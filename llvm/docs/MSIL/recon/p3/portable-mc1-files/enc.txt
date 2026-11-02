@@ -1,0 +1,8 @@
+type [mscorlib]System.Text.UTF8Encoding
+type [mscorlib]System.Text.UTF32Encoding
+type [mscorlib]System.Text.DecoderFallbackException
+method instance void [mscorlib]System.Text.UTF8Encoding::.ctor(bool, bool)
+method instance void [mscorlib]System.Text.UTF32Encoding::.ctor(bool, bool, bool)
+method instance void [mscorlib]System.String::.ctor(char*)
+method instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target()
+method instance void [mscorlib]System.Runtime.InteropServices.GCHandle::Free()

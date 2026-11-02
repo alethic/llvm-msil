@@ -7843,6 +7843,2328 @@ native-callable values), `msil/test/M2/04-shared/csharp-consumer.test` (`delegat
 - **The exit order** that the R4/R5 decision gives (handlers and destructors on the host C library's tables), which
   E7h and the DLL-CRT oracle reproduce.
 
+### 5.18 The portable target (msil32/msil64-unknown-dotnet)
+
+The portable target compiles C and C++ to an assembly that names no CPU, no operating system and no native library:
+`msil64-unknown-dotnet` (LP64) and `msil32-unknown-dotnet` (ILP32). Its C library is the in-tree llvm-libc, shipped as
+the shared library assembly `c.dll` by default (C library mode 2), and linked statically from `libc.a` with `-static`
+from P-3 (mode 3); the host triples keep the platform's C library through P/Invoke (mode 1). This contract fixes the
+triples, clang's TargetInfo and ABI, the predefines, the driver and sysroot, the dotnet link-rule family, msil-ld's
+behaviour, the PE envelope and the width guard, the helper archive, what stays loud on the portable triples until which
+step, the test legs, and what is reserved for msil32 (P-4). The C library's own configuration, ABI headers, OS layer
+and shared state are contract 5.19; managed calls from C (MC-1) are contract 5.20.
+
+Program order (user, 2026-11-01, option A): M26, **P-1a** (the msil64 toolchain, no C library), **P-1b**
+(freestanding llvm-libc as `c.dll`), **P-1r** (the re-pin and gating rows of M27-M35), M27, **MC-1**, **P-2** (the
+single-threaded OS layer over the BCL), M28, M29, M30, **P-3** (threads, per-thread state, `-static` with shared
+state), M31-M35, **P-4** (msil32). P-1a, P-1b, MC-1, P-2, P-3 and P-4 are milestones with the Phase 3 protocol
+(section 1, 5.13's rules, 5.17.7's gate) outside Phase 3's numbering and exit gate. P-1r is not a farm milestone: it
+is a read-only orchestration pass after P-1b whose product is one `[MSIL] Plan:` commit of section 12 rows (the rows
+R1-R21 this contract cites as "P-1r row R<n>"), because the plan must not change during a farm run.
+
+Decisions this contract applies: the user's decisions of 2026-11-01 (portable triples, msil64 first, msil32 in P-4,
+no `__ELF__`, a dotnet link-rule family, managed function pointers, one shared C state) and the decision brief answers
+(user, 2026-11-01) Q1-Q35, cited below as "brief Q<n>". "Phase 3 brief R<n>" names a recommendation of the Phase 3
+decision brief (`llvm/docs/MSIL/recon/p3/decision-brief.md`), which is not a P-1r row.
+
+Sources: the P-0 recon reports `llvm/docs/MSIL/recon/p3/portable-loader.md` (sections 1-6), `portable-libc.md` (2-5),
+`portable-linkrules.md` (2-4), `portable-target.md` (2-6), `portable-mc1.md` (2-4) and `portable-state.md` (2-4),
+each with its verifier sections folded in, and their cited artifacts under
+`llvm/docs/MSIL/recon/p3/portable-<key>-files/`; Design.md sections 3, 5.2, 6; plan 5.7.7, 5.8.2, 5.9.15, 5.10.8,
+5.10.9, 5.13-5.17. The site inventories of 5.18.2 and 5.18.5 were checked against M26's tree.
+
+Contracts, WP texts and reviews cite files and functions, never a line number alone (5.13's rule).
+
+#### 5.18.1 Triples and object format
+
+- **PT1 Spelling.** `llvm::Triple` gains the arch types `msil32` and `msil64` (appended to `ArchType`) and the OS type
+  `DotNet` (`TRIPLE_OS(DotNet, "dotnet", "Generic")` appended to `llvm/include/llvm/TargetParser/TripleName.def`, one
+  macro per line with string literals, because `llvm/utils/get_triple_system_name.py` parses the file). New
+  predicates `Triple::isMSIL()` (either arch) and `Triple::isOSDotNet()`. `parseArch`, `getArchTypeName`,
+  `getArchTypePrefix` (`"msil"`), `getArchPointerBitWidth` (32/64), `get32BitArchVariant`/`get64BitArchVariant` (each
+  other) and `isLittleEndian` (true) know both arches. The canonical spellings are `msil64-unknown-dotnet` and
+  `msil32-unknown-dotnet`; `Triple::normalize("msil64-dotnet")` gives `msil64-unknown-dotnet` (TripleTest pins it,
+  and msil-ld's `getMSILTriple` reads the normalized form).
+- **PT2 Object format.** `getDefaultFormat` returns `Triple::MSIL` for the msil arches, so the portable triples need no
+  `-msil` suffix and `isOSBinFormatELF()` is false for them (which keeps `__ELF__` undefined, 5.18.3). An msil arch
+  with an explicit non-MSIL format (`msil64-unknown-dotnet-elf`) is refused by `TargetRegistry::lookupTarget`
+  (`unknown target triple`); the spelling `msil64-unknown-dotnet-msil` is accepted and normalizes to the canonical one.
+- **PT3 No native triple.** The portable triples have no native triple. `Triple::getNativeFormatTriple` returns
+  `*this` for `isMSIL()`, and every caller that derives behaviour from the native triple is checked for the portable
+  case: `Triple::computeDataLayout` (`llvm/lib/TargetParser/TargetDataLayout.cpp`) takes the arch case before its MSIL
+  redirect (the redirect to `getNativeFormatTriple().computeDataLayout` is guarded by `isOSBinFormatMSIL() &&
+  !isMSIL()`; without the guard the call recurses); `Triple::isCompatibleWith` already stops when the native triple is
+  still MSIL; clang's `MSILTargetInfo<Native>` is never instantiated for a portable triple (5.18.2);
+  `SemaDeclAttr.cpp`'s aligned limit (8192 only when the native triple is COFF) needs no change, because the portable
+  native triple is not COFF and the limit stays `Sema::MaximumAlignment`, as on the Linux MSIL triples.
+- **PT4 Data layouts.** msil64: `e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128`; msil32:
+  `e-m:e-p:32:32-i64:64-i128:128-n8:16:32:64-S128`. Both little-endian, 64-bit `long long` and `double` aligned to 8,
+  stack aligned to 16. Each string freezes with its width's compiler-level ABI (PT10).
+- **PT5 Refused combinations.** A non-msil arch with OS `dotnet` (`x86_64-unknown-dotnet`) is refused by clang's
+  `AllocateTarget` and by `TargetRegistry::lookupTarget`, with a test; without the refusal it would become a generic
+  ELF x86-64 triple whose `isOSDotNet()` is true. An msil arch with any OS other than `dotnet`
+  (`msil64-unknown-linux`) is refused the same way. The vendor is `unknown`; another vendor is accepted by the triple
+  parser and treated as `unknown`.
+- **PT6 Backend selection.** `TargetRegistry::lookupTarget` picks the MSIL target for an msil arch through the
+  existing object-format branch; `LLVMInitializeMSILTargetInfo`'s arch-match function stays always false.
+- **PT7 RuntimeLibcalls.** `llvm/include/llvm/IR/RuntimeLibcalls.td` gains an `IsMSIL` predicate, its availability
+  `def isMSIL : RuntimeLibcallAvailability<(all_of IsMSIL)>` and an `MSILSystemLibrary` (`SystemRuntimeLibrary` with
+  the compiler-rt, libm and libc names; no f80 or f128 rows). Without it the generated system-library lookup ends in
+  `return {}` and the new arches have no libcalls at all (`memcpy`, `ldexp`). Its i128 rows are what the host MSIL
+  triples effectively use: the backend expands i128 division inline and shifts through the `*_PARTS` nodes, and the
+  helper archive has no `*ti*` member (5.14.3 A5), so no `__divti3`-style name is offered as available.
+  `lto::LTO::getRuntimeLibcallSymbols(msil64-unknown-dotnet)` then gives msil-ld's N1 set (5.14.2) for the portable
+  triple.
+- **PT8 Objects and records.** Portable CIL objects keep 5.8's netmodule shape (B2), in the PE32 I386 envelope of
+  5.18.7 instead of PE32+. The link-info record's triple key is the normalized portable triple; its data model is
+  (pointer 8, long 8, wchar 4, long double 8) on msil64 (`MSILLink::setDataModel`'s existing rule for a 64-bit
+  non-Windows triple). The record header has no C runtime field; the C runtime identity of an assembly is recorded in
+  its library symbol table (PL8). No record minor is taken: the triple key isolates portable objects and assemblies
+  from host ones (`hasTripleKey` in `lld/MSIL/Driver.cpp` and `lld/MSIL/AssemblyFiles.cpp`, which compares arch,
+  subarch, OS and environment, refuses a mix, msil32 with msil64 included). Record v1.1's FIXED_ARITY entries (5.14.8)
+  never occur on dotnet (PB1).
+- **PT9 Rebuild front-load.** Every header-level edit of P-1a lands in its two root WPs: `P-1a/triple` (P-1a.a:
+  `Triple.h`, `TripleName.def`, `RuntimeLibcalls.td`) and `P-1a/lists` (P-1a.b: `ImageLayout.h` with `SectionRules`
+  and LR1's inline selector and predicates, `Trailer.h`'s guard field, `BCLMembers.def`, `PEWriter.h`'s format member,
+  `DiagnosticDriverKinds.td`'s `err_drv_msil_portable_static`, clang's `CodeGen/TargetInfo.h` and its CMake line).
+  Measured from the build's `.ninja_deps`: one rebuild of about 2,481 objects (about 159 job-minutes; `Triple.h` alone
+  2,477). No later WP of a P-step edits `Triple.h` (a second edit repeats the rebuild). This bend of Phase 3 brief
+  R21's no-front-load rule is approved (brief Q10) and recorded as a 5.13.5 exemption (section 12 row).
+- **PT10 Frozen compiler-level ABI.** At P-1b's commit (the first shipped `c.dll`) the msil64 data layout (PT4),
+  PC2's msil64 column, 5.18.2's ABI rules as they apply to msil64 and the msil64 predefines (5.18.3) become frozen
+  ABI; before it a section 12 row may amend them, after it no row changes them (as 5.14.4 T10). msil32's layout,
+  PC2's msil32 column, its ABI rules and its predefines stay amendable until P-4's commit, which freezes them (P4-3).
+  The C library's ABI items (errno numbering, llvm-libc's generic set as extended, 5.19.5 and 5.19.6; `struct tm`,
+  `jmp_buf`, `mbstate_t`, `struct lconv`, the export list) are 5.19's and freeze for msil64 at the same commit.
+
+#### 5.18.2 clang TargetInfo and ABI
+
+- **PC1 TargetInfo.** A standalone, header-only `MSILPortableTargetInfo` in `clang/lib/Basic/Targets/MSIL.h` (a fork
+  file with a `fork-only` line already), chosen in `clang/lib/Basic/Targets.cpp` `AllocateMSILTarget` when
+  `isMSIL() && isOSDotNet()` (with the PT5 refusals there); it derives from `TargetInfo`, not from a native
+  TargetInfo, so no host behaviour leaks in. Generic CPU only (`-mcpu=` other than `generic` is an error), no target
+  features before M33's switches (5.16; P-1r row R9 applies them to every MSIL triple), only `CC_C`,
+  `GenericItanium` C++ ABI, `getDefaultLongDoubleFormat` IEEE double. Inline assembly: `validateAsmConstraint`
+  refuses every constraint, so an `asm` statement with an operand is a Sema error; an empty `asm` without operands is
+  the compiler barrier that `emitMSILAsmStmt` (`clang/lib/CodeGen/CGStmt.cpp`) emits on every MSIL triple (a
+  single-thread seq_cst fence and `llvm.sideeffect`); any other `asm` text is `err_msil_asm_unsupported`. Global
+  register variables are errors (no register names).
+- **PC2 Types.** Spellings follow brief Q4 (a) (wasm style: identical C++ mangling on both widths).
+
+| Type | msil64 | msil32 | Source |
+|---|---|---|---|
+| `char` | signed | signed | portable-linkrules; brief Q5 |
+| `short`, `int`, `long long` | 16, 32, 64 | 16, 32, 64 | |
+| `long`, pointers | 64 | 32 | user (LP64 / ILP32) |
+| `size_t`, `ptrdiff_t`, `intptr_t` | `unsigned long`, `long`, `long` | the same spellings | brief Q4 (a) |
+| `int64_t`, `intmax_t` | `long long` | `long long` | brief Q4 (a) |
+| `wchar_t` | `int` (32-bit signed) | `int` | user decision; `-fshort-wchar` is an error |
+| `wint_t` | `int` (32-bit signed) | `int` | brief Q5 (b), the wasm choice: `TargetInfo`'s default `WIntType` (`SignedInt`) is kept |
+| `char16_t`, `char32_t` | `uint_least16_t`, `uint_least32_t` | the same | |
+| `long double` | IEEE binary64, size and alignment 8 | the same | Design.md 3; `-mlong-double-80`/`-128` are errors |
+| `__float128`, `_Float128` | none | none | |
+| `__int128` | yes (16, aligned 16) | no | TargetInfo's default rule |
+| `_BitInt(N)` | max 128 direct | max 64 direct | `DefaultABIInfo` uses 128 only with `hasInt128Type()` |
+| `max_align_t` | 8 (from `long double` = binary64) | 8 | brief Q6 (a); `malloc` returns 16-aligned blocks on msil64 (5.19) |
+| `SuitableAlign`, `__BIGGEST_ALIGNMENT__`, new-alignment | 128 bits, 16, 16 | 64 bits, 8, 8 | |
+| atomics | `MaxAtomicInlineWidth` and `MaxAtomicPromoteWidth` 64 | 64 | Phase 3 brief R12's cap; no 16-byte lock-free |
+| `va_list` | `char *` (`CharPtrBuiltinVaList`) | the same | |
+
+  `wint_t` and `WEOF`: with `int` `wint_t`, clang defines `__WINT_TYPE__` `int` and no `__WINT_UNSIGNED__`, so
+  llvm-libc's `WINT_MIN`/`WINT_MAX` (`stdint-macros.h`) are `int`'s, and llvm-libc's one `WEOF` definition,
+  `((wint_t)(0xffffffffu))` in `include/llvm-libc-macros/wchar-macros.h`, is `-1` of type `int`. llvm-libc therefore
+  needs neither a dotnet branch nor a header choice for `wint_t` or `WEOF`; P-1b's `01-libc/datamodel-headers` test
+  pins `WEOF == -1`, `(wint_t)-1 < 0` and `WINT_MIN` (5.19.6).
+- **PC3 Math errno.** The dotnet toolchain keeps `IsMathErrnoDefault()` true, so `__NO_MATH_ERRNO__` is not defined
+  and llvm-libc's `MATH_ERRNO` configuration holds.
+- **PC4 ABIInfo.** A new `clang/lib/CodeGen/Targets/MSIL.cpp` (fork file, `fork-only` line) defines
+  `MSILPortableABIInfo`, derived from `DefaultABIInfo`, and `createMSILPortableTargetCodeGenInfo`, selected for `case
+  Triple::msil32: case Triple::msil64:` in `createTargetCodeGenInfo` (`clang/lib/CodeGen/CodeGenModule.cpp`), declared
+  in `clang/lib/CodeGen/TargetInfo.h` and listed in `clang/lib/CodeGen/CMakeLists.txt` (upstream hooks). Rules:
+  aggregates are passed `byval` indirect and returned `sret`; empty records are ignored as arguments (an override:
+  `DefaultABIInfo::classifyArgumentType` does not ignore them); `__int128` is direct on msil64; `_BitInt` wider than
+  PC2's limit is indirect; `EmitVAArg` uses `emitVoidPtrVAArg` with an 8-byte slot, aggregates indirect (a pointer in
+  the slot), scalars with a larger alignment aligned up. The backend's call lowering is attribute-driven
+  (`MSILTargetLowering::LowerCall`, `LowerFormalArguments`), so it needs no portable case apart from PB1.
+- **PC5 Variadic lowering.** `createMSILABIInfo` in `llvm/lib/Transforms/IPO/ExpandVariadics.cpp` (M26's block of
+  5.13.5) gains an `MSILPortable` `VariadicABIInfo` class, tested first (`if (T.isMSIL())`, before the
+  `isOSWindows()` test): a `char *` `va_list`, slot alignment max(8, the type's alignment), aggregates indirect,
+  exactly PC4's `EmitVAArg`. `llvm::hasMSILVariadicABI(T)` then holds for msil64, so `MSILPrepareIR`'s
+  variadic-definition error does not fire on it. 5.15.2's rules (VARARG references, the cross-assembly rule 1) apply
+  unchanged; a call from a program into `c.dll`'s `snprintf` is such a cross-assembly VARARG call.
+  `llvm/test/Transforms/ExpandVariadics/msil-abi.ll` gains a portable RUN line.
+- **PC6 Library-call simplification.** `TargetLibraryInfo` keeps its default for OS `dotnet` (every library function
+  available). A simplification into a name `c.dll` does not provide (for example `printf` to `puts` before P-2) is a
+  loud link error with PL3's N6 line, never a silent change; P-2 re-audits the default against the entry-point list
+  when stdio arrives and adds a dotnet TLI row if a simplification would land on an absent name.
+- **PB1 Backend sites keyed on the native ABI.** `MSILTargetLowering::LowerCall`'s `passInt128ByPointer` (x86_64
+  Windows only) is false; `getNativeVAListStructSize` (`MSILISelLowering.cpp`), which today returns 0 only for Windows
+  or AArch64 Darwin and 24 or 32 otherwise, returns 0 for `isMSIL()` (the `char *` rule, no native struct); the
+  `ldexpf`/`frexpf` promotion (keyed on `isWindowsGNUEnvironment()`) does not apply; `MSILPrepareIR.cpp`'s
+  `isSupportedTarget` accepts `msil64` with OS `dotnet` and pointer size 64 (5.18.11 for msil32).
+  `MSILPrepareIR.cpp`'s definition diagnostics (M26) set `VAArgIsExpanded` from `isOSWindows()` and report every
+  `va_arg` instruction on any other triple; on dotnet, whose `char *` `va_list` PC5 expands, the test becomes
+  `isOSWindows() || isOSDotNet()`, pinned by one msil64 `va_arg` `.ll` case that compiles. M26's other native-keyed
+  sites need no dotnet change: `MSILVariadics.cpp`'s `getFixedArityList` is empty for a triple that is neither Linux
+  nor Windows (so `rewriteFixedArityCalls` never runs and no FIXED_ARITY entry is written); `lld/MSIL/Variadics.cpp`'s
+  `getCRuntime` gives none for OS dotnet; `lld/MSIL/Relocations.cpp`'s `getDataImportHelper` runs only behind
+  `findDataImportFunctions` (LR2); `llvm/lib/CLI/TrailerDefs.cpp`'s `isOfferedIn` requires `isOSWindows()` for the
+  `WindowsExecutable` scope; the windows-msvc stdio sites (`Writer::addUCRTStdio`, LTO.cpp's UCRT stdio options,
+  `TrailerStdio.cpp`) are false; `SemaChecking.cpp`'s `getMSILNativeLongDoubleSize` returns 0 on dotnet, so `%L`
+  gets no native-size warning, which is right for a binary64 `long double`.
+
+#### 5.18.3 Predefines
+
+- **PD1 Defined.** `__MSIL__` (kept: "any MSIL triple"); `__msil64__` or `__msil32__`; `__dotnet__`; the generic
+  data-model macros (`__LP64__`/`_LP64` or `_ILP32`/`__ILP32__`), `__LITTLE_ENDIAN__`, `__BYTE_ORDER__ ==
+  __ORDER_LITTLE_ENDIAN__`, `__SIZEOF_*__` from PC2 (`__SIZEOF_INT128__` on msil64 only, `__SIZEOF_LONG_DOUBLE__` 8),
+  `__WCHAR_TYPE__ int`, `__WINT_TYPE__ int` (no `__WINT_UNSIGNED__`), `__CHAR_UNSIGNED__` absent, an empty
+  `__USER_LABEL_PREFIX__`, `__BIGGEST_ALIGNMENT__` per PC2, `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1/2/4/8` (never `_16`),
+  the `__GCC_ATOMIC_*` lock-free values for sizes up to 8.
+- **PD2 Never defined.** `__ELF__`, `__unix__`, `__unix`, `__linux__`, `__linux`, `__gnu_linux__`, `_WIN32`, `_WIN64`,
+  `_MSC_VER`, `__MINGW32__`, `__APPLE__`, `__x86_64__`, `__x86_64`, `__amd64__`, `__amd64`, `__k8`, `__k8__`,
+  `__aarch64__`, `_M_X64`, `__SSE*__`, `__MMX__`, `__SEG_FS`, `__SEG_GS`, `__FLOAT128__`, `__code_model_*__`,
+  `__WINT_UNSIGNED__`, `__NO_MATH_ERRNO__` (by default). Reason for `__ELF__` (user decision; portable-linkrules 2):
+  llvm-libc selects its baremetal layer for `__ELF__` without `__linux__` in exactly three headers
+  (`src/__support/OSUtil/io.h`, `src/stdlib/abort_utils.h`, `include/llvm-libc-macros/time-macros.h`), which would be a
+  silent interim OS layer; without `__ELF__` those headers select nothing, and OS-dependent uses fail to compile or
+  link.
+- **PD3 No lowercase family macro.** There is no `__msil__` (too close to `__MSIL__`); code tests `__dotnet__` for the
+  platform and `__msil64__`/`__msil32__` for the width. Upstream patches key on `__dotnet__` (compiler-rt, 5.18.8;
+  llvm-libc `LIBC_TARGET_OS_IS_DOTNET`) and on `__msil32__ || __msil64__` (`LIBC_TARGET_ARCH_IS_MSIL`), never on
+  `__MSIL__`, which the host MSIL triples define too.
+- **PD4 Test.** `clang/test/Preprocessor/init-msil-portable.c` (`fork-only` line) pins PD1 for both widths with `-dM
+  -E` and lists every PD2 name in `--implicit-check-not`. It joins the check-msil path lists (PX5).
+
+#### 5.18.4 Driver and sysroot
+
+- **PV1 Toolchain.** `DotNetToolChain` in `clang/lib/Driver/ToolChains/MSIL.{h,cpp}`, chosen first in
+  `createMSILToolChain` when `isMSIL() && isOSDotNet()` (today's function handles Linux, MSVC and MinGW and reports
+  anything else unsupported); it links with `msil::Linker` (msil-ld), assembles nothing natively, and its default
+  runtime library is compiler-rt (`-rtlib=compiler-rt`, no libgcc), with no unwind library and no C++ standard library
+  (the toolchain adds no `-lc++`; the C++ goal decides that later).
+- **PV2 Sysroot.** `--sysroot` if given, else `<InstalledDir>/../lib/clang-runtimes/<normalized triple>`. Headers, in
+  order (WebAssembly's): the resource directory's `include`, `<sysroot>/include/<triple>`, `<sysroot>/include`
+  (`-nostdinc`, `-nobuiltininc`, `-nostdlibinc` honoured). Library path: `-L<sysroot>/lib/<triple>` only. P-1b
+  installs the C headers in `<sysroot>/include/` and `c.dll` and the empty `libm.a` (PV3) in
+  `<sysroot>/lib/<triple>/` (5.19.3); before P-1b the directories need not exist. The sysroot never holds a `libc.a`
+  before P-3 (PV4).
+- **PV3 Default libraries.** `-lc`, then the helper archive (`TC.getCompilerRT(Args, "builtins")`, 5.18.8, passed when
+  the file exists, as today), unless `-nostdlib` or `-nodefaultlibs` (both dropped) or `-nolibc` (`-lc` dropped, the
+  helper archive kept). No `-lm`, `-lpthread` or `-ldl`: the math library is in `c.dll`. From P-1b the sysroot ships an
+  empty `libm.a` (an archive with no members, which msil-ld classifies as a static library that defines nothing) so that
+  build systems that pass `-lm` link (brief Q14 (a), wasi-libc's convention); P-1b's `build-libc.py` installs it.
+  `-lpthread`, `-ldl` and `-lrt` stay a loud "library not found". P-1a's programs, which have no C library, pass
+  `-nolibc -ffreestanding` (`%{msil_portable_cflags}`, PX1), so the f16, complex and `-ftrapv` helpers still come from
+  the archive.
+- **PV4 `-static`.** A loud driver error on the portable triples until P-3, T-P9: `'-static' is not supported for
+  'msil64-unknown-dotnet' yet: the managed C library links only as the shared assembly c.dll`, through a new
+  `err_drv_msil_portable_static` (declared by `P-1a/lists`, PT9; the generic `err_drv_unsupported_opt_for_target`,
+  which fires for every MSIL triple today, keeps the host triples' text). P-3 replaces it with mode 3. A driver error
+  alone could be bypassed, so two more rules hold until P-3: the sysroot never holds `libc.a` (P-1b's `build-libc.py`
+  keeps the archive it links `c.dll` from in the build tree, `<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a`,
+  and never installs it), and msil-ld refuses a static C library on dotnet (PL10), so `-Bstatic -lc`, `-l:libc.a`, a
+  path to the build tree's archive or a direct msil-ld link cannot produce a static copy with private C state.
+- **PV5 Other options.** `-shared` gives `--shared` (5.18.6); `-pie`, `-no-pie`, `-rdynamic`, `-nostartfiles` are
+  claimed as today; `-print-target-triple` prints the normalized triple; `-print-libgcc-file-name` prints 5.18.8's
+  path; the default image name stays `a.exe` (the executable-naming decision of 2026-10-26); `-fshort-wchar`,
+  `-mlong-double-*`, `-mcpu=` other than `generic` and `-march=` are errors naming the triple. `#pragma comment` keeps
+  the non-Windows rule of `ParsePragma.cpp` (only `lib`). msil32 builds its jobs; msil-ld refuses the link (T-P1,
+  5.18.11).
+- **PV6 Test.** `clang/test/Driver/msil-dotnet.c` (`fork-only` line): the job lines for both widths with and without
+  `--sysroot`, `-nostdlib`, `-nolibc`, `-shared`, T-P9, the PT5 refusals and the normalization. It joins the
+  check-msil path lists (PX5).
+
+#### 5.18.5 The dotnet link-rule family
+
+Today every link rule of the MSIL target is a two-way choice, COFF rules when `isOSWindows()` and ELF rules otherwise
+(about 25 sites); unchanged, a dotnet triple would silently get ELF plus Linux native behaviour (portable-linkrules
+2). The portable triples get a third family, **Dotnet**, modelled on wasm-ld: format-neutral rules, no native code.
+
+- **LR1 Selector.** `llvm/include/llvm/CLI/ImageLayout.h`'s `enum class SectionRules` gains `Dotnet`, and
+  `cli::getSectionRules(const Triple &)` returns it for `isOSDotNet()`. Named predicates on the rule set replace every
+  use of an enumerator: `definesStartStop`, `groupsDollarSections`, `constructorsTakeArgs`,
+  `rejectsNullConstructorSlots` (true for Dotnet only: T-P7) and `allowsFiniSections` (each `bool f(SectionRules)`;
+  today's `cli::skipsNullConstructorSlots`, true for COFF only, stays declared in `Trailer.h` and defined in
+  `Trailer.cpp`, keeps its name and takes an exhaustive switch), and, for native binding,
+  `cli::bindsNatively(const Triple &)`. `getSectionRules`, `bindsNatively` and the predicates are `inline` functions
+  in `ImageLayout.h`, written by the root WP `P-1a/lists`, so every implementing WP's private build has them (5.7.1's
+  private-build rule) and no WP depends on `P-1a/cli` for them. Rules for every rule-set decision: a `switch` over
+  `SectionRules` has no `default`; no code outside `ImageLayout.h` and `llvm/lib/CLI/ImageLayout.cpp` names an
+  enumerator except as a `case` label; no function or member takes a rule set as a default
+  (`MSILDataSegment::finalize`'s default argument goes, and so do the member defaults `ImageInput::Rules` and
+  `ConstructorKey::Rules` in `ImageLayout.h`, so every constructor passes `cli::getSectionRules(TT)`). On M26's tree
+  the uses are: 10 `==` comparisons (7 in `ImageLayout.cpp`; `Trailer.cpp`'s `skipsNullConstructorSlots`,
+  `MarkLive.cpp`, `OutputSegment.cpp`'s `getConstructorArgs`), 3 `isOSWindows() ? COFF : ELF` selections
+  (`MSILAsmPrinter::getSectionRules`, `MarkLive::run`, `Writer::Writer`'s `OutputModule`), the constant
+  `constexpr cli::SectionRules rules = cli::SectionRules::ELF` in LTO.cpp's `findEnvpConstructor`, one default argument
+  (`MSILDataSegment.h`'s `finalize`) and two member defaults; no `switch`. A new enumerator would silently take COFF
+  rules at the `== COFF` sites and ELF rules at the rest.
+- **LR2 Sites converted (P-1a).** Rule-set sites: `ImageLayout.cpp` (`classifySection`, `getOutputSectionName`,
+  `getSectionPriority`, the `ConstructorKey` operators, `layoutImage`); `Trailer.cpp` (`skipsNullConstructorSlots`);
+  in `lld/MSIL/`: `OutputSegment.cpp` (`getConstructorArgs`, `OutputImage::layout`'s start/stop rule), `MarkLive.cpp`
+  (`MarkLive::run`, its two `isOSWindows()` sites), `LTO.cpp` (`isSectionBoundary`,
+  `isHiddenSectionBoundaryReference`, `findEnvpConstructor`'s constant, `BitcodeCompiler::BitcodeCompiler`'s
+  `usedStartStop`), `Exports.cpp` (`selectExports`, two sites), `Writer.cpp` (`Writer::Writer`), `SymbolTable.cpp`
+  (`bindLateSymbols`'s two start/stop lambdas), `InputFiles.cpp` (`ObjFile::getLinkerOptions`,
+  `BitcodeFile::getLinkerOptions`); `MSILDataSegment.h` (`finalize`'s default argument, used by `emitObjectEnd`);
+  `MSILAsmPrinter.cpp` (`getSectionRules`, `checkSections`, `getConstructorArgs`, `collectExternGlobals`' start/stop
+  set); `MSILPrepareIR.cpp` (`lowerExternWeak`'s start/stop set). Native-binding sites keyed on `!isOSWindows()` or on
+  the native triple take `cli::bindsNatively` (false on dotnet): in `lld/MSIL/NativeLibraries.cpp`
+  `mayBindNatively`, `findDataImportFunctions`, `hasWideNativeLongDouble`, `isOtherFormat`/`getOtherFormatMessage`,
+  `isCompatibleELF`/`isCompatibleCOFF` (which today return true for arches other than x86_64/aarch64) and
+  `getNameClassLine` (N2's dotnet line, PL3); in `lld/MSIL/Driver.cpp` `isSupportedTarget` (PL1) and
+  `getLibraryCandidates` (PL6); in `MSILAsmPrinter.cpp` `getDataImportFunctions`, `emitTrailer`'s
+  `DataImportHelper` kind and `getCLibrarySoname`; `MSILUtilities.cpp`'s `getCRuntime` (nullopt on dotnet). Because
+  `getPInvokeModule` returns an explicit `msil-import-module` before it consults the C runtime, explicit imports are
+  refused separately (PL4). Sites that are already right on dotnet: `ParsePragma.cpp`'s `#pragma comment` kind rule
+  (non-Windows: `lib` only) and `linkerMain`'s `--ucrtbase-imports` check. Hot files get hooks and predicate calls
+  only (5.13.1 L2, LR4); the dotnet logic itself (T-P4, N6, T-P11) lives in the non-hot `SymbolTable.cpp`,
+  `InputFiles.cpp` and `MSILPortable.cpp`, and T-P12's envelope check in `Driver.cpp` (PL1).
+- **LR3 Enumerator check.** P-1a's gate step 34 (G6) greps `llvm/lib/CLI`, `lld/MSIL` and `llvm/lib/Target/MSIL` for
+  `SectionRules::(COFF|ELF|Dotnet)\b` outside `ImageLayout.cpp` and fails on any line that does not start with `case`
+  or `//` (`ImageLayout.h`, the one header that names enumerators outside `case` labels, lies in
+  `llvm/include/llvm/CLI`, which the grep does not search); its reviewers also confirm that no rule-set default
+  argument or member default is left. No script and no allowlist is added: M27-M35's gates stay as written. M28-M35's
+  planned texts still state two-way rules (M29.a's "`PreInitTable` is `.preinit_array[.N]` under ELF rules", M29.c's
+  `checkSections`, M29's "ELF reverse, COFF ascending" destructor order, M28.c's "`ThunkFilter` = not
+  `isOSWindows()`", M31.d's template rule); P-1r row R20 rewrites them onto LR1's predicates and `cli::bindsNatively`
+  (5.18.12), and each later milestone's reviewers rerun the G6 grep over its diff, so dotnet keeps T-P8 for
+  `.preinit_array`.
+- **LR4 Host outputs unchanged.** The conversion changes no host output. P-1a's gate proves it twice: text through
+  `il-snapshot.py --compare` over `msil/test/M1`, `msil/test/M2` and `llvm/test/CodeGen/MSIL` (HEAD's binaries
+  against the new ones), and bytes through `msil/utils/ci/det-manifest.py build` (both x86_64 triples' CIL objects and
+  archives of `msil/test/M1` at -O0 and -O2) before and after, then `det-manifest.py compare`; the unchanged lit tests
+  are the third witness. Because it touches hot files (5.13.1 L1) by more than a hook, a section 12 row grants a
+  behaviour-preserving substitution of a `SectionRules` comparison, selection or default by a named predicate of
+  `ImageLayout.h` as a fourth non-hook edit kind of 5.13.1 L2 (after retiring a diagnostic, a verbatim move and a
+  fix-loop change), proved by these two comparisons in the milestone's gate.
+- **LR5 Constructors.** `llvm.global_ctors` entries (INIT) and `.init_array` / `.init_array.N` slots, sorted stably by
+  priority, ties in input order (per object: slots, then entries), which is today's ELF order and wasm-ld's. They take
+  no arguments (brief Q7 (a)): a constructor whose IR type takes parameters is T-P6, `constructor '<f>' takes
+  arguments, which msil64-unknown-dotnet does not pass`. A null `.init_array` slot is T-P7, `null constructor slot in
+  '<section>' of '<file>': msil64-unknown-dotnet calls every slot`. They run in the module initializer after the width
+  guard (5.18.7), the image relocations, the library `ldtoken`s and the cross-assembly relocations (in phase 2 for a
+  `-shared` output), as today.
+- **LR6 Destructors (P-2).** From P-2, the MSIL pipeline runs upstream's `LowerGlobalDtorsPass`
+  (`createLowerGlobalDtorsLegacyPass()`) on the portable triples, as WebAssembly does (brief Q31 (a)):
+  `llvm.global_dtors` becomes registration functions that call `__cxa_atexit(dtor, nullptr, &__dso_handle)` with managed
+  function pointers (measured: ELF destructor order, also across assemblies through `-shared`). It runs at 5.13.6's
+  dotnet-only slot **P0b**: the first pass of `MSILPassConfig::addIRPasses` on dotnet, so after
+  `PreISelIntrinsicLowering`, `ExpandIRInsts` and P0's `doInitialization` hooks, and before P1, whose
+  `diagnoseGlobalDtors` would otherwise reject the destructors. P-1r row R16 reserves the slot in 5.13.6 and P-2
+  implements it with a portable RUN line in `pipeline.ll`; M27's, M28's and M31's llc-test roles keep `pipeline.ll`'s
+  host order. Until P-2, `llvm.global_dtors` keeps today's diagnostic on dotnet, so `__attribute__((destructor))` (and
+  C++ built with `-fno-use-cxa-atexit`) is a loud compile error; a C++ namespace-scope object with a destructor calls
+  `__cxa_atexit(dtor, obj, &__dso_handle)` under clang's default `-fuse-cxa-atexit` (on for every non-Windows, non-AIX
+  triple, dotnet included), a loud undefined-symbol link error until P-2 (N6's line; `__dso_handle` is LR8's);
+  `__cxa_atexit` itself is absent from `c.dll` until P-2 (it needs the heap and `internal::exit`). `.fini_array` stays
+  an error (LR7).
+- **LR7 Named section errors.** From P-1a, `.fini_array`, `.preinit_array`, `.ctors`, `.dtors` and `.CRT$X*` sections
+  are T-P8 on dotnet: `section '<name>' is not supported for msil64-unknown-dotnet: <reason>`, where `<reason>` is `the
+  portable target runs no destructor sections` for `.fini_array` and `.dtors`, `the portable target has no
+  pre-initialization stage` for `.preinit_array`, and `the portable target runs constructors only from .init_array` for
+  `.ctors` and `.CRT$X*` (destructors register through `__cxa_atexit` from P-2, LR6). `.tdata`/`.tbss` are not in T-P8:
+  they keep Phase 2's `thread_local` error until M31, whose TLS template (ImageLayout rule 7) and `MSILLowerThreadLocal`
+  then apply under the Dotnet rule set through a predicate `allowsTLSTemplate` (true for all three rule sets from M31),
+  added by P-1r row R19 (5.18.9, 5.18.12).
+- **LR8 `__dso_handle` (P-2).** From P-2, msil-ld defines a hidden, pointer-sized, zero synthetic `__dso_handle` in
+  each dotnet output whose link keeps a live reference to it, strong or weak (`LowerGlobalDtorsPass` emits
+  `extern_weak`; without the rule a weak reference binds to 0). It is never exported; `--lto-emit-asm` adds it to the
+  merged module. P-2 writes it (`lld/MSIL/Synthetic.cpp`, `SymbolTable.cpp`, `LTO.cpp`); M29.d extends that
+  implementation to the ELF triples instead of writing its own (P-1r rows R4 and R5, 5.15.5's `__dso_handle`).
+- **LR9 Section boundaries.** `__start_<X>` and `__stop_<X>` keep today's non-Windows rule: defined for a
+  C-identifier output section only when referenced, a GC root, visible to LTO, never exported, per assembly.
+  Sections group by verbatim name with only `.init_array.N` collapsed; no `$` grouping.
+- **LR10 Linker options.** Embedded linker options use GNU tokenization; `#pragma comment(lib, ...)` gives `-l`.
+- **LR11 Entry point.** `'<msil>Main'` keeps today's shape on the portable triples in P-1a and P-1b (argv from
+  `Environment.GetCommandLineArgs`, main's result as the exit code). From P-2 the dotnet `'<msil>Main'` (brief Q28
+  (b)):
+  1. calls `__llvm_libc_set_c_main()` before `main` when the link resolves that name (`c.dll` exports it from P-2,
+     5.19.9; until the call, `c.dll`'s standard streams are unbuffered, so a host that is not a C program loses no
+     output);
+  2. calls `main(argc, argv)`;
+  3. passes main's result to `exit` when the link resolves `exit` (`exit(main(argc, argv))`, so that streams are
+     flushed and handlers run), else returns it as the exit code.
+
+  Neither call is made when the link does not resolve the name: a P-1b `c.dll` has neither, and has no buffered
+  stream to lose. P-2 creates the dotnet `EntryPoint` exit field in `Trailer.h` and the `__llvm_libc_set_c_main` call
+  beside it (one trailer item); M29's planned "an object's `exit` wins" rule extends the exit field to the host
+  triples (P-1r row R5: M29.a, M29.b and M29.d cite P-2's names; M31.b's `TrailerExit.cpp` edits name the file P-2
+  created or extended). A `-shared` output has no `'<msil>Main'` and makes neither call.
+
+#### 5.18.6 msil-ld on the portable triples
+
+- **PL1 Target gate.** `lld/MSIL/Driver.cpp` `isSupportedTarget` accepts `msil64` with OS `dotnet`; `msil32` is T-P1
+  (5.18.11); `getMSILTriple` returns an msil-arch triple as it is (PT2). An input whose record triple key differs is
+  refused as today (`hasTripleKey`), so host and portable objects or assemblies never mix. On every triple msil-ld also
+  compares each CIL object's PE format and COFF machine with `PEOptions::get(<target>)`'s envelope and refuses a
+  mismatch, T-P12: `'<file>' is a <format> CIL object for machine <machine>, which <triple> does not link (it links
+  <format> objects for machine <machine>)` (`<format>` is `PE32` or `PE32+`, `<machine>` the COFF value in hex), so a
+  PE32/I386 msil64 object never links silently into a host link even if its record's triple key were forged; every valid
+  host link is unchanged (LR4; `lld/test/MSIL/portable-machine.test`). The envelope is also checked where it is written
+  (`checkContent`, PE2) and by `msil/utils/mdtools/cli-corpus-check.py`'s O1 (PE3).
+- **PL2 No native libraries.** On dotnet, late binding has only step 1 (Design.md 5.2: objects, archives, toolchain
+  assemblies); step 2 (native libraries) does not exist. `mayBindNatively` is false for every name; `isCompatibleCOFF`,
+  `isCompatibleELF` and `isOtherFormat` (`lld/MSIL/NativeLibraries.cpp`) refuse every native library. A native library
+  given as an input, an import library, or an archive with no CIL or bitcode member is T-P4: `'<file>' is a native
+  library, which msil64-unknown-dotnet cannot link: the portable target binds no native code`. There are no
+  data-import helpers, no `environ` binding, no envp constructor, no P/Invoke. An archive with no members at all (the
+  sysroot's `libm.a`, PV3) is not native: it defines nothing and links as an empty static library.
+- **PL3 Undefined symbols.** A strong undefined symbol is an error with the usual `>>> referenced by` lines. For a C
+  library name, the class line N6 (5.14.2; after the first line, before `>>> referenced by`) is added:
+  `>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide` when an input named
+  `c.dll` takes part, else `>>> a C library function; link the managed C library c.dll (-lc)`. A name is a C library
+  name when `TargetLibraryInfo::getLibFunc` knows it or when it is in `lld/MSIL/CLibraryNames.def`, the sorted,
+  checked-in list of llvm-libc's public function names that TLI lacks (`strftime`, `localtime`, `pthread_create`,
+  `thrd_create`, `signal`, `raise`, `fe*`, ...), generated by P-1a's lld WP from the `functions:` entries of
+  `libc/include/**/*.yaml`; the list is a non-hot file of `P-1a/lld`. The line is a hint: a name missing from both
+  sources still fails as an undefined symbol, only without N6. An lld test pins N6 for `malloc` (a TLI name) and
+  `pthread_create` (a list name). N1-N3 keep their lines (5.14.2); N2's on dotnet reads `>>> an atomic operation
+  (libatomic's interface), which msil64-unknown-dotnet does not provide yet` until M30 (sized) and P-3 (the lock path).
+  Weak undefined symbols keep today's non-Windows rule.
+- **PL4 Explicit import attributes.** `import_module`/`import_name` (5.10.7, which `addMSILImportAttributes` turns into
+  P/Invokes on every MSIL triple) are errors on the portable triples (brief Q3 (a)), in the backend
+  (`MSIL::checkPortableModule` in `llvm/lib/Target/MSIL/MSILPortable.cpp`, called from `MSILPrepareIR`, for `-S` and
+  objects) and in msil-ld (for bitcode and older objects), T-P2: `'<f>' is declared with import module '<module>',
+  which msil64-unknown-dotnet does not support: the portable target binds no native code`. Every toolchain library for
+  the portable triples, `c.dll` included, is checked to contain 0 `ImplMap` and 0 `ModuleRef` rows (`llvm-cil-dump
+  --stats-only` prints a `# table <Name> rows=N` line only for a non-empty table, so it lists neither). Managed calls
+  (MC-1, 5.20) are not P/Invokes and are not affected.
+- **PL5 `-S` externals.** `-S` output has no link step; an external function that the module does not define cannot
+  become a P/Invoke on dotnet (`getPInvokeModule` returns nullopt without an explicit import), so it is T-P3 in
+  `reportNotImported`: `function '<f>' is not defined in this module: standalone text for msil64-unknown-dotnet
+  imports nothing (link with msil-ld)` (pinned by an llc test).
+- **PL6 `-l` lookup.** On dotnet the candidates are `<name>.dll`, `lib<name>.dll`, `lib<name>.a`, never `.so`, `.lib`
+  or `.dll.a`; inside one search directory a toolchain library assembly wins over an archive unless `-Bstatic`
+  (`searchLibraryBaseName` gains the dotnet precedence; a candidate order alone does not do it, because today a static
+  candidate returns at once). This is Design.md 5.2's shared-first rule "once the toolchain ships shared library
+  assemblies of its own", scoped to the portable triples (brief Q8 (a)); host triples keep static-first and their
+  outputs stay byte-identical. `-l:<file>` takes the file as today.
+- **PL7 `-shared` exports.** The selection is (a) every symbol named by the new options `--export=<sym>`,
+  `--export-if-defined=<sym>` and `--export-list=<file>` (one name per line, `#` comments), forced even when hidden,
+  with `symbol exported via --export not found: <sym>` for a missing one (wasm-ld's semantics), plus (b) every
+  default- or protected-visibility GLOBAL or WEAK definition (`mayBeExported`'s rule), minus `--exclude-libs` members.
+  Two rules the C library's link depends on: a name given by `--export` or `--export-list` is resolved like `-u`, so it
+  extracts the archive member that defines it (`--export-if-defined` names only what is already defined), and a forced
+  export is exported even when `--exclude-libs` covers its archive. There is no dllexport mode;
+  `__declspec(dllexport)` keeps the non-Windows "unknown attribute ignored" warning. WEAK COMDAT copies stay exported
+  (LTO.cpp's export-candidate rule excludes them only on Windows). Phase 2 decision Q21's "defined in X and exported by
+  Y" warning applies unchanged on dotnet, WEAK/WEAK pairs included; any change for such pairs belongs to the C++
+  library work. The three options are new and added for every triple (they are generic and change nothing unless
+  used; `--exclude-libs` exists already), but only the portable C library relies on them: `c.dll` is linked from the
+  build tree's `libc.a` with `--exclude-libs=ALL --export-list=msil/lib/libc/msil64-unknown-dotnet.exports`, the
+  generated, checked-in, append-only C ABI (brief Q17 (a), 5.19.7), and llvm-libc's objects stay hidden (no upstream
+  visibility patch). P-1a's lld tests pin both rules with an archive-only definition, with and without
+  `--exclude-libs=ALL`, and on `x86_64-unknown-linux-gnu-msil` too.
+- **PL8 C runtime identity.** The identity is recorded in the output's library symbol table (`table.CRuntime`), as
+  today, and `AssemblyFiles.cpp` keeps refusing a mismatch when both sides are not `none`. On dotnet: the C library
+  itself is the `--shared` output whose assembly name is `c` (`c.dll`), and it records the identity `c` whether or not
+  it links `-lc`; every other output records `c` when it links `-lc` and `none` otherwise (`getCRuntimeIdentity`'s
+  existing rule). An output on dotnet whose simple name equals a referenced assembly's is T-P13 (portable-loader R5: the
+  .NET host can resolve the wrong file): `output assembly '<name>' has the simple name of the referenced assembly
+  '<file>': the .NET host can load one in place of the other`. The assembly name `c` is reserved for the C library: an
+  output on dotnet named `c` that is not `--shared` (a program `c.exe`, with or without `-lc`) is T-P14: `the assembly
+  name 'c' is reserved for the C library on msil64-unknown-dotnet: only a --shared link may produce c.dll`.
+- **PL9 Long double, data model, helpers.** `hasWideNativeLongDouble` is false (no `msil_longdouble.c` forwarders, no
+  native `long double` table); `setDataModel` and the N1 set follow PT7 and PT8.
+- **PL10 No static C library before P-3.** On `*-unknown-dotnet`, an output other than the C library itself (the
+  `--shared` output named `c`, PL8) that takes any definition from a member of an archive whose symbol index defines
+  `__llvm_libc_errno` (5.19.5's exported errno provider, defined in `libc/src/__support/OSUtil/dotnet/errno.cpp`), the
+  errno member or any other (`strtok`, `strerror`), is an error, T-P11: `the C library cannot be linked statically for
+  msil64-unknown-dotnet yet: link the shared C library c.dll (-lc)`. The rule is P-1a's msil-ld work (a stand-in archive
+  pins it in `lld/test/MSIL/portable-libc-static.test`, also for a program that takes only a stateful member other than
+  the errno provider), pinned on the real `libc.a` by a `msil/test/Portable/90-loud` case from P-1b; P-3 lifts it with
+  mode 3 (5.19.8). Without it a direct link of the build tree's `libc.a` would silently give a static copy with its own
+  errno cell and statics, the private-state static C library the user's decision of 2026-11-01 rules out. If 5.19
+  renames the errno provider, PL10 follows the new name in the same commit.
+
+#### 5.18.7 PE image envelope and the width guard
+
+- **PE1 Envelope (msil64).** `cli::PEOptions::get` (`llvm/lib/CLI/PEWriter.cpp`, which today handles x86_64 and
+  aarch64 and errors on anything else) gets a `Triple::msil64` case: machine I386, the PE32 format (the new
+  `PEOptions::Format` member, `PE32Plus` by default, `PE32` here), ImageBase 0x400000 (executable) or 0x10000000
+  (library and object), CorFlags `ILONLY` only, SizeOfStackReserve/Commit 0x400000/0x4000 (kept: on a direct
+  Framework start the image's reserve sets the main thread's stack, measured on 64-bit and 32-bit), heap
+  0x100000/0x1000, DllCharacteristics 0x8540, COFF characteristics 0x0022 (exe) / 0x2022 (dll), as today's
+  `IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE` (plus `IMAGE_FILE_DLL`). No import table, IAT,
+  `_CorExeMain` stub or `.reloc`; AddressOfEntryPoint 0. Measured: such an image runs as a 64-bit process under .NET
+  8 and 10 on Windows and Linux and under .NET Framework 4.8 (direct start and `Assembly.LoadFrom` in a 64-bit host),
+  exactly like Roslyn's AnyCPU image with stub and `.reloc` in every cell; so the stub and `.reloc` are not needed and
+  the "PE32 needs the mscoree stub and .reloc" rationale in `PEWriter.h`/`.cpp` and 5.7.7 is dropped.
+- **PE2 Writer.** `writePEImage` takes per-format constants: optional header 224 bytes, magic 0x10B, BaseOfData (u32
+  at +24: the first data section's RVA or 0), ImageBase u32 at +28, four u32 stack/heap fields at +72, LoaderFlags at
+  +88, NumberOfRvaAndSizes at +92, data directories at +96, section table at 0x178 (the PE32+
+  `static_assert(SectionTableOffset == 0x188)` becomes a per-format one). `checkContent` accepts I386 only with PE32,
+  `ILONLY`, and neither `32BITREQUIRED` nor `32BITPREFERRED`, and refuses PE32+ with I386; its machine message stops
+  naming phase 5. Never `IMAGE_FILE_RELOCS_STRIPPED` on a DLL (every runtime refuses it) and never
+  `IMAGE_FILE_32BIT_MACHINE`. `Triple::msil32` is T-P1 (5.18.11). The callers (`lld/MSIL/Writer.cpp`
+  `Writer::writeImage`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp`, `llvm-cil-copy.cpp`) pass the triple
+  as today.
+- **PE3 Objects.** Portable CIL objects use the same PE32 I386 envelope (measured: `llvm-nm`, `llvm-ar`'s armap and
+  msil-ld read a PE32 CIL object and link it as an object and as an archive member). Contract text that says PE32+ is
+  amended (section 12 rows): 5.7.7, 5.7.10 (the canonical `Format:` line and `llvm-cil-copy`'s input), 5.8.2 O1,
+  section 10 Q1/B2's "PE32+ envelope", Design.md 5.1; `cli-corpus-check.py`'s O1 (`OBJECT_MACHINES`, "not a PE32+
+  dll") accepts the portable envelope.
+- **PE4 Why a guard.** AnyCPU also loads into every 32-bit process measured (.NET 8/10 x86, Framework 4.8 32-bit),
+  where D2's `native int` 64-bit integers silently compute wrong results (a real msil-ld output returned 48 in 64-bit
+  processes and 0 in 32-bit ones). The width guard is therefore mandatory (brief Q1 (a)), and it also refuses
+  big-endian runtimes (brief Q2 (a)): the trailer's image copy and every `ldind` assume little-endian. Hosts that the
+  guard refuses without a measurement are recorded in `llvm/docs/MSIL/Status.md` by P-1a's documentation role: Windows
+  on ARM64 without Framework 4.8.1 (AnyCPU Framework executables run under x86 emulation there, so the guard refuses
+  on a 64-bit machine), linux-arm and browser-wasm .NET (32-bit), and big-endian runtimes (s390x).
+- **PE5 Guard site.** The first code of `<Module>::.cctor` in every portable output, executable and `-shared` alike:
+  the module initializer runs before any other type's initializer and before any global method, also when a host
+  calls an export directly (measured on Framework 4.8, .NET 8 and 10), and its failure is sticky (every later access
+  rethrows `TypeInitializationException`). It is not in `'<msil>Main'`, which a library never runs. On portable
+  outputs `<Module>::.cctor` therefore always exists (today it exists only when phase 1 or phase 2 has work). The guard
+  precedes phase 1's image work and M28's `ldsfld`/`pop` touch of the data field (5.15.3 M28.b), which P-1r row R3
+  re-pins for portable outputs as "guard first, then the touch".
+- **PE6 Guard IL.** Width: `ldc.i4.m1; conv.i; conv.u8; ldc.i8 -1; bne.un FAIL_WIDTH` (the sign extension through
+  `conv.i` is load-bearing: a `conv.u` form fires on 64-bit too). Byte order: `ldc.i4.1; call uint8[]
+  System.BitConverter::GetBytes(int32); ldc.i4.0; ldelem.u1; brfalse FAIL_ORDER`. Each failure label does `ldstr` of a
+  link-time constant message and `newobj` `System.PlatformNotSupportedException::.ctor(string)`, then `throw`. The
+  messages are T-P10: `<assembly> is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is
+  32-bit` and `<assembly> is built for msil64-unknown-dotnet and needs a little-endian .NET process`. Both shapes
+  verify with ILVerify and pass `msil/utils/msil-verify.py` with no change to `ilverify-allowed.txt` (an
+  `ldind.u1`-through-a-local byte-order check fails the gates' verify step, so it is not used). Not
+  `Environment.FailFast`, which prints nothing on the .NET Framework console (the message goes only to the event log);
+  not `Environment.Exit`, which would kill a host that merely loaded a library. An executable that hits the guard
+  prints the exception on every runtime and exits 0xE0434352 on Windows and 134 on Linux; a host that loads a library
+  catches `TypeInitializationException` with the message inside.
+- **PE7 Guard placement in the sources.** The guard's IL is a part of its own, `llvm/lib/CLI/TrailerGuard.cpp`
+  (`cli::emitPortableGuard(TrailerSink &, const PortableGuard &, TrailerMethod &)`, declared in
+  `llvm/lib/CLI/TrailerParts.h`); the hot files get hooks only (5.13.1 L2): a `cli::TrailerInput` member
+  (`std::optional<cli::PortableGuard> Guard`: pointer size, assembly name, triple), the always-present
+  `<Module>::.cctor` on portable outputs and one call at the top of `cli::buildTrailer`'s initializer emission. The
+  text sink's fill is `MSILAsmPrinter::fillTrailerGuard` in `MSILTrailerTextSink.cpp` (L9); msil-ld's producer sets
+  the field in `lld/MSIL/Writer.cpp` for dotnet links. The guard needs no `TrailerDefs.def` row.
+- **PE8 BCL rows.** `BCLMembers.def` gains one block `// P-1a: the portable width and byte-order guard (plan
+  5.18.7)` with four rows, all `Required` and mscorlib-safe (both types are public in mscorlib on Framework 4.8 and
+  forwarded on modern .NET): `CLI_BCL_TYPE(PlatformNotSupportedException, "System",
+  "PlatformNotSupportedException", true)`, `CLI_BCL_METHOD(PlatformNotSupportedException_ctor, ...)` (`.ctor(string)`,
+  instance, `void`), `CLI_BCL_TYPE(BitConverter, "System", "BitConverter", true)` and
+  `CLI_BCL_METHOD(BitConverter_GetBytes, ...)` (static, `uint8[] GetBytes(int32)`). `check-mscorlib-safe.py` proves
+  them in P-1a's gate (B4) after P-1a's harness WP adds the accessibility probe (a `call` or `newobj` probe, or
+  reflection's `IsPublic` on Framework; today's `ldtoken` probe skips the access check), amending 5.11.7 (section 12
+  row). 5.13.7 B2's block heading may name a P-step or MC-1 instead of `M<n>`, and B7's planned-blocks list gains
+  P-1a's block (section 12 row). Consequences:
+  - `--print-bcl-table` changes (L7: P-1a's lld-test role re-pins it).
+  - `msil/test/M2/05-refs/mscorlib-safe.test` pins the built-in table's size (`count 20` and its listing at M26);
+    P-1a's harness-test role re-pins it to 24 with the four rows, and later milestones that append mscorlib-safe rows
+    start from P-1a's count and MC-1's (P-1r row R21).
+  - M33.a's planned block (5.16.7) also declares `CLI_BCL_TYPE(BitConverter, ...)`; a second type row would be a
+    duplicate enumerator in `BCLMembers.h`. P-1r row R18 amends 5.16.7 and M33.a: the type row exists from P-1a's
+    block, and M33.a appends only `BitConverter_DoubleToInt64Bits` and `BitConverter_Int64BitsToDouble` on it. P-1r
+    row R15 checks every planned M27-M35 block for any other type Id that P-1a or MC-1 already defines.
+- **PE9 Header and stack facts for P-4** (not used by msil64): `32BITREQUIRED` is refused loudly by 64-bit .NET on
+  Windows and Linux and by a 64-bit Framework host, and runs 32-bit on a Framework direct start;
+  `32BITREQUIRED|32BITPREFERRED` runs 64-bit on Linux .NET and loads in a 64-bit Framework host (only Windows .NET x64
+  refuses it); a PE32+ image with machine I386 behaves inconsistently; `IMAGE_FILE_32BIT_MACHINE` is ignored by every
+  loader. Design.md section 3's bullet "Pointer size is fixed at compile time" gains the portable exception (AnyCPU
+  PE32 plus the guard), approved by the user (brief Q12, DM-6).
+
+#### 5.18.8 The helper archive for the portable triples
+
+- **PH1 Location and build.** `msil64-unknown-dotnet`'s archive is
+  `<resource-dir>/lib/msil64-unknown-dotnet/libclang_rt.builtins.a` (5.14.3 A1's rule; brief Q9 (a): the resource
+  directory, so `-print-libgcc-file-name` and `getCompilerRT` work unchanged). `msil/utils/build/build-builtins.py`
+  accepts the portable triple (its usage check "is not an MSIL triple (<arch>-...-msil)" is relaxed to "an MSIL
+  triple": a `-msil` suffix or an msil arch) and builds the portable archive only when `--triple
+  msil64-unknown-dotnet` names it; it is not in the default set (`DEFAULT_TRIPLES`) or in `--all` (`ALL_TRIPLES`), and
+  `--check`/`--check-list` cover it only when the triple is named. The portable legs' setup builds it (stamped,
+  5.18.10), and the P-steps' gates name it explicitly, so no M27-M35 gate step that runs `build-builtins.py` changes.
+  A2's compile command (with `-ffreestanding`) is unchanged.
+- **PH2 compiler-rt hook.** `compiler-rt/lib/builtins/int_lib.h`'s first `COMPILER_RT_ALIAS` branch (the alias
+  attribute branch of `__ELF__`, `__MINGW32__`, `__wasm__`, ...) gains `|| defined(__dotnet__)`; without it every
+  source stops at `#error Unsupported target` (measured: unpatched, none of the 88 listed sources compiles except
+  `fp_mode.c`; with the hook all 88 do). This amends 5.13.5's "compiler-rt is not edited in Phase 3" (section 12 row,
+  upstream-hooks block, 5.18.13).
+- **PH3 Source list.** `msil/lib/builtins/sources.txt` adds the portable triple's glob to `int_util.c` and the
+  `-ftrapv` helpers (`absv`, `addv`, `mulv`, `negv`, `subv`), which are `*-linux-*` only today. Never for the portable
+  triples: `msil_longdouble.c` (`long double` is natively `double`; its glob `*-linux-*,x86_64-*-windows-gnu-*`
+  already excludes dotnet), `atomic.c` and every `__atomic_*` definition (the lock path is P-3's, 5.19), the `*ti*`
+  sources (A5), and the host families of 5.14.3 A6: `msil_ucrt_stdio.c` and `msil_ucrt_stdio_options.c`
+  (`*-windows-msvc-msil`), `msil_exit_forward.c` (M29), `msil_atomic_msvc.c` (M30), `msil_thread_exit.c` (M31),
+  `msil_cpu_model.c`, `msil_crc32c.c`, `msil_rdtsc.c` (M32) get host-only globs (P-1r rows R4, R6, R7, R8 for
+  M29-M32's `sources.txt` lines); M33's `msil_bitops.c` is portable C and applies to every triple. Without `__ELF__`,
+  `comparedf2.c` and `comparesf2.c` define no `__cmpdf2`/`__cmpsf2` aliases; the backend lowers floating-point
+  compares inline, so no MSIL code needs them, and `--check-list` and any symbol-set comparison expect the difference.
+  f16 and bf16 helpers are included (A4). The changed globs also touch the host Linux triples, so P-1a runs 5.17.7's
+  G1b step (`build-builtins.py --all`; a section 12 row adds P-1a to G1b's list).
+- **PH4 Privacy.** A7 holds: members are hidden, so `c.dll` and every other portable `-shared` output keep their own
+  copy and never export a helper.
+
+#### 5.18.9 What stays loud on the portable triples (rows for 5.15.11)
+
+5.15.11 and 5.15.12 gain a portable column for `msil64-unknown-dotnet` (P-1r row R12). "Absent" means the C library
+neither defines nor declares the name (the user's rule: before MC-1 the C library ships only freestanding entry
+points; no interim OS layer). llvm-libc's generated headers declare only shipped entry points, so an absent function
+shows up two ways: a C99 or C++ use through `c.dll`'s headers is an undeclared-function compile error, and a use
+through the program's own prototype is an undefined-symbol link error with PL3's N6 line naming `c.dll` (5.19.1 and
+5.19.16 say the same).
+
+| Feature | Loud on msil64 until | Then |
+|---|---|---|
+| Any C library function (P-1a) | P-1b: undefined symbol with N6's line (`link the managed C library c.dll (-lc)`) | `c.dll`'s freestanding entry points (5.19.4) |
+| OS-dependent C library functions: stdio streams, `printf`/`puts`/`fopen`, `malloc` family, `exit`, `_Exit`, `abort`, `getenv`, `time`, clocks, `remove`/`rename`, `tmpfile`/`tmpnam`, `strdup`, `vasprintf`/`asprintf`, `vsscanf`/`sscanf` | P-2: absent | P-2's OS layer over MC-1 (5.19.9, 5.19.10) |
+| `localtime`, `localtime_r`, `ctime`, `ctime_r`, `mktime`, `strftime`, `strftime_l` | P-2: absent (they would silently answer in UTC, and `strftime`'s `%z`/`%Z` would always print `+0000`/`UTC`; brief Q18 (a)) | P-2 (`TimeZoneInfo` through MC-1; `struct tm` with `tm_gmtoff` and `tm_zone`, brief Q19 (a)) |
+| `atexit`, `at_quick_exit`, `__cxa_atexit`, `__cxa_finalize` | P-2: absent (heap and `internal::exit`) | P-2 |
+| C++ static destructors, `__attribute__((destructor))` | P-2: `__attribute__((destructor))` (and C++ built with `-fno-use-cxa-atexit`) reaches `llvm.global_dtors`, which keeps today's compile-time diagnostic on dotnet (LR6); a C++ namespace-scope object with a destructor calls `__cxa_atexit(dtor, obj, &__dso_handle)` under clang's default `-fuse-cxa-atexit` (`Clang.cpp` turns it on for every non-Windows, non-AIX triple, dotnet included), an undefined-symbol link error (N6's line for `__cxa_atexit`, and `__dso_handle`, which msil-ld defines only from P-2, LR8) | P-2: `__cxa_atexit` in `c.dll` and msil-ld's `__dso_handle` (LR8); `llvm.global_dtors` lowered at slot P0b to `__cxa_atexit` (LR6; brief Q31 (a)) |
+| `rand`, `srand` | P-3: absent (their state is a `cpp::Atomic`, whose `__atomic_*_8` calls stay undefined until M30; no libc step between M30 and P-3 rebuilds `c.dll`) | P-3 adds them to the entry-point and append-only export lists |
+| `hsearch`, `hcreate`, `hcreate_r` | P-2: absent (heap; `randomness.h`'s raw `thread_local` would need M31) | P-2, with `randomness.h` moved to `LIBC_THREAD_LOCAL` (empty in llvm-libc's single-thread mode); per-thread under P-3's dotnet mapping (5.19.12) |
+| `strsignal`, `signal.h`, `raise`, `sigprocmask` | absent until a signal design (brief Q21 (a)) | the signal design, with Linux signal numbers |
+| Sized atomics (1-8 bytes, aligned) | M30: every atomic is an `__atomic_*` call, undefined on portable (N2's portable line) | inline (M30's lowering serves every triple; P-1r row R6) |
+| Lock-path atomics (16-byte, generic, misaligned) | P-3: undefined (N2's portable line) | interned-name `Monitor` locks, frozen under T11 at P-3's commit |
+| User `thread_local` | M31: Phase 2's error (`.tdata`/`.tbss` are not T-P8, LR7) | M31's per-output block, applied under the Dotnet rule set by P-1r row R19 (`allowsTLSTemplate`; M31.f/M31.g add one msil64 case each; M31's `__msil_thread_exit`/`__msil_thread_adopt` calls are not emitted on dotnet). `c.dll` itself never contains a `thread_local`, before or after M31 (5.19.12) |
+| Threads (`pthread_*`, `thrd_*`), C function pointer to delegate | P-3: absent | P-3 |
+| `-static` | P-3: T-P9 (driver), T-P11 (msil-ld, PL10), no `libc.a` in the sysroot (PV4) | mode 3 with the shared C state |
+| Variadic definitions and calls | none from P-1a (PC5; M26's rules; PB1's `va_arg` test) | |
+| setjmp/longjmp | M27 (MSJ1 is "any triple") | M27. 5.15.4 saves the signal mask only "on a Linux triple", so on dotnet M27 would skip it silently; P-1r row R1 extends 5.15.4's condition to `*-unknown-dotnet` (one condition in `MSILLowerSjLj`; the saved mask at offset 72 is `sizeof(sigset_t)` of 5.19's portable ABI, inside 5.15.4's 128 bytes and P-1b's 200-byte `jmp_buf`). A `sigsetjmp(buf, nonzero)` site then references `sigprocmask`, absent until the signal design: a link error with N6's line. M27's gate stays host-only; MC-1.h adds the first portable setjmp/longjmp self-check and the `sigsetjmp` mask case in `msil/test/Portable/03-sjlj` |
+| Native-callable function pointers, thunks, `--uco-thunks` (M28) | never on portable: function pointers are managed (`ldftn`/`calli`); P-1r row R2 gates M28's dispatch, thunks and callback rules off on `*-unknown-dotnet` through a `ThunkKind::Managed` entry kind (Phase 2's `ldftn Method; stsfld Field` bytes, set for every entry when `!cli::bindsNatively(TT)`) | |
+| Native libraries, import attributes (PL2 T-P4, PL4 T-P2) | permanent error (brief Q3 (a)) | |
+| Constructors with arguments (T-P6), null slots (T-P7); `.fini_array`, `.preinit_array`, `.ctors`/`.dtors`, `.CRT$X*` (T-P8, LR7) | permanent error | |
+| `-S` externals (PL5, T-P3) | permanent error | |
+| Cyclic dynamic allocas | M32 (M26's error before) | the shadow stack: H1 applies to every triple, and on dotnet its state in M31's TLS block header needs P-1r row R19 (R8) |
+| Inline assembly with operands or text, architecture intrinsics, target builtins | permanent error (no architecture; PC1) | |
+| `__float128`, `-mlong-double-*`, `-fshort-wchar` | permanent error | |
+| fenv (`fe*`), `math_errhandling`'s `MATH_ERREXCEPT` | absent: llvm-libc's dummy `FEnvImpl` would silently succeed; `math_errhandling` is `MATH_ERRNO` only (brief Q20 (a)) | no step plans them; a software fenv only on the user's request |
+| Managed calls from C | MC-1 | MC-1's attribute (5.20) |
+| Running in a 32-bit or big-endian process | permanent: the guard's `PlatformNotSupportedException` (T-P10, 5.18.7) | |
+| `msil32-unknown-dotnet` code generation and links | P-4: backend, msil-ld and PE writer errors (T-P1, 5.18.11) | P-4 |
+
+Rows of 5.15.11 that describe native behaviour (callbacks off the Phase 2 list, native variadic addresses, the M28
+trap thunks, native exit tables, the libatomic binding, structs by value at P/Invoke boundaries) do not apply to the
+portable triples, which bind no native code; P-1r row R12 adds a sentence saying so.
+
+#### 5.18.10 Test legs and lit features
+
+- **PX1 lit configuration.** `msil/test/lit.cfg.py` accepts `msil_triple=msil64-unknown-dotnet`: its "must end in
+  `-msil`" check accepts an msil-arch triple, which has no native triple, so the native-oracle and hosted features are
+  never set for it. Additions to 5.17.2 (P-1a's harness WP defines them unless marked P-1b):
+
+| Parameter | Values | Feature | Meaning |
+|---|---|---|---|
+| (derived) | | `msil-triple=msil64-unknown-dotnet`, `msil-triple-portable`, `msil-triple-msil64` | `msil_triple` is a portable triple |
+| (derived) | | `msil-portable` | the build's clang and msil-ld accept `msil64-unknown-dotnet` (any lit run; a test that compiles for the portable triple explicitly `REQUIRES:` it) |
+| (derived) | | `msil-portable-builtins` | the portable helper archive exists (5.18.8) |
+| `msil_require_portable` | 0/1 | | a missing portable toolchain, archive or (from P-1b) sysroot is a configuration error instead of UNSUPPORTED |
+| `msil_portable_sysroot` (P-1b) | path; default the build's sysroot | `msil-portable-sysroot` | the portable sysroot holds `c.dll`, the empty `libm.a` and the C headers |
+| `msil_require_x86` | 0/1 | `msil-dotnet-x86` | Windows only: a 32-bit `dotnet.exe` (.NET 8 and 10 x86) and a 32-bit Framework start are available for the guard test; with 1, their absence is a configuration error |
+
+| Substitution | Expands to |
+|---|---|
+| `%msil_portable_triple` | `msil64-unknown-dotnet` |
+| `%clang_portable`, `%llc_portable` | `clang --target=msil64-unknown-dotnet`; `llc -mtriple=msil64-unknown-dotnet` |
+| `%{msil_portable_cflags}` | `-nolibc -ffreestanding` (PV3: the helper archive stays linked, no `-lc`); the tests of `00-freestanding` |
+| `%{msil_portable_libc_cflags}` (P-1b) | `--sysroot=<msil_portable_sysroot>` with the C library linked by default; the tests that use `c.dll` |
+| `%msil_dotnet_x86` | the 32-bit host command (feature `msil-dotnet-x86`) |
+| `%msil_set_32bitreq` | writes a copy of an image with `32BITREQUIRED` set (the Framework 32-bit start of the guard test) |
+
+- **PX2 Scripts.** `msil-prog.py`, `msil-equiv.py`, `update-expected.py` and `build-builtins.py` require or append
+  `-msil` today; each accepts the portable triple (P-1a's harness role; `build-builtins.py` is P-1a's builtins role,
+  5.18.8). A portable program has no native oracle
+  before P-2: P-1a and P-1b programs are self-checking (each failed check sets a bit of the exit status), with
+  hand-written expected files under 5.17.4's portable allowance (section 12 row: the reason "portable: no stdout before
+  P-2; the program checks itself", listed in `msil/test/README.md`); from P-2 the oracle is a host-native transcript
+  of the same program. `gate-select.py expected-dirs` leaves out `msil/test/Portable` (its `SKIPPED_DIRS`, today
+  `("Inputs", "Output")`, gains `Portable`), so no G7 step runs the native oracle over it.
+- **PX3 Tests per area (P-1a).**
+  - Unit tests: `llvm/unittests/TargetParser/TripleTest.cpp` (PT1-PT5, normalization, the recursion),
+    `llvm/unittests/MC/TargetRegistry.cpp`, `llvm/unittests/CLI/PEWriterTest.cpp` (PE1/PE2's header bytes; msil32,
+    I386 with `32BITREQUIRED` and PE32+ with I386 refused; the i686 refusal kept with its new reason),
+    `TrailerTest.cpp` (guard first in one-phase and two-phase output), `ImageLayoutTest.cpp` (the Dotnet predicates,
+    the `.init_array.N` grouping).
+  - clang: `clang/test/Preprocessor/init-msil-portable.c`, `clang/test/Driver/msil-dotnet.c`,
+    `clang/test/CodeGen/MSIL/portable-abi.c` (PC2/PC4's IR shapes, empty records, `va_arg`; an `asm` with an operand
+    refused, the empty barrier kept).
+  - `llvm/test/Transforms/ExpandVariadics/msil-abi.ll`'s portable RUN line (PC5).
+  - `llvm/test/CodeGen/MSIL/portable-*.ll`: the guard's IL at the top of `<Module>::.cctor`, `conv.i` before
+    `conv.u8`; a `va_arg` that compiles (PB1); a portable libcall (`memcpy`, `ldexp`, PT7); T-P1-T-P3, T-P6-T-P8;
+    msil32 refused.
+  - `lld/test/MSIL/`: `portable-link.test` (target gate, msil32 refused, a host object refused by the triple key, T-P4
+    for a `.so`, a `.lib` and a COFF import library, N6 with and without a stand-in `c.dll`, for `malloc` and
+    `pthread_create`), `portable-machine.test` (T-P12 for an msil64 object whose COFF machine is rewritten to 0x8664 and
+    for a host object rewritten to I386/PE32; the unmodified host and portable links pass), `portable-ctors.test`
+    (order, T-P6, T-P7, T-P8 per section kind with its reason), `portable-startstop.test`, `portable-exports.test`
+    (`--export` of a hidden symbol, `--export-if-defined`, `--export-list`, the not-found text, WEAK COMDAT copies, an
+    archive-only definition with and without `--exclude-libs=ALL`, also on `x86_64-unknown-linux-gnu-msil`),
+    `portable-libc-static.test` (T-P11 with a stand-in archive, for the errno member and for a stateful member that does
+    not touch errno; the C library's own `--shared` link named `c` passes), `portable-libsearch.test` (`c.dll` beside
+    `libc.a`: dotnet takes the DLL, `-Bstatic` the archive, the host triple keeps static-first; a memberless `libm.a`),
+    `portable-identity.test` (identity `c` for a program linking `-lc`, T-P13, T-P14 for an executable named `c`),
+    `portable-guard.test` (a linked image and a `-shared` library: guard first, the T-P10 strings).
+  - `msil/test/Portable/00-freestanding/`: self-checking `-nolibc` C programs `datamodel`, `int64-arith`, `int128`,
+    `float-bits`, `varargs`, `fnptr-calli` (managed function pointers, `&f` identity across a `-shared` pair),
+    `shared-pair` (a guarded `-shared` library and a program), `ctors-order`, `startstop`, `helpers` (f16 and other
+    helpers through the archive), and `guard-x86`, which REQUIRES `msil-dotnet-x86`.
+
+  No destructor, `__dso_handle` or setjmp case belongs to P-1a: the first two are P-2's (LR6, LR8), setjmp needs M27
+  (MC-1.h, 5.18.9).
+- **PX4 The portable smoke legs.** One leg with a Windows run and a WSL run, written as the pair `portable-smoke`
+  (Windows: `msil_triple=msil64-unknown-dotnet msil_pipeline=obj msil_dotnet_runtime=10 msil_also_run=10+tc0
+  msil_run_netfx=1 msil_require_portable=1 msil_require_x86=1`, so `guard-x86` runs) and `portable-smoke-wsl` (WSL
+  .NET 10 with TC=0, `$wslRuntime`), the `-wsl` name following lit-legs' rule (`Test-WslLeg`: tag `Wsl` or a name like
+  `*-wsl`) so that `run-m1-gate.ps1 -NoWsl` leaves the WSL run out, as for `gc-churn`/`gc-churn-wsl`. Paths:
+  `msil/test/Portable` (P-1a's `00-freestanding`, then P-1b's `01-libc` and `90-loud`, MC-1's `02-managed-calls` and
+  `03-sjlj`, and P-2's directories as they appear). Setup, stamped, before the Windows run: `build-builtins.py
+  --triple msil64-unknown-dotnet`, and from P-1b `build-libc.py`; neither is a row of `msil/utils/ci/build.ps1` or
+  `build.sh`, so the CI build of every push and of `run-m1-gate.ps1` never builds the portable archive or `c.dll`.
+  - **Tag `Portable`** (a new 5.17.6 tag), run by `lit-legs.ps1 -Portable` (with `-Wsl` for the WSL half) and
+    `lit-legs.sh --portable`; `run-m1-gate.ps1` gains a `-Portable` switch, and 5.17.11's post-commit command becomes
+    `run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -Portable -CorpusCache <cache>` (a section 12 row amending
+    5.17.11). The legs are never tagged `Exit`: M35's phase gate (every default, `Wsl` and `Exit` leg, through
+    `run-m1-gate.ps1 -Exit`), M35's planned `exit-report.py` (legs tagged `''`, `Wsl` or `Exit`) and
+    `check-matrix.py --legs` (`PHASE_TAGS = ("", "Wsl", "Exit")`) never select them, so M35 certifies the host
+    triples and its gate stays as written (P-1r row R11). `lit-legs.ps1 -Describe` prints the tag like the others;
+    P-1a's harness self-tests pin it (`msil/test/harness/legs/describe.test`, `describe-sh.test`, and
+    `portable-tag.test`/`portable-tag-sh.test` beside `exit-tag.test`/`exit-tag-sh.test`).
+  - **Host legs never run them.** `msil/test/Portable/lit.local.cfg` marks every test UNSUPPORTED unless the feature
+    `msil-triple-portable` is set, and `net-core`'s `--filter-out` gains `Portable/`, so `net-core` (G3 of every
+    M27-M35 gate), `net8`, `lto`, `p3-full` and `wsl-p3`, which take `msil/test` whole, neither run nor count them.
+  - **When they run.** The portable smoke legs run in post-commit runs only (user decision); the M27-M35 gates stay
+    as written. A portable failure found by a post-commit run becomes a fix WP of the next milestone or P-step through
+    a section 12 row, as 5.17.11 says for any post-commit failure. Each P-step's own gate (P-1a, P-1b, P-2, P-3, P-4)
+    also runs that step's own portable directories as exit checks, by calling `msil/utils/build/msil-lit.ps1` on them
+    with the portable parameters (P-1a: `00-freestanding`, including `guard-x86`), never `lit-legs.ps1 -Leg
+    portable-smoke` (brief Q11 (a)). MC-1's gate runs no portable step: MC-1 is proved on the host triples and by its
+    llc and lld tests' msil64 cases, and its `02-managed-calls` and `03-sjlj` directories run only in the post-commit
+    legs.
+  - **Objects only until P-3.** The legs run `msil_pipeline=obj`; no portable LTO run exists before P-3, which adds
+    LTO to the portable legs (brief Q13 (a)); the host LTO legs cover the shared code meanwhile. There is no separate
+    32-bit leg (`guard-x86` is a test of the Windows run).
+- **PX5 Host legs and path lists.** Every P-step gate also runs 5.17.7's standard rows on the host triples, and
+  P-1a's includes LR3's G6 grep and LR4's `il-snapshot.py --compare` and `det-manifest.py compare`. The new clang tests
+  `clang/test/Preprocessor/init-msil-portable.c` and `clang/test/Driver/msil-dotnet.c` join `$checkMsil`
+  (`lit-legs.ps1`), `check_msil` (`lit-legs.sh`) and `msil/test/CMakeLists.txt`'s check-msil list, each with its
+  `fork-only` line, so the host legs run them (they need no portable runtime); `clang/test/CodeGen/MSIL/portable-abi.c`
+  is taken by the existing `clang/test/CodeGen/MSIL` entry.
+
+#### 5.18.11 msil32: reserved for P-4
+
+- **P4-1 Until P-4.** clang accepts `msil32-unknown-dotnet`: its TargetInfo (PC2's msil32 column, `__msil32__`,
+  `_ILP32`) works for preprocessing and syntax checks, and the driver builds the jobs. Code generation is refused by
+  `MSILPrepareIR.cpp`'s `isSupportedTarget` with T-P1, `target 'msil32-unknown-dotnet' is not supported yet: only
+  msil64-unknown-dotnet is implemented`; msil-ld's `isSupportedTarget` and `PEOptions::get` refuse it with the same
+  text; no helper archive, sysroot or `c.dll` exists for it. The text names no phase or step (5.14.3 A9's rule).
+- **P4-2 Each width refuses the other.** An msil32 assembly running in a 64-bit process is refused loudly (the
+  mirror of PE6, `IntPtr.Size` 8); msil32 and msil64 objects and assemblies never link together (PT8).
+- **P4-3 What P-4 owns** (recorded so that no earlier step forecloses it): the address-width parametrization of the
+  backend (about 100 I64 sites) and the D2 mirror; 4-byte pointers in the trailer, the link-info record, constructor
+  slots and function-address leaves (LR5 and `lld/MSIL/LTO.cpp` assume 8); the envelope choice for a 32-bit process
+  (PE9: `32BITREQUIRED` makes Framework start it 32-bit and makes 64-bit .NET refuse it loudly; plus a guard); 4-byte
+  `Interlocked` rows; the TLS header variant; msil32's frozen compiler-level ABI at P-4's commit (PT10: its layout,
+  PC2's msil32 column with the `_BitInt` limit 64 and no `__int128`, its ABI rules and predefines); the C library's
+  msil32 ABI items (5.19: `jmp_buf` size, `sigset_t` words, `clock_t`, `rand`'s cell).
+
+#### 5.18.12 Which step implements what
+
+| Step | This contract's parts |
+|---|---|
+| P-1a | 5.18.1 (all; PT10's msil64 freeze takes effect at P-1b), 5.18.2 (all), 5.18.3, 5.18.4 (PV1-PV3 without the sysroot contents, PV4's T-P9, PV5, PV6), 5.18.5 (LR1-LR5, LR7, LR9, LR10; LR11's P-1a shape), 5.18.6 (PL1-PL9, PL10's rule with a stand-in archive), 5.18.7 (PE1-PE8; PE4's Status.md hosts), 5.18.8, 5.18.10 (PX1-PX5 for `msil/test/Portable/00-freestanding`), 5.18.11 P4-1 and P4-2 |
+| P-1b | PV2's sysroot contents (headers, `c.dll`), PV3's empty `libm.a`, PV4's "no `libc.a` in the sysroot", PL7's `c.dll` link and export list, PL8's `c.dll` identity, PL4's 0-`ImplMap`/0-`ModuleRef` check of `c.dll`, PL10's `90-loud` case on the real `libc.a`, `msil_portable_sysroot`, `%{msil_portable_libc_cflags}`, `01-libc` and `90-loud` in the portable legs (with 5.19) |
+| P-1r | the re-pins named here: R1 (5.15.4's mask condition on dotnet), R2 (M28 off portable through `ThunkKind::Managed`), R3 (5.15.3's `<Module>::.cctor` wording, PE5), R4 and R5 (M29 reuses P-2's LR8 `__dso_handle` and LR11 exit field; R4 also carries M29's host-only `sources.txt` glob), R6, R7, R8 (M30-M32's host-only `sources.txt` globs, PH3), R9 (M33's switches on every MSIL triple), R11 (the `Portable` tag outside M35's gate, PX4), R12 (5.15.11's portable column, 5.18.9), R15 (no repeated type row, PE8), R16 (5.13.6's slot P0b, LR6), R18 (M33.a's `BitConverter` type row, PE8), R19 (M31's TLS template and `MSILLowerThreadLocal` under the Dotnet rule set, LR7; M32's H1 on dotnet), R20 (M28-M35's rule decisions on LR1's predicates and `cli::bindsNatively`, with the G6 grep rerun by their reviewers, LR3), R21 (the `mscorlib-safe.test` count chain from P-1a's 24, PE8) |
+| MC-1 | none of this contract (5.20); PL4 stays (managed calls are not P/Invokes); MC-1.h adds the first portable setjmp/longjmp self-check and the `sigsetjmp` mask case (5.18.9), after M27 |
+| P-2 | LR6 (`LowerGlobalDtorsPass` at slot P0b), LR8 (`__dso_handle`), LR11's P-2 shape (the `__llvm_libc_set_c_main` call, `exit(main())` and the dotnet `EntryPoint` exit field), PC6's TLI re-audit; `hcreate`/`hsearch` (5.18.9) |
+| P-3 | PV4's mode 3 (`libc.a` in the sysroot, the driver option, PL10 lifted), the lock path (5.18.9), `rand`/`srand`, LTO in the portable legs (PX4) |
+| P-4 | 5.18.11 P4-3, PT10's msil32 freeze |
+
+#### 5.18.13 Upstream files the portable steps change (additions to 5.13.5)
+
+Each changed upstream file has a `hook` block in `msil/utils/upstream-hooks.txt` with at least one `lit`, `gtest`,
+`compile`, `utc` or `none` line; a `fork` line alone does not satisfy a block. A new `lit` line adds lit inputs, so the
+WP that adds it updates the manifest's input-count comment.
+
+| File | Step | Change | Manifest block |
+|---|---|---|---|
+| `llvm/include/llvm/TargetParser/Triple.h` | P-1a/triple | PT1, PT3 | existing block (`gtest unittests/TargetParser/TargetParserTests.exe`, `compile`) |
+| `llvm/include/llvm/TargetParser/TripleName.def` | P-1a/triple | PT1 | new block: `gtest unittests/TargetParser/TargetParserTests.exe` |
+| `llvm/lib/TargetParser/Triple.cpp`, `llvm/lib/TargetParser/TargetDataLayout.cpp` | P-1a/triple | PT1-PT4 | existing blocks; their `gtest` lines cover the new cases |
+| `llvm/lib/MC/TargetRegistry.cpp` | P-1a/triple | PT2, PT5 | existing block (`gtest unittests/MC/MCTests.exe`) |
+| `llvm/include/llvm/IR/RuntimeLibcalls.td` | P-1a/triple | PT7 | new block: `lit llvm/test/Transforms/Util/DeclareRuntimeLibcalls/*.ll` plus a `fork` line naming the `llvm/test/CodeGen/MSIL/portable-*.ll` test that pins a portable libcall |
+| `clang/lib/Basic/Targets.cpp` | P-1a/clang | PC1's selection, PT5 | existing block, plus `fork clang/test/Preprocessor/init-msil-portable.c` and `fork clang/test/Driver/msil-dotnet.c` |
+| `clang/lib/CodeGen/TargetInfo.h`, `clang/lib/CodeGen/CMakeLists.txt` | P-1a/lists | PC4's declaration and file | new blocks: `compile` plus `fork clang/test/CodeGen/MSIL/portable-abi.c` |
+| `clang/lib/CodeGen/CodeGenModule.cpp` | P-1a/clang | PC4's `createTargetCodeGenInfo` case | existing block, plus `fork clang/test/CodeGen/MSIL/portable-abi.c` |
+| `clang/include/clang/Basic/DiagnosticDriverKinds.td` | P-1a/lists | `err_drv_msil_portable_static` (T-P9, PV4) | existing block, plus `fork clang/test/Driver/msil-dotnet.c` |
+| `llvm/lib/Transforms/IPO/ExpandVariadics.cpp` | P-1a/target | PC5 | existing block (M26's `lit llvm/test/Transforms/ExpandVariadics/*.ll`, which takes `msil-abi.ll`'s portable RUN line) |
+| `compiler-rt/lib/builtins/int_lib.h` | P-1a/builtins | PH2 | new block: `none` (compiler-rt's builtins tests are not built by the fork) plus `fork msil/test/Portable/00-freestanding/helpers.test` |
+| `llvm/unittests/TargetParser/TripleTest.cpp`, `llvm/unittests/MC/TargetRegistry.cpp` | P-1a/llc-tests | PX3's cases | existing blocks and their `gtest` lines |
+
+`clang/lib/Sema/SemaDeclAttr.cpp` is not changed (PT3). Fork files in upstream directories get `fork-only` lines:
+`clang/lib/CodeGen/Targets/MSIL.cpp`, `clang/test/Preprocessor/init-msil-portable.c` and
+`clang/test/Driver/msil-dotnet.c`; `clang/lib/Basic/Targets/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.*` and
+`llvm/test/Transforms/ExpandVariadics/msil-abi.ll` have theirs; `clang/test/CodeGen/MSIL/portable-abi.c` lies under a
+fork prefix and needs none. 5.13.5's
+closing paragraph ("compiler-rt is not edited in Phase 3"; "No Phase 3 milestone edits ... `RuntimeLibcalls.td`") and
+section 11's Phase 3 summary get the P-step exceptions (section 12 row); MC-1's `Attr.td` exemption is 5.20's;
+llvm-libc's files (each new one with its own `fork-only` line, because `check-upstream-hooks.py` matches fork-only
+entries by exact path) are 5.19's. The export list `msil/lib/libc/msil64-unknown-dotnet.exports` and the N6 name list
+`lld/MSIL/CLibraryNames.def` lie under fork prefixes and need no manifest line.
+
+#### 5.18.14 Interfaces this contract assumes
+
+- **5.13:** L1/L2/L9 (hooks in `Trailer.*`, `BCLMembers.def`, `NativeLibraries.*`, `MSILAsmPrinter.*`,
+  `MSILPrepareIR.cpp`; fills in `MSILTrailerTextSink.cpp`) with L2's fourth non-hook edit kind (LR4), 5.13.6's slots
+  (with the dotnet-only P0b reserved by P-1r row R16 and implemented by P-2), B1-B7 (with PE8's heading extension),
+  5.13.3 and 5.13.4 (rows for the new files `MSILPortable.{h,cpp}`, `TrailerGuard.cpp`,
+  `clang/lib/CodeGen/Targets/MSIL.cpp`, `CLibraryNames.def` and the P-1a roles).
+- **5.14:** N1-N3 and the new N6 line (5.14.2), A1-A9 (5.14.3), T10 for PT10's freeze wording, T11 for the portable
+  lock path at P-3.
+- **5.15:** 5.15.2's VARARG rules (PC5), 5.15.3's `<Module>::.cctor` shape (PE5) and `ThunkKind` (R2), 5.15.4's MSJ1
+  prefix "any triple" and its mask condition (R1), 5.15.5's `__dso_handle` (LR8), 5.15.7's TLS template (R19), 5.15.11
+  and 5.15.12 (5.18.9).
+- **5.16:** 5.16.7's planned `BitConverter` rows (PE8, R18).
+- **5.17:** 5.17.2's lit mechanics, 5.17.4's hand-written allowance for portable tests, 5.17.6's leg table and
+  `-Describe` (the `Portable` tag prints like the others), 5.17.7's standard gate rows and G1b, 5.17.11's post-commit
+  run (with `-Portable`) and failure rule.
+- **5.19:** the C library's entry-point list (5.19.4), errno provider `__llvm_libc_errno` (5.19.5, PL10), the
+  portable C ABI and its errno numbering (5.19.6), the export list (5.19.7, PL7), the modes (5.19.8, PV4),
+  `__llvm_libc_set_c_main` and the stdio buffering rule (5.19.9, LR11), `build-libc.py`'s sysroot install with the
+  empty `libm.a` (5.19.3, PV2, PV3).
+- **5.20:** MC-1's attribute (nothing here depends on it; PL4 does not apply to it).
+- **Design.md:** the section 3, 5.1 and 5.2 edits this contract relies on (the portable-triples bullet with `int`
+  `wint_t`, DM-5; the pointer-size bullet's portable exception, DM-6; 5.1's PE32 envelope; 5.2's dotnet late binding
+  and `-l` order), approved by the user (brief Q12).
+
+### 5.19 The managed C library (LLVM libc on the portable target)
+
+This contract fixes the C library of the portable triples (`msil64-unknown-dotnet` now, `msil32-unknown-dotnet` at
+P-4): which LLVM libc entry points ship at each stage, how the library is configured and built, the C ABI items each
+stage freezes, the shared assembly `c.dll` and the archive `libc.a`, the three C library modes, the process-wide state
+that `-static` copies share (names, layouts and versioning), .NET Framework 4.8 support, the changes to upstream
+`libc/`, and the tests' oracle. Sources: the P-0 recon reports portable-libc, portable-state, portable-linkrules,
+portable-mc1, portable-target and portable-loader
+([recon/p3/portable-libc.md](recon/p3/portable-libc.md) and its siblings
+`recon/p3/portable-{state,linkrules,mc1,target,loader}.md`, each with its verifier corrections folded in; where a
+report and its correction disagree, the correction holds), the artifacts in `recon/p3/portable-libc-files/`
+(`p1bset.py`, `overlay3/`, `run/prog.c`, `run/fmt.c`, `run/fpid.c`); the user's decisions recorded by the section 12
+rows 'C library linking modes (user, 2026-10-31)', 'Program order', 'Portable triples' and 'Portable target choices'
+(2026-11-01); and the decision brief answers (user, 2026-11-01), cited below as 'brief Q<n>'. Contracts 5.18 (target,
+driver, msil-ld rule family, trailer) and 5.20 (MC-1) are the companion contracts; 5.19.17 lists what this one assumes
+from them. Code anchors name files and functions, never a line number alone.
+
+#### 5.19.1 Rules
+
+1. **In-tree LLVM libc.** The library is the fork's own `libc/` tree, built for the portable triples. Its OS layer is
+   C/C++ code inside the libc that calls `System.*` through MC-1's managed calls (5.20). There is no ILAsm, C# or
+   compiler-intrinsic OS layer at any stage, and no OS layer at all before MC-1.
+2. **Absent until real (5.15.1 rule 1).** Before the stage that implements an OS-dependent function, the function is
+   not defined. The generated headers declare only shipped entry points (llvm-libc's own rule), so a C99 or C++ use of
+   an absent function through `<stdio.h>`, `<stdlib.h>` and the like is an undeclared-function error, and a use through
+   the program's own prototype is an undefined-symbol link error with N6's class line naming `c.dll` (5.18 PL3). This
+   is how the user's 'OS-dependent functions fail as undefined symbols at link time' (row 'Portable target choices')
+   shows up in practice. No stub that traps, returns an error code or answers in UTC stands in for a missing OS layer.
+   An entry point whose freestanding implementation gives a silently wrong answer (the `localtime` family without a
+   time-zone layer, `fenv` without floating-point status) counts as OS-dependent.
+3. **A C library the user links, not a runtime.** `c.dll` and `libc.a` are C libraries in Design.md section 6's sense
+   (its 'No runtime support assembly' bullet names the portable libc's assembly). The toolchain's own private state
+   (thunk table, TLS block, shadow stack, MSJ1 status blocks) stays per output under 5.14.4 T9. Only the C library's
+   state is process-wide (T9's portable carve-out names this section), and only the libc's own code looks names up
+   (5.19.11); no trailer helper reads or writes AppDomain data or a named slot.
+4. **Keys.** libc code selects the portable branches with `LIBC_TARGET_OS_IS_DOTNET` (from `__dotnet__`) and
+   `LIBC_TARGET_ARCH_IS_MSIL` (from `__msil32__ || __msil64__`), and public headers with `__dotnet__`, never with
+   `__MSIL__`, which every host MSIL triple also defines. The portable triples define no `__ELF__` (5.18), so
+   llvm-libc's three `__ELF__` selectors (`src/__support/OSUtil/io.h`, `src/stdlib/abort_utils.h`,
+   `include/llvm-libc-macros/time-macros.h`) never reach the baremetal layer.
+5. **One build, two packagings.** The same objects form `c.dll` and `libc.a`. Every libc symbol is hidden in the
+   objects (llvm-libc's hidden `LIBC_NAMESPACE_DECL` plus `-fvisibility=hidden`); `c.dll`'s exports come from a
+   checked-in export list (5.19.7), so `libc.a` linked into a user's `-shared` assembly re-exports nothing (brief
+   Q17 (a)).
+6. **Frozen means frozen.** An item this contract lists as frozen at a stage (5.19.5, 5.19.6, 5.19.7, 5.19.11) is
+   frozen at that stage's commit; before it a section 12 row may amend it, after it nothing changes it, and a test
+   expectation showing a change is never updated to follow it (the T11 pattern). Additions are allowed only where the
+   item says append-only.
+7. **Both runtimes.** Every default build of `c.dll` and `libc.a` runs on .NET Framework 4.8 and on modern .NET
+   (5.19.13).
+
+#### 5.19.2 Stages
+
+| Stage | Program position | What the libc gains | Modes available on portable |
+| --- | --- | --- | --- |
+| P-1b | after P-1a (after M26) | Freestanding entry points only (5.19.4); errno over one exported cell (kept through P-2); `c.dll` and an empty `libm.a` in the sysroot; headers for the shipped set | mode 2 |
+| P-2 | after MC-1 (after M27) | The single-threaded OS layer over the BCL: heap, stdio over `System.IO.Stream`, `exit`/`atexit`/`abort`, environment, clocks and time zone; global destructors through `__cxa_atexit`; `__llvm_libc_set_c_main`; the process root at layout major 0 (no per-thread state) | mode 2 |
+| P-3 | after M28-M30 | Threads (C11 `thrd_*`, POSIX `pthread_*`), `LIBC_THREAD_MODE_PLATFORM`, per-thread state (the per-thread C block, errno moves into it, its holder), `rand`/`srand`, the libc's wait buckets, the `AppDomain.ProcessExit` subscription, the shared layouts frozen as major 1, `-static` enabled | modes 2 and 3 |
+| P-4 | after M35 | The same contract at 4-byte pointers for `msil32-unknown-dotnet` (its sizes in 5.19.6) | modes 2 and 3 |
+
+Mode 1 (host triple, platform libc through P/Invoke) is Phase 1-3's model and is unchanged by every stage.
+
+#### 5.19.3 Tree layout and build
+
+**New fork files** (no upstream conflict; owned by the stage that creates them). The files under `libc/` lie outside
+`msil/utils/ci/check-upstream-hooks.py`'s `FORK_PREFIXES`, and the manifest matches `fork-only` lines by exact path,
+so each new file gets its own `fork-only` line in `msil/utils/upstream-hooks.txt`, written by the WP that owns the
+manifest in the stage that creates the file (P-1b.c at P-1b; a directory entry does not work). The export lists sit
+under `msil/`, a fork prefix, and need no manifest line.
+
+| Path | Stage | Contents |
+| --- | --- | --- |
+| `libc/config/dotnet/config.json` | P-1b | Options (below) |
+| `libc/config/dotnet/msil64/entrypoints.txt`, `headers.txt` | P-1b, appended by P-2, P-3 | The shipped set (5.19.4) and the headers that declare exactly it |
+| `libc/config/dotnet/msil32/` | P-4 | The msil32 lists (same names) |
+| `msil/lib/libc/msil64-unknown-dotnet.exports` | P-1b, append-only | `c.dll`'s export list, generated from `entrypoints.txt` plus the named extras (5.19.7); `msil32-unknown-dotnet.exports` at P-4 |
+| `libc/src/__support/OSUtil/dotnet/` | P-1b: `io.h` (declares `write_to_stderr`, defines nothing), `errno.cpp`, `CMakeLists.txt` (the `dotnet_util` library); P-2: `io.cpp`, `exit.cpp`, `shared_state.{h,cpp}`, the MC-1 declarations of the BCL members the layer calls; P-3: `threads/` | The OS layer |
+| `libc/src/__support/StringUtil/tables/dotnet_platform_errors.h` | P-1b | The `strerror` table of 5.19.5 |
+| `libc/src/__support/File/dotnet/` | P-2 | `DotnetFile` (5.19.9) |
+| `libc/src/stdio/dotnet/` | P-2 | The standard-stream accessors of 5.19.9, `remove`, `rename`, `tmpfile`, `tmpnam` (upstream's are Linux-only) |
+| `libc/src/stdlib/dotnet/` | P-2 | `malloc` family (5.19.10), `getenv` |
+| `libc/src/time/dotnet/` | P-2 | clocks and the time-zone layer |
+| `libc/include/llvm-libc-macros/dotnet/time-macros.h`, `libc/include/llvm-libc-macros/dotnet/CMakeLists.txt` | P-2 | The dotnet `CLOCK_*` values; the CMake file that `libc/include/llvm-libc-macros/CMakeLists.txt` picks up through `add_subdirectory(${LIBC_TARGET_OS})` when the directory exists |
+| `libc/src/__support/threads/dotnet/` | P-3 | The dotnet `Mutex` and the wait buckets (5.19.12) |
+
+No `libc/include/llvm-libc-macros/dotnet/` errno family exists: the errno numbers extend upstream's generic set
+(5.19.5).
+
+**`libc/config/dotnet/config.json` (P-1b).** Start from `libc/config/baremetal/config.json` and change it to:
+errno `LIBC_ERRNO_MODE_EXTERNAL`; thread mode `LIBC_THREAD_MODE_SINGLE` (P-3: `LIBC_THREAD_MODE_PLATFORM`, with
+5.19.12's rule that no shipped object contains a `thread_local`); printf float, index mode, `%n`, `%m` (strerror) and
+wide enabled, fixed point and `_BitInt` disabled, `LIBC_CONF_PRINTF_MODULAR` false (its default: the installed
+headers carry no `modular_format` attribute and the libc defines no `__*_modular` function, so no program can
+reference one); scanf float and index enabled; `str_to_float` Eisel-Lemire and Clinger fast paths enabled; qsort the
+default implementation, not heap sort; math `LIBC_MATH_NO_EXCEPT | LIBC_MATH_ASSUME_ROUND_NEAREST_ONLY` only, so math
+keeps errno (`MATH_ERRNO`), the accurate passes and full tables (the CLR always rounds to nearest and there is no
+fenv, 5.19.4); null checks on; the stack protector off (MSIL has none); `LIBC_CONF_CTYPE_SMALLER_ASCII` at its default
+(false). Release builds (`CMAKE_BUILD_TYPE=Release`) define `NDEBUG`, so no shipped entry point reaches `LIBC_ASSERT`
+and through it `write_to_stderr` or `internal::exit`.
+
+**CMake (upstream file, conflict surface in 5.19.14).** `libc/cmake/modules/LLVMLibCArchitectures.cmake`: the arch
+regexes `^msil64` and `^msil32`, and in `get_arch_and_system_from_triple` an explicit special case, like the GPU one,
+that reads component 2 of a three-component `msil{32,64}-unknown-dotnet` triple as the system and maps `dotnet` to
+`LIBC_TARGET_OS` `dotnet` (the generic rule takes component `size-2`, `unknown`, and would select baremetal). No
+default-visibility `LLVM_LIBC_FUNCTION_ATTR`/`LLVM_LIBC_VARIABLE_ATTR` is set (rule 5). `-fvisibility=hidden` comes from
+`build-libc.py`'s compiler flags, so `LLVMLibCCompileOptionRules.cmake` is not edited.
+
+**Build driver.** A fork script `msil/utils/build/build-libc.py` (P-1b) runs libc's CMake in its own build directory
+`<build>/runtimes/msil64-unknown-dotnet` with `LLVM_LIBC_FULL_BUILD=ON`, `LIBC_TARGET_TRIPLE=msil64-unknown-dotnet`,
+`LIBC_CONFIG_PATH` (the dotnet config), `CMAKE_C_COMPILER_TARGET`/`CMAKE_CXX_COMPILER_TARGET`,
+`CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`, `CMAKE_SYSTEM_NAME=Generic`, `CMAKE_BUILD_TYPE=Release`,
+`LLVM_INCLUDE_TESTS=OFF` and `CMAKE_MAKE_PROGRAM`, with the just-built clang, `llvm-ar` and msil-ld; `cmake.exe` comes
+from the Visual Studio environment of `msil/utils/build/msil-env.ps1`, and the script takes the build directory's
+exclusive lock (`msil/utils/build/msil-lock.ps1`'s `.msil-build.lock`, as `build-builtins.py` does) while it writes
+under `<build>/runtimes/` and the sysroot. It links `c.dll` from the libc build's archive with `msil-ld -shared
+--export-list=msil/lib/libc/msil64-unknown-dotnet.exports --exclude-libs=ALL --assembly-version=<5.19.7>` plus the
+msil64 helper archive from the resource directory (5.18.8, brief Q9 (a)), which relies on 5.18 PL7's two
+`--export-list` rules (a forced export extracts the archive member that defines it, as `-u` does, and wins over
+`--exclude-libs`). From P-2 the link adds `--reference` to the Framework 4.8 implementation assemblies `mscorlib.dll`
+and `System.dll` of the build host (5.19.13); on a host without them the script stops with a message naming the
+missing file and never falls back to the built-in table or another reference set. It installs the headers and `c.dll`
+into the portable sysroot that 5.18 PV2 searches (`<sysroot>/include/` and `<sysroot>/lib/msil64-unknown-dotnet/`;
+in the build tree `<build>/lib/clang-runtimes/msil64-unknown-dotnet/`), together with an empty `libm.a` (an archive
+with no members) in the same library directory, so that build systems passing `-lm` link (brief Q14 (a); the math
+functions are in `c.dll`). `--check` compares a rebuild with the installed files, like `build-builtins.py --check`;
+`--check-exports` regenerates the export list and compares it; `--check-append-only OLD NEW` proves a list only grew;
+the stamp records the reference set used. The intermediate archive stays in the libc build directory
+(`<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a`): `libc.a` is neither installed in the sysroot nor linkable
+into a user's output before P-3 (5.19.8). Measured by P-0's feasibility review (Windows host, the build's clang, a
+baremetal-style configuration of 434 entry points): configure 60 s, build and header generation 8 min 17 s at 2 jobs
+on a loaded host. CMake's compiler-identification step on msil64 CIL objects is not measured yet: P-1b's build WP
+checks it first and, if it fails, stops and reports; it never falls back to a hand-written source list.
+
+`build-libc.py` is not a row of `msil/utils/ci/build.ps1`/`build.sh`: it runs only as the stamped setup step of the
+post-commit portable legs (5.18 PX4) and as explicit steps of the P-step gates, so a portable libc failure never turns
+the CI build of a host milestone red. A CI row, if wanted later, comes with its own section 12 row and harness pins.
+
+#### 5.19.4 Entry points per stage
+
+**P-1b: the measured freestanding closure.** `entrypoints.txt` lists every candidate entry point whose object and
+transitive support objects reference no heap, atomics, exit path, clock, `File`, environment, signal names or
+hash-table global (portable-libc 6.6, measured by `p1bset.py` and re-run by its verifier). The measured set has 514
+entry points (`p1bset.py` prints 515, which counts the support object `locale/locale.cpp`): ctype 30, inttypes 6,
+locale 6 (`duplocale`, `freelocale`, `localeconv`, `newlocale`, `setlocale`, `uselocale`), math 243 (no f16, bf16 or
+f128), search 7 (`insque`, `lfind`, `lsearch`, `remque`, `tfind`, `twalk`, `twalk_r`), stdbit 70, stdio 2
+(`vsnprintf`, `vsprintf`), stdlib 38 (`a64l` through `wctomb`, including `qsort`, `qsort_r`, `strto*`, `strfrom*`,
+`div`/`ldiv`/`lldiv`, `mblen`, `mbtowc`, `mbstowcs`, `wcstombs`, `wctomb`, `l64a`, `bsearch`, `memalignment`), string
+40 (including `strerror`, `strerror_r`, `strtok`, `strtok_r`, `memset_explicit`), strings 12, time 13 and wchar 47.
+Changes to the measured set:
+
+- **Added because M26 precedes P-1b** (portable-libc verifier): `snprintf`, `sprintf` (closure equal to
+  `vsnprintf`'s). They need 5.18's msil64 case of M26's ExpandVariadics hook (`VariadicABIInfo::create`).
+- **Removed as stubs** (rule 2): `swprintf` (`src/wchar/swprintf.cpp` sets `ENOSYS` and always returns -1; the tree
+  has no `vswprintf`) and `strptime` (`src/time/strptime.cpp` always returns a null pointer, and its third parameter
+  is `const struct tm *`). Both stay absent (undeclared; N6 through a program's own prototype) until upstream
+  implements them and a libc stage adds them with a section 12 row. P-1b.a, the libc-config WP, checks every listed
+  entry point's source for a body that ignores its arguments and reports any other such stub before listing it.
+- **Added:** `complex` (16) and `wctype` (16), measured to compile (16 of 16 each); the P-1b WP runs the same closure
+  check on them before listing them.
+- **Removed as silently wrong** (rule 2; brief Q18 (a)): `localtime`, `localtime_r`, `ctime`, `ctime_r`, `mktime`
+  (they answer in UTC, `src/time/time_utils.h`), `strftime` and `strftime_l` (`%z` and `%Z` always print `+0000` and
+  `UTC` off Linux). The time area ships 5: `asctime`, `asctime_r`, `difftime`, `gmtime` and `gmtime_r`
+  (`strptime` is an upstream stub, removed above).
+- **Not shipped:** fenv (16): with no `FEnvImpl` for the arch, `src/__support/FPUtil/FEnvImpl.h`'s dummy functions
+  "silently succeed" and `fetestexcept` always answers 0 (brief Q20 (a): no fenv functions; a software fenv comes only
+  on the user's request, with its own section 12 row); f16/bf16 (187): their closure was not measured, although the
+  msil64 helper archive holds the half helpers from P-1a (5.18.8); no stage plans them, so they stay absent until a
+  section 12 row adds them; f128 (no binary128 `long double`); the `setjmp.h` functions are declared but never defined
+  (M27 intercepts the calls, 5.19.6).
+
+Result: 514 - 7 - 1 + 2 + 32 = about 540 names (generated, never typed; the WP pins the exact count in its export-list
+test).
+
+**Withheld at P-1b, with the stage that brings each:**
+
+| Entry points | Missing prerequisite | Stage |
+| --- | --- | --- |
+| `malloc`, `calloc`, `realloc`, `free`, `aligned_alloc`, `strdup`, `strndup`, `wcsdup`, `tsearch`, `tdelete`, `tdestroy`, `hsearch_r`, `hdestroy`, `hdestroy_r`, `hcreate`, `hcreate_r`, `hsearch`, `vasprintf`, `asprintf`, `vsscanf`, `sscanf` | heap (and for `hcreate`/`hsearch` the `LIBC_THREAD_LOCAL` fix in `src/__support/HashTable/randomness.h`) | P-2 |
+| `exit`, `_Exit`, `quick_exit`, `atexit`, `at_quick_exit`, `abort`, `__cxa_atexit`, `__cxa_finalize`, `assert` (via `__assert_fail`) | `internal::exit` and the heap (`ReverseOrderBlockStore` allocates) | P-2 |
+| stdio streams: `fopen` ... `printf`, `fprintf`, `scanf`, `puts`, `putchar`, the wide stream functions (`fgetwc` ... `ungetwc`), `perror`, `remove`, `rename`, `tmpfile`, `tmpnam` | `File` platform half, heap | P-2 |
+| `getenv`, `setenv`, `unsetenv`, `getopt` and its variables | environment, stdio (per copy, 5.19.11) | P-2 |
+| `time`, `clock`, `clock_gettime`, `timespec_get`, `localtime` family, `mktime`, `strftime`, `strftime_l`, `tzset` | clock and time zone | P-2 |
+| `rand`, `srand` | `cpp::Atomic<unsigned long>` (`src/stdlib/rand_util.cpp`) compiles to `__atomic_*_8` calls, undefined on portable until M30's inline atomics; M30 does not touch the libc | P-3, the first libc stage after M30: it adds both to `entrypoints.txt` and the append-only export list, with the shared MISC cell |
+| `strsignal`, `signal.h`, `raise`, `signal`, `sigprocmask` | a signal design | the signal design, not before P-3 (brief Q21 (a)) |
+| `thrd_*`, `mtx_*`, `cnd_*`, `tss_*`, `call_once`, `pthread_*`, `__cxa_thread_atexit_impl` | threads | P-3 |
+| `environ`, `open`/`read`/`write`, `fileno`, `fdopen`, `fcntl.h`, `popen` | a design for `environ` and for POSIX descriptors | not through P-3 (5.19.10) |
+
+**P-2 adds** the heap, stdio, exit, environment and time rows above, with `hcreate`/`hsearch` (`randomness.h` moved
+to `LIBC_THREAD_LOCAL`, empty in SINGLE mode; per thread under P-3's thread-local rule, 5.19.12). **P-3 adds** the
+thread rows and `rand`/`srand` with their shared cell. Every stage's export-list test (5.19.15) proves that the list
+only grew. P-2 also re-audits `TargetLibraryInfo` on OS `dotnet`, which treats every C function as available, for
+folds into functions `c.dll` lacks at that stage (for example `printf` to `puts`).
+
+#### 5.19.5 errno
+
+- **Mode.** `LIBC_ERRNO_MODE_EXTERNAL` from P-1b on. The public expression is llvm-libc's
+  `errno` = `(*__llvm_libc_errno())` (`libc/include/errno.h.def`), frozen at P-1b. `__llvm_libc_errno` is defined in
+  `libc/src/__support/OSUtil/dotnet/errno.cpp` and exported by `c.dll` (5.19.7).
+- **Storage per stage.** P-1b and P-2: one process cell in `c.dll` (a hidden global in `errno.cpp`), following the
+  user's order, in which per-thread state belongs to P-3 (brief Q16 (a)). P-3: the `errno` field of the calling
+  thread's C block (5.19.11), so every `-static` copy and `c.dll` see one errno per thread; `__llvm_libc_errno`'s ABI
+  does not change. SHARED mode is not used: its `shared_errno` in `libc/src/errno/libc_errno.cpp` is per copy and
+  would need a mode switch at P-3. THREAD_LOCAL is not used: it needs M31's `thread_local` and gives each copy its own
+  errno.
+- **Thread safety before P-3: a stated exception to fail-loudly** (brief Q16 (a)). The one cell races silently when
+  a .NET host calls `c.dll` from several threads; so do `strtok`, the hidden `mbstate_t` statics, `setlocale` and the
+  per-call result buffers. No loud check is possible before MC-1, and P-2 adds none (a per-call thread check on every
+  errno access would cost every C program). Until P-3, `c.dll` is a single-threaded C library, as any
+  `LIBC_THREAD_MODE_SINGLE` build is; Status.md states it as an exception to fail-loudly.
+- **Numbering (frozen at P-1b; brief Q15 (b)).** The portable triples take llvm-libc's generic errno set, which
+  `libc/hdr/errno_macros.h` and `libc/include/errno.h.def` already select for a full build that defines neither
+  `__linux__` nor `__APPLE__`; neither file changes. The set is extended in place in the one upstream header
+  `libc/include/llvm-libc-macros/generic-error-number-macros.h`:
+  - Its 36 names keep their numbers: `EPERM` .. `EPIPE` 1-32, `EDOM` 33, `ERANGE` 34, `EOVERFLOW` 35, `EILSEQ` 84.
+  - It gains the 44 names of `src/__support/StringUtil/tables/posix_errors.h` that it lacks, each with Linux
+    asm-generic's number except `EDEADLK`, whose Linux number 35 is the generic `EOVERFLOW`; `EDEADLK` takes 75,
+    Linux's `EOVERFLOW` number, which the generic set leaves free. So the portable numbering equals Linux's except
+    that `EOVERFLOW` and `EDEADLK` swap 35 and 75. The added names: `ENAMETOOLONG` 36, `ENOLCK` 37, `ENOSYS` 38,
+    `ENOTEMPTY` 39, `ELOOP` 40, `ENOMSG` 42, `EIDRM` 43, `ENOSTR` 60, `ENODATA` 61, `ETIME` 62, `ENOSR` 63,
+    `ENOLINK` 67, `EPROTO` 71, `EMULTIHOP` 72, `EBADMSG` 74, `EDEADLK` 75, `ENOTSOCK` 88, `EDESTADDRREQ` 89,
+    `EMSGSIZE` 90, `EPROTOTYPE` 91, `ENOPROTOOPT` 92, `EPROTONOSUPPORT` 93, `ENOTSUP` 95, `EAFNOSUPPORT` 97,
+    `EADDRINUSE` 98, `EADDRNOTAVAIL` 99, `ENETDOWN` 100, `ENETUNREACH` 101, `ENETRESET` 102, `ECONNABORTED` 103,
+    `ECONNRESET` 104, `ENOBUFS` 105, `EISCONN` 106, `ENOTCONN` 107, `ETIMEDOUT` 110, `ECONNREFUSED` 111,
+    `EHOSTUNREACH` 113, `EALREADY` 114, `EINPROGRESS` 115, `ESTALE` 116, `EDQUOT` 122, `ECANCELED` 125,
+    `EOWNERDEAD` 130, `ENOTRECOVERABLE` 131.
+  - It gains the two POSIX aliases `EWOULDBLOCK` (= `EAGAIN`) and `EOPNOTSUPP` (= `ENOTSUP`): 82 names, 80 numbers.
+  - **Who else sees it.** Every llvm-libc full build that takes the generic family (the baremetal configurations, the
+  GPU targets and any other target defining neither `__linux__` nor `__APPLE__`) gains these macros in its
+  `<errno.h>`; no existing number changes, no libc source tests one of the added names with `#ifdef`, and their
+  `strerror` tables (`tables/minimal_platform_errors.h`) are untouched. This is a recorded upstream conflict surface
+  (5.19.14). If an upstream merge brings a different number for one of the added names, the merge keeps the frozen
+  number by moving that name's definition under a `__dotnet__` branch of the same header; a portable number never
+  changes.
+  - **Messages.** `src/__support/StringUtil/platform_errors.h` gets a dotnet branch to the new fork table
+  `tables/dotnet_platform_errors.h`: `STDC_ERRORS + POSIX_ERRORS` plus a one-entry table for `ENOTBLK` (the one
+  generic name in neither), with the matching errno-name tables, so `strerror`, `strerror_r` and printf `%m`/`%#m`
+  name every number. Upstream's `tables/linux_platform_errors.h` is not used: its Linux extension table names codes
+  the generic set does not define.
+- **MC-1 mapping (P-2).** The OS layer maps BCL exceptions to these codes through 5.20's `msil_catch` entries, tested
+  by type in the order written (5.20 MA5), so a derived type precedes its base: `FileNotFoundException` and
+  `DirectoryNotFoundException` to `ENOENT`, `UnauthorizedAccessException` to `EACCES`, `PathTooLongException` to
+  `ENAMETOOLONG`, `DecoderFallbackException` to `EILSEQ`, then any other `IOException` to `EIO`. `msil_catch` cannot
+  test an HResult, so no `IOException` is told apart by one. Each P-2 primitive lists its own entries; unlisted
+  exceptions escape loudly (5.20.8).
+
+#### 5.19.6 The portable C ABI, item by item
+
+Items 5.18 fixes at P-1a and freezes for msil64 at P-1b (cited, not re-decided here): the data model (LP64 / ILP32),
+`wchar_t` 32-bit signed (user), `wint_t` `int` (brief Q5 (b), the wasm choice) with no `__WINT_UNSIGNED__`, plain
+`char` signed, `long double` = IEEE binary64, `max_align_t` clang's natural 8 (brief Q6 (a)), the wasm-style type
+spellings (`size_t` `unsigned long`, `int64_t` `long long` on both widths, brief Q4 (a)), the `va_list` (a `char *`),
+the struct-return and by-value rules of the portable ABIInfo, `__int128` on msil64 only. llvm-libc's `wint_t`
+(`__WINT_TYPE__`), `WINT_MIN`/`WINT_MAX` and `WEOF` follow the compiler, so they need no dotnet branch:
+`include/llvm-libc-macros/wchar-macros.h`'s `WEOF`, `((wint_t)(0xffffffffu))`, is `-1` of type `int` on the portable
+triples, as the user decided. The libc frozen items:
+
+| Item | msil64 | msil32 (P-4) | Frozen at |
+| --- | --- | --- | --- |
+| errno expression and numbering | 5.19.5 | same | P-1b |
+| `WEOF` | `-1`, type `int` (llvm-libc's definition over `int` `wint_t`) | same | P-1b |
+| `time_t` | `int64_t` (`time_t_64.h`) | same | P-1b |
+| `struct timespec` | `{time_t, int64_t}`, 16 bytes | 16 bytes | P-1b |
+| `struct tm` | llvm-libc's ISO fields plus `long tm_gmtoff` and `const char *tm_zone` (brief Q19 (a)) | same fields | P-1b |
+| `clock_t` | `long` (8 bytes, llvm-libc's) | `long long` (llvm-libc's `long` would be 4; a `__dotnet__` branch of `clock_t.h`) | P-1b (msil64), P-4 (msil32) |
+| `mbstate_t` | 8 bytes (`uint32_t` and two `uint8_t`) | 8 bytes | P-1b |
+| `div_t`, `ldiv_t`, `lldiv_t`, `imaxdiv_t` | llvm-libc's | same | P-1b |
+| `locale_t`, `LC_*` values, `struct lconv` | llvm-libc's (`localeconv` ships) | same | P-1b |
+| `FILE` | incomplete type | same | P-1b |
+| `jmp_buf`, `sigjmp_buf` | opaque, 200 bytes, 8-aligned (`uint64_t[25]`): 5.15.4's MSJ1 prefix at 0-15, the mask flag at 64 and the saved mask at 72 inside the 200 bytes, sized by the signal design | P-4 fixes the size | P-1b (size and prefix) |
+| `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp` | declared in `setjmp.h`, never defined (MSILLowerSjLj intercepts calls from M27; before M27 they are M27's loud error) | same | P-1b |
+| `fpos_t`, `off_t` | `{off_t, mbstate_t}` (16 bytes), `int64_t` | same | P-2 |
+| `BUFSIZ`, `EOF`, `SEEK_*`, `FILENAME_MAX`, `L_tmpnam`, `TMP_MAX` | llvm-libc's 1024, -1, 0/1/2, 4096 and 1000000; `L_tmpnam` 4096 (= `FILENAME_MAX`, through a `__dotnet__` branch in `stdio-macros.h`), because `tmpnam`'s names lie under `Path.GetTempPath()`, not llvm-libc's 20-byte `/tmp/` names | same | P-2 |
+| `clockid_t`, `CLOCK_*` values, `CLOCKS_PER_SEC` | Linux's `CLOCK_*` values (`dotnet/time-macros.h`); `CLOCKS_PER_SEC` 1000000 | same | P-2 |
+| `stdin`, `stdout`, `stderr` spelling | lvalue macros over exported accessors (5.19.9) | same | P-2 |
+| signal numbers, `NSIG`, `sigset_t`, `SIG_DFL`/`SIG_IGN`/`SIG_ERR` | Linux numbering 1-64, `NSIG` 65, `__NSIGSET_WORDS` = 64/(8*`sizeof(unsigned long)`) (1 word), 0/1/-1 | 2 words, 4-aligned | the signal design (brief Q21 (a)) |
+| `once_flag`, `mtx_t`, `cnd_t`, `thrd_t`, `tss_t`, `pthread_*_t`, `pthread_key_t` | llvm-libc's types with 32-bit keys (brief Q34) | same, 4-byte pointers | P-3 |
+
+`once_flag.h`, `__jmp_buf.h` and `callonce.h` end in `#error` off their supported platforms, and `signal-macros.h`,
+`sigset_t.h` and `time-macros.h` have no portable branch today; each gets a `LIBC_TARGET_ARCH_IS_MSIL` or
+`__dotnet__` branch in the stage that freezes it. No `fenv_t` or `fcntl.h` branch is made (5.19.4, 5.19.10).
+
+#### 5.19.7 `c.dll`: the shared assembly and its export ABI
+
+- **Identity.** Assembly and file name `c` / `c.dll`, `ExportClass` `c`, C runtime identity `c` set explicitly in the
+  symbol-table attribute (5.18 PL8; portable-linkrules D11), triple key `msil64-unknown-dotnet`, data model 8,8,4,8,
+  `runtime='none'`. msil-ld refuses an output whose simple name equals a referenced library's simple name (T-P13),
+  because the .NET host can resolve the wrong file, and any output named `c` that is not `--shared` (`c.c` linked to
+  `c.exe`: T-P14) (5.18 PL8; portable-loader R5).
+- **Version.** The assembly version is `<abi-major>.<abi-minor>.0.0` (msil-ld `--assembly-version`): `1.0` at P-1b,
+  the minor raised by each stage commit that appends to the export list. Modern .NET loads a newer `c.dll` for an older
+  program and refuses an older one loudly; .NET Framework does not check versions of a non-strong-named assembly, and a
+  missing export is then a `MissingMethodException` at JIT time. `c.dll` is not strong-named; strong naming would come
+  with its own section 12 row.
+- **Exports.** Exactly the names in `msil/lib/libc/msil64-unknown-dotnet.exports`: every `entrypoints.txt` name that
+  is a C function or object, plus the named extras that are no entry point: `__llvm_libc_errno` from P-1b; from P-2
+  `__cxa_atexit` and `__cxa_finalize` (defined beside `atexit` in `src/stdlib/atexit.cpp`), the stdio accessors
+  `__llvm_libc_stdin`, `__llvm_libc_stdout`, `__llvm_libc_stderr` (5.19.9) and `__llvm_libc_set_c_main` (5.19.9;
+  brief Q28 (b)). `__assert_fail` is an entry point (`libc.src.assert.__assert_fail`). Not exported:
+  `__stack_chk_fail` (MSIL has no stack protector), support symbols, the compiler-rt builtins. The list is
+  append-only from P-1b; a name is never removed or retyped. msil-ld's `--export-list` (5.18 PL7: forced export even
+  of hidden symbols, an error for a name not defined) is the mechanism, so llvm-libc's hidden visibility
+  (portable-libc D1: `__llvm_libc_errno` is declared inside the hidden `LIBC_NAMESPACE_DECL` in
+  `src/__support/libc_errno.h`, and msil-ld's ELF-style merge, `mergeVisibility` in `lld/MSIL/Symbols.cpp`, keeps it
+  hidden) needs no upstream patch (brief Q17 (a)).
+- **Contents rules.** 0 `pinvokeimpl` and 0 `moduleref` at every stage (5.18 PL4; CodeGenModule's
+  `addMSILImportAttributes` would otherwise turn an `import_module` in libc code into a P/Invoke, a route to a native
+  OS layer). References: `mscorlib` only at P-1b; from P-2, `mscorlib` and `System`, bound through `--reference`
+  (5.19.13); a reference beyond them only with a stage that states it, reached only on modern .NET (5.19.13's one
+  possible case). Release `c.dll` neither defines nor references `write_to_stderr` or `internal::exit` before P-2.
+  Checked with `llvm-cil-dump --stats-only`, which omits empty tables: no `# table ImplMap` or `# table ModuleRef`
+  line, and `# table AssemblyRef rows=1` at P-1b (`rows=2` from P-2).
+- **Function identity.** `&f` of an exported function compares equal in the program and in `c.dll` on every runtime
+  (measured on 4.8 and .NET 10 for `strlen`; Design.md 4.5's address fields), and a test pins it.
+- **Deployment** (brief Q22 (a)). The driver links `c.dll` from the sysroot; running the program needs `c.dll` in the
+  application directory, which the user or the build system copies, as `csc` leaves references to the build system. A
+  missing `c.dll` is a loud `FileNotFoundException`.
+
+#### 5.19.8 The three C library modes, `libc.a` and `-static`
+
+| Mode | Triple | Link | State |
+| --- | --- | --- | --- |
+| 1 | host (`*-linux-gnu-msil`, `*-windows-*-msil`) | the platform libc through P/Invoke (Phase 1-3) | the host C library's (5.15.1 rule 3) |
+| 2 (default) | portable | `-lc` finds `c.dll`; the program references assembly `c` and binds through its symbol table (M22) | `c.dll`'s C globals (P-1b); the process root at major 0 with `c.dll` its one copy, and .NET's own homes (P-2); the shared root and per-thread blocks (P-3) |
+| 3 | portable, `-static` | `libc.a` linked into each assembly; code private to each copy | one process-wide state shared by every copy and `c.dll` (5.19.11), from P-3 |
+
+- **No mixing across kinds.** msil-ld's triple key refuses `c.dll` or `libc.a` in a host-triple link and a host libc
+  in a portable link; no state is shared between host-triple and portable assemblies (Design.md section 6).
+- **`-l` order on portable** (5.18 PL6, brief Q8 (a)): `lld/MSIL/Driver.cpp`'s `searchLibraryBaseName` prefers the
+  managed `X.dll` over `libX.a` under `-Bdynamic` on `*-unknown-dotnet`, and `-Bstatic`/`-static` pick `libX.a`; host
+  triples keep Design.md 5.2's static-first order.
+- **`-static` before P-3.** Three layers, each loud. The driver refuses `-static` on the portable triples with T-P9
+  (5.18 PV4). No `libc.a` exists in the sysroot, so `-l:libc.a` and a sysroot `msil-ld -Bstatic -lc` find nothing.
+  The libc build directory still holds the intermediate `libc.a` (5.19.3), and a direct link of it by path or `-L`
+  would give a silent static copy with its own errno cell and statics, the private state the user's decision rules
+  out; so msil-ld refuses it (5.18 PL10, T-P11): on `*-unknown-dotnet`, an output other than the C library itself
+  (the `--shared` output whose assembly name is `c`, 5.18 PL8; not any output that records identity `c`, which every
+  `-lc` link does) that takes any definition from a member of an archive whose symbol index defines
+  `__llvm_libc_errno` is the error `the C library cannot be linked statically for msil64-unknown-dotnet yet: link the
+  shared C library c.dll (-lc)`, pinned on the real archive in `msil/test/Portable/90-loud`. P-3 builds and installs
+  `libc.a`, lifts T-P9 and T-P11, and adds mode 3's tests. A copy linked from `libc.a` and `c.dll` in one process
+  share state from P-3 on, because both find the same root (5.19.11).
+- **Exports under mode 3.** A user's `-shared` assembly that links `libc.a` exports none of its symbols (rule 5);
+  only `c.dll` exports libc names.
+
+#### 5.19.9 The stdio model (P-2; shared from P-3)
+
+- **The generic `File` class** in `libc/src/__support/File/file.h` with a dotnet platform half
+  `libc/src/__support/File/dotnet/{file.h,file.cpp}`: `DotnetFile : File` holds a GCHandle (5.20.9) to a
+  `System.IO.Stream`, and `dotnet_file_write`, `_read`, `_seek`, `_close` and `openfile` call `Stream` and
+  `FileStream` members through MC-1, with errno from 5.19.5's mapping. The standard streams wrap
+  `Console.OpenStandardInput/Output/Error()` (unbuffered `Stream`s, so the only buffer is the libc's). Not the
+  baremetal cookie stdio, which has no `fopen` and only three unbuffered streams.
+- **File names** are converted from UTF-8 by MC-1's throwing decoder (5.20.10 S1: `new UTF8Encoding(false, true)`);
+  invalid bytes are an error return with `EILSEQ` (5.19.5), never a replacement character.
+- **Spelling of the standard streams (frozen at P-2).** `stdio.h` defines `#define stdout (*__llvm_libc_stdout())`
+  (and `stdin`, `stderr`), with `FILE **__llvm_libc_stdout(void)` exported from `c.dll`. Assignment to `stdout`
+  reaches every copy, and no constructor or msil-ld process-data binding is needed. Upstream's per-copy `FILE *stdout`
+  objects (`src/stdio/generic/stdout.cpp`, `src/stdio/linux/stdout.cpp`) are not used; `libc/src/stdio/dotnet/` holds
+  the accessors.
+- **Buffering and the C-program flag** (brief Q28 (b)). `c.dll` exports `void __llvm_libc_set_c_main(void)`, which
+  sets a flag in the STDIO state (5.19.11). The dotnet `'<msil>Main'` calls it before `main` whenever the link
+  resolves it (5.18 LR11's P-2 shape, with `exit(main(argc, argv))`), so it is called in every C program from P-2 on
+  and never in a host that is not a C program (a C# program calling `c.dll`). Until the flag is set, `c.dll`'s standard
+  streams are unbuffered, so a host that is not a C program and never calls `exit` loses no output. Once it is set,
+  C's rules apply: stdout line-buffered when `Console.IsOutputRedirected` is false, fully buffered otherwise; stderr
+  unbuffered. `exit` flushes every open `FILE` (5.19.10). From P-3, whose `AppDomain.ProcessExit` handler flushes the
+  streams in every host (5.19.10), C's rules apply in every host; `__llvm_libc_set_c_main` keeps its export and its
+  call (the list is append-only) and no longer changes buffering.
+- **P-3 changes.** The open-file list and its lock move into the root's STDIO sub-block, the standard `FILE`s live on
+  the shared heap, and `File`'s non-recursive mutex becomes a recursive owner/count lock word over the wait buckets (the
+  upstream defect: a `FILE` locked by `flockfile` deadlocks its own `fputc`). Whether a shared `FILE` keeps `File`'s
+  platform function pointers (valid process-wide unless a collectible copy unloads) or a kind enum (diverging from
+  upstream `File`) is fixed by P-3's milestone text before the major-1 freeze.
+
+#### 5.19.10 The rest of the P-2 OS layer
+
+- **Heap (frozen with the major; brief Q29 (a), revising the user's heap mapping of 2026-10-31).** Every block is
+  `Marshal.AllocHGlobal` memory with a header of two pointers `{base, size}` before the returned address (16 bytes on
+  msil64, 8 on msil32); `realloc` uses `Marshal.ReAllocHGlobal` for blocks whose base equals the header's (no
+  alignment padding); `aligned_alloc` and `posix_memalign` over-allocate and record `base`; `free` uses
+  `Marshal.FreeHGlobal(base)`. The same scheme runs on every runtime, so `NativeMemory` is not used: it is absent on
+  Framework, a block from one scheme freed by the other corrupts the heap (measured 0xC0000374), and under shared
+  `-static` state any copy must be able to free any block. `malloc`'s blocks are 16-aligned on msil64 (C allows this
+  above `max_align_t`'s 8, brief Q6 (a)); a base that would give a less aligned address is over-allocated like
+  `aligned_alloc`'s. llvm-libc's `FreeListHeap` is not built (it needs `_end` and `__llvm_libc_heap_limit`). The
+  libc's own `operator new`/`delete` use the same heap.
+- **Exit.** `internal::exit` (`OSUtil/dotnet/exit.cpp`) calls `Environment.Exit`. `exit` runs the `atexit` and
+  `__cxa_atexit` handlers in reverse order, flushes and closes every `FILE`, then calls `internal::exit`; `_Exit`
+  skips handlers and flushing. `'<msil>Main'` is `exit(main(argc, argv))` whenever the link resolves `exit` (5.18
+  LR11; P-1r R4 and R5 give M29 P-2's code to extend). Global destructors register through `c.dll`'s `__cxa_atexit`
+  from upstream `LowerGlobalDtorsPass`, which runs on dotnet from P-2 at 5.13.6's slot P0b (5.18 LR6, reserved by
+  P-1r R16; brief Q31 (a)); msil-ld's synthetic `__dso_handle` (5.18 LR8) is the owner argument. Before P-2 a
+  non-empty `llvm.global_dtors` keeps today's error on dotnet (MSILPrepareIR's definition diagnostics).
+- **A host that is not a C program** (a C# application calling `c.dll`) never calls `exit`. A design that runs
+  handlers on `AppDomain.ProcessExit` needs a .NET delegate over a C function, which MC-1 excludes (5.20.14, brief
+  Q27 (a)) and which arrives with M28's `getDelegateConstructor` and P-3's delegate piece, so P-2 does not use one. At
+  P-2 the exit handlers and the final flush run only through `exit()`, and such a host loses no output because its
+  standard streams stay unbuffered (5.19.9). From P-3, `c.dll` subscribes `AppDomain.ProcessExit` to run
+  `__cxa_finalize(0)` and flush the streams, run once against `exit` through the EXIT sub-block's state word.
+- **abort and assert.** `abort` writes `abort() called` to stderr through the standard `FILE` (unbuffered) and then
+  calls `Environment.FailFast` with the same text, because FailFast prints nothing on the .NET Framework console
+  (portable-loader R6; .NET 8/10 print `Process terminated`). `__assert_fail` prints the C standard's message to
+  stderr, then aborts.
+- **Environment.** `getenv` reads `Environment.GetEnvironmentVariable`; results are kept in the ENV sub-block so the
+  returned pointer stays valid until the next `setenv`/`unsetenv` of that name; `setenv`/`unsetenv` write through
+  `Environment.SetEnvironmentVariable`. The process environment is .NET's own home, as Design.md section 6 asks.
+  `environ` and `envp` are not provided through P-3: the headers do not declare `environ`, so a use is an undeclared
+  identifier, and a program's own `extern char **environ` fails to link. A later stage that adds it brings a design
+  (a registry of each copy's `&environ`, or a macro spelling) and a new sub-block id, with its own section 12 row.
+- **No POSIX descriptor layer through P-3.** `open`, `read`, `write`, `fileno`, `fdopen` and `fcntl.h` stay absent;
+  stdio is the only file interface. Directory id 2 (FD) stays reserved. A later stage that adds descriptors keeps one
+  shared offset per open file description in the FD sub-block and applies it with `FileStream.Seek` on unbuffered
+  streams on every runtime (a .NET 6+ `FileStream` keeps its own position); `RandomAccess` (.NET 6+, absent on
+  Framework) is not used by default.
+- **Clocks and time.** `time`, `clock_gettime(CLOCK_REALTIME)` and `timespec_get` from `DateTime.UtcNow` ticks (a
+  boxed handle, 5.20); `CLOCK_MONOTONIC` and `clock` from `Stopwatch.GetTimestamp` and the field `Stopwatch.Frequency`
+  (`System` on 4.8); `localtime`, `mktime`, `strftime %z/%Z` from `TimeZoneInfo.Local` (`GetUtcOffset`,
+  `StandardName`/`DaylightName`); `tzset` calls `TimeZoneInfo.ClearCachedData`. P-2's milestone text fixes how `TZ`
+  is read; whatever its rule, a set `TZ` is never silently ignored in favour of the system zone (rule 2).
+  `Environment.TickCount64` and `Environment.ProcessId` are not used (internal or absent on 4.8).
+- **argv** comes from 5.18's trailer (`Environment.GetCommandLineArgs`, UTF-8).
+
+#### 5.19.11 Shared state: homes, discovery names, layouts and versioning
+
+**Where each piece lives** (portable-state sections 4-7, with its verifier's corrections). P-1b keeps all state in
+`c.dll`'s C globals (one copy, no managed calls). P-2 creates the process root at major 0 for the pieces it implements
+and keeps errno in the exported cell; P-3 creates the per-thread C block, adds the rest and freezes major 1 (brief
+Q32 (a)).
+
+| Home | Pieces |
+| --- | --- |
+| Per-thread C block (P-3) | `errno`; the `uselocale` locale; tss values; the thread-exit list; the thread descriptor; the signal mask; through `ext`, the thread-local objects of 5.19.12's rule (`strerror`'s buffer, `l64a`'s buffer, the hash seed of `randomness.h`, `strsignal`'s buffer if signals ship), one field each |
+| Process root, sub-blocks | 1 STDIO (open-file list, lock word, the standard `FILE`s, the C-program flag of 5.19.9); 2 FD (reserved, 5.19.10); 3 EXIT (atexit, at_quick_exit and `__cxa_atexit` lists with owner `__dso_handle`, exit-state word); 4 ENV (getenv result cache); 5 LOCALE (the global locale); 6 MISC (`rand_next` at the pointer width, as upstream `rand.cpp` sizes it; `strtok`'s pointer, per process (brief Q34); the ten `internal_mbstate` cells by source; the `tmpnam` budget; the `hsearch` table); 7 SIGNAL (65 dispositions, with the signal design); 8 TSS (1024 32-bit keys, brief Q34); 9 THREAD; 10 TIME (time-zone cache); 11 STARTUP (argv0, `program_invocation_name` source); 12 HEAP (scheme id 1) |
+| .NET's own homes | the environment (`System.Environment`), time-zone data (`TimeZoneInfo`), the console streams |
+| Interned-name Monitors | the libc's wait buckets; the atomics lock path's locks (5.18, T11) |
+| Per copy by design | the per-call result buffers that upstream keeps as plain statics (`asctime`, `ctime`, `gmtime`, `localtime`, `tmpnam(NULL)`, `setlocale`'s string, `localeconv`'s struct, pwd/grp line buffers); before P-3 also the `LIBC_THREAD_LOCAL` objects, which SINGLE mode makes plain statics; `__dso_handle`; constants; the `getopt` variables (brief Q35 (a)); `tzname`/`timezone`/`daylight` (computed from the shared TIME data); compiler-rt builtins; the toolchain's private state (rule 3) |
+
+The `tmpnam` budget is a plain counter in P-2's own `tmpnam` (upstream's `cpp::Atomic<size_t>` would need the lock
+path before P-3); P-3 makes it an atomic on the root. How the upstream files' statics reach the root (dotnet override
+sources beside upstream's, or small upstream hooks that call an accessor in `OSUtil/dotnet/shared_state.h`) is fixed
+by P-3's milestone text; P-3 must cover every row.
+
+**Discovery names (frozen at P-2's commit as names, never changed).**
+
+| Name | Kind | Holds |
+| --- | --- | --- |
+| `<msil>v1:libc.root` | `AppDomain.SetData`/`GetData` key | a boxed `System.IntPtr`: the root's address |
+| `<msil>v1:libc.root.lock` | `Monitor` on `String.Intern` of the name | guards the root's creation and directory insertions |
+| `<msil>v1:libc.thread` | `Thread.GetNamedDataSlot` | an `object[]`: [0] a boxed `IntPtr` (the block), [1] the block's holder (P-3) |
+| `<msil>v1:libc.wait:<i>`, i = 0..63 | interned-name `Monitor`s | the libc's wait queues (mutex, condition, once, join) from P-3; i = (addr * 0x9E3779B97F4A7C15) >> 58 on msil64 |
+| `<msil>v1:atomic.lock:<i>` | interned-name `Monitor`s (1024) | the atomics lock path, frozen under T11 at P-3's commit (5.18); listed here only to reserve the namespace |
+
+`v1` is a namespace and is never bumped; layout versions live inside the root. Every lookup type-tests the value and
+calls `Environment.FailFast` (after writing the message to stderr) on a foreign value. Scope: one per process on
+modern .NET, across AssemblyLoadContexts; one per AppDomain on .NET Framework, whose interned strings are process-wide
+(a C call chain that crosses Framework AppDomains sees two states; documented, inherent; each AppDomain's root is
+never freed, so recycling domains leaks one root each, documented in Status.md). A block lookup through the slot costs
+12-33 ns once per thread per copy (measured); a copy may cache the block's address, never errno itself.
+
+**Root layout v1.** Header `{u32 magic 'MLCR', u16 major, u16 minor, u32 size, u8 ptr_size, u8 scope, u16 dir_cap =
+64, u64 creator, u32 flags, u32 reserved}`, then 64 directory entries `{u32 id, u16 major, u16 minor, u32 size, u32
+check, ptr block}` (24 bytes on msil64, 20 on msil32); `block` is written last (a release store). Each sub-block
+starts with `{u32 magic, u16 major, u16 minor, u32 size}` and lives on the shared heap. Rules: a name never changes;
+after the freeze a sub-block never grows and a new field takes a new sub-block id (the directory has 64 slots, of
+which ids 1-12 are assigned: a stated limit); a field is never reinterpreted; an unknown major, a size smaller than
+expected or a `check` mismatch makes the copy write both versions and the id to stderr and call
+`Environment.FailFast` (brief Q33 (a)), never a private copy, silent or not (the user's decision of 2026-11-01: one
+shared state); `ptr_size` different from the reader's is the same failure (it cannot happen in a process whose width
+guard passed, 5.18.7). Major 0 is provisional from P-2; major 1 starts at P-3's commit. The contract version goes into
+each libc copy's symbol-table attribute. From the first release after the freeze a two-release compatibility test
+runs (5.19.15).
+
+**Per-thread C block v1 (P-3).** `{u32 magic 'MLCT', u16 major, u16 minor, u32 size, i32 errno (offset 12), ptr desc,
+ptr locale (0 = global), ptr tss_values, ptr exit_list, u32 flags, u32 reserved, u64 sigmask, ptr ext}`; `ext` points
+at the thread-local extension (5.19.12), whose fields P-3's root WP enumerates and which freezes with the block.
+`__llvm_libc_errno` returns `block + 12`. Only the owning thread creates and writes its block. The block is
+`Marshal.AllocHGlobal` memory, freed when the thread dies by a finalizable holder kept at slot [1]: a K3 trailer type
+`'<msil>CBlock'` whose finalizer calls the libc's free hook, created through a K2 trailer definition that the libc
+calls as a C function (5.14.5 S4: compiled code reaches helpers only as C symbols), both emitted only in an output
+that defines that hook (`c.dll`, or an output linking `libc.a`), with its own `TrailerDefs.def` row and a P-3 re-pin
+row; M31.b may reuse the shape for `'<msil>Thread'` (a row then). If P-3's milestone text finds the trailer route too
+costly, the fallback is leaking the blocks of foreign threads until M31 with slot [1] reserved in the frozen layout;
+either way the step is P-3's, before the major-1 freeze. `GC.AllocateArray` (absent on 4.8) is not used.
+
+**Freeze list at P-3's commit:** the discovery names, the root header and directory, sub-blocks 1-12 as P-3 ships
+them, the C block and its thread-local extension, the heap scheme of 5.19.10, the wait-bucket count and hash, the
+lock-word encodings of `FILE` and of the C11/POSIX mutex types. These form an append-only ABI between libc releases:
+every `-static` copy and every `c.dll` of the same major interoperate in one process.
+
+#### 5.19.12 Threads and `-static` (P-3)
+
+- `thrd_create`/`pthread_create` start a `System.Threading.Thread` over a delegate built from the C function pointer
+  (P-3's delegate piece, built on M28's `getDelegateConstructor`); the thread's C block is created on first use.
+- `LIBC_THREAD_MODE_PLATFORM` with a dotnet `Mutex` in `libc/src/__support/threads/dotnet/`: a 32-bit lock word in
+  user memory, uncontended paths through `Interlocked` (M30's inline atomics), waits in the wait bucket of the word's
+  address (`Monitor.Wait`/`PulseAll` on the interned bucket). `call_once` and condition variables use the same buckets;
+  `callonce.h`'s `#error` and `mutex.h`'s PLATFORM branch (which includes a mutex only under `__linux__` or
+  `__APPLE__`) get dotnet branches.
+- tss: llvm-libc's `TSSKeyMgr` table moves to the TSS sub-block (32-bit keys, brief Q34); values hang off the C block.
+- **No `thread_local` in the libc, before or after M31.** In PLATFORM mode `libc/src/__support/macros/attributes.h`
+  defines `LIBC_THREAD_LOCAL` as `thread_local` (it is empty only in SINGLE mode), which would need M31's TLS (after
+  P-3; refused on dotnet until then, 5.18 LR7) and would give each `-static` copy its own object. So every
+  `LIBC_THREAD_LOCAL` or raw `thread_local` site that `c.dll` ships gets a `LIBC_TARGET_OS_IS_DOTNET` branch that keeps
+  the object in the C block's thread-local extension, one field each: today
+  `src/__support/StringUtil/error_to_string.cpp` (`error_buffer`, `strerror`'s buffer, shipped since P-1b),
+  `src/stdlib/l64a.cpp` (`BASE64_BUFFER`), `src/__support/HashTable/randomness.h` (the hash seed `state` and
+  `counter`), `src/__support/StringUtil/signal_to_string.cpp` (`signal_buffer`) if signals ship, and
+  `src/__support/threads/thread.cpp`'s `tss_values` and `atexit_callback_mgr` if that file is built (the dotnet thread
+  layer keeps both in the C block already). `thread.cpp` has no other thread-local object. P-3's root WP enumerates the
+  list with a grep of the shipped sources; P-3's gate checks that no object of `c.dll` or `libc.a` has a
+  `.tdata`/`.tbss` section or a TLS reference (P-1r R7).
+- Thread exit: the thread-exit list runs when the C thread function returns or calls `thrd_exit`; foreign .NET
+  threads that only call into C get their block freed by the holder's finalizer (5.19.11), without running C
+  thread-exit handlers.
+- `rand`/`srand` ship with the MISC cell (5.19.4); the `atexit` lists, the open-file list and the locale move to the
+  root; `c.dll` subscribes `AppDomain.ProcessExit` over P-3's delegate piece (5.19.10).
+- `-static` is enabled in the driver, T-P9 and T-P11 are lifted (5.19.8), `libc.a` is installed in
+  `<sysroot>/lib/msil64-unknown-dotnet/`, and mode 3's tests run (5.19.15).
+
+#### 5.19.13 .NET Framework 4.8 and modern .NET
+
+- **Measured base (P-0 probe).** A `c.dll` of 13 entry points plus errno (0 `pinvokeimpl`, only `mscorlib`
+  referenced) and four programs exited 42 on .NET Framework 4.8, .NET 10 Windows and WSL .NET 10 (tiered and
+  `TieredCompilation=0`); ILVerify reported only classes allowed by `msil/utils/ilverify-allowed.txt`
+  (portable-libc 4.3).
+- **Binding of the OS layer's members (P-2; brief Q30 (a)).** `build-libc.py` links `c.dll` with `--reference` to the
+  build host's Framework 4.8 implementation assemblies `mscorlib.dll` and `System.dll` (the set MC-1's harness role
+  finds for `%{msil_refs_netfx}`), so every `System.*` member binds to `mscorlib` or `System` (`Stopwatch` and
+  `Process` live in `System` on 4.8), never to `System.Runtime`, and the result loads on both runtimes (portable-mc1
+  3.3). With references present, msil-ld's managed-call checks, the enum-width check included, apply to every member
+  (5.20.7). Building `c.dll` therefore needs a Windows host with Framework 4.8 (5.19.3); the portable legs build it
+  there and run it under WSL as well. Every member the layer calls is public with the same signature on 4.8 and on
+  modern .NET; the portable legs' runs on both prove each one the layer reaches.
+- **Members not used by default:** `NativeMemory`, `GC.AllocateArray`, `Environment.TickCount64`,
+  `Environment.ProcessId`, `Marshal.PtrToStringUTF8`, `File.Move(string, string, bool)`, `RandomAccess`,
+  `AssemblyLoadContext`, `PosixSignalRegistration`. A modern-only member may be reached only from a method that .NET
+  Framework never JIT-compiles, behind `Environment.Version.Major >= 5`, and only where a pinned test runs both paths.
+  The one possible case, a clean-up on `AssemblyLoadContext.Unloading` for collectible copies, comes only if a later
+  delegate stage provides it (it subscribes an event, so it needs a delegate over a C function, and it adds a
+  reference beyond `mscorlib`/`System`, the exception 5.19.7 allows); it is not planned for P-3.
+- **Accessibility.** `msil/utils/check-mscorlib-safe.py` checked with `ldtoken` only and passed internal members
+  (`Environment.get_TickCount64` on 4.8.1, measured). P-1a's harness WP fixes it before P-1a's guard rows are proved
+  (the section 12 row amending 5.11.7); MC-1's rows are proved with the fixed tool.
+- **Framework specifics** documented in Status.md: GCHandles and the C state are per AppDomain; `FailFast` is silent
+  on the console (5.19.10's abort writes first); POSIX `rename` over an existing file uses `File.Replace` (no atomic
+  overwrite move on 4.8).
+
+#### 5.19.14 Changes to upstream `libc/` (conflict surfaces)
+
+Each file is a `hook` block in `msil/utils/upstream-hooks.txt`, added by the stage that first edits it, and a 5.13.5
+row. The fork does not build llvm-libc's own tests, so each libc block reads `none llvm-libc's tests are not built by
+the fork` plus `fork msil/test/Portable/<directory>/<test>.test` for the stage's test that pins the change (P-1b's in
+`01-libc`). Every change is an `#elif` or `||` branch keyed per rule 4, except the generic errno extension, which
+appends names; none changes another target's existing result.
+
+| File | Change | Stage | Upstream-able |
+| --- | --- | --- | --- |
+| `libc/src/__support/macros/properties/os.h` | `LIBC_TARGET_OS_IS_DOTNET` | P-1b | yes |
+| `libc/src/__support/macros/properties/architectures.h` | `LIBC_TARGET_ARCH_IS_MSIL`, inside `LIBC_TARGET_ARCH_IS_VM` | P-1b | yes |
+| `libc/cmake/modules/LLVMLibCArchitectures.cmake` | msil arch regexes; the dotnet system special case | P-1b | yes |
+| `libc/include/llvm-libc-macros/generic-error-number-macros.h` | 44 POSIX names and 2 aliases appended (5.19.5); seen by every generic-family full build (baremetal, GPU) | P-1b | yes, as an extension of the generic set |
+| `libc/src/__support/StringUtil/platform_errors.h` | dotnet branch to the fork table `tables/dotnet_platform_errors.h` | P-1b | yes |
+| `libc/src/__support/OSUtil/io.h` | dotnet branch | P-1b | yes |
+| `libc/include/llvm-libc-macros/math-macros.h` | `math_errhandling` = `MATH_ERRNO` on msil | P-1b | yes |
+| `libc/include/llvm-libc-types/__jmp_buf.h` | msil branch, 200 bytes | P-1b | yes |
+| `libc/include/llvm-libc-types/struct_tm.h`, `libc/src/time/time_utils.h` | `tm_gmtoff`/`tm_zone` under dotnet (brief Q19 (a)) at P-1b; time-zone hooks at P-2 | P-1b, P-2 | partly |
+| `libc/src/stdlib/abort_utils.h` | dotnet branch (P-2's abort) | P-2 | yes |
+| `libc/include/llvm-libc-macros/time-macros.h` | dotnet branch to `dotnet/time-macros.h` | P-2 | yes |
+| `libc/include/llvm-libc-macros/stdio-macros.h` | `L_tmpnam` under `__dotnet__` | P-2 | yes |
+| `libc/src/__support/HashTable/randomness.h` | raw `thread_local` to `LIBC_THREAD_LOCAL` | P-2 | yes (a defect fix) |
+| `libc/src/wchar/fputwc.cpp` | include `src/__support/libc_assert.h` (it uses `LIBC_ASSERT`) | P-2 | yes (a defect fix) |
+| `libc/include/llvm-libc-macros/signal-macros.h`, `libc/include/llvm-libc-types/sigset_t.h` | the signal design | the signal design | yes |
+| `libc/include/llvm-libc-types/once_flag.h`, `libc/src/__support/threads/callonce.h`, `libc/src/__support/threads/mutex.h` | dotnet branches | P-3 | yes |
+| `libc/src/__support/File/file.h` | the recursive lock; the shared-`FILE` form | P-3 | the lock fix yes |
+| `libc/src/__support/StringUtil/error_to_string.cpp`, `libc/src/stdlib/l64a.cpp`, `libc/src/__support/HashTable/randomness.h` (again), `signal_to_string.cpp` and `threads/thread.cpp` if shipped | dotnet branch keeping the thread-local object in the C block (5.19.12) | P-3 | no |
+| the stateful upstream files of 5.19.11 | only if P-3 picks hooks | P-3 | no |
+| `libc/include/llvm-libc-types/clock_t.h` | `long long` under msil32 | P-4 | yes |
+
+Not changed: `libc/hdr/errno_macros.h` and `libc/include/errno.h.def` (the generic family already reaches dotnet),
+`libc/src/__support/libc_errno.h` (brief Q17 (a)), `libc/src/errno/libc_errno.cpp`,
+`libc/include/llvm-libc-types/fenv_t.h` (brief Q20 (a)), `libc/cmake/modules/LLVMLibCCompileOptionRules.cmake`
+(5.19.3), `libc/src/__support/macros/attributes.h` (5.19.12 keys each site instead). `compiler-rt/lib/builtins/int_lib.h`
+is 5.18's (5.18.13). Fork-only and conflict-free: the files of 5.19.3 (one `fork-only` line each) and
+`msil/lib/builtins/sources.txt` (5.18's dotnet globs). Ten upstream libc files at P-1b, 15 by P-2 and about 21 by P-3
+(more if P-3 picks hooks) recur at every upstream merge; the merge workflow builds the portable libc and runs P-1b's
+tests after each merge.
+
+#### 5.19.15 Tests and the oracle
+
+- **P-1b: self-checking programs.** Before P-2 there is no stdout, so P-1b's programs check themselves (each failed
+  check sets a bit of the exit status, 5.18 PX2) under 5.17.4's allowance for portable tests before P-2. Each
+  expected constant in a test carries a comment naming its source: the correctly rounded value (llvm-libc's math is
+  correctly rounded in this configuration), the host-native E7h run of the same check where glibc agrees, or the C
+  standard. P-1b re-runs P-0's probe programs
+  (`recon/p3/portable-libc-files/run/`) on msil64, because the probe used the SysV host ABI with host macros removed and
+  the portable ABIInfo can change `div`/`ldiv`/`imaxdiv`/`localeconv` shapes.
+- **The oracle from P-2: host-native transcripts.** The same C source, compiled natively for
+  `x86_64-unknown-linux-gnu` and linked with the same tree's LLVM libc in overlay mode (`libllvmlibc.a` ahead of
+  glibc) built with `config/dotnet`'s options, run under WSL (`msil-run.py --native --runner wsl`, as E7h, 5.17.3).
+  This gives the same algorithms (llvm-libc's correctly rounded math and printf) and the same `wchar_t`. Overlay mode
+  takes glibc's `<errno.h>`, so the oracle's errno numbers are Linux's (`EOVERFLOW` 75, `EDEADLK` 35): transcripts
+  print errno as its name (`strerrorname_np`-style, from the test's own table), never as a number. Where the data
+  models differ (`long double`, `wint_t`'s signedness, `__int128` printing on msil32), the expected file is
+  hand-written under 5.17.4 with a comment naming the difference. glibc (E7h) is a secondary oracle only for behaviour
+  llvm-libc and glibc share. P-2's harness WP builds the overlay (cross from the Windows host with E7h's glibc
+  sysroot, or natively under WSL) and pins its build and flags in `msil/test/harness/portable-libc-oracle.test`; it
+  builds it before anything else and, if it cannot, stops and reports (no other oracle replaces it silently).
+- **P-1b tests.** The export list is regenerated and compared (only additions, `build-libc.py --check-append-only`;
+  `c.dll`'s ExportClass equals the list, `llvm-cil-dump --link-info`); `c.dll` has 0 `pinvokeimpl`, 0 `moduleref` and
+  references only `mscorlib` (`llvm-cil-dump --stats-only`, 5.19.7); no trap bodies; the absent functions fail as rule
+  2 says, in two cases: a program that declares its own prototypes of `malloc`, `exit`, `printf`, `rand` and
+  `localtime` fails to link with N6's line naming `c.dll`, and `#include <stdlib.h>` plus a call of `malloc` is an
+  undeclared-function error; header checks as `_Static_assert` programs (`sizeof`/`alignof` of every 5.19.6 item
+  frozen at P-1b; errno values, among them `EOVERFLOW` 35, `EDEADLK` 75, `ENOSYS` 38 and the aliases; `WEOF == -1`
+  with type `int`); `strerror` and `%m` for every name of 5.19.5's set; errno set in `c.dll` read by the program and
+  by a second `-shared` assembly (portable-libc D1); `&strlen` equal across the boundary; `qsort` with a program
+  comparator (cross-assembly `calli`); `snprintf` across the boundary (M26); `swprintf` and `strptime` absent (rule
+  2); `strtod`/`strtol` with end pointers; math bit-exact (`sinf`, `exp`, `pow`, `sqrt`); `vsnprintf` formats (`%e`,
+  `%g`, `%.10a`, `%lld`, `%zu`, `%m`, truncation); ILVerify within the allowed list; IR-shape tests of LLVM libc's C++
+  (`LLVM_LIBC_FUNCTION` aliases, COMDATs); a direct link of the build directory's `libc.a` refused by msil-ld (T-P11, in
+  `msil/test/Portable/90-loud`); an empty `libm.a` satisfying `-lm`. Runs: the runtimes of 5.18 PX4's legs (.NET 10
+  x64 tiered and `TieredCompilation=0`, .NET Framework 4.8 x64, WSL .NET 10).
+- **P-2 tests** (in `msil/test/Portable/05-os`). `printf("hello, world\n")`; stdio round trips through
+  `fopen`/`fread`/`fwrite`/`fseek`/`fclose`; `ENOENT` from a missing file; an unlisted exception escaping loudly;
+  invalid UTF-8 names giving `EILSEQ`; `exit` order (handlers, then flush) against the oracle; global destructors
+  through `__cxa_atexit`; `abort` and `assert` messages on both runtimes; `getenv`/`setenv`; clocks monotonic; a C#
+  host writing through `c.dll` and never calling `exit` loses no output (unbuffered until `__llvm_libc_set_c_main`),
+  while a C program's stdout is buffered by C's rules; the root created once (major 0) and a foreign value under the
+  key causing FailFast.
+- **P-3 tests** (in `msil/test/Portable/06-threads` and `07-static`). Threads and errno per thread; the thread-local
+  objects of 5.19.12 per thread and shared by copies (`strerror` from two threads), and no `.tdata`/`.tbss` in any
+  shipped object; two `-static` copies plus `c.dll` in one process sharing errno per thread, one `FILE *` passed
+  between them with ordered output, one `atexit` list, `malloc` in one copy and `free` in another; a C# host calling
+  `c.dll` and exiting without `exit`, its buffered output flushed by the `ProcessExit` handler; a major mismatch (a
+  doctored root) failing with FailFast after both versions on stderr; two AssemblyLoadContexts sharing state; the
+  frozen layouts checked against this contract's text (never against the code, as M30's lock-protocol test does for
+  T11). The portable legs gain LTO runs at P-3 (brief Q13 (a): objects only before). A collectible copy unloading its
+  exit entries is tested only if a later stage adds 5.19.13's ALC clean-up.
+- **Gates.** M27-M35's gates stay as written, and the post-commit run gains the portable legs `portable-smoke` and
+  `portable-smoke-wsl` (5.18 PX4), tagged `Portable`, never `Exit`, so M35's phase gate, `exit-report.py` and
+  `check-matrix.py` never select them; `msil/test/Portable/lit.local.cfg` marks its tests UNSUPPORTED unless the
+  feature `msil-triple-portable` is set, so host legs never run them. Each P-step's own gate (P-1a, P-1b, P-2, P-3,
+  P-4) also runs that step's own `msil/test/Portable/` directories (and `90-loud`) with
+  `msil/utils/build/msil-lit.ps1` under the portable parameters, on .NET 10, TC=0 and Framework 4.8 and under WSL
+  .NET 10, never through `lit-legs.ps1 -Leg` on the standing legs; MC-1's gate runs no portable step, since MC-1's exit
+  criteria are proved on the host triples (brief Q11 (a)).
+
+#### 5.19.16 What fails loudly, by stage
+
+'Absent' below means rule 2's two forms: undeclared through the libc's headers, and an undefined-symbol link error
+with N6's line through the program's own prototype.
+
+| Use | P-1b | P-2 | P-3 |
+| --- | --- | --- | --- |
+| stdio streams, `printf` | absent | works | works, shared |
+| `malloc` family | absent | works | shared heap rules |
+| `exit`, `atexit` | absent | works | shared lists |
+| global destructors | `__attribute__((destructor))`: today's `llvm.global_dtors` error; C++ static objects: undefined `__cxa_atexit` (N6) and `__dso_handle` at link | through `__cxa_atexit` | shared lists |
+| a host that is not a C program, at its exit | nothing to flush (no stdio) | handlers do not run; no output lost (streams unbuffered until `__llvm_libc_set_c_main`) | `ProcessExit` runs handlers and flushes |
+| `localtime`, `strftime`, `time` | absent | works | works |
+| `rand`, `srand` | absent | absent | shared cell |
+| `environ`, POSIX descriptors | absent | absent | absent |
+| threads, `thread_local` | M31's error / absent | same | threads work; the libc itself has no `thread_local`; user `thread_local` with M31 (P-1r R19) |
+| a multi-threaded host calling `c.dll` | races silently (documented exception, 5.19.5) | same | per-thread state |
+| `-static` | T-P9; no sysroot `libc.a`; T-P11 for the build directory's `libc.a` | same | works |
+| fenv | undeclared (brief Q20 (a)) | same | same |
+| signals | undeclared | undeclared | undeclared until the signal design |
+| a 32-bit or big-endian process | 5.18's guard (T-P10) | same | same |
+
+#### 5.19.17 Interfaces this contract assumes
+
+- **From 5.18 (P-1a):** the triples and predefines (`__dotnet__`, `__msil64__`, no `__ELF__`, `__WINT_TYPE__` `int`
+  without `__WINT_UNSIGNED__`, and the DotNetToolChain's `IsMathErrnoDefault()` true, so clang does not define
+  `__NO_MATH_ERRNO__` against the `MATH_ERRNO` configuration), the frozen C types it lists (msil64's at P-1b;
+  msil32's at P-4), the portable ABIInfo, the ExpandVariadics msil64 case, the DotNetToolChain (PV2's sysroot layout,
+  PV3's default `-lc` plus the helper archive, `-nostdlib`, and `-nolibc`, which keeps the helper archive; PV4's
+  T-P9), the msil64 helper archive in the resource directory (5.18.8: built only when its triple is named; with
+  `int_util.c` and the `-ftrapv` helpers; the half helpers for f16), msil-ld's dotnet rule family (PL2 no native
+  binding, PL3's N6 line naming `c.dll`, PL7's `--export-list` with archive extraction and precedence over
+  `--exclude-libs`, PL6's shared-first `-l`, PL8's identity `c` and name clash, LR5's constructors without arguments,
+  PL10's T-P11), the trailer's width guard (5.18.7), and today's `llvm.global_dtors` error kept on dotnet until P-2.
+- **From 5.18 (P-2's part):** LR6 (`LowerGlobalDtorsPass` at slot P0b), LR8 (the synthetic `__dso_handle`), and
+  LR11's P-2 shape of the dotnet `'<msil>Main'`: it calls `__llvm_libc_set_c_main()` before `main` whenever the link
+  resolves that name, and is `exit(main(argc, argv))` whenever the link resolves `exit`.
+- **From 5.20 (MC-1):** calls to static and instance methods, constructors, static field reads
+  (`Stopwatch.Frequency`), string conversions (5.20.10's throwing UTF-8 and UTF-32 decoders, UTF-16), object handles
+  with a defined lifetime (5.20.9), boxed value types (`DateTime`, `IntPtr`) as handles and back (brief Q25 (a)),
+  `msil_catch` errno mapping (5.20.8, brief Q24 (A)), binding through `--reference` (5.20.7), and for the root glue:
+  `String.Intern`, `Monitor.Enter(object)`/`Exit`/`Wait`/`PulseAll` on a handle, `AppDomain.GetData`/`SetData`,
+  `Thread.GetNamedDataSlot`/`GetData`/`SetData`, `new object[]` with `Array.SetValue`/`GetValue`. No delegate: P-2's
+  designs need none (5.19.10). If 5.20 lacks one of these, P-2 does not start until a section 12 row resolves it.
+- **From P-1r:** R1 (5.15.4's mask save on `*-unknown-dotnet` triples too, so a `sigsetjmp(buf, nonzero)` site
+  references `sigprocmask` and fails to link with N6's line until the signal design), R4 and R5 (M29 extends P-2's
+  exit field and `__dso_handle`), R7 (no libc state in M31's TLS block), R16 (slot P0b), R19 (user `thread_local` on
+  dotnet through M31).
+- **From M27-M30 and P-3's delegate piece:** MSILLowerSjLj (setjmp, 5.15.4's prefix), M28's
+  `getDelegateConstructor` and P-3's C-function-pointer delegates (threads, `ProcessExit`), M30's inline atomics
+  (P-3's `rand`/`srand` and lock words). M31's TLS is not assumed (5.19.12).
+- **From 5.13/5.17:** the hot-file rules (the libc lives in `libc/`, outside the hot files), the hooks manifest, the
+  legs and the post-commit run.
+
+### 5.20 Managed calls from C and C++, stage 1 (MC-1)
+
+MC-1 lets C and C++ code call .NET members directly. An attribute on a function declaration names a type, a member
+and the member's exact CIL signature. The backend gives the declaration a small IL stub that converts the arguments,
+makes the call and converts the result. msil-ld binds the member through its existing reference binder and checks it.
+MC-1 is the first stage of the managed-calls goal (user, 2026-10-22). Its scope is what the portable C library's OS
+layer needs, and its first client is P-2's OS layer over the BCL (5.19). It runs after M27, whose IL exception clauses
+it reuses, and before P-2 and M28 (program order, user, 2026-11-01, option A).
+
+It is enabled on every MSIL object-format triple, both the host triples and the portable ones. It adds:
+- no link-info record minor;
+- no pass slot and no `pipeline.ll` change;
+- no trailer definition, link-content service or `TrailerDefs.def` row;
+- no runtime support assembly;
+- no exception type of its own.
+
+Decided by the decision brief answers (user, 2026-11-01): the attribute spelling (Q23 (a)), the exception rule (Q24
+(A)), non-enum value types as opaque boxed handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)), no
+delegates in MC-1 (Q27 (a)), MC-1 proved on the host triples with its portable directory run by the post-commit
+`Portable` legs only (Q11 (a)), and `c.dll` binding `System.*` through `--reference` to the Framework 4.8
+implementation assemblies from P-2 (Q30 (a)).
+
+Sources: recon-mc1 ([recon/p3/portable-mc1.md](recon/p3/portable-mc1.md), with its verifier corrections; its
+measurements are in `recon/p3/portable-mc1-files/`), recon-linkrules and recon-state (`recon/p3/portable-linkrules.md`,
+`recon/p3/portable-state.md`); exports-multiasm 8.2 ([recon/p2/exports-multiasm.md](recon/p2/exports-multiasm.md));
+FeatureIdeas.md item 3; the user's 2026-10-25 libc architecture; plan 5.10.7 (the M13 import attributes, the
+precedent), 5.11.7 (the built-in table), M21's binder (5.11), M27.a (`emitExceptionClause`, AsmPrinter-written
+bodies), 5.13-5.15. Code anchors name files and functions.
+
+#### 5.20.1 Model
+
+- **MM1** A *managed-call function* is a C or C++ function **declaration** that carries `msil_method`. Every direct call
+  of it in a module calls one internal stub method of that module. The stub's IL is written by the AsmPrinter and makes
+  exactly one member access (`call`, `callvirt`, `newobj`, `newarr`, `ldsfld` or `ldfld`). The access is wrapped in the
+  conversions Sema chose (5.20.3) and, with `msil_catch`, in one filter clause (5.20.8).
+- **MM2** The member is referenced as an ordinary `[msil.bcl]` TypeRef/MemberRef in objects (`[<assembly>]` in text,
+  5.20.6). msil-ld binds it like any BCL request: by name and full signature, public members only, against the
+  references, or against the built-in `[mscorlib]` table when the link has none (5.11.7). The only additions are
+  5.20.7's checks.
+- **MM3** Nothing is resolved at run time by name. A wrong member is a link error, and a wrong conversion is a compile
+  error. An exception the declaration does not list escapes as an ordinary unhandled .NET exception (5.15.1 rule 1).
+
+#### 5.20.2 Attribute grammar
+
+Two clang attributes, each with the `Clang<"...">` spelling (GNU and `[[clang::...]]`), `InheritableAttr` records with
+`Subjects = SubjectList<[Function], ErrorDiag>` (so a non-function subject is clang's standard error, not a warning).
+Their new `TargetSpec` is `def TargetMSIL : TargetSpec { let CustomCode = [{ T.isOSBinFormatMSIL() }]; }`, which covers
+the host MSIL triples and `msil64-unknown-dotnet` (and `msil32-unknown-dotnet`, which clang accepts and the backend
+refuses until P-4, 5.18). On other targets they are ignored with clang's usual `unknown attribute ... ignored` warning.
+`__has_attribute(msil_method)` is true exactly on MSIL object-format triples, so headers (P-2's OS layer) can guard on
+it.
+
+```c
+__attribute__((msil_method(TYPE, MEMBER, SIGNATURE [, ASSEMBLY])))
+__attribute__((msil_catch(EXCEPTION_TYPE, CODE)))        /* repeatable; order is significant */
+```
+
+- **MA1 TYPE** is a string literal. It takes one of these forms:
+  - `"Ns.Name"`, or `"Ns.Outer/Inner"` for a nested type: a reference type (class or interface);
+  - `"valuetype Ns.Name"`: a value type, which may be an enum;
+  - an SZARRAY type `"<elem>[]"`. This form is valid only with MEMBER `".ctor"` and lowers to `newarr`. The element
+    type is a listing primitive, `string`, `object` or `class Ns.T`.
+
+  The `valuetype` prefix is required, because the stub's `this` and result handling depend on it (5.20.3).
+  msil-ld checks the spelling against the TypeDef when it has references (5.20.7 MK3).
+- **MA2 MEMBER** is a string literal. It takes one of these forms:
+  - a method name;
+  - `".ctor"`: `newobj`, or `newarr` for an array TYPE;
+  - a property accessor, by its accessor name (`"get_Length"`, `"set_ExitCode"`);
+  - a field name, when SIGNATURE starts with `field` or `instance field`. Field access is read-only: `ldsfld`/`ldfld`.
+
+  Events, generic methods and operators other than by their `op_*` method names are not in MC-1.
+- **MA3 SIGNATURE** is the member's own CIL signature as its definition declares it, in canonical listing v1 text
+  (5.7.10): `"[instance ]RET(P1, P2, ...)"` or `"[instance ]field T"`.
+  - Types allowed: the listing primitives (`void` as a return only, `bool`, `char`, `int8` to `uint64`, `float32`,
+    `float64`, `native int`, `native uint`, `string`, `object`), `class Ns.T`, `valuetype Ns.T`, `T*` (unmanaged
+    pointer) and `T[]` (SZARRAY).
+  - Not in MC-1 (T-M2 with `... is not supported for MSIL yet`): generic instantiations and generic parameters, byrefs
+    `&`, custom modifiers, `vararg`, function pointers, `typedref`, and multi-dimensional arrays.
+  - For an array `.ctor` the signature is `"instance void(int32)"`. It describes `newarr`'s length operand; no member
+    is bound.
+- **MA4 ASSEMBLY** (optional) is the resolution scope printed in **text** output only: standalone `-S`/llc and
+  `--lto-emit-asm`. The default is `mscorlib`, as for BCL members in text (5.11.8). Objects always use `[msil.bcl]`, and
+  msil-ld binds by name against the references (Design.md 7.1), so ASSEMBLY never affects a linked output. It exists
+  so that standalone text names `[System]` for `System.Diagnostics.Stopwatch` and `Process` on Framework (measured on
+  Framework, .NET 8, .NET 10 and WSL .NET 8/10: portable-mc1.md, verifier corrections, "the `[System]` scope works
+  everywhere").
+- **MA5 msil_catch(EXCEPTION_TYPE, CODE)**: EXCEPTION_TYPE is `"Ns.Name"` of a reference type. CODE is an integer
+  constant expression with a value from 1 to `INT32_MAX`. Entries are tested in the order written, and the first type
+  the exception is an instance of (`isinst`) wins. Filters match on the type only, never on an HResult or a message.
+  `msil_catch` requires `msil_method` on the same declaration.
+
+Example (the shape of P-2's `fopen` primitive; `dn_handle` is an opaque handle type, 5.20.9; the CODE values are
+5.19.5's errno numbers):
+
+```c
+typedef struct __dn_object *dn_handle;
+__attribute__((msil_method("System.IO.FileStream", ".ctor",
+    "instance void(string, valuetype System.IO.FileMode, valuetype System.IO.FileAccess, "
+    "valuetype System.IO.FileShare, int32)"),
+  msil_catch("System.IO.FileNotFoundException", ENOENT),
+  msil_catch("System.IO.DirectoryNotFoundException", ENOENT),
+  msil_catch("System.UnauthorizedAccessException", EACCES),
+  msil_catch("System.IO.PathTooLongException", ENAMETOOLONG),
+  msil_catch("System.Text.DecoderFallbackException", EILSEQ),
+  msil_catch("System.IO.IOException", EIO)))
+dn_handle __dn_fs_open(const char *path, int mode, int access, int share, int bufsize, int *err);
+```
+
+The two-attribute spelling is decided (decision brief answers, Q23 (a)). The alternatives the recon weighed and
+rejected:
+- a reserved prefix on `import_module`/`import_name`, which would overload 5.10.7's unchecked P/Invoke semantics and
+  cannot carry a catch list;
+- one attribute with a catch-list string, which loses per-entry diagnostics;
+- a linker map file, which gives no C-side checking.
+
+#### 5.20.3 Sema checks
+
+The checks live in a new file `clang/lib/Sema/SemaMSILManagedCall.cpp` with a file-private header
+`clang/lib/Sema/SemaMSILManagedCall.h`. They are called from two `ProcessDeclAttribute` cases in
+`clang/lib/Sema/SemaDeclAttr.cpp` and one `mergeDeclAttribute` case in `clang/lib/Sema/SemaDecl.cpp`. That mirrors
+how `mergeDeclAttribute` calls `S.Wasm().mergeImportModuleAttr` (`clang/lib/Sema/SemaWasm.cpp`), except that MC-1's
+entry points are free functions declared in the file-private header, so `Sema.h` and the `SemaWasm` part do not
+change. The signature parser is header-only (5.20.5 ML1), so clang links no new LLVM library.
+
+- **MS1 Subject.**
+  - The subject is a function declaration without a body. A definition with `msil_method` is T-M1.
+  - The function must have a prototype (no K&R), must not be variadic and must not be `main` (T-M12).
+  - Its name must not be one clang treats as a library builtin (`FunctionDecl::getBuiltinID()` nonzero, for example a
+    declaration of `strlen`): clang could fold or expand such a call without the stub (T-M12).
+  - In C++ it must be a namespace-scope function: a member function, a function template or a specialization of one,
+    and a `constexpr` or `consteval` function are T-M13. Overloaded namespace-scope functions are allowed; each
+    declaration names its own member and has its own mangled name.
+  - It may not be combined with `import_module`/`import_name`, `alias`, `ifunc` or `weak` (T-M6).
+  - `msil_catch` without `msil_method` is T-M5.
+- **MS2 First declaration.** `msil_method` must appear on the first declaration of the function. A later declaration
+  either repeats the same arguments or omits them and inherits them; anything else is T-M14, naming both locations.
+  This is the asm-label rule. It keeps the mangled name stable (5.20.4 MR2), so MC-1 has no counterpart of
+  `updateMSILImportAttributes`. `msil_catch` lists are merged the same way: identical lists or inherited.
+- **MS3 Signature.** The TYPE, MEMBER and SIGNATURE texts parse with `llvm/CLI/ManagedSignature.h`, and SIGNATURE must
+  be consistent with MEMBER and TYPE:
+  - a field member needs a `field` signature, and a method member a method signature;
+  - `.ctor` is `instance` and returns `void`;
+  - an array TYPE has `instance void(int32)`.
+
+  Each failure is T-M2, whose reason names the offending token or the inconsistency.
+- **MS4 Arity.** The C parameter list is, in order:
+  - a `this` handle, if the signature is `instance` and MEMBER is not `.ctor`;
+  - one parameter per CIL parameter;
+  - one trailing `int *` parameter if any `msil_catch` is present.
+
+  A wrong count is T-M4, with the expected breakdown; a trailing parameter of another type is T-M5. The C return
+  corresponds to the CIL return. For `.ctor` it corresponds to the constructed object, or the array for `newarr`. For a
+  field it corresponds to the field's type.
+- **MS5 Conversions.** Each pair (C type, CIL type) must match exactly one row below, otherwise it is T-M3, naming both
+  types. Sema records the row's code in the IR (5.20.4). *Handle type* means `void *`, `intptr_t`, `uintptr_t`, or a
+  pointer to an incomplete struct type (the opaque typedef of 5.20.2's example, which P-2 uses). Widths are the target's (5.18's data models;
+  `native int` is 8 bytes on msil64 and the 64-bit host triples, 4 on msil32).
+
+| CIL type | C type accepted | Code | Stub IL (in / out) |
+|---|---|---|---|
+| `bool` | `_Bool`/`bool`, or an integer of at most 32 bits | `bool` | in: `ldc.i4.0; cgt.un`; out: as is |
+| `int8`..`int32`, `uint8`..`uint32` | an integer type of the same width (signedness not checked) | `val` | as is |
+| `char` | `char16_t`, or `wchar_t` where it is 16 bits | `val` | as is |
+| `int64`, `uint64` | a 64-bit integer type | `val` | as is |
+| `native int`, `native uint` | an object pointer, `intptr_t`, `uintptr_t`, `size_t`, `ptrdiff_t`, or a handle type | `val` | as is |
+| `float32`, `float64` | `float` for `float32`, `double` for `float64` (never the other; no conversion) | `val` | as is |
+| `T*` | any object pointer | `val` | as is |
+| `valuetype E` (E an enum) | any integer type (Sema cannot see E; msil-ld checks that E is an enum of that width, 5.20.7 MK2) | `enum` | as is |
+| `string` (param) | `const char *`, `const char8_t *` (also non-const) | `utf8` | 5.20.10 S1 |
+| `string` (param) | `const char16_t *`, and `const wchar_t *` where `wchar_t` is 16 bits | `utf16` | 5.20.10 S2 |
+| `string` (param) | `const char32_t *`, and `const wchar_t *` where `wchar_t` is 32 bits (Linux host triples, both portable triples) | `utf32` | 5.20.10 S3 |
+| `string`, `object`, `class T`, `T[]` (param) | a handle type | `obj` | handle to object (5.20.9 MH4), then `castclass` to the CIL type |
+| `valuetype V` (not an enum, not GCHandle; param) | a handle type | `boxed` | handle to object, `unbox.any V` |
+| `valuetype System.Runtime.InteropServices.GCHandle` | a handle type | `gch` | the C value *is* the GCHandle's `IntPtr`: `GCHandle::FromIntPtr` / `GCHandle::ToIntPtr` (never boxed) |
+| `string`, `object`, `class T`, `T[]` (return) | a handle type | `obj` | a new handle (0 for null), 5.20.9 MH2 |
+| `valuetype V` (not an enum, not GCHandle; return) | a handle type | `boxed` | `box V`, then a new handle |
+| `this` of a reference type | a handle type | `this-obj` | handle to object, `castclass T`, `callvirt` (`ldfld` for a field) |
+| `this` of `valuetype V` | a handle type | `this-val` | handle to object, `unbox V` (a managed pointer into the boxed copy), `call` (`ldfld` for a field) |
+| `this` of `valuetype GCHandle` | a handle type | `this-gch` | `FromIntPtr`, `box GCHandle`, `unbox GCHandle`, `call` |
+| `void` (return) | `void` | `void` | - |
+| (trailing) | `int *` | `err` | 5.20.8 |
+
+  Rules that apply to the table:
+  - Strings are never returned as C strings. A `string` result is a handle, and C converts it by calling `Encoding`
+    members itself (P-2 does this; 5.20.10 S4).
+  - Value types other than enums and `GCHandle` are opaque boxed handles (decision brief answers, Q25 (a)): the
+    `boxed` and `this-val` rows and value-type `.ctor`s (`newobj`, then `box`) are in MC-1.
+  - A `valuetype` CIL type with a non-handle, non-integer C type is T-M3. A `class`/`string` CIL type with a C string
+    type is accepted only for `string`.
+- **MS6 msil_catch.**
+  - EXCEPTION_TYPE parses as a type name (T-M2).
+  - CODE is in range, and the same type listed twice is an error (T-M15).
+  - These catch-all types are refused with T-M11: `System.Object`, `System.Exception`, `System.SystemException`,
+    `System.Runtime.InteropServices.ExternalException` and `System.Runtime.InteropServices.SEHException`. They would
+    hide unrelated failures, against the fail-loudly rule, and the `ExternalException` family is M27's longjmp carrier
+    (5.15.4). Without delegates no longjmp can cross a stub in MC-1, but the refusal keeps that true when delegates
+    come. The refusal is permanent, so T-M11 has no `yet`.
+- **MS7 Diagnostics.** The texts follow 5.15.1 rule 2: no phase or milestone numbers, `... is not supported for MSIL
+  yet` for a restriction the fuller goal lifts. The Sema texts are new `err_msil_*` definitions in one block of
+  `DiagnosticSemaKinds.td`, after M26's `warn_msil_printf_long_double` and `warn_msil_scanf_long_double` (category
+  "Semantic Issue"); errors take no `InGroup`, so no diagnostic group is added. Diagnostics name the function as
+  written in source, never with the `__msil_mc.` prefix.
+
+**Shared texts (T-M; pinned whole by MC-1's tests; the milestone text cites them from here).** `<f>` is the function's
+name as written in Sema, and in the backend and msil-ld the stub's name without the `__msil_mc.` prefix (the C name, or
+the C++ mangled name).
+
+| Id | Where | Text |
+|---|---|---|
+| T-M1 | Sema, MS1 | `'msil_method' is only allowed on a function declaration without a body` |
+| T-M2 | Sema, MA1-MA3, MS3, MS6 | `'msil_method' <argument> '<text>' is not valid: <reason>` (`<argument>` is `type`, `member` or `signature`; for an `msil_catch` type, `'msil_catch' type '<text>' is not valid: <reason>`); `<reason>` names the offending token or the inconsistency, and a form that the fuller goal adds says `<form> is not supported for MSIL yet` (for example `byref types are not supported for MSIL yet`) |
+| T-M3 | Sema, MS5 | `<position> of '<f>' has C type '<T>', which cannot carry CIL type '<C>'` (`<position>` is `parameter <i>` with the 1-based C position, `the 'this' handle` or `the result`) |
+| T-M4 | Sema, MS4 | `'<f>' has <n> parameters; 'msil_method' needs <m> (<breakdown>)` (for example `a 'this' handle, 2 CIL parameters and the 'msil_catch' error code`) |
+| T-M5 | Sema, MS1, MS4 | `'msil_catch' needs 'msil_method' on the same declaration`; `the last parameter of '<f>' has C type '<T>'; 'msil_catch' needs a trailing 'int *' parameter` |
+| T-M6 | Sema, MS1 | `'msil_method' cannot be combined with '<attribute>'` (`import_module`, `import_name`, `alias`, `ifunc`, `weak`) |
+| T-M7 | msil-ld, MK2 | `managed call '<f>': parameter <i> passes <n> bits for '<E>', which is not an enum of that width` (`<i>` is the member's 1-based CIL parameter position; E is a struct, or its width differs) |
+| T-M8 | msil-ld, MK2 | `managed call '<f>': '<V>' is a value type, which msil-ld checks only against references; pass --reference=<reference assemblies>` |
+| T-M9 | msil-ld, MK4 | `managed call '<f>': 'msil_catch' type '<T>' does not derive from System.Exception` |
+| T-M10 | backend, ML2 (1) | `taking the address of the managed-call function '<f>' is not supported for MSIL yet` |
+| T-M11 | Sema, MS6 | `catching '<T>' in 'msil_catch' is not supported for MSIL` |
+| T-M12 | Sema, MS1 | `'msil_method' is only allowed on a prototyped, non-variadic function other than 'main'`; `'msil_method' is not allowed on '<f>', which clang treats as a builtin function` |
+| T-M13 | Sema, MS1 | `'msil_method' on a C++ <kind> is not supported for MSIL yet` (`<kind>` is `member function`, `function template`, `constexpr function` or `consteval function`) |
+| T-M14 | Sema, MS2 | `'<attribute>' must appear on the first declaration of '<f>'`; `'<attribute>' on this declaration of '<f>' differs from its first declaration`; each with the note `first declared here` (`<attribute>` is `msil_method` or `msil_catch`) |
+| T-M15 | Sema, MS6 | `'msil_catch' code <v> is not in the range 1 to 2147483647`; `'msil_catch' lists '<T>' twice` |
+| T-M16 | msil-ld, MK3 | `managed call '<f>': '<T>' is a <value|reference> type, but the declaration uses it as a <reference|value> type` |
+| T-M17 | backend, MR4 | `managed call '<f>' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units` |
+
+#### 5.20.4 IR representation
+
+- **MR1 Attributes.** `clang/lib/CodeGen/CodeGenModule.cpp`, beside `addMSILImportAttributes`, under
+  `getTriple().isOSBinFormatMSIL()`, puts string function attributes (compiler-internal, 5.15.1 rule 7) on the IR
+  **declaration**:
+
+  ```
+  "msil-managed-type"="System.IO.FileStream"            ; TYPE as written, including "valuetype " or "[]"
+  "msil-managed-member"=".ctor"
+  "msil-managed-sig"="instance void(string, valuetype System.IO.FileMode, ...)"
+  "msil-managed-asm"="mscorlib"                          ; only when ASSEMBLY is given
+  "msil-managed-conv"="utf8,enum,enum,enum,val,err;obj" ; per C parameter in order, ';', then the return code
+  "msil-managed-catch"="System.IO.FileNotFoundException=2;...;System.IO.IOException=5"
+  ```
+
+  The attribute names are constants in `llvm/CLI/ManagedSignature.h`, shared by clang, the target and the tests. IR
+  loses the C distinctions (`const char *` versus `void *`, `char16_t *`, `_Bool`), so Sema's decision is written
+  down, and the backend executes it without deciding anything.
+- **MR2 Name.** CodeGen names the IR declaration `__msil_mc.<symbol>`, where `<symbol>` is the name it would otherwise
+  have (the C name, the asm label, or the C++ mangled name). The hook is in `CodeGenModule::getMangledName`, for a
+  `FunctionDecl` with `MSILMethodAttr` on an MSIL triple; MS2 makes the name stable. Reasons:
+  1. The name is in class N3 (5.14.2, `cli::isToolchainName`: `__msil_*`). An undefined `__msil_mc.*` name in a bitcode
+     input therefore never binds to a native library or another assembly (`mayBindNatively` in
+     `lld/MSIL/NativeLibraries.cpp`, `SymbolTable::bindManagedSymbol`).
+  2. The IR linker cannot merge a managed-call declaration with an unrelated definition of the C name in another LTO
+     input. Merging would silently replace the managed call by that definition under LTO only, a divergence from
+     object links, where the stub is internal.
+  3. It needs no function attributes in irsymtab, which carries none (portable-mc1.md, verifier corrections, the LTO
+     gap).
+  4. A translation unit that declares the same C name without the attribute refers to `<symbol>` itself, which nothing
+     defines, so the link fails loudly with an undefined symbol instead of reaching another unit's stub.
+
+  The C-level name is unchanged in source, diagnostics strip the prefix, and no symbol with the prefix reaches an
+  object's SYMTAB (MW1).
+- **MR3** Calls stay ordinary IR calls to the declaration. The optimizer sees only an external declaration, so no stub
+  body is visible to IPO, and no library-call recognition applies to the prefixed name.
+- **MR4 Consistency across translation units.** CodeGen also appends one operand per managed-call declaration to the
+  named metadata `!msil.managed.calls`: `!{!"<IR name>", !"<type>", !"<member>", !"<sig>", !"<asm>", !"<conv>",
+  !"<catch>"}`. The IR linker concatenates named metadata, so after an LTO merge the list holds every translation
+  unit's entries. `MSIL::createManagedCallStubs` (ML2) requires all entries of one IR name to be equal and otherwise
+  reports T-M17. Without this check, two units that give the same function different arguments would each get their
+  own stub in an object link, while LTO would silently keep the first declaration's attributes for both. Within one
+  unit MS2 already makes the entries equal.
+
+#### 5.20.5 Lowering (rule L2: new files, hooks only)
+
+- **ML1 `llvm/include/llvm/CLI/ManagedSignature.h`** (new, header-only, like `BCLMembers.h`) holds:
+  - the parser of MA1-MA3 into `cli::ManagedSignature { bool HasThis; bool IsField; ManagedType Return; SmallVector<
+    ManagedType> Params; }`, with `parseManagedSignature(StringRef) -> Expected<ManagedSignature>`, where each
+    `ManagedType` is a kind, an element type and a type name;
+  - the conversion codes of MS5;
+  - the attribute names of MR1 and the metadata name of MR4;
+  - the `__msil_mc.` prefix.
+
+  Its unit test `llvm/unittests/CLI/ManagedSignatureTest.cpp` (`CLIManagedSignatureTest`) covers every MA1-MA3 form
+  and every rejected form. MC-1 does not merge this parser with lld's canonical-listing parser
+  (`lld::msil::parseBCLMethodSig` in `lld/MSIL/Synthetic.cpp`) or the object writer's (`parseBCLType` in
+  `MCTargetDesc/MSILObjectWriter.cpp`); a unit test in `llvm/unittests` cannot reach lld's code, so their agreement is
+  proved end to end by MT3's lld test, which links one managed call per MA3 form against references and through the
+  built-in table.
+- **ML2 `llvm/lib/Target/MSIL/MSILManagedCalls.{h,cpp}`** (new) holds:
+  1. `bool MSIL::createManagedCallStubs(Module &M)`, declared in `MSILManagedCalls.h` (not in `MSIL.h`) and called from
+     slot P0 in `MSILPrepareIRLegacy::doInitialization` after M24's `MSIL::relaxStrictInt128Conversions` and before
+     M33's `MSIL::outlineInt128Operations` (a 5.13.6 P0-list amendment). It runs for code generation only, so after the
+     optimizer, and also in msil-ld's LTO code generation (rule P-1). It first runs MR4's check. Then each declaration
+     with `"msil-managed-type"` becomes, in place, an internal `noinline` definition whose IR body is `unreachable`,
+     with the attribute `"msil-managed-stub"`. Being in place, it needs no call redirection, and the `msil-managed-*`
+     attributes stay on it for the AsmPrinter.
+
+     Any use other than a direct call whose function type is the declaration's is T-M10: an address taken, a call
+     through a cast pointer (a direct call with another function type), an initializer. The use becomes poison, as for
+     5.15.4's errors, which leaves valid IR. Why MC-1 refuses addresses on every triple:
+     - On host triples, an address that reaches native code enters M28's thunk machinery, which was not designed for
+       AsmPrinter-written bodies.
+     - One rule keeps MC-1's tests triple-generic.
+     - P-2 needs none.
+     - Lifting the error later, which the fuller goal may do on the portable triples where function pointers are
+       managed (`ldftn`), breaks nothing.
+  2. `void MSIL::emitManagedCallStubBody(...)`, the body writer. It is called from the AsmPrinter's emission of method
+     bodies (5.13.2's hook point), the point M27.a uses for its throw helper: none of the stub's machine instructions is
+     emitted. It writes:
+     - the argument conversions (MS5);
+     - the access: `call` for a static method or a value-type `this`; `callvirt` for an instance method of a reference
+       type; `newobj` (a value-type `.ctor` included, then `box`); `newarr`; `ldsfld`/`ldfld`;
+     - the result conversion;
+     - `ret`;
+     - with `"msil-managed-catch"`, the clause of 5.20.8, emitted through `MSILTargetStreamer::emitExceptionClause`.
+
+     The stub's `.maxstack` comes from a stub rule in `MSILStackCheck.cpp`, as M27.a raises it for its wrappers and
+     throw helper. The stub's primitive locals (the code local, the length counter, a result local) are declared the
+     way M27.a declares a wrapper's extra local R after the function's locals. MC-1 uses M27's interfaces as M27 leaves
+     them and does not edit `MSILMachineFunctionInfo.*` or `MCTargetDesc/MSILTargetStreamer.*` (ML5). If M27's as-built
+     interface cannot declare a stub's locals, MC-1.c's hand-over says so before MC-1.c writes the body writer, and the
+     orchestrator gives `MSILMachineFunctionInfo.*` to `MC-1/target` with a section 12 row. Labels and branches
+     written by the AsmPrinter (the length loops of 5.20.10, the filter) use M27.a's mechanism: labels emitted with
+     `OutStreamer->emitLabel`, short-form branches to them, and object offsets filled as for branch targets. M27.a's
+     sjlj filter is the precedent for written branches and labels on the object path, and MC-1's llc tests pin the
+     object-path offsets through `llvm-cil-dump` (5.20.11).
+  3. Handle dereference: `GCHandle::FromIntPtr(h)`, `box GCHandle`, `unbox GCHandle`, `call instance object
+     GCHandle::get_Target()`. It is measured to verify fully with ILVerify and to run on Framework and .NET 8
+     (portable-mc1.md 3.4, `recon/p3/portable-mc1-files/bx.il`). This keeps MC-1 off the object writer's typed-local
+     path, at the cost of one small allocation per dereference. A `valuetype GCHandle` local (measured in
+     portable-mc1.md 3.3) is a later optimization.
+- **ML3 MC token kinds.** `MCTargetDesc/MSILMCExpr.{h,cpp}` gains `MSILMemberRefExpr::ManagedMember` (type, member,
+  parsed signature, text scope) and `MSILMemberRefExpr::ManagedType` (a TypeRef, or an SZARRAY TypeSpec, for
+  `castclass`, `isinst`, `box`, `unbox`, `unbox.any` and `newarr`), appended to `MSILMemberRefExpr::Kind`. They are
+  printed as `[msil.bcl]`/`[<ASSEMBLY>]` text. `MCTargetDesc/MSILObjectWriter.cpp` encodes them; its `parseBCLType`
+  (today the primitives, `*` and `[]` only) gains `class T` and `valuetype T` with a TypeRef token in `[msil.bcl]`, or
+  calls ML1's parser. MC-1's own `GCHandle` rows need that too, because their signatures name `valuetype
+  System.Runtime.InteropServices.GCHandle`. Stub-internal BCL members (GCHandle, the encoders, `String::.ctor(char*)`)
+  stay ordinary `MSILMemberRefExpr::BCLMember` references by `cli::BCLMemberId` (5.20.13).
+- **ML4 `MSILMCInstLower.cpp`** needs no change: calls target the stub, a MethodDef of the module (rule R1).
+  M27's `MSILLowerSjLj.cpp` (P8) treats a call to a function with `"msil-managed-stub"` as one that cannot `longjmp`
+  (one hook). Without that, such calls are wrapped (overhead only, portable-mc1.md section 7).
+- **ML5** MC-1 changes none of these: `MSILTargetMachine.cpp`, `MSIL.h`, `pipeline.ll`, `MSILEHClauses.*`
+  (`WholeBodyKind` unchanged), `MSILTrailerTextSink.*`, `Trailer.*`, `TrailerDefs.def`, `MSILLink.h`, `LinkInfo.*`,
+  `MSILMachineFunctionInfo.*` (unless ML2 (2)'s row gives it to MC-1), `MCTargetDesc/MSILTargetStreamer.*` (M27's
+  `emitExceptionClause` is used as M27 leaves it; the new token kinds print through `MSILMCExpr.cpp`), and
+  `MSILVariadics.cpp`.
+
+#### 5.20.6 Output forms
+
+- **MW1 Objects.** The stub is an internal MethodDef `__msil_mc.<symbol>` of the object. It is not a SYMTAB symbol,
+  because it is internal. Its member and types are `[msil.bcl]` requests (5.8), and its clause is in the method's
+  clause table.
+- **MW2 Standalone text** (`clang -S`, llc). The stub is printed with its body. Scopes are `[mscorlib]`, or
+  `[<ASSEMBLY>]` per declaration. The text is unchecked, as 5.10.7's explicit imports are, and is documented so.
+  `ilasm` assembles it, and it runs where the named assemblies resolve.
+- **MW3 `--lto-emit-asm`.** The stubs are created in LTO code generation (ML2 runs at P0 there). Scopes are printed as
+  in MW2 and never bound (5.11.8). With `--reference`, msil-ld still runs 5.20.7's checks on the merged module's
+  declarations, reading the IR attributes in `lld/MSIL/LTO.cpp`.
+
+#### 5.20.7 msil-ld: binding and checks
+
+- **MK1 Binding** is M21's binder, unchanged (`lld/MSIL/Synthetic.cpp` `OutputModule::mapTypeToken`/`mapBCLToken`,
+  `lld/MSIL/BCLBinder.cpp`).
+  - With references, any public member binds, with the full-signature match and the existing `overloads present`
+    diagnostics (measured in portable-mc1.md 3.3). The resolution scope is the defining assembly in the reference set
+    (`mscorlib`/`System` for Framework references, `System.Runtime`, `System.Console`, ... for a .NET pack).
+  - Without references, only the built-in table binds, and anything else gets 5.11.7's existing text `.NET member
+    '<x>' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>`
+    (`BCLBinder::Impl::notInTable`).
+  - An output meant to run on Framework 4.8 and modern .NET alike binds against Framework assemblies or the built-in
+    table, never against a .NET pack. `c.dll` binds its `System.*` members through `--reference` to the Framework 4.8
+    implementation assemblies of the build host, from P-2 (decision brief answers, Q30 (a); 5.19.13). That works on any
+    Windows host with Framework 4.8 (portable-mc1.md, verifier corrections, error 5).
+  - Types bind by the same rule. Without references, a TypeRef binds only if its type is a mscorlib-safe table type
+    (`BCLBinder::Impl::bindTypeByName` and `findBuiltinType`); any other type gets the same `not in msil-ld's built-in
+    mscorlib table` error. That covers `msil_catch` types and `castclass`/`isinst` targets too.
+- **MK2 Enum check** (new file `lld/MSIL/ManagedCalls.{h,cpp}`, one call from `lld/MSIL/Writer.cpp`; L2). Why:
+  Framework 4.8's JIT silently accepts a scalar for a struct parameter (measured, portable-mc1.md 3.6). The check:
+  - msil-ld walks each object method named `__msil_mc.*` with the same IL walker that remaps its tokens.
+  - It finds the stub's member access. That is the one `call`/`callvirt`/`newobj`/`newarr`/`ldsfld`/`ldfld` whose token
+    is not one of 5.20.13's stub-internal rows. 5.20.5 fixes this stub shape, and an unexpected shape is an internal
+    error.
+  - It pairs the member's parameters with the stub's own parameters by MS4's positions.
+  - For every member parameter `valuetype E` passed from an integer stub parameter, E's TypeDef must be an enum whose
+    `value__` has that integer's width, else T-M7. The binder already reads an enum's underlying type for M22's
+    custom-attribute blobs (`BCLBinder::Impl::getEnumUnderlyingType`); MC-1.d makes it reachable through a small
+    public `BCLBinder` query, beside MK3's and MK4's.
+  - Without references there is no TypeDef, and `BCLMembers.def` has no underlying-type column (B3). So a managed call
+    that binds through the built-in table and has an `enum` conversion, or any `valuetype` other than `GCHandle`
+    (MK3), is T-M8. Q30 (a) keeps `c.dll` on references, so no B5 kind with kind and width columns is planned.
+- **MK3 Value-type spelling.** With references, TYPE's `valuetype` prefix, `boxed`/`this-val` conversions and `box`/
+  `unbox` tokens must name a value type, and `this-obj`/`obj`/`castclass` tokens a reference type; a mismatch is T-M16.
+  Without references, T-M8 already refuses every `valuetype` use other than `GCHandle`, whose kind MC-1's own rows fix.
+- **MK4 Catch types.** With references, each `msil_catch` type must derive from `System.Exception`, else T-M9. Without
+  references a catch type binds only if it is a table type (MK1), and its derivation is not checked: an entry that
+  names a table type that is not an exception never matches, so the exception escapes loudly (MX1). The table's
+  exception types after MC-1 are `EntryPointNotFoundException` (Phase 2), P-1a's `PlatformNotSupportedException` and
+  MC-1's `DecoderFallbackException` (5.20.13). M27's `Exception` and `ExternalException` are table types too, but MS6
+  refuses them in `msil_catch`.
+- **MK5 LTO.** With MR2's name, a bitcode input's undefined `__msil_mc.<symbol>` is an N3 name. Late binding never
+  binds it, and LTO code generation defines it internally. MC-1.d's first task is an LTO probe (portable-mc1.md,
+  verifier corrections, the LTO gap). If msil-ld reports N3 names that are undefined only in bitcode before LTO code
+  generation, MC-1.d skips names with the `__msil_mc.` prefix there, keyed on the name with no attributes needed.
+  Otherwise there is no hook. `lld/MSIL/LTO.cpp`'s `annotateImports` (the import annotation of the merged module)
+  skips declarations with `"msil-managed-type"` beside its `findOfferedTrailerDef` skip.
+- **MK6** MC-1 changes neither `lld/MSIL/InputFiles.*` nor `lld/MSIL/SymbolTable.*` unless MK5's probe requires the
+  skip. No native library is ever consulted for a managed call.
+
+#### 5.20.8 Exceptions (the rule)
+
+Option (A) (decision brief answers, Q24 (A)): listed exceptions map to codes through a per-stub filter, unlisted ones
+escape. MC-1 runs after M27, as ordered.
+
+- **MX1** Without `msil_catch`, the stub has no clause. Every exception escapes the stub as an ordinary .NET
+  exception:
+  - in an EXE, an unhandled exception with its stack trace (exit `0xE0434352` on Windows, 134 on Linux);
+  - in a library called by a managed host, an exception the host can catch.
+
+  This is 5.15.1 rule 1's loud failure. A .NET exception is outside IR semantics, as for every BCL call the backend
+  already emits.
+- **MX2** With `msil_catch`, the whole stub body (argument conversions, access and result conversion) is one `.try`
+  region, followed by one filter and one handler, emitted through `emitExceptionClause` (M27.a (1)).
+  - The filter tests `isinst <T_k>` for each entry in order. On the first match it stores CODE_k in a local and does
+    `endfilter 1`. With no match it does `endfilter 0`, so the exception keeps propagating from the first pass with its
+    original stack trace (measured on Framework 4.8.1, .NET 8/10 and WSL .NET 8/10, portable-mc1.md 3.2).
+  - The handler pops the exception, stores the local through the trailing `int *` (`stind.i4`) and leaves to a
+    return of the zero value of the C return type: 0, a null handle, 0.0, or nothing for `void`.
+  - On success, `*err` is not written; the caller initializes it (the `errno` convention). A null `err` is undefined
+    in C terms; the handler's store through it faults.
+- **MX3** No exception type is shared between assemblies. MC-1 throws nothing of its own and catches only the types
+  the declaration names. MS6 keeps catch-alls and M27's carrier family out of the filter, so M27's sjlj filter
+  (`ExternalException` with the armed status block) and MC-1's filters cannot interfere. The recon's verifier
+  confirmed that M27's filter ignores foreign `ExternalException`s.
+- **MX4** An exception thrown inside the conversions is mappable like one from the member: `InvalidCastException` from
+  a wrong handle, `NullReferenceException` from a freed handle, `DecoderFallbackException` from invalid UTF-8 or UTF-32
+  (5.20.10).
+
+#### 5.20.9 Object handles
+
+- **MH1** A handle is the `IntPtr` of a `GCHandleType.Normal` GCHandle (`GCHandle.ToIntPtr(GCHandle.Alloc(o))`). 0 is
+  null.
+- **MH2** Every reference-typed or boxed **result** is a new strong handle owned by the caller. A null result is 0 and
+  allocates nothing. The caller frees it exactly once, through a managed call of `GCHandle::Free`, which MS5's `gch`
+  rule makes the identity on the C value:
+
+  ```c
+  __attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle", "Free", "instance void()")))
+  void __dn_free(dn_handle h);
+  ```
+- **MH3** **Arguments are borrowed**: the stub never frees or keeps them.
+- **MH4** Dereference is ML2 (3). A handle of the wrong type fails `castclass` with `InvalidCastException` (measured on
+  every runtime). A freed handle gives a null target with no exception on Framework and .NET 8 (measured), so the
+  following `castclass`/`callvirt` usually throws `NullReferenceException`. A recycled slot holding an object of the
+  same type cannot be detected. Use after free is undefined and documented as such.
+- **MH5 Scope.**
+  - Handles are valid on every thread and in every assembly of the process, `-static` copies included. That matches
+    5.19's "code private, C state shared".
+  - On Framework a GCHandle belongs to its AppDomain, consistent with 5.19's per-AppDomain C state there. This is
+    documented and has not been measured. MC-1's tests add no cross-AppDomain case.
+- **MH6** Leaks are silent, and handles left at exit are harmless. Freeing is the C library's duty (P-2), not MC-1's.
+
+#### 5.20.10 Strings and arrays
+
+- **S1 UTF-8 (`utf8`).** A null pointer gives a null string. Otherwise:
+  1. The stub counts the bytes up to the terminating 0 with an IL loop (`int32` count).
+  2. It calls `newobj UTF8Encoding::.ctor(bool, bool)` with `(false, true)`. The `true` makes invalid bytes throw
+     `System.Text.DecoderFallbackException`.
+  3. It calls `callvirt instance string Encoding::GetString(uint8*, int32)`.
+
+  It is never `Encoding.UTF8`, which silently replaces invalid bytes with U+FFFD, so a non-UTF-8 POSIX file name would
+  silently become a different name (decision brief answers, Q26 (a)). It is never `Marshal.PtrToStringAnsi` (ANSI code
+  page on Windows) or `Marshal.PtrToStringUTF8` (absent on Framework 4.8). Measured:
+  `recon/p3/portable-mc1-files/utf.il`, exit 42 on Framework 4.8.1, .NET 8 and .NET 10. A caller maps the exception
+  with `msil_catch("System.Text.DecoderFallbackException", EILSEQ)` or lets it escape.
+- **S2 UTF-16 (`utf16`).** A null pointer gives a null string. Otherwise `newobj String::.ctor(char*)`. This is
+  lossless: .NET strings may hold lone surrogates.
+- **S3 UTF-32 (`utf32`).** The stub counts 4-byte units up to 0, calls `newobj UTF32Encoding::.ctor(bool, bool, bool)`
+  with `(false, false, true)` (little-endian, no BOM, throwing), then `GetString(uint8*, int32)` with 4*n bytes. Invalid
+  scalars throw `DecoderFallbackException`, as in S1. This assumes a little-endian runtime: every host triple's
+  runtime is, and P-1a's width and byte-order guard refuses any other for the portable triples (5.18.7).
+- **S4 Results.** A `string` result is a handle (MH2). C obtains bytes through ordinary managed calls, for example
+  `UTF8Encoding::.ctor(bool, bool)` with throwing set, then `Encoding::GetByteCount(string)` and `GetBytes(string)` into
+  a `uint8[]` handle, then `Marshal::Copy(uint8[], int32, native int, int32)`. An out-buffer convenience form is left
+  for the fuller goal.
+- **S5 Arrays.** `T[]` values are handles. They are created with an array TYPE and `.ctor` (`newarr`, length `int32`),
+  and copied to and from C memory with `Marshal::Copy` overloads. Elements are read or written with `System.Array`
+  members (`get_Length`, `GetValue(int32)`, `SetValue(object, int32)`) or `Marshal::Copy`. MC-1 has no element-access
+  conversion and no C-array-to-managed-array marshalling (spans are deferred, 5.20.14).
+
+#### 5.20.11 Triples, verification and tests
+
+- **MT1 Triples.** MC-1 applies to every MSIL object-format triple: `x86_64-pc-windows-msvc-msil`,
+  `x86_64-unknown-linux-gnu-msil` and the aarch64 ones, and `msil64-unknown-dotnet`. `msil32-unknown-dotnet` gets the
+  same rules once P-4 lets its backend run; `native int` is then 4 bytes. Only the wide-string form differs:
+  - `wchar_t *` is the UTF-16 form on Windows host triples;
+  - `wchar_t *` is the UTF-32 form on Linux host triples and on both portable triples, where `wchar_t` is 32-bit signed
+    (user decision, 2026-11-01).
+
+  On the host triples a program calls the BCL directly, which gives MC-1 tests that need no `c.dll`. Nothing in MC-1
+  changes how host triples bind their C library (P/Invoke, 5.15.1 rule 3).
+- **MT2 Verification (D21, 5.17.16).** Stub bodies pass `msil-verify.py` with the existing
+  `msil/utils/ilverify-allowed.txt`. The recon's prototypes raised only allow-listed classes (`StackByRef`,
+  `UnmanagedPointer`), and the box/unbox dereference verifies cleanly. A new verifier class in MC-1's outputs is a
+  review finding, not an allow-list change.
+- **MT3 Tests** (MC-1's test roles; the milestone text gives the WPs):
+  - clang:
+    - `clang/test/Sema/attr-msil-method.c` and `clang/test/SemaCXX/attr-msil-method.cpp`: every Sema T-M text (T-M1 to
+      T-M6, T-M11 to T-M15) pinned whole, both spellings, `__has_attribute`, the accepted forms, and both wide-string
+      widths through `-triple`;
+    - `clang/test/CodeGen/MSIL/msil-method.c`: MR1's attributes, MR2's name for C and C++ mangled names, and MR4's
+      `!msil.managed.calls` operands.
+  - CLI: `llvm/unittests/CLI/ManagedSignatureTest.cpp` (`CLIManagedSignatureTest`, at least 6 cases: primitives,
+    `class`/`valuetype`, nested types, arrays and pointers, fields, each rejected form).
+  - llc (`llvm/test/CodeGen/MSIL/managed-call-*.ll`, -O0 and -O2, on both host x86_64 triples and msil64):
+    - `-S` text of every conversion row and of the clause;
+    - objects through `llvm-cil-dump`: token kinds, the clause table, and branch offsets of the length loops and the
+      filter;
+    - T-M10 pinned whole, for `&f` and for a call through a cast pointer;
+    - the P0 transformation;
+    - the `MSILLowerSjLj` exemption (a setjmp caller does not wrap stub calls).
+  - lld (`lld/test/MSIL/managed-calls.test`, and more `managed-calls-*.test` files if the role splits it, with
+    `Inputs/fakepack` references; host-triple and msil64 objects):
+    - binding through `--reference` and through the built-in table, one managed call per MA3 form (ML1's end-to-end
+      parser agreement), and a wrong return type with the binder's overload list;
+    - the no-reference refusal for a non-table member and a non-table type;
+    - T-M7 for an `int32` passed to an `int64`-backed and to a `uint8`-backed enum, and for a struct passed as an
+      integer (the recon verifier's untested width cases, at link time);
+    - T-M8 without references, T-M9 and T-M16;
+    - MK5 under object LTO and `--lto-emit-asm`, and T-M17 for two bitcode inputs (`llvm-as`) that declare one function
+      with different arguments.
+  - built-in table size: `msil/test/M2/05-refs/mscorlib-safe.test` pins the number of mscorlib-safe entries (`count`,
+    `<n> entries`, `<n> of <n>`, one TABLE line per entry; 20 at M26). MC-1's exec-test role re-pins it to M27's count
+    plus 15 (planned: P-1a's 24, M27's 28, MC-1's 43) and adds the 15 TABLE lines. M22 needed a fix-loop grant for the
+    same pin.
+  - execution, in a new `msil/test/M3/13-managed-calls/`, host triples on Windows .NET 10 with TC=0, Framework 4.8 and
+    WSL .NET 10. MC-1 adds a 5.17.13 row; `M3/12` is M35's `12-combined`. The directory runs in `p3-full` and `wsl-p3`
+    under CF's conditions, and MC-1's gate also runs it under `msil_pipeline=lto`. Expected files follow 5.17.4:
+    - where the member has a C equivalent, each managed declaration sits under `#if defined(__MSIL__)` with a C
+      fallback in `#else`, and the native oracle builds the fallback;
+    - otherwise the expected file is hand-written under `%{msil_expected_rule}` with the reason "managed member, no
+      native oracle", an addition to 5.17.4's list (5.20.12 item 11).
+
+    A test that binds a member outside the built-in table passes `%{msil_refs_netfx}` (MC-1's harness role: `--reference`
+    to the Framework 4.8 implementation assemblies, `mscorlib.dll` and `System.dll` in
+    `%WINDIR%/Microsoft.NET/Framework64/v4.0.30319`, on Windows hosts; feature `msil-refs-netfx`) and REQUIRES that
+    feature. Unlike `%{msil_ref_dir_net48}` it needs no targeting pack, and it is the mechanism Q30 (a) picks for
+    `c.dll`. Outputs bound this way run on Framework, .NET 10 and WSL .NET 10 (portable-mc1.md 3.3). The tests (at
+    least 11 files, the list below; the count MC-1's gate step 23 requires):
+    - `static-call`: static members through the built-in table with no reference, only members in the table at MC-1's
+      time: `Buffer::MemoryCopy(void*, void*, int64, int64)` (pointer and `int64` `val` rows, oracle `memmove`),
+      `Marshal::AllocHGlobal(native int)`, `BitConverter::GetBytes(int32)` (P-1a's row; a `uint8[]` result handle,
+      freed with `GCHandle::Free`) and `Environment::GetCommandLineArgs()` (a `string[]` result handle). `Math` is not
+      used: its rows are M33's;
+    - `strings`: a UTF-8 round trip of a non-ASCII string through `Marshal::StringToHGlobalUni(string)`, the UTF-16
+      result compared in C, and an invalid byte sequence mapped through `msil_catch` to its code;
+    - `wide-strings`: `char16_t *` and `char32_t *` on both OSes, and `wchar_t *` as UTF-16 on Windows and UTF-32 on
+      Linux;
+    - `handles`: `newobj`, `callvirt`, a property getter, `GCHandle::Free` exactly once, and a wrong-type handle failing
+      `castclass` loudly (`%{msil_prog_loud_<L>}`);
+    - `value-types` (`%{msil_refs_netfx}`): a value-type `.ctor` (`DateTime`), `this-val` (`DateTime::get_Ticks()`) and
+      a boxed result handle;
+    - `catch-map` (`%{msil_refs_netfx}`): a missing file through `FileStream`'s constructor gives its code, and an
+      unlisted exception escapes as `[unhandled exception: System.ArgumentException]` (`%{msil_prog_loud_<L>}`);
+    - `enum-args` (`%{msil_refs_netfx}`): `FileMode`, `FileAccess` and `FileShare` as integers;
+    - `field-read` (`%{msil_refs_netfx}`): a static field, `Stopwatch.Frequency` (in `System` on Framework);
+    - `console` (`%{msil_refs_netfx}`): output through `Console::OpenStandardOutput()` and `Stream::Write(uint8[],
+      int32, int32)`;
+    - `arrays` (`%{msil_refs_netfx}`): `newarr` with `Marshal::Copy`;
+    - `shared`: a `-shared` library whose exported function makes a managed call, called by a C program.
+  - portable: `msil/test/Portable/02-managed-calls/`, at least three self-checking tests on `msil64-unknown-dotnet`.
+    Each checks itself (each failed check sets a bit of the exit status, as 5.18 PX2's portable tests do) or prints a fixed status line through managed calls, with hand-written expected files under 5.17.4's
+    portable allowance ("portable: no stdout before P-2; the program checks itself"). Each is linked with `c.dll`
+    (P-1b's freestanding `strlen`, `memcmp`). No portable test passes `--reference` before P-2, so every member and type
+    the tests use is a table entry after MC-1's block, and the same tests link in the Windows and the WSL portable leg:
+    - `handles`: `newobj EntryPointNotFoundException::.ctor(string)` gives a handle; M27's `Exception::get_HResult`
+      through `this-obj`; `GCHandle::Free` once. Then the `string[]` handle of `Environment::GetCommandLineArgs()`,
+      passed as the `this` of `Exception::get_HResult`, fails `castclass` loudly (`%{msil_prog_loud_<L>}`);
+    - `strings`: UTF-8 and UTF-32 (`wchar_t *`, 32 bits on the portable triples) C strings through
+      `Marshal::StringToHGlobalUni(string)`, with the UTF-16 result compared in C;
+    - `catch-map`: an invalid UTF-8 argument with `msil_catch("System.Text.DecoderFallbackException", EILSEQ)` gives
+      `c.dll`'s `EILSEQ` (5.19.5), and the same call without `msil_catch` escapes as `[unhandled exception:
+      System.Text.DecoderFallbackException]` (`%{msil_prog_loud_<L>}`).
+
+    MC-1's exec-test role also owns `msil/test/Portable/03-sjlj/` (P-1r row R1): the first portable setjmp/longjmp
+    self-check after M27, and `sigsetjmp-mask`, where a nonzero mask fails to link with N6's line on `sigprocmask`.
+
+    Both portable directories are run by the post-commit `Portable` legs only (5.18.10). MC-1's own gate runs no
+    portable step and builds neither the portable helper archive nor `c.dll` (decision brief answers, Q11 (a): the
+    P-steps' own gates run their own `Portable/` directories; MC-1 is proved on the host triples). MC-1's exit criteria
+    cover the portable triple through its llc and lld tests, both of which carry msil64 cases. A portable failure found
+    by a post-commit run becomes a fix WP of the next step through a section 12 row (5.17.11).
+
+#### 5.20.12 Contract amendments MC-1 needs
+
+Items 1-9, 11 and 12 are section 12 rows of the plan commit that adds this contract; item 10 is MC-1's documentation
+WP, and 5.20.13's re-pins land with MC-1's commit.
+
+1. **5.13.5 exemption.**
+   - Add a table row for MC-1, roles `MC-1/lists` (root) and `MC-1/clang`.
+     - `MC-1/lists` takes `clang/include/clang/Basic/Attr.td` (`TargetMSIL` and the records `MSILMethod` and
+       `MSILCatch`, the latter repeatable and kept in source order), `AttrDocs.td` and `DiagnosticSemaKinds.td` (MS7's
+       texts, no group).
+     - `MC-1/clang` takes `clang/lib/Sema/SemaDeclAttr.cpp` (two `ProcessDeclAttribute` cases),
+       `clang/lib/Sema/SemaDecl.cpp` (`mergeDeclAttribute`), `clang/lib/Sema/CMakeLists.txt` (the new file) and
+       `clang/lib/CodeGen/CodeGenModule.cpp` (MR1's and MR4's hook and MR2's `getMangledName` hook).
+   - MC-1's harness role writes the manifest blocks (L6). Their checks are `lit` subsets of `clang/test/Sema/attr-*.c`
+     (for example `attr-wasm.c`, the shared `TargetSpec` neighbourhood) and `fork` lines for the three fork clang tests
+     of MT3. Each new file outside the fork prefixes gets its own `fork-only` line: `clang/test/Sema/attr-msil-method.c`,
+     `clang/test/SemaCXX/attr-msil-method.cpp`, `clang/lib/Sema/SemaMSILManagedCall.cpp` and
+     `clang/lib/Sema/SemaMSILManagedCall.h`. The harness role also adds both Sema tests to check-msil (`$checkMsil` in
+     `lit-legs.ps1`, `check_msil` in `lit-legs.sh`, `msil/test/CMakeLists.txt`), as M26 did for
+     `clang/test/Sema/msil-long-double-format.c`; `clang/test/CodeGen/MSIL/` is already taken whole.
+   - The closing paragraph's "No Phase 3 milestone edits `Attr.td`" gains "except MC-1 (5.20)". MC-1 does not take
+     `msil_fixed_arity`, which stays with the fuller managed calls. The portable triples need no fixed-arity list:
+     `getFixedArityList` in `MSILVariadics.cpp` returns none for them, and `c.dll`'s variadic functions are variadic
+     definitions the toolchain compiles.
+   - The row records the rebuild class: a new attribute record is 519-523 objects, about 3,500 CPU-seconds (5.6.10),
+     and `DiagnosticSemaKinds.td` has 138 clang dependents inside that set (M26's Header changes, measured read-only
+     from the build's dependency data on 2026-10-29).
+2. **5.14.1 / 5.15.1 rule 4: a fifth delivery kind.**
+   - **K5 Managed-call stubs**: internal methods `__msil_mc.<symbol>` that P0 makes from attributed declarations, with
+     AsmPrinter-written bodies that access one .NET member named by IR attributes (5.20).
+   - Built by `MSIL::createManagedCallStubs` plus the AsmPrinter. In `-S`/llc they are defined in the module.
+   - The last sentence of 5.14.1 becomes: "no IR declaration names a BCL member, except a managed-call declaration
+     (K5); other code that needs a .NET API calls a K2 definition".
+   - 5.14.2's N3 row, whose names `__msil_*` already include `__msil_mc.*`, notes that a K5 stub is never a SYMTAB
+     symbol and that late binding never binds an undefined `__msil_mc.*` name in bitcode.
+3. **5.13.6:** the P0 list gains `MSIL::createManagedCallStubs` (MC-1) between M24's and M33's calls. No slot is added,
+   and `pipeline.ll` is unchanged.
+4. **5.13.7 B2 and B7:** a block heading may name a portable or managed-calls step instead of `M<n>`: `// MC-1: managed
+   calls from C and C++, stage 1 (plan 5.20)`. The same amendment serves P-1a's guard rows (5.18.7). B7 gains P-1a's
+   guard rows and "MC-1 fifteen rows (5.20.13)".
+5. **5.11.7:** the `check-mscorlib-safe.py` method (portable-mc1.md 3.5; verifier corrections, error 7). The probe also
+   *calls* or `newobj`s each method, or checks `IsPublic` by reflection on Framework, so an internal member such as
+   Framework's `Environment::get_TickCount64()` fails. A self-test with an internal member is added. P-1a's harness WP
+   P-1a.i makes the change before P-1a's guard rows are proved, because those are the first mscorlib-safe rows after
+   the finding. M27's text does not change. P-1r's audit re-runs the fixed tool over the mscorlib-safe rows planned for
+   M27-M35. MC-1's gate re-proves MC-1's rows with the fixed tool (B4). This item is not MC-1's work:
+   `check-mscorlib-safe.py` is not an MC-1 file.
+6. **5.15.11:** add the row "Managed calls (MC-1)". Until MC-1, `msil_method` is an unknown attribute (clang's warning)
+   and the call is an undefined-symbol link error. From MC-1 the rules are 5.20's, and taking the address is T-M10.
+   Its portable column is P-1r's row R12.
+7. **5.15.12:** a row for MC-1 covering all of 5.20.
+8. **Design.md** (user-approved, decision brief answers Q12): section 1's non-goals sentence on the later goals
+   becomes the brief's DM-2 text (a first stage of the managed calls ships during phase 3 for the portable C library;
+   the fuller managed calls and inline IL stay after phase 3). No other Design.md edit is MC-1's; MC-1's rules are
+   documented in Status.md (item 10).
+9. **FeatureIdeas.md item 3** (typed and delegate-accepting export overloads, "scheduled with the managed-calls goal"):
+   a note that MC-1 does not include them and that they stay with the fuller goal (orchestrator edit, L8).
+10. **Status.md** and **GettingStarted.md**: MC-1's documentation WP (attributes, conversions, handles and their
+    lifetime, exceptions, the Framework value-type hazard and its link check, the unchecked standalone text, limits).
+11. **5.17.4 and 5.17.13:**
+    - 5.17.4's list of hand-written expected files gains MC-1's managed-only results ("managed member, no native
+      oracle", MT3);
+    - 5.17.13 gains the directory rows `M3/13-managed-calls` (MC-1, host managed calls, run by `p3-full` and `wsl-p3`),
+      `Portable/02-managed-calls` and `Portable/03-sjlj` (MC-1, run by the post-commit `Portable` legs only).
+12. **5.13.3, 5.13.4 and L7:** new-file rows `MC-1/lists` `llvm/include/llvm/CLI/ManagedSignature.h`, `MC-1/clang`
+    `clang/lib/Sema/SemaMSILManagedCall.{h,cpp}`, `MC-1/target` `llvm/lib/Target/MSIL/MSILManagedCalls.{h,cpp}` and
+    `MC-1/lld` `lld/MSIL/ManagedCalls.{h,cpp}`; an MC-1 row in 5.13.4 from 5.20.15 (hot files: `BCLMembers.def` to
+    `MC-1/lists`, `MSILPrepareIR.cpp` and `MSILAsmPrinter.*` to `MC-1/target`); L7's milestone list gains MC-1.
+13. **5.15.10 and M32.a (BCL type collision).** M32's planned rows include `CLI_BCL_TYPE(String, "System", "String",
+    true)` before `String_Concat`. MC-1's block defines the same Id first, and a second `CLI_BCL_TYPE(String, ...)`
+    would be a duplicate enumerator in `BCLMembers.h` (`#define CLI_BCL_TYPE(Id, ...) Id,`), failing M32's gate build.
+    The row:
+    - 5.15.10's list and M32.a drop the `String` type row and append only `String_Concat`, whose owner is MC-1's
+      `String` type;
+    - M32's `--print-bcl-table` and B7 pins follow.
+
+    No other planned M27-M35 type or method Id is one of MC-1's (`GCHandle`, `Encoding`, `UTF8Encoding`,
+    `UTF32Encoding`, `DecoderFallbackException`, `String` and their methods), and P-1a's block defines none of them
+    (searched in the plan's `CLI_BCL_TYPE(` rows and in 5.18.7's block). MC-1's documentation WP's hand-over repeats
+    the check against the plan as it stands at MC-1's commit.
+
+#### 5.20.13 `BCLMembers.def` rows (one block, appended after M27's; B1-B7)
+
+These are the stub-internal members, plus two that let calls bind without references:
+- `GCHandle::Free`, so that MH2's free binds;
+- the type `DecoderFallbackException`, so that `msil_catch` maps S1/S3's decoding failure to `EILSEQ` without
+  references (MK1, MK4), as MC-1's portable `catch-map` test does.
+
+All are `Required` and mscorlib-safe. All 15 resolve through `[mscorlib]` on Framework 4.8.1 and .NET 8: the recon
+verifier's run (`recon/p3/portable-mc1-files/sec4.txt`) and the probe of `recon/p3/portable-mc1-files/enc.txt` with
+`probe-1.out`, which covers `DecoderFallbackException`, `UTF8Encoding::.ctor(bool, bool)`, `UTF32Encoding::.ctor(bool,
+bool, bool)` and `String::.ctor(char*)`. MC-1's gate proves every row again with the fixed tool (5.20.12 item 5).
+
+```
+// MC-1: managed calls from C and C++, stage 1 (plan 5.20)
+CLI_BCL_TYPE(GCHandle, "System.Runtime.InteropServices", "GCHandle", true)
+CLI_BCL_METHOD(GCHandle_Alloc, GCHandle, "Alloc", false, "valuetype System.Runtime.InteropServices.GCHandle", "object", Required, "", true)
+CLI_BCL_METHOD(GCHandle_ToIntPtr, GCHandle, "ToIntPtr", false, "native int", "valuetype System.Runtime.InteropServices.GCHandle", Required, "", true)
+CLI_BCL_METHOD(GCHandle_FromIntPtr, GCHandle, "FromIntPtr", false, "valuetype System.Runtime.InteropServices.GCHandle", "native int", Required, "", true)
+CLI_BCL_METHOD(GCHandle_get_Target, GCHandle, "get_Target", true, "object", "", Required, "", true)
+CLI_BCL_METHOD(GCHandle_Free, GCHandle, "Free", true, "void", "", Required, "", true)
+CLI_BCL_TYPE(Encoding, "System.Text", "Encoding", true)
+CLI_BCL_METHOD(Encoding_GetString, Encoding, "GetString", true, "string", "uint8*, int32", Required, "", true)
+CLI_BCL_TYPE(UTF8Encoding, "System.Text", "UTF8Encoding", true)
+CLI_BCL_METHOD(UTF8Encoding_ctor, UTF8Encoding, ".ctor", true, "void", "bool, bool", Required, "", true)
+CLI_BCL_TYPE(UTF32Encoding, "System.Text", "UTF32Encoding", true)
+CLI_BCL_METHOD(UTF32Encoding_ctor, UTF32Encoding, ".ctor", true, "void", "bool, bool, bool", Required, "", true)
+CLI_BCL_TYPE(DecoderFallbackException, "System.Text", "DecoderFallbackException", true)
+CLI_BCL_TYPE(String, "System", "String", true)
+CLI_BCL_METHOD(String_ctor_PChar, String, ".ctor", true, "void", "char*", Required, "", true)
+```
+
+- The recon's `Encoding::get_UTF8()`/`get_UTF32()` rows are not used (S1, S3).
+- Exception types for `isinst` and user types for `castclass`/`box`/`unbox` are `ManagedType` tokens. They bind
+  through the references, or through a table type row when the link has none (MK1). `DecoderFallbackException` is the
+  one such row MC-1 adds; `System.Exception` exists from M27.
+- `String` is the Id M32 also plans (5.15.10). 5.20.12 item 13 makes M32 append only `String_Concat` on it.
+- These rows change `--print-bcl-table`, so MC-1's lld test role owns the whole `lld/test/MSIL/` directory (L7). They
+  change the built-in table's size, so MC-1's exec-test role owns `msil/test/M2/05-refs/mscorlib-safe.test` (MT3).
+- **Re-pins after MC-1.** The block shifts every later `cli::BCLMemberId` and every pinned `--print-bcl-table` text.
+  The orchestrator re-pins, in the M28-M35 texts, with MC-1's commit:
+  - the `--print-bcl-table` lines and B7 counts (M28, M29, M30, M31, M32, M33 rows);
+  - M32's `String` row (5.20.12 item 13);
+  - `msil/test/M2/05-refs/mscorlib-safe.test`: every later milestone that appends mscorlib-safe rows starts its re-pin
+    from MC-1's count and owns the file in its text (P-1r row R21);
+  - the CLITests `'*'` floors of M28-M35, which rise by MC-1's actual new cases (at least 6);
+  - the quiet-minute estimates of M28-M35's G3b (`p3-full`) and G4 (`wsl-p3`), which rise by `13-managed-calls`'s
+    run time, about 1-1.5 minutes each, measured in MC-1's round 1;
+  - the hook context in `MSILAsmPrinter.*` (M28.c, M29.c, M31.c, M32.c, M33.c, M34.c);
+  - the P0 order and `doInitialization` context in `MSILPrepareIR.cpp` (M29.c, M31.c, M32.b, M33.e);
+  - `MCTargetDesc/MSILMCExpr.*` (M31.c);
+  - `MCTargetDesc/MSILObjectWriter.*` (M31.c, M33.c);
+  - `MSILStackCheck.cpp` and `MSILLowerSjLj.cpp` (M32.c); MC-1 leaves `MSILMachineFunctionInfo.*` and
+    `MCTargetDesc/MSILTargetStreamer.*` unchanged (ML5), so their M28-M34 citations need no re-pin;
+  - `llvm/lib/Target/MSIL/CMakeLists.txt` (M28.c, M30.b, M31.c, M32.a, M33.a, M34.c);
+  - `llvm/unittests/CLI/CMakeLists.txt` (M28.g);
+  - `lld/MSIL/Writer.cpp` (M28.d, M29.d, M31.d, M33.d, M34.d);
+  - `lld/MSIL/CMakeLists.txt` (M34.d);
+  - `lld/MSIL/BCLBinder.*` (M33.c), for MK2-MK4's queries;
+  - `lld/MSIL/LTO.cpp` (M28.d, M29.d, M31.d), for MK5's `annotateImports` skip;
+  - `lld/MSIL/SymbolTable.*` (M29.d, M31.d, M33.c) and `lld/MSIL/InputFiles.*` (M33.c), only if MC-1's lld hand-over
+    says MK5's probe changed them.
+
+  The estimate is about 2-4 h.
+
+#### 5.20.14 Deferred to the fuller managed-calls goal
+
+These are refused with `... is not supported for MSIL yet` or simply absent:
+- **Spans and byrefs:** `ref`/`out`/`in` parameters, `Span<T>`/`ReadOnlySpan<T>`, pinned C buffers passed as managed
+  arrays.
+- **Value types by value:** C structs mapped to .NET structs (explicit layout) as parameters, results or fields. This
+  overlaps M33's `TrailerSink::addValueType` and M34's `lld/MSIL/ValueTypes.*`. MC-1 has only enums as integers and
+  opaque boxed handles.
+- **Delegates:** C functions as .NET delegates (event handlers, `ProcessExit`, `AssemblyLoadContext.Unloading`,
+  `Console.CancelKeyPress`, `PosixSignalRegistration`), and therefore any callback from .NET into C (decision brief
+  answers, Q27 (a)).
+- **Generics:** generic types and methods, for example `GC.AllocateArray<T>`. MA3's grammar has no generic form, and
+  msil-ld does not map an object's `MethodSpec` token yet (`OutputModule::mapBCLToken`: "names a generic method
+  instantiation, which is not supported yet"), although its binder already binds `MethodSpec` requests.
+- **Writes and events:** field writes, events.
+- **C++ members:** C++ member functions and templates as managed-call subjects (T-M13).
+- **Function addresses:** addresses of managed-call functions (T-M10).
+- **Header generator:** generating C declarations from reference assemblies.
+- **Typed-pointer and delegate-accepting export overloads** (FeatureIdeas.md item 3) for C# callers of toolchain
+  libraries.
+- **Types defined in the copy:** types defined by C code. The finalizable holder of 5.19's per-thread C block is not
+  one: 5.19.11 makes it P-3's K3 trailer type `'<msil>CBlock'`.
+- **Inline IL** (the separate late goal), which the fuller managed calls pair with.
+- **`-S` checking:** checking of standalone text against references.
+
+**Consequence for P-2 and P-3** (recon-state's verifier corrections; portable-linkrules.md D3). Some designs need
+delegates over C functions, which MC-1 does not provide. In the user's order (option A), the first step that has them
+is P-3: C function pointers to delegates are MC-3's piece there, over M28's `getDelegateConstructor`. M28 runs after
+P-2. The designs that need delegates:
+- `c.dll`'s `AppDomain.ProcessExit` subscription, which runs `__cxa_finalize` and flushes the streams for a host that
+  is not a C program. It comes at P-3. At P-2, exit handlers and the final flush run only through `exit()`, and
+  `c.dll`'s standard streams stay unbuffered until a C program's start-up says otherwise: the dotnet `'<msil>Main'`
+  calls `__llvm_libc_set_c_main()`, exported by `c.dll`, before `main` (one trailer item at P-2; decision brief
+  answers, Q28 (b); 5.19.9, 5.19.10). So a host that is not a C program loses no output.
+- An `AssemblyLoadContext.Unloading` clean-up. It comes only if a later delegate stage provides it, and it would add a
+  reference beyond `mscorlib`/`System`, reached only on modern .NET.
+- Signal registration (`Console.CancelKeyPress`, `PosixSignalRegistration`), which waits for 5.19's signal design
+  (signals are absent until then; decision brief answers, Q21 (a)).
+
+`try`/`finally` around `Monitor.Enter`/`Exit` is not expressible in C either, which matters only because a C call
+chain has no `finally`. 5.19 therefore uses designs without delegates for P-2. The objects the shared root needs
+(created at P-2 with major 0, frozen at P-3) are within MC-1:
+- `String.Intern`, `AppDomain.GetData`/`SetData`, `Thread.GetNamedDataSlot`/`GetData`/`SetData` through handles;
+- a boxed `IntPtr` made by `newobj IntPtr::.ctor(int64)` and read by `IntPtr::ToInt64()` (`this-val`);
+- `new object[]` through an array `.ctor` with `Array::SetValue`/`GetValue`;
+- `Monitor.Enter(object)`/`Exit(object)`. The two-argument `Enter(object, ref bool)` needs a byref, which is deferred.
+
+#### 5.20.15 Files and roles (for the MC-1 milestone text; 5.13.4 style)
+
+The roles and WP letters are the milestone text's (MC-1.a-MC-1.i).
+
+| Role | Files | What |
+|---|---|---|
+| MC-1.a `MC-1/lists` (root) | `clang/include/clang/Basic/Attr.td`, `AttrDocs.td`, `DiagnosticSemaKinds.td`, `llvm/include/llvm/CLI/ManagedSignature.h` (new), `llvm/include/llvm/CLI/BCLMembers.def`, `MCTargetDesc/MSILMCExpr.h` | the attribute records and MS7's Sema texts; ML1; 5.20.13's block; ML3's kinds |
+| MC-1.b `MC-1/clang` | `clang/lib/Sema/SemaMSILManagedCall.cpp` (new), `clang/lib/Sema/SemaMSILManagedCall.h` (new, file-private), `clang/lib/Sema/SemaDeclAttr.cpp`, `SemaDecl.cpp`, `clang/lib/Sema/CMakeLists.txt`, `clang/lib/CodeGen/CodeGenModule.cpp` | 5.20.3, 5.20.4 |
+| MC-1.c `MC-1/target` | `MSILManagedCalls.*` (new), `MSILPrepareIR.cpp`, `MSILAsmPrinter.*`, `MCTargetDesc/MSILMCExpr.cpp`, `MCTargetDesc/MSILObjectWriter.*`, `MSILStackCheck.cpp`, `MSILLowerSjLj.cpp`, `llvm/lib/Target/MSIL/CMakeLists.txt` | 5.20.5, 5.20.6, MR4's check |
+| MC-1.d `MC-1/lld` | `lld/MSIL/ManagedCalls.*` (new), `lld/MSIL/Writer.cpp`, `lld/MSIL/LTO.cpp`, `lld/MSIL/InputFiles.*`, `lld/MSIL/SymbolTable.*`, `lld/MSIL/BCLBinder.*`, `lld/MSIL/CMakeLists.txt`. `InputFiles.*` and `SymbolTable.*` change only if MK5's probe needs the skip (MK6); `BCLBinder.*` for MK2-MK4's queries. The hand-over says which changed. | 5.20.7 |
+| MC-1.e `MC-1/harness` | `msil/utils/upstream-hooks.txt`, `msil/test/CMakeLists.txt`, `msil/test/lit.cfg.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh` | the manifest blocks and `fork-only` lines (5.20.12 item 1, L6); the Sema tests' check-msil paths; `%{msil_refs_netfx}` and the feature `msil-refs-netfx` (MT3) |
+| MC-1.f `MC-1/llc-tests` | `llvm/test/CodeGen/MSIL/`, `clang/test/Sema/attr-msil-method.c`, `clang/test/SemaCXX/attr-msil-method.cpp`, `clang/test/CodeGen/MSIL/`, `llvm/unittests/CLI/ManagedSignatureTest.cpp`, `llvm/unittests/CLI/CMakeLists.txt` | MT3's clang, CLI and llc tests |
+| MC-1.g `MC-1/lld-tests` | the whole `lld/test/MSIL/` (L7) | MT3's lld tests; `--print-bcl-table` re-pins |
+| MC-1.h `MC-1/exec-tests` | `msil/test/M3/13-managed-calls/`, `msil/test/Portable/02-managed-calls/`, `msil/test/Portable/03-sjlj/`, `msil/test/M2/05-refs/mscorlib-safe.test` | MT3's execution, portable and table-size tests; P-1r row R1's portable setjmp tests |
+| MC-1.i `MC-1/docs` | `llvm/docs/MSIL/Status.md`, `GettingStarted.md`, `msil/test/README.md` | 5.20.12 item 10; the hand-over of 5.20.13's re-pins and item 13's check |
+
+`check-mscorlib-safe.py` is not MC-1's (5.20.12 item 5). The portable `Portable` legs take `msil/test/Portable` whole
+(5.18.10), so MC-1's harness role adds no leg path for the portable directories.
+
+Effort: 16-22 h of farm wall-clock (decision brief; the recon's earlier 22-32 h predates the narrowed design), with
+about 5,200 planned lines over the nine WPs. Rebuild: the `Attr.td` records are the broad class (519-523 objects),
+`DiagnosticSemaKinds.td` 138 inside it, `BCLMembers.def` 21 (B6). 5.20.13's re-pins add 2-4 h.
+
+#### 5.20.16 Interfaces this contract assumes
+
+- **M27:**
+  - `MSILTargetStreamer::emitExceptionClause` in all three streamers, with filter labels, and object-writer clause
+    storage (`cli::MethodBodyInfo::Clauses`);
+  - AsmPrinter-written bodies whose machine instructions are not emitted (the throw helper);
+  - written labels and branches on the object path (M27.a (2)'s filter);
+  - `MSILStackCheck` raising `.maxstack` for written bodies, and the declaration of extra locals after a function's
+    locals;
+  - `MSILLowerSjLj.cpp` at P8;
+  - the `System.Exception` type and `Exception::get_HResult` rows.
+- **M21/M22:** the reference binder (arbitrary public members, full signatures, `overloads present`,
+  `BCLBinder::Impl::getEnumUnderlyingType`), the built-in table (5.11.7) and `-shared` exports.
+- **5.13/5.14:** L2 hooks (P0 in `MSILPrepareIRLegacy::doInitialization`; the AsmPrinter's emission of method bodies),
+  the N3 class, B1-B7.
+- **5.17:** `%{msil_prog_loud_<L>}` and `[unhandled exception: <type>]`, `%{msil_expected_rule}` (5.17.4), the netfx,
+  net10 and WSL legs, `p3-full` and `wsl-p3`, D21's `msil-verify.py`.
+- **5.18:** the portable triples, their data models and 32-bit signed `wchar_t`; P-1a's width and byte-order guard
+  (S3's little-endian assumption) and its `PlatformNotSupportedException` and `BitConverter::GetBytes(int32)` rows;
+  the post-commit `Portable` legs (tag `Portable`, never `Exit`, so M35's gate and `exit-report.py` never select them;
+  5.18.10), `msil/test/Portable/lit.local.cfg` marking the directory UNSUPPORTED on host-triple runs, and
+  `gate-select.py` skipping `Portable` for expected-file checks.
+- **P-1a/P-1b:** the fixed `check-mscorlib-safe.py` (5.20.12 item 5), and `c.dll` with its freestanding entry points
+  for the portable tests.
+- **P-1r:** row R1 (the portable setjmp tests are MC-1.h's) and row R21 (the `mscorlib-safe.test` re-pin chain).
+- **5.19:** the client (P-2's OS layer), its errno numbering for CODE values (5.19.5: llvm-libc's generic errno set as
+  extended for the portable triples; `EILSEQ` in the portable `catch-map` test), its unbuffered streams for hosts that
+  are not C programs until `__llvm_libc_set_c_main()` (Q28 (b)), and its binding of `System.*` through the Framework
+  4.8 implementation assemblies from P-2 (Q30 (a)).
+
 ## 6. Milestones
 
 ### M0. Infrastructure: tracked build scripts, plan checks, execution harness, jitall, CI skeleton
@@ -11742,6 +14064,393 @@ L7: the whole directory. Beyond 5.15.2's list: a FIXED_ARITY explicit import; a 
 
 **Rebuild cost.** Measured read-only from the shared build's dependency and build logs (2026-10-29, before the upstream merge): about 214 objects, 42 job-minutes of compiles. `DiagnosticSemaKinds.inc`'s 138 clang dependents (Header changes) are 36 of them, `SemaExpr.cpp` and `SemaOpenMP.cpp` near 2 minutes each: Phase 3's largest rebuild so far, about 10-14 minutes at 4 jobs on a quiet host, which M26.g's private build also pays. The rest: the four CLI headers 44 objects (about 5 job-minutes), the target headers 38 (about 2), one LLVMipo object, the edited sources; CMake regenerates for the new files; relinks of llc, opt, clang, lld, the unit tests and the CLI tools; the two archives (about 1 min); G1b (3-5, not counted). Gate after the build (quiet estimates, 5.17.7): steps 2-6 0.5, G2 1.5, G3 7-8, G3b 3-5, G3c 2-3, G4 5-7 (run 2 about 2-3), step 23 1-1.5, steps 24-25 3.5, steps 26-27 5.5-7, step 28 2.5, steps 29-30 0.5, G5 3, G6 1, G7 1.5-2, G8-G9 1: about 38-46 normalized minutes. Round 1 decides (5.17.7): if it fails above 30, only G4's run 2 may move (G4 becomes `-Leg wsl-p3 -Run 1`); it holds no M26 exit test, since `variadic-def-xtu` runs in run 1. G3c stays (M26's harness change edits existing files), and the exit checks (steps 23-27), P-3's proof (step 28), G5, G3, G3b and G4's run 1 never move; the orchestrator records any remainder above 30 in a section 12 row. The full `ctest`, `ctest-wsl`, `ctest-lto`, `programs*` and `det*` legs run after the commit (5.17.11).
 
+### P-1a. The msil64-unknown-dotnet toolchain without a C library
+
+**Goal.** Contract 5.18 for `msil64-unknown-dotnet` (P-0's recon copies `llvm/docs/MSIL/recon/p3/portable-target.md`, `portable-linkrules.md` and `portable-loader.md`), with the user's decisions recorded as the decision brief answers (user, 2026-11-01), cited below as "brief Q<n>". After P-1a: the triples `msil64-unknown-dotnet` and `msil32-unknown-dotnet` parse, normalize and select the MSIL target with the MSIL object format by default; `getNativeFormatTriple` and `computeDataLayout` stop at an MSIL arch; a non-msil arch with OS `dotnet` is refused; RuntimeLibcalls has an MSIL system library. clang has a standalone `MSILPortableTargetInfo` (LP64, wasm-style type spellings, signed `char`, `int` `wint_t`, no host macro, no `__ELF__`) and an `MSILPortableABIInfo`, matched slot for slot by ExpandVariadics' `MSILPortable` class. A `DotNetToolChain` builds the link job (sysroot, `-lc` and `clang_rt.builtins` by default, `-static` refused). The backend accepts msil64 and refuses msil32 loudly (T-P1); explicit imports are refused (T-P2); standalone text imports nothing (T-P3). msil-ld links msil64 with the dotnet link-rule family (5.18.5, 5.18.6): constructors without arguments, start/stop symbols, forced exports (`--export`, `--export-if-defined`, `--export-list`), no native library and no native binding (T-P4 and the N6 line), shared-first `-l` on dotnet only, the C runtime identity `c` and the reserved assembly name `c`, no static take of the C library (T-P11), and on every triple a CIL object whose envelope does not match the target is refused (T-P12). Every msil64 image and CIL object is a stubless AnyCPU PE32/I386 ILONLY envelope, and its `<Module>::.cctor` starts with the width and byte-order guard, which throws `PlatformNotSupportedException` in a 32-bit or big-endian process (T-P10). `clang_rt.builtins` builds for msil64; freestanding self-checking programs and a `-shared` pair run on .NET 10, TieredCompilation=0, a .NET Framework 4.8 direct start and WSL .NET 10, and the guard fires under 32-bit .NET 8, .NET 10 and Framework. Host-triple output is unchanged (il-snapshot, det-manifest), and `check-mscorlib-safe.py` checks accessibility.
+
+Not in P-1a: the C library (P-1b; until then links use `-nolibc`, which keeps `clang_rt.builtins`, and `-lc` cannot resolve); global destructors, `__cxa_atexit`, `__dso_handle` and `'<msil>Main'`'s `exit(main())` (P-2); `-static` (P-3); msil32 code generation (P-4); atomics (M30 inline, P-3's portable lock path); `thread_local` (M31, through P-1r row R19); P/Invoke of any kind (refused, brief Q3 (a)); portable LTO coverage (brief Q13 (a): the portable legs and the P-steps' gates run objects only, and P-3 adds LTO runs). Native function pointers do not exist on the portable triples (managed `calli`, user decision). The standing portable legs run only in post-commit runs (5.17.6); this milestone's gate runs its own portable directory with `msil-lit.ps1` as an exit check (brief Q11 (a)).
+
+**Depends on:** M26 (ExpandVariadics' MSIL hook block in `VariadicABIInfo::create`, record v1.1, `llvm/lib/CLI/TrailerParts.h`, `msil/test/M3/05-variadics`, the Linux syntax-check step), M25 (`build-builtins.py`, `msil/lib/builtins/sources.txt`, the resource-directory archive path), M24 (`MSILTrailerTextSink.{h,cpp}` and L9, hosted mode, the M24 legs, `gate-select.py`, `calibrate.py`), Phase 2 (M22 library assemblies and accessors, M21 references and the built-in table, M17's PE writer). Contract text: 5.13.1-5.13.7, 5.14.2, 5.17.2, 5.17.4, 5.17.6, 5.17.7, 5.18. Every WP reads its Reads entries and the section 12 rows for P-1a (among them the 5.13.5 exemption, the R21 bend, the 5.13.1 L2 predicate substitution, 5.11.7's accessibility amendment, 5.17.4's portable allowance and 5.17.6's portable legs).
+
+**Header changes** (all in the root WPs P-1a.a and P-1a.b, so that the gate's build pays the broad rebuild once; the R21 bend, brief Q10):
+- `llvm/include/llvm/TargetParser/Triple.h` (about 2,477 objects, 158.7 job-minutes: portable-target section 5) and `TripleName.def`: appended enumerators `msil32`, `msil64` and `DotNet`. `LastArchType` and `LastOSType` move; the root WP lists every user of either and confirms that no array or table outside `Triple.cpp` is sized by them
+- `llvm/include/llvm/IR/RuntimeLibcalls.td` (`RuntimeLibcalls.inc`: 598 objects, 32.6 job-minutes)
+- `clang/include/clang/Basic/DiagnosticDriverKinds.td` (85 objects, 4.8), `clang/lib/CodeGen/TargetInfo.h` (58, 5.0)
+- `llvm/include/llvm/CLI/ImageLayout.h` (20; it now holds the inline link-rule selector and predicates), `Trailer.h` (10), `BCLMembers.def` (21), `PEWriter.h` (few)
+- Union: 2,481 objects, 158.9 job-minutes (86% of a full build). Private builds of the other WPs recompile only the TUs they own and those whose behaviour they check: appended enumerators change no layout, so no binary mixes two layouts. "With P-1a.a's sources" in a Checks line means that the private build also recompiles P-1a.a's `Triple.cpp`, `TargetDataLayout.cpp`, `TargetRegistry.cpp` and `llvm/lib/IR/RuntimeLibcalls.cpp` (with the regenerated `RuntimeLibcalls.inc`), because the shared build does not know msil64 (5.7.1 allows the sources of the WPs depended on).
+
+Roles (5.13.4, 5.17.1): P-1a.a `P-1a/triple` (root), P-1a.b `P-1a/lists` (root), P-1a.c `P-1a/clang`, P-1a.d `P-1a/driver`, P-1a.e `P-1a/target`, P-1a.f `P-1a/cli`, P-1a.g `P-1a/lld`, P-1a.h `P-1a/builtins`, P-1a.i `P-1a/harness`, P-1a.j `P-1a/llc-tests` (with the clang and unit tests), P-1a.k `P-1a/lld-tests` (all of `lld/test/MSIL/`, L7: the guard rows are mscorlib-safe and change `--print-bcl-table`), P-1a.l `P-1a/exec-tests`, P-1a.m `P-1a/harness-tests`, P-1a.n `P-1a/docs`. Hot files: `MSILPrepareIR.cpp`, `MSILAsmPrinter.*` and `MSILTrailerTextSink.*` go to `P-1a/target`; `Trailer.h` and `BCLMembers.def` go to `P-1a/lists`; `Trailer.cpp` goes to `P-1a/cli`; `NativeLibraries.*` goes to `P-1a/lld`; `sources.txt` goes to `P-1a/builtins`. P-1a appends one `BCLMembers.def` block (four rows) and no `TrailerDefs.def` row.
+
+Shared texts (the WPs write them verbatim; tests pin them whole; 5.18 quotes them):
+- **T-P1** (msil32: clang accepts it, the backend, `PEOptions::get` and msil-ld refuse it): `target 'msil32-unknown-dotnet' is not supported yet: only msil64-unknown-dotnet is implemented`
+- **T-P2** (an explicit import on a portable triple): `'<f>' is declared with import module '<module>', which msil64-unknown-dotnet does not support: the portable target binds no native code`
+- **T-P3** (an undefined function in standalone text): `function '<f>' is not defined in this module: standalone text for msil64-unknown-dotnet imports nothing (link with msil-ld)`
+- **T-P4** (a native library input: a `.so`, a `.lib`, an import library, or an archive that has members none of which is CIL or bitcode): `'<file>' is a native library, which msil64-unknown-dotnet cannot link: the portable target binds no native code`
+- **N6** (5.14.2's class line for an undefined C library name on dotnet, after the first line, before `>>> referenced by`): `>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide` when an input named `c.dll` takes part, else `>>> a C library function; link the managed C library c.dll (-lc)`
+- **T-P6** (a constructor with parameters): `constructor '<f>' takes arguments, which msil64-unknown-dotnet does not pass`
+- **T-P7** (a null `.init_array` slot): `null constructor slot in '<section>' of '<file>': msil64-unknown-dotnet calls every slot`
+- **T-P8** (named sections; `.tdata`/`.tbss` are not T-P8 and keep Phase 2's `thread_local` error until M31, P-1r row R19): `section '<name>' is not supported for msil64-unknown-dotnet: <reason>`, where `<reason>` is `the portable target runs no destructor sections` for `.fini_array` and `.dtors`, `the portable target has no pre-initialization stage` for `.preinit_array`, and `the portable target runs constructors only from .init_array` for `.ctors` and `.CRT$X*`
+- **T-P9** (driver, the new diagnostic `err_drv_msil_portable_static`): `'-static' is not supported for 'msil64-unknown-dotnet' yet: the managed C library links only as the shared assembly c.dll`
+- **T-P10** (the guard; two link-time constants, one per failed check): `<assembly> is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit` and `<assembly> is built for msil64-unknown-dotnet and needs a little-endian .NET process`
+- **T-P11** (until P-3: a dotnet link other than the C library itself, the `--shared` output named `c`, that takes any definition from a member of an archive whose symbol index defines `__llvm_libc_errno`): `the C library cannot be linked statically for msil64-unknown-dotnet yet: link the shared C library c.dll (-lc)`
+- **T-P12** (every triple: a CIL object whose PE format or COFF machine differs from the target's envelope; `<format>` is `PE32` or `PE32+`, `<machine>` the COFF value in hex): `'<file>' is a <format> CIL object for machine <machine>, which <triple> does not link (it links <format> objects for machine <machine>)`
+- **T-P13** (dotnet: the output's simple name equals a referenced assembly's; portable-loader R5): `output assembly '<name>' has the simple name of the referenced assembly '<file>': the .NET host can load one in place of the other`
+- **T-P14** (dotnet: the assembly name `c` on an output that is not `--shared`): `the assembly name 'c' is reserved for the C library on msil64-unknown-dotnet: only a --shared link may produce c.dll`
+
+**Work packages**
+
+#### P-1a.a Triple, data layout, target registry and runtime libcalls (implement, ~450 lines)
+
+- Owned files: `llvm/include/llvm/TargetParser/Triple.h`, `llvm/include/llvm/TargetParser/TripleName.def`, `llvm/lib/TargetParser/Triple.cpp`, `llvm/lib/TargetParser/TargetDataLayout.cpp`, `llvm/lib/MC/TargetRegistry.cpp`, `llvm/include/llvm/IR/RuntimeLibcalls.td`
+- Reads: this plan sections 5.13.5 and 5.18.1, the section 12 rows for P-1a (the 5.13.5 exemption, the R21 bend); llvm/docs/MSIL/recon/p3/portable-target.md sections 1 and 5 including its verifier corrections; llvm/lib/TargetParser/Triple.cpp (parseArch, parseFormat, getDefaultFormat, getNativeFormatTriple, isCompatibleWith, normalize); llvm/lib/TargetParser/TargetDataLayout.cpp (Triple::computeDataLayout); llvm/lib/MC/TargetRegistry.cpp (both TargetRegistry::lookupTarget overloads); llvm/lib/Target/MSIL/TargetInfo/MSILTargetInfo.cpp (the registration's arch-match lambda); llvm/include/llvm/IR/RuntimeLibcalls.td (SystemRuntimeLibrary defs, isDefaultLibcallArch); llvm/utils/get_triple_system_name.py
+- Provides: `Triple::msil32`, `Triple::msil64`, `Triple::DotNet`, `Triple::isMSIL()`, `Triple::isOSDotNet()`; default format MSIL for the msil arches; 5.18.1's data layouts; `getNativeFormatTriple()` returning `*this` for `isMSIL()`; the `lookupTarget` refusals; `IsMSIL` and `MSILSystemLibrary`
+
+(1) **Triple.** `parseArch`, `getArchTypeName`/`getArchTypePrefix`, the 32/64-bit variants (msil32 <-> msil64), `getArchPointerBitWidth` 32/64, little-endian; `TRIPLE_OS(DotNet, "dotnet", ...)` in `TripleName.def`, one macro per line with string literals (`get_triple_system_name.py` parses the file); `getDefaultFormat` returns `Triple::MSIL` for both msil arches, so `msil64-unknown-dotnet` and `msil64-unknown-dotnet-msil` are the same target and `isOSBinFormatELF()` is false (no `__ELF__`). `normalize` turns `msil64-dotnet` into `msil64-unknown-dotnet`. `getNativeFormatTriple` returns `*this` for an MSIL arch; `computeDataLayout` tests the arch before the native redirect: msil64 `e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128`, msil32 `e-m:e-p:32:32-i64:64-i128:128-n8:16:32:64-S128`. `isCompatibleWith` keeps its "native still MSIL" stop; msil64 and msil32 are incompatible with each other and with every host MSIL triple. (2) **TargetRegistry.** `lookupTarget` refuses an msil arch with a non-MSIL format (`msil64-unknown-dotnet-elf`) and a non-msil arch with OS `dotnet` (`x86_64-unknown-dotnet`, which would otherwise silently become a generic native ELF target), with the existing "unable to get target" form plus the reason; `MSILTargetInfo.cpp`'s arch-match lambda keeps returning false. (3) **RuntimeLibcalls.td.** `IsMSIL` and `MSILSystemLibrary` (compiler-rt, libm and libc names; no f80 or f128 rows; without it the generated lookup ends with `return {};` and a new arch gets no libcalls at all). The i128 rows are what the host MSIL triples effectively get: the backend expands i128 division inline and `sources.txt` excludes every `*ti*` helper. A missing libcall is a link error with N1's line, never an empty lookup. Checks: `msil-syntax.ps1` on the three `.cpp` files; a private `TargetParserTests` and `MCTests` against the shared build's libraries (recompiling only `Triple.cpp`, `TargetDataLayout.cpp`, `TargetRegistry.cpp` and the tests); `llvm-tblgen -gen-runtime-libcalls` on the new `.td`, with the generated MSIL lookup diffed by hand.
+
+#### P-1a.b Declarations: SectionRules, the guard field, BCL rows, PE format, driver diagnostic, CodeGen hook (implement, ~250 lines)
+
+- Owned files: `llvm/include/llvm/CLI/ImageLayout.h`, `llvm/include/llvm/CLI/Trailer.h`, `llvm/include/llvm/CLI/BCLMembers.def`, `llvm/include/llvm/CLI/PEWriter.h`, `clang/include/clang/Basic/DiagnosticDriverKinds.td`, `clang/lib/CodeGen/TargetInfo.h`, `clang/lib/CodeGen/CMakeLists.txt`
+- Reads: this plan sections 5.7.7, 5.11.7, 5.13.1, 5.13.7, 5.14.4, 5.18.5 and 5.18.7, this milestone's texts and the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-linkrules.md D1 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-loader.md sections 4 and 6 with V2 and V3; llvm/include/llvm/CLI/ImageLayout.h (SectionRules, ImageInput, ConstructorKey); llvm/include/llvm/CLI/Trailer.h (TrailerInput, TrailerSink, skipsNullConstructorSlots); llvm/include/llvm/CLI/BCLMembers.def; llvm/include/llvm/CLI/PEWriter.h (PEOptions)
+- Provides: `cli::SectionRules::Dotnet`; the inline functions `cli::SectionRules cli::getSectionRules(const Triple &)` and `bool cli::bindsNatively(const Triple &)` and the predicates `definesStartStop`, `groupsDollarSections`, `constructorsTakeArgs`, `rejectsNullConstructorSlots` and `allowsFiniSections` (each `bool f(SectionRules)`, an exhaustive switch), defined in `ImageLayout.h`; the member defaults `SectionRules Rules = SectionRules::ELF;` of `ImageInput` and `ConstructorKey` removed, so every construction passes `cli::getSectionRules(TT)` (the callers are P-1a.e's, P-1a.f's and P-1a.g's); `cli::PortableGuard` (`uint8_t PointerSize`, `std::string Assembly`, `std::string Triple`) and `std::optional<cli::PortableGuard> TrailerInput::Guard`; the BCL block; `PEOptions::Format` (`PE32Plus` default, `PE32`); `err_drv_msil_portable_static` (T-P9); `std::unique_ptr<TargetCodeGenInfo> createMSILPortableTargetCodeGenInfo(CodeGenModule &CGM)`; `Targets/MSIL.cpp` in clang CodeGen's CMake list (its `fork-only` line is P-1a.i's, which owns `msil/utils/upstream-hooks.txt`)
+
+Declarations only (L4), except the selector and the predicates, which are header code so that every dependent WP's private build has them; the other definitions belong to P-1a.c, P-1a.e, P-1a.f and P-1a.g. The existing `cli::skipsNullConstructorSlots(SectionRules)` stays declared in `Trailer.h` and defined in `Trailer.cpp` (P-1a.f turns its `== COFF` into an exhaustive switch). **BCL block** (B1-B4), headed `// P-1a: the portable width and byte-order guard (plan 5.18.7)`: `CLI_BCL_TYPE` `PlatformNotSupportedException` (`System`) and its `.ctor(string)`; `CLI_BCL_TYPE` `BitConverter` (`System`) and `uint8[] GetBytes(int32)`; all four `Required` and mscorlib-safe (both types exist in Framework 4.8's mscorlib and are forwarded by `System.Runtime`), so a portable link without references binds them through the built-in table, and the table's mscorlib-safe count goes from 20 to 24. The `BitConverter` type row is also planned by M33.a (5.16.7); P-1r row R18 makes M33 append only its two members to this type. Checks: `msil-syntax.ps1` on one includer of each header; HEAD's `check-mscorlib-safe.py` on the four rows (net48, net8, net10, WSL net10), which proves presence; the accessibility probe of P-1a.i's fixed script runs at the gate (step 13), because P-1a.i depends on this root WP and starts only after it has finished.
+
+#### P-1a.c clang: MSILPortableTargetInfo and MSILPortableABIInfo (implement, ~600 lines)
+
+- Owned files: `clang/lib/Basic/Targets/MSIL.h`, `clang/lib/Basic/Targets.cpp`, `clang/lib/CodeGen/Targets/MSIL.cpp`, `clang/lib/CodeGen/CodeGenModule.cpp`
+- Depends on: P-1a.a, P-1a.b
+- Reads: this plan sections 5.13.5 and 5.18.1-5.18.3 and the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-target.md sections 2.1-2.3 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-linkrules.md section 3; clang/lib/Basic/Targets/MSIL.h (MSILTargetInfo); clang/lib/Basic/Targets.cpp (AllocateTarget, AllocateMSILTarget); clang/lib/Basic/Targets/WebAssembly.h; clang/lib/Basic/TargetInfo.cpp (the WIntType default); clang/lib/Frontend/InitPreprocessor.cpp (`__WINT_*`, `__ELF__`); clang/lib/CodeGen/ABIInfoImpl.cpp (DefaultABIInfo, emitVoidPtrVAArg); clang/lib/CodeGen/Targets/WebAssembly.cpp; clang/lib/CodeGen/CodeGenModule.cpp (createTargetCodeGenInfo)
+- Provides: `MSILPortableTargetInfo` (both widths), chosen in `AllocateMSILTarget` when `isMSIL() && isOSDotNet()`; `AllocateTarget` refusing a non-msil arch with OS dotnet; `MSILPortableABIInfo` and its `createMSILPortableTargetCodeGenInfo`; the `case Triple::msil32: case Triple::msil64:` of `createTargetCodeGenInfo`
+
+(1) **TargetInfo** (header-only, as `MSILTargetInfo` is): 5.18.2's model (PC1, PC2) and 5.18.3's predefines. LP64 on msil64 (ILP32 on msil32, built but unused before P-4); `size_t`/`ptrdiff_t`/`intptr_t` as `unsigned long`/`long` and `int64_t` as `long long` on both widths (brief Q4 (a)); signed `char`; `wchar_t` int32 signed (`-fshort-wchar` diagnosed); `wint_t` `int` (brief Q5 (b), the wasm choice): the class leaves clang's default `WIntType` (`SignedInt`, `clang/lib/Basic/TargetInfo.cpp`), so clang predefines `__WINT_TYPE__` as `int`, `__WINT_WIDTH__` as 32 and no `__WINT_UNSIGNED__`, and llvm-libc needs no dotnet branch for it (P-1b: `llvm-libc-types/wint_t.h` takes `__WINT_TYPE__`, and `llvm-libc-macros/wchar-macros.h`'s `WEOF`, `((wint_t)(0xffffffffu))`, is then -1 of type `int`); `long double` = IEEE binary64, 8 bytes (`-mlong-double-*` diagnosed); `max_align_t` clang's natural 8 with `__BIGGEST_ALIGNMENT__` 16 (`SuitableAlign` 128; brief Q6 (a): `malloc` is 16-aligned from P-2); `CharPtrBuiltinVaList`; `MaxAtomicInlineWidth` and `MaxAtomicPromoteWidth` 64; `__int128` on msil64 only; GenericItanium C++ ABI; generic CPU only; no inline asm constraints or global registers; only `CC_C`. Predefines: `__MSIL__`, `__msil64__` (or `__msil32__`), `__dotnet__`, `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1/2/4/8`, the generic width macros, an empty `__USER_LABEL_PREFIX__`; never `__ELF__`, `__unix__`, `__unix`, `__linux__`, `__linux`, `__gnu_linux__`, `_WIN32`, `_WIN64`, `__APPLE__`, `__x86_64__` (or `__x86_64`, `__amd64`, `__k8`), `__aarch64__`, `__SSE*`, `__MMX__`, `__SEG_FS`/`__SEG_GS`, `__FLOAT128__` or a code-model macro. (2) **ABIInfo** (`clang/lib/CodeGen/Targets/MSIL.cpp`, derived from `DefaultABIInfo`): empty records ignored; aggregates byval indirect; sret returns; i128 direct on msil64; `_BitInt(N)` indirect above 128 bits on msil64 and above 64 on msil32; `EmitVAArg` through `emitVoidPtrVAArg` with 8-byte slots, slot alignment up to 16 and aggregates by pointer, the rule P-1a.e's ExpandVariadics class implements from 5.18.2. Checks: `msil-syntax.ps1`; a private `clang` (recompiling `Targets.cpp`, `CodeGenModule.cpp`, the new file and `InitPreprocessor.cpp`'s object; with P-1a.a's sources) with `-dM -E` for both widths, and `-emit-llvm` of portable-target section 2.3's cases.
+
+#### P-1a.d Driver: DotNetToolChain (implement, ~350 lines)
+
+- Owned files: `clang/lib/Driver/ToolChains/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.cpp`
+- Depends on: P-1a.a, P-1a.b
+- Reads: this plan sections 5.18.3 and 5.18.4 and the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-target.md section 3 including its verifier corrections; clang/lib/Driver/ToolChains/MSIL.cpp (createMSILToolChain, msil::Linker::ConstructJob, the -static refusal); clang/lib/Driver/ToolChains/BareMetal.cpp (BareMetal::computeSysRoot); clang/lib/Driver/ToolChains/WebAssembly.cpp (AddClangSystemIncludeArgs)
+- Provides: `DotNetToolChain`; the sysroot layout of 5.18.4 (`<InstalledDir>/../lib/clang-runtimes/<triple>` unless `--sysroot`); T-P9
+
+`createMSILToolChain` chooses `DotNetToolChain` first for `isMSIL() && isOSDotNet()`. Linker msil-ld; headers: the resource `include/`, `<sysroot>/include/<triple>`, `<sysroot>/include` (WebAssembly's order; `-nostdinc`, `-nobuiltininc` and `-nostdlibinc` honoured); `-L<sysroot>/lib/<triple>`; default libraries `-lc` (unless `-nolibc`), then `clang_rt.builtins` from `<resource>/lib/msil64-unknown-dotnet/` (brief Q9 (a)), no `-lm` (the math functions are in `c.dll`; P-1b's sysroot holds an empty `libm.a` for build systems that pass `-lm`, brief Q14 (a)), no `-lpthread`; `-nostdlib` and `-nodefaultlibs` drop both; `-nolibc` drops `-lc` and keeps `clang_rt.builtins` (the freestanding tests' link); `-shared` gives `--shared`; `-static` gives T-P9; math errno on by default (`IsMathErrnoDefault`); msil32 builds its job and msil-ld refuses it (T-P1). The driver copies nothing beside the output: deploying `c.dll` next to a program is the user's or the build system's job (brief Q22 (a)). Checks: `msil-syntax.ps1`; a private `clang` (with P-1a.a's sources) with `-###` for each case of portable-target section 3.2.
+
+#### P-1a.e Backend: accept msil64, the portable checks, link-rule sites, ExpandVariadics (implement, ~700 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILPrepareIR.cpp`, `llvm/lib/Target/MSIL/MSILPortable.h`, `llvm/lib/Target/MSIL/MSILPortable.cpp`, `llvm/lib/Target/MSIL/MSILAsmPrinter.h`, `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `llvm/lib/Target/MSIL/MSILTrailerTextSink.h`, `llvm/lib/Target/MSIL/MSILTrailerTextSink.cpp`, `llvm/lib/Target/MSIL/MSILDataSegment.h`, `llvm/lib/Target/MSIL/MSILDataSegment.cpp`, `llvm/lib/Target/MSIL/MSILISelLowering.cpp`, `llvm/lib/Target/MSIL/MSILUtilities.h`, `llvm/lib/Target/MSIL/MSILUtilities.cpp`, `llvm/lib/Target/MSIL/CMakeLists.txt`, `llvm/lib/Transforms/IPO/ExpandVariadics.cpp`
+- Depends on: P-1a.a, P-1a.b
+- Reads: this plan sections 5.13.1-5.13.3, 5.15.2 (the ExpandVariadics hook), 5.18.2, 5.18.5, 5.18.7 and 5.18.9, this milestone's texts and the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-target.md section 4.1 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-linkrules.md section 2.1 and D1-D6 including its verifier corrections; llvm/lib/Target/MSIL/MSILPrepareIR.cpp (isSupportedTarget, the va_arg check `VAArgIsExpanded` of the definition diagnostics); llvm/lib/Target/MSIL/MSILAsmPrinter.cpp (getSectionRules, checkSections, getConstructorArgs, reportNotImported, emitPInvokeDeclarations, emitTrailer); llvm/lib/Target/MSIL/MSILDataSegment.h (finalize); llvm/lib/Target/MSIL/MSILISelLowering.cpp (getNativeVAListStructSize, the constructor's `NoFloatLdexpFrexp`); llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp (passInt128ByPointer's x86_64 Windows condition); llvm/lib/Target/MSIL/MSILUtilities.h and MSILUtilities.cpp (getPInvokeModule, the file-static getCRuntime); llvm/lib/Target/MSIL/MSILVariadics.cpp (getFixedArityList); llvm/lib/Transforms/IPO/ExpandVariadics.cpp (VariadicABIInfo::create and M26's MSIL classes)
+- Provides: `bool MSIL::checkPortableModule(Module &M)` (T-P1, T-P2) called from `MSILPrepareIR`'s run (a hook); every target link-rule site on `cli::getSectionRules` and the predicates; T-P3 in `reportNotImported`; `void MSILAsmPrinter::fillTrailerGuard(Module &M, MSILTrailerTextSink &Sink, cli::TrailerInput &In)` (L9: defined in `MSILTrailerTextSink.cpp`, declared in `MSILAsmPrinter.h`, one call in `emitTrailer` before `cli::buildTrailer`); the `MSILPortable` VariadicABIInfo class
+
+(1) `isSupportedTarget` accepts msil64 + DotNet; msil32 gets T-P1. `checkPortableModule` (new file, L2): T-P2 for a declaration with `msil-import-module`, and the existing data-import error for any native data reference. (2) **Link-rule sites:** `getSectionRules` returns `cli::getSectionRules(TT)`; `checkSections` and `getConstructorArgs` use the predicates (T-P6, T-P7, T-P8 on dotnet); `MSILDataSegment.h`'s `finalize` loses its default argument, so `emitObjectEnd` passes the rules explicitly. No `SectionRules` enumerator remains in the target outside `case` labels (step 34 searches); `getSectionRules`' `isOSWindows() ? COFF : ELF` selection goes. (3) **Native sites:** `getNativeVAListStructSize` (`MSILISelLowering.cpp`, today 24 for every non-Windows, non-Darwin x86_64 triple) returns 0 for an MSIL arch; `passInt128ByPointer` (x86_64 Windows only) and the ldexpf promotion (`NoFloatLdexpFrexp` in `MSILISelLowering.cpp`'s constructor, windows-gnu only) are already off on dotnet, which P-1a.j pins; `getPInvokeModule` returns nothing, so standalone text gives T-P3 for every undefined function; `getCRuntime` returns none; `MSILPrepareIR`'s va_arg check (`VAArgIsExpanded`, today `isOSWindows()`) treats `isOSDotNet()` like Windows, because the portable `char*` va_list is expanded by ExpandVariadics. M26's other sites need nothing on dotnet: `getFixedArityList` returns an empty list. (4) **Guard fill:** `fillTrailerGuard` sets `In.Guard` for `isOSDotNet()` modules (pointer size from the data layout, the module's assembly name, the triple). (5) **ExpandVariadics:** an `MSILPortable` class in M26's `createMSILABIInfo`, tested first (`if (T.isMSIL())`, before its `isOSWindows()` test; 5.18.2 PC5), implementing 5.18.2's slot rule (additions only, 5.13.5). L2: the changes in the hot `MSILPrepareIR.cpp` and `MSILAsmPrinter.*` are hooks (`checkPortableModule`'s call, the va_arg condition, `getSectionRules`' body, the predicate calls, T-P3's text, `fillTrailerGuard`'s declaration and call), each feature within about 30 lines, or 5.13.1 L2's behaviour-preserving predicate substitutions; the logic lives in `MSILPortable.cpp` and `MSILTrailerTextSink.cpp`. Checks: `msil-syntax.ps1` (with `MSILTrailerTextSink.cpp`); a private `llc` and `opt` (with P-1a.a's sources): the portable `.ll` cases of portable-target section 6.1 at -O0 and -O2 with `-S` (an msil64 object needs P-1a.f's `PEOptions::get` case, which this WP neither owns nor depends on, so `-filetype=obj` and `llvm-cil-dump --headers --link-info` of portable objects are the gate's; 5.6.1 rule 7); a host `.ll` sample gives byte-identical output before and after.
+
+#### P-1a.f lib/CLI: the PE32 envelope, the link-rule predicates, the guard emitter (implement, ~550 lines)
+
+- Owned files: `llvm/lib/CLI/PEWriter.cpp`, `llvm/lib/CLI/ImageLayout.cpp`, `llvm/lib/CLI/Trailer.cpp`, `llvm/lib/CLI/TrailerGuard.cpp`, `llvm/lib/CLI/TrailerParts.h`, `llvm/lib/CLI/CMakeLists.txt`, `llvm/tools/llvm-cil-copy/llvm-cil-copy.cpp`
+- Depends on: P-1a.a, P-1a.b
+- Reads: this plan sections 5.7.7, 5.13.1-5.13.3, 5.14.5, 5.15.3 (the `<Module>::.cctor` rule of M28.b), 5.18.5 and 5.18.7 and the section 12 rows for P-1a (PE32 for the portable triples); llvm/docs/MSIL/recon/p3/portable-loader.md sections 1-6 with every verifier section; llvm/docs/MSIL/recon/p3/portable-loader-files/guardB.il; llvm/docs/MSIL/recon/p3/portable-loader-files/dump.txt; llvm/lib/CLI/PEWriter.cpp (PEOptions::get, checkContent, writePEImage); llvm/lib/CLI/ImageLayout.cpp (classifySection, getOutputSectionName, getSectionPriority, the ConstructorKey operators, layoutImage); llvm/lib/CLI/Trailer.cpp (cli::buildTrailer, cli::skipsNullConstructorSlots, emitPhase1, emitPhase2); llvm/tools/llvm-cil-copy/llvm-cil-copy.cpp
+- Provides: the msil64 PE32 envelope; msil32 refused in `PEOptions::get` (T-P1); every lib/CLI link-rule site on P-1a.b's predicates, `cli::skipsNullConstructorSlots` an exhaustive switch (true for COFF only); the guard part (`void cli::emitPortableGuard(TrailerSink &Sink, const PortableGuard &G, TrailerMethod &Cctor)`, declared in `TrailerParts.h`)
+
+(1) **PEWriter** (portable-loader section 6 item 1): msil64 gets Machine I386, `Format::PE32`, ImageBase 0x400000 (executable) or 0x10000000 (library, module), CorFlags ILONLY only, stack 0x400000/0x4000, heap 0x100000/0x1000, DllCharacteristics 0x8540, COFF characteristics 0x0022/0x2022, no import, IAT, stub or `.reloc`, `AddressOfEntryPoint` 0; never `IMAGE_FILE_RELOCS_STRIPPED` on a DLL, `IMAGE_FILE_32BIT_MACHINE`, 32BITREQUIRED or 32BITPREFERRED. CIL objects use the same options, so msil64 objects are PE32 netmodules (PEImage already reads PE32; portable-loader V7). `checkContent` accepts I386 only with PE32, ILONLY and neither 32BITREQUIRED nor 32BITPREFERRED, and refuses PE32+ with I386. `writePEImage` gets per-format constants (optional header 224 or 240 bytes, section table 0x178 or 0x188, magic, `BaseOfData`, 32-bit ImageBase and stack and heap fields). The comment "needs the mscoree stub and .reloc" goes, with the measured reason in its place; i686 host triples stay refused for their own reasons. Host triples write the same bytes as before. `llvm-cil-copy` copies an I386 ILONLY input with the msil64 defaults. (2) **ImageLayout:** the Dotnet rule set as P-1a.b's predicates define it (ELF's grouping by verbatim name with only `.init_array.N` collapsed, start/stop defined, no `$` grouping, constructors without arguments, null slots an error, no `.fini_array`); every `SectionRules` enumerator use in lib/CLI outside `ImageLayout.cpp` becomes a predicate call or an exhaustive switch. (3) **Trailer.cpp hook** (L2, about 15 lines): with `In.Guard` set, `<Module>::.cctor` always exists and its first code is one call into `TrailerGuard.cpp`, before `emitPhase1` in one-phase output and before `emitPhase2` (and before any `'<msil>Data'` touch) in two-phase output. `<Module>::.cctor` runs before any other type initializer of the module on Framework 4.8, .NET 8 and .NET 10, and a throw from it is sticky (portable-loader V1), so no other initializer needs a copy. (4) **TrailerGuard.cpp:** `ldc.i4.m1; conv.i; conv.u8; ldc.i8 -1; bne.un FAIL32` (the sign extension is load-bearing: `conv.u` would fire on 64-bit), then `ldc.i4.1; call uint8[] BitConverter::GetBytes(int32); ldc.i4.0; ldelem.u1; brfalse FAILBE` (verifiable, unlike an `ldind.u1` of an int32 local; brief Q2 (a)), then the rest of the initializer; each FAIL is `ldstr` of T-P10's constant (`Sink.addUserString`), `newobj PlatformNotSupportedException::.ctor(string)`, `throw` (brief Q1 (a): not `Environment.FailFast`, which prints nothing on the Framework console, and not in `'<msil>Main'`, which libraries never run). Both sinks implement every member the part uses, so `lld/MSIL/Synthetic.cpp` does not change. Checks: `msil-syntax.ps1`; private `CLITests` (recompiling lib/CLI; with P-1a.a's sources); `guardB.il`'s shapes assembled through the private build and run in a 64-bit process (prints 42) and under the 32-bit .NET host (`dotnet.exe` of the x86 install, `exec`: `PlatformNotSupportedException`).
+
+#### P-1a.g msil-ld: the dotnet link-rule family (implement, ~950 lines)
+
+- Owned files: `lld/MSIL/Driver.cpp`, `lld/MSIL/Options.td`, `lld/MSIL/Config.h`, `lld/MSIL/NativeLibraries.h`, `lld/MSIL/NativeLibraries.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`, `lld/MSIL/LTO.cpp`, `lld/MSIL/MarkLive.cpp`, `lld/MSIL/OutputSegment.h`, `lld/MSIL/OutputSegment.cpp`, `lld/MSIL/Writer.cpp`, `lld/MSIL/InputFiles.h`, `lld/MSIL/InputFiles.cpp`, `lld/MSIL/Exports.h`, `lld/MSIL/Exports.cpp`, `lld/MSIL/AssemblyFiles.cpp`, `lld/MSIL/CLibraryNames.def`
+- Depends on: P-1a.a, P-1a.b, P-1a.e, P-1a.f
+- Reads: this plan sections 5.9.6, 5.10.7, 5.13.1, 5.13.2, 5.14.2, 5.18.5, 5.18.6 and 5.18.9, this milestone's texts and the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-linkrules.md sections 2.1, 2.4, 4 (D1-D13) and 5 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-target.md section 4.2; llvm/docs/MSIL/recon/p3/portable-loader.md R5; lld/MSIL/Driver.cpp (isSupportedTarget, getMSILTriple, getLibraryCandidates, searchLibraryBaseName, the archive classification that makes an archive without CIL or bitcode members a native library); lld/MSIL/NativeLibraries.cpp (hasWideNativeLongDouble, mayBindNatively, isOtherFormat, isCompatibleCOFF, isCompatibleELF, findDataImportFunctions); lld/MSIL/SymbolTable.cpp (bindLateSymbols, reportUnresolved); lld/MSIL/LTO.cpp (isSectionBoundary, findEnvpConstructor, reportUnbound); lld/MSIL/MarkLive.cpp (MarkLive::run); lld/MSIL/OutputSegment.cpp (OutputImage::layout, getConstructorArgs); lld/MSIL/Writer.cpp (the OutputModule's rule selection); lld/MSIL/Exports.cpp (selectExports, mayBeExported, getCRuntimeIdentity); lld/MSIL/Variadics.cpp (getCRuntime); lld/MSIL/Symbols.cpp (mergeVisibility); lld/wasm/Driver.cpp, lld/wasm/Symbols.cpp (Symbol::isExported)
+- Provides: msil64 accepted and msil32 refused (T-P1); `--export=<sym>`, `--export-if-defined=<sym>`, `--export-list=<file>` (one name per line, `#` comments; forced export even of hidden symbols, wasm-ld's semantics; `symbol exported via --export not found: <sym>`; forced names are resolved like `-u`, so they extract archive members, and a forced export wins over `--exclude-libs`); T-P4, N6, T-P6-T-P8, T-P11-T-P14; empty archives accepted on dotnet; shared-first `-l` on dotnet; identity `c`; the guard fill of msil-ld's `TrailerInput`
+
+(1) **Selector:** every link-rule site of portable-linkrules section 2.1 (and the three its verifier added: `findEnvpConstructor`'s constant, `MSILDataSegment`'s default, `MarkLive::run`'s own choice), and `Writer.cpp`'s `isOSWindows() ? SectionRules::COFF : SectionRules::ELF`, use `cli::getSectionRules(ctx.arg.target)` and the predicates; every native-binding site uses `cli::bindsNatively`: on dotnet `hasWideNativeLongDouble` and `mayBindNatively` are false, the native readers refuse every library (T-P4), `findDataImportFunctions` and the C runtime selection give nothing, late binding runs step 1 (objects, archives, toolchain assemblies) only, and a strong undefined symbol is an error with N6's line when `TargetLibraryInfo::getLibFunc` knows it or `lld/MSIL/CLibraryNames.def` lists it (5.18 PL3: the sorted, checked-in list of llvm-libc's public function names that TLI lacks, which this WP generates from the `functions:` entries of `libc/include/**/*.yaml`; a name in neither source still fails as an undefined symbol, only without N6). A weak undefined function becomes null with a trap stub, as today. **Archives** on dotnet: an archive with no members is accepted and contributes nothing (the portable sysroot's empty `libm.a`, brief Q14 (a)); an archive that has members, none of them CIL or bitcode, is T-P4. (2) **Constructors** (D2): INIT entries and `.init_array[.N]` slots sorted stably by priority, ties in input order, no arguments (T-P6, brief Q7 (a)), null slots T-P7; they run after the relocations, the library `ldtoken`s and the cross-assembly relocations. (3) **Exports** (D7): on dotnet the selection is the forced names plus the default- and protected-visibility GLOBAL and WEAK definitions; WEAK COMDAT copies stay exported; no dllexport mode; the options are accepted on every triple and change nothing unless used. `--export`, `--export-if-defined` (only when already defined) and `--export-list` names are resolved like `-u`, so they extract the archive members that define them (wasm-ld's `handleUndefined`), and a forced export is exported even when `--exclude-libs` covers its archive: `c.dll` is linked from llvm-libc's archive this way (P-1b.c). (4) **`-l`** (D9): on dotnet the candidates are `<n>.dll`, `lib<n>.dll`, `lib<n>.a`, never `.so`, `.lib` or `.dll.a`; `searchLibraryBaseName` prefers a managed candidate over a static one in the same directory unless `-Bstatic` (brief Q8 (a): dotnet only); host triples are unchanged. (5) **Options in objects** use GNU tokenization (D10). (6) **Identity** (5.18 PL8): the C library is the `--shared` output whose assembly name is `c`; it records the C runtime identity `c` whether or not it links `-lc` and is exempt from T-P11. Every other dotnet output records `c` when it links `-lc` and `none` otherwise (`getCRuntimeIdentity`'s existing rule); any other output named `c` is T-P14. An output whose simple name equals a referenced assembly's is T-P13. (7) **Envelope check (every triple):** a CIL object whose PE format or COFF machine differs from `PEOptions::get(ctx.arg.target)`'s is T-P12, so a PE32/I386 msil64 object can never link silently into a host link even if its record's triple key were forged; every valid host link is unchanged. (8) **Guard:** `Writer.cpp` sets `TrailerInput::Guard` for dotnet links. `getMSILTriple` normalizes `msil64-dotnet`. (9) **No static C library** (T-P11, until P-3): on dotnet an output other than the C library itself that takes any definition from a member of an archive whose symbol index defines `__llvm_libc_errno` (the errno member or any other, such as `strtok`'s) is an error, so a direct link of llvm-libc's build-tree archive (by path, or `-L` with `-Bstatic -lc`) cannot give a static copy with private state. L2: `NativeLibraries.*` gets only hooks (an early `if (!cli::bindsNatively(...))` per reader, at most about 30 lines); T-P4's refusal, N6's line, T-P11 and T-P12 live in `SymbolTable.cpp`, `InputFiles.cpp` and `Driver.cpp`. Checks: `msil-syntax.ps1`; a private `lld` (with P-1a.a's, P-1a.e's and P-1a.f's sources, so that msil64 objects and images can be written) against yaml2obj and llc-written objects for every rule, each text by hand; host links of the M2 samples are byte-identical before and after.
+
+#### P-1a.h The helper archive for msil64 (implement, ~150 lines)
+
+- Owned files: `msil/utils/build/build-builtins.py`, `msil/lib/builtins/`, `compiler-rt/lib/builtins/int_lib.h`
+- Depends on: P-1a.c, P-1a.e, P-1a.f
+- Reads: this plan sections 5.13.5, 5.14.3 (A1-A5, A10), 5.17.7 (G1b), 5.18.1 and 5.18.8 and the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-linkrules.md sections 2.2 and 6 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-target.md (its compiler-rt verifier correction); msil/utils/build/build-builtins.py; msil/lib/builtins/sources.txt; compiler-rt/lib/builtins/int_lib.h (COMPILER_RT_ALIAS); compiler-rt/lib/builtins/comparedf2.c
+- Provides: `|| defined(__dotnet__)` on `int_lib.h`'s first `COMPILER_RT_ALIAS` branch (user decision: compiler-rt branches for the dotnet family; measured, 88 of 88 sources compile); `build-builtins.py --triple msil64-unknown-dotnet` (no `-msil` suffix check for `*-unknown-dotnet`), not in the default set and not in `--all`; `sources.txt` globs: `int_util.c` and the `-ftrapv` helpers for `*-linux-*,*-unknown-dotnet`, `msil_longdouble.c` and every Windows member never on dotnet
+
+`atomic.c`, `*ti*` and the hosted sources stay excluded (A5). Without `__ELF__`, `comparedf2.c` and `comparesf2.c` define no `__cmpdf2`/`__cmpsf2` aliases; the expected member list says so. The portable archive is opt-in, so the M27-M35 gates' `build-builtins.py` steps are unchanged (5.17.6); `--check` and `--check-list` cover the portable archive only when `--triple msil64-unknown-dotnet` names it. The changed globs also touch the musl and aarch64 Linux triples, so the gate runs G1b (`--all`). Checks: `--self-test`; `--triple msil64-unknown-dotnet --out` twice into scratch, byte-identical; `--list` for the triple; `--all --out <scratch>/milestones/P-1a/P-1a.h/builtins-all`. The private build is P-1a.h's own clang, llc and lld, recompiling P-1a.a's, P-1a.c's, P-1a.e's and P-1a.f's sources.
+
+#### P-1a.i Harness: portable lit configuration, the portable legs, check-mscorlib-safe, hooks (infra, ~900 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/utils/msil-prog.py`, `msil/utils/msil-equiv.py`, `msil/utils/update-expected.py`, `msil/utils/msil-run.py`, `msil/utils/check-mscorlib-safe.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/ci/gate-select.py`, `msil/utils/run-m1-gate.ps1`, `msil/utils/upstream-hooks.txt`, `msil/utils/mdtools/cli-corpus-check.py`, `msil/test/CMakeLists.txt`
+- Depends on: P-1a.b
+- Reads: this plan sections 5.11.7, 5.12.3-5.12.6, 5.13.5, 5.17.1-5.17.7, 5.17.11 and 5.18.10, the section 12 rows for P-1a (the 5.13.5 exemption, 5.11.7's amendment, 5.17.4's portable allowance, 5.17.6's portable legs, 5.17.7 and 5.17.13); llvm/docs/MSIL/recon/p3/portable-target.md section 6; llvm/docs/MSIL/recon/p3/portable-mc1.md section 3.5; llvm/docs/MSIL/recon/p3/portable-loader.md section 6 item 4; msil/test/lit.cfg.py (default_msil_triple and the check after it); msil/utils/msil-prog.py; msil/utils/msil-equiv.py; msil/utils/update-expected.py; msil/utils/msil-run.py; msil/utils/check-mscorlib-safe.py; msil/utils/ci/lit-legs.ps1 (the leg table, Test-WslLeg, the tag selection, `$wslRuntime`); msil/utils/run-m1-gate.ps1 (the leg selection, -Exit, -NoWsl); msil/utils/ci/gate-select.py (expected_dir, SKIPPED_DIRS); msil/utils/upstream-hooks.txt; msil/utils/ci/check-upstream-hooks.py (the line kinds, FORK_PREFIXES); msil/utils/mdtools/cli-corpus-check.py (O1)
+- Provides: `msil_triple=msil64-unknown-dotnet` accepted (features `msil-triple=msil64-unknown-dotnet`, `msil-triple-portable`, `msil-triple-msil64`; no native triple, no native oracle; derived `msil-portable`, `msil-portable-builtins`); the parameters `msil_require_portable` and `msil_require_x86` (a missing toolchain, archive or 32-bit host is a configuration error instead of UNSUPPORTED); `%msil_portable_triple`, `%clang_portable`, `%llc_portable`, `%{msil_portable_cflags}` (`-nolibc -ffreestanding`, which keeps `clang_rt.builtins`; P-1b.c adds `%{msil_portable_libc_cflags}` for tests that use `c.dll`), `%msil_dotnet_x86` (feature `msil-dotnet-x86`) and `%msil_set_32bitreq` (writes a copy with 32BITREQUIRED); the legs `portable-smoke` and `portable-smoke-wsl` (tag `Portable`), `lit-legs.ps1 -Portable`, `lit-legs.sh --portable` and `run-m1-gate.ps1 -Portable`; net-core's `--filter-out` gaining `Portable/`; `gate-select.py`'s `SKIPPED_DIRS` gaining `Portable`; P-1a's two clang tests in check-msil; `check-mscorlib-safe.py`'s accessibility probe; the hook blocks of the 5.13.5 exemption; the hand-over for P-1a.m, with the exact `build-builtins.py --triple` invocation that P-1a.l's tests rely on
+
+(1) **lit.cfg.py:** portable-target section 6.2's table, with its verifier's tool list: `msil-prog.py`, `msil-equiv.py` and `update-expected.py` stop requiring or appending `-msil` for `*-unknown-dotnet`. Portable composites have no native oracle; their expected files follow 5.17.4's portable allowance. (2) **msil-run.py** reports a guard failure as it reports any unhandled exception; a portable run under `%msil_dotnet_x86` uses the 32-bit host. (3) **The portable legs** (5.17.6; tag `Portable`, never `Exit`): `portable-smoke` runs `msil/test/Portable` on Windows (.NET 10, `msil_also_run=10+tc0`, `msil_run_netfx=1` for the Framework direct start, and `msil_require_x86=1`, so `guard-x86` is never silently UNSUPPORTED); `portable-smoke-wsl` runs the same directory under WSL .NET 10 with TC=0 (the `$wslRuntime` parameters with `msil_triple=msil64-unknown-dotnet` in place of the Linux host triple); each first runs `build-builtins.py --triple msil64-unknown-dotnet` (stamped). `lit-legs.ps1 -Portable` selects them (the `-wsl` one also needs `-Wsl`, the rule `Exit` legs follow, since `Test-WslLeg` keys WSL legs on a `-wsl` name); `run-m1-gate.ps1 -Portable` passes `-Portable` to the leg runner and drops the `-wsl` leg under `-NoWsl`; `-Exit` alone selects neither, so M35's gate, `exit-report.py` and `check-matrix.py` see no change. No M27-M35 gate names them. net-core's `--filter-out` gains `Portable/`; the other host legs that take `msil/test` whole see the directory, whose `lit.local.cfg` (P-1a.l) marks every test UNSUPPORTED without the feature `msil-triple-portable`. (4) **check-mscorlib-safe.py** (5.11.7 as amended): each method is also called or constructed (or checked `IsPublic` by reflection on Framework), so an internal member such as Framework 4.8.1's `Environment::get_TickCount64()` fails; `System.Attribute::.ctor()` (protected, msil-ld's own request) stays accepted. (5) **gate-select.py and check-msil:** `expected-dirs` leaves out `msil/test/Portable` (`SKIPPED_DIRS` gains `Portable`: the portable expected files are hand-written and have no native oracle, so G7 must not select them); `msil/test/CMakeLists.txt`, `$checkMsil` (`lit-legs.ps1`) and `check_msil` (`lit-legs.sh`) gain `clang/test/Preprocessor/init-msil-portable.c` and `clang/test/Driver/msil-dotnet.c`; `msil/test/Portable` stays out of check-msil (the portable legs run it). (6) **upstream-hooks.txt:** blocks for every P-1a file of the 5.13.5 exemption with its line kinds (`gtest` TargetParserTests and MCTests for `TripleTest` and `TargetRegistry`, `lit` for the ExpandVariadics, format and preprocessor tests, `none` plus `fork msil/test/Portable/00-freestanding/helpers.test` for `int_lib.h`, `lit llvm/test/Transforms/Util/DeclareRuntimeLibcalls/*.ll` plus a `fork` line naming P-1a.j's `llvm/test/CodeGen/MSIL/portable-*.ll` test that pins a portable libcall for `RuntimeLibcalls.td` (5.18.13)), and `fork-only` lines for each new fork file in an upstream directory and for the two new clang tests; `min-pass` per block raised by counting. (7) **cli-corpus-check.py**'s O1 accepts the PE32 envelope for portable inputs. (8) No lit test here (5.17.1): the hand-over lists, for P-1a.m, every new text, flag, tag and leg row, and every existing self-test pin the change breaks on purpose (among them `build-builtins.test`'s `-msil` suffix rule and `legs/describe.test`/`describe-sh.test`). Checks: the existing harness self-tests in a private lit root (each failure is a listed pin); `lit-legs.ps1 -Describe`; `check-mscorlib-safe.py` on the current table (passes) and on a scratch table with `Environment::get_TickCount64` (fails on net48).
+
+#### P-1a.j FileCheck, clang and unit tests (test, ~1,100 lines)
+
+- Owned files: `llvm/test/CodeGen/MSIL/`, `llvm/test/Transforms/ExpandVariadics/msil-abi.ll`, `clang/test/Preprocessor/init-msil-portable.c`, `clang/test/CodeGen/MSIL/`, `clang/test/Driver/msil-dotnet.c`, `llvm/unittests/TargetParser/TripleTest.cpp`, `llvm/unittests/MC/TargetRegistry.cpp`, `llvm/unittests/CLI/PEWriterTest.cpp`, `llvm/unittests/CLI/TrailerTest.cpp`, `llvm/unittests/CLI/ImageLayoutTest.cpp`
+- Reads: this plan sections 5.4, 5.5, 5.18 and 5.17.18, this milestone's Goal and texts, the Provides lines of P-1a.a-P-1a.g, the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-target.md section 6.1; llvm/docs/MSIL/recon/p3/portable-loader.md section 6 item 4; HEAD's versions of the files it changes
+- Provides: `portable-*.ll` (msil64 at -O0 and -O2, `-S` and objects: pointers are native ints, the data layout, the guard first in `<Module>::.cctor` with `conv.i` before `conv.u8`, a `va_arg` instruction that compiles, a portable libcall (`memcpy`, `ldexp`: 5.18.1 PT7, the test that 5.18.13's `RuntimeLibcalls.td` fork line names), no `passInt128ByPointer` or float ldexp promotion on msil64, T-P1-T-P3, T-P6-T-P8 in objects and whole-program text); `msil-abi.ll`'s portable rows; `init-msil-portable.c` (full `-dM` lists for both widths with `__WINT_TYPE__ int`, `__WINT_WIDTH__ 32`, `__BIGGEST_ALIGNMENT__ 16`, and `--implicit-check-not` for `__WINT_UNSIGNED__` and every host macro of P-1a.c, the unsuffixed forms included); `clang/test/CodeGen/MSIL/portable-abi.c`; `msil-dotnet.c` (portable-target section 6.1's driver cases, T-P9, `-nolibc` keeping `clang_rt.builtins`, `x86_64-unknown-dotnet` refused); unit cases: `TripleTest` (parse, normalize, default format, 32/64 variants, `getNativeFormatTriple() == *this`, `isCompatibleWith`, layouts), `TargetRegistry` (lookup, the two refusals), `CLIPEWriterTest` +3 (`PortablePE32Header`: 0x10B, 0xE0, 0x14C, 0x22/0x2022, table 0x178, bases, stack 0x400000, entry 0, CLR directory only; `Msil32Refused`; `I386RequiresILOnlyWithoutBitness`; the i686 refusal kept with its new reason), `CLITrailerTest` +2 (guard first in one-phase and two-phase output), `CLIImageLayoutTest` +2 (the Dotnet predicates; the `.init_array.N` grouping)
+
+From the specification only. Host tests stay unchanged except where a text moved on purpose (none expected).
+
+#### P-1a.k msil-ld tests (test, ~650 lines)
+
+- Owned files: `lld/test/MSIL/`
+- Reads: this plan sections 5.10.10, 5.11.1, 5.14.2, 5.17.18, 5.18.5, 5.18.6, 5.18.7 and 5.18.9, this milestone's texts, the P-1a.b and P-1a.g Provides lines and the section 12 rows for P-1a; llvm/docs/MSIL/recon/p3/portable-linkrules.md section 5; HEAD's lld/test/MSIL/ (bcl-builtin.test, the `--print-bcl-table` pins)
+- Provides: `portable-link.test` (target gate, msil32 refused, a host object in a portable link refused by the triple key, T-P4 for a `.so`, a `.lib`, a COFF import library and an archive of native members, an empty archive accepted, N6 with and without a stand-in `c.dll`, for `malloc` (a TLI name) and `pthread_create` (a `CLibraryNames.def` name)), `portable-machine.test` (T-P12 for an msil64 object whose COFF machine is rewritten to 0x8664 by a `%python` step, and for an x86_64-pc-windows-msvc-msil object rewritten to I386/PE32, both refused; the unmodified host and portable links pass), `portable-ctors.test` (order c1, slot, c2; T-P6; T-P7; T-P8 per section kind with its reason), `portable-startstop.test`, `portable-exports.test` (`--export` of a hidden symbol, `--export-if-defined`, `--export-list`, the not-found text, WEAK COMDAT copies, a forced name defined only in an archive member, the same archive under `--exclude-libs=ALL`, accepted on `x86_64-unknown-linux-gnu-msil` too), `portable-libc-static.test` (T-P11: a program taking `__llvm_libc_errno` from a synthetic archive member, and a program taking only a `strtok`-style member of the same archive; the C library's own `--shared` link named `c` passes and records identity `c`), `portable-libsearch.test` (`c.dll` beside `libc.a`: dotnet takes the DLL, `-Bstatic` the archive, the host triple keeps static-first), `portable-identity.test` (identity `c` for a program linking `-lc`, T-P13 for `c.c` linked to an output named like a referenced library, T-P14 for an executable named `c`), `portable-guard.test` (`llvm-cil-dump` of a linked image and a `-shared` library: guard first, the T-P10 strings); the re-pinned `--print-bcl-table` lines for the four rows
+
+L7: the whole directory.
+
+#### P-1a.l Execution tests: msil/test/Portable/00-freestanding (test, ~600 lines)
+
+- Owned files: `msil/test/Portable/lit.local.cfg`, `msil/test/Portable/00-freestanding/`
+- Depends on: P-1a.h, P-1a.i
+- Reads: this plan sections 5.5, 5.17.4, 5.17.13 and 5.18, this milestone's texts, the P-1a.i Provides line and hand-over, the section 12 rows for P-1a (5.17.4's portable allowance); llvm/docs/MSIL/recon/p3/portable-loader.md sections 3.4 and 4; llvm/docs/MSIL/recon/p3/portable-loader-files/wide.c; msil/test/M3/lit.local.cfg
+- Provides: `msil/test/Portable/lit.local.cfg` (every test UNSUPPORTED unless the feature `msil-triple-portable` is set, so the host legs that take `msil/test` whole never run them under a host triple); at least 10 tests: `datamodel` (`_Static_assert`s of 5.18.2's types (PC2) and 5.18.3's predefines: sizes, alignments, signedness and limits, among them `_Generic((__WINT_TYPE__)0, int: 1)`, `_Alignof(max_align_t) == 8` and signed `char`), `int64-arith` (`wide.c`'s `long long` multiply and the D2 shapes), `int128`, `float-bits`, `varargs` (a variadic definition and call through the `MSILPortable` slots), `fnptr-calli` (managed function pointers, `&f` identity across a `-shared` pair), `shared-pair` (a `-shared` portable library with `--export` and a program, both guarded), `ctors-order`, `startstop`, `helpers` (`clang_rt.builtins` members: f16 conversions, `__muldc3`, `__powidf2`), `guard-x86` (REQUIRES `msil-dotnet-x86`: the image under 32-bit .NET 8 and 10 and a `%msil_set_32bitreq` copy on a Framework direct start; the run fails and stderr holds T-P10's text, `LOUD:` lines matching only that text, 5.17.4)
+
+Self-checking programs linked with `%{msil_portable_cflags}` (each failed check sets a bit of the exit status), hand-written expected files under 5.17.4's portable allowance ("portable: no stdout before P-2; the program checks itself"); one image per test, run by the two portable legs and by this milestone's gate steps; under 2 s per run at -O2.
+
+#### P-1a.m Harness self-tests (test, ~350 lines)
+
+- Owned files: `msil/test/harness/portable/`, `msil/test/harness/mscorlib-safe.test`, `msil/test/harness/build-builtins.test`, `msil/test/harness/legs/`, `msil/test/M2/05-refs/mscorlib-safe.test`
+- Depends on: P-1a.b, P-1a.h, P-1a.i
+- Reads: this plan sections 5.11.7, 5.17.1, 5.17.2, 5.17.5 and 5.17.6, the P-1a.b, P-1a.h and P-1a.i texts and hand-overs, the section 12 rows for P-1a; msil/test/harness/; msil/test/M2/05-refs/mscorlib-safe.test
+- Provides: `portable/lit-config.test` (the portable parameters, features and configuration errors on a synthetic suite; a host-triple run reports `msil/test/Portable` UNSUPPORTED), `portable/x86-runner.test`, `mscorlib-safe.test` (new: an internal member fails, a public one passes), `build-builtins.test` (one `--triple msil64-unknown-dotnet --list` case: `int_util.c` and the `-ftrapv` helpers present, no `msil_longdouble.c`, no Windows member; the relaxed suffix rule), `legs/portable-tag.test` and `legs/portable-tag-sh.test` (modelled on `exit-tag.test` and `exit-tag-sh.test`: `-Portable` selects the pair, `-Exit` alone selects neither, `-NoWsl` drops the `-wsl` leg), the two legs' rows in `legs/describe.test` and `legs/describe-sh.test`, a `legs/gate-select.test` case (a changed `msil/test/Portable/00-freestanding/x.c` yields no expected-dir), `msil/test/M2/05-refs/mscorlib-safe.test` re-pinned from 20 to 24 entries with the four new TABLE lines (no WP owned it, as in M22); the pins P-1a.i's hand-over lists
+
+Each new check pins its failure path (5.17.5); no existing check is dropped.
+
+#### P-1a.n Documentation (docs, ~300 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`, `msil/utils/build/README.md`
+- Depends on: P-1a.a, P-1a.b, P-1a.c, P-1a.d, P-1a.e, P-1a.f, P-1a.g, P-1a.h, P-1a.i, P-1a.j, P-1a.k, P-1a.l, P-1a.m
+- Reads: this plan sections 5.18 and 5.17.4, this milestone's text and the section 12 rows for P-1a; the hand-overs of P-1a.a-P-1a.m
+- Provides: Status.md's portable section (triples, data model with `int` `wint_t`, ABI, envelope and guard, link rules, every T-P text and N6, what is loud and until when; the guard also refuses .NET on Windows on ARM64 without Framework 4.8.1, which may start AnyCPU Framework executables under x86 emulation, and 32-bit linux-arm and browser-wasm .NET: all loud, none measured); GettingStarted's freestanding `-nolibc` example and the 32-bit refusal; READMEs: `msil/test/Portable`, the two portable legs and the `Portable` tag, the uses of 5.17.4's portable allowance in `msil/test/README.md`'s table of hand-written files, `--triple msil64-unknown-dotnet`
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `llvm-tblgen` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $b = "C:/llvm-msil-scratch/milestones/P-1a/gate/il-baseline"; if (Test-Path -LiteralPath "$b/x86_64-pc-windows-msvc-msil") { "baseline present: $b" } else { python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 4 --out $b msil/test/M1 msil/test/M2 llvm/test/CodeGen/MSIL; exit $LASTEXITCODE }'  (HEAD's binaries before the build; kept across fix rounds)
+ 2. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $m = "C:/llvm-msil-scratch/milestones/P-1a/gate/det-before.txt"; if (Test-Path -LiteralPath $m) { "baseline present: $m" } else { python msil/utils/ci/det-manifest.py build --clang D:/llvm-msil/build/bin/clang.exe --ar D:/llvm-msil/build/bin/llvm-ar.exe --out $m --work C:/llvm-msil-scratch/milestones/P-1a/gate/det-before --jobs 4; exit $LASTEXITCODE }'  (HEAD's binaries: the host CIL objects and archives of msil/test/M1, both x86_64 triples, O0 and O2)
+ 3. pwsh -NoProfile -Command '"D: has {0:N1} GB free (report only)" -f ((Get-PSDrive D).Free / 1GB)'
+ 4. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0)
+ 5. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0)
+ 6. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/make-glibc-sysroot.sh /mnt/c/llvm-msil-scratch/glibc-sysroot  (G0)
+ 7. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: the Triple.h rebuild, about 159 job-minutes; never while a post-commit run is active)
+ 8. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 4  (G1: host archives)
+ 9. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot --builtins --clang D:/llvm-msil/build/bin/clang.exe --jobs 4  (G0's M25 addition)
+10. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --all --jobs 4 --out C:/llvm-msil-scratch/milestones/P-1a/gate/builtins-all  (G1b: sources.txt changed)
+11. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --triple msil64-unknown-dotnet --jobs 4  (the portable archive: every listed source compiles without __ELF__)
+12. pwsh -NoProfile -Command 'python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --check; if ($LASTEXITCODE) { exit 1 }; python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --triple msil64-unknown-dotnet --check; if ($LASTEXITCODE) { exit 1 }; python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --check-list; exit $LASTEXITCODE'  (A10, A3)
+13. python D:/llvm-msil/msil/utils/check-mscorlib-safe.py --msil-ld D:/llvm-msil/build/bin/msil-ld.exe --out C:/llvm-msil-scratch/milestones/P-1a/gate/mscorlib-safe  (5.13.7 B4: the guard rows, with the accessibility probe of 5.11.7 as amended, on Framework 4.8, .NET 8, .NET 10 and WSL .NET 10)
+14. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe  (G2)
+15. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=TripleTest.*:*MSIL*
+16. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 461  (M26's 454 plus P-1a.j's 7)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLIPEWriterTest.*' -NoSkip -MinTests 23  (20 plus 3)
+19. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLITrailerTest.*' -NoSkip -MinTests 29  (M26's 27 plus 2)
+20. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLIImageLayoutTest.*' -NoSkip -MinTests 35  (33 plus 2)
+21. python D:/llvm-msil/msil/utils/ci/calibrate.py --label start  (G2c)
+22. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net-core  (G3: host tests, the new llc, clang and lld tests; Portable/ filtered out)
+23. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg p3-full  (G3b)
+24. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg harness  (G3c: P-1a changes harness files)
+25. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-p3  (G4)
+26. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_dotnet_runtime=10 --param msil_also_run=10+tc0 --param msil_run_netfx=1 --param msil_require_verify=1 --param msil_require_exec=1" msil/test/Portable/00-freestanding  (exit check, brief Q11 (a): one image per test on .NET 10, TC=0 and a Framework 4.8 direct start; this milestone's own directory, not the post-commit legs)
+27. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_runner=wsl --param msil_wsl_dotnet=private --param msil_dotnet_runtime=10 --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1" msil/test/Portable/00-freestanding  (exit check, brief Q11 (a): the same under WSL .NET 10; the parameters P-1a.i pins for portable-smoke-wsl)
+28. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --filter=guard-x86 --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_require_x86=1 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_run_netfx=1" msil/test/Portable/00-freestanding  (exit check: the guard fires under 32-bit .NET 8, .NET 10 and Framework)
+29. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $o = "C:/llvm-msil-scratch/milestones/P-1a/gate/il-after"; Remove-Item -Recurse -Force -LiteralPath $o -ErrorAction SilentlyContinue; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 4 --out $o --compare C:/llvm-msil-scratch/milestones/P-1a/gate/il-baseline --skip-changed msil/test/M1 msil/test/M2 llvm/test/CodeGen/MSIL; exit $LASTEXITCODE'  (host IL and diagnostics unchanged: the SectionRules refactor, the PE writer and the link family)
+30. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $m = "C:/llvm-msil-scratch/milestones/P-1a/gate/det-after.txt"; Remove-Item -Recurse -Force -LiteralPath C:/llvm-msil-scratch/milestones/P-1a/gate/det-after -ErrorAction SilentlyContinue; python msil/utils/ci/det-manifest.py build --clang D:/llvm-msil/build/bin/clang.exe --ar D:/llvm-msil/build/bin/llvm-ar.exe --out $m --work C:/llvm-msil-scratch/milestones/P-1a/gate/det-after --jobs 4; if ($LASTEXITCODE) { exit 1 }; python msil/utils/ci/det-manifest.py compare C:/llvm-msil-scratch/milestones/P-1a/gate/det-before.txt $m; exit $LASTEXITCODE'  (host CIL objects and archives byte-identical: the PE writer's per-format rewrite)
+31. python D:/llvm-msil/msil/utils/ci/calibrate.py --label end  (G4c)
+32. python D:/llvm-msil/msil/utils/ci/calibrate.py --combine D:/llvm-msil/build/lit-results/calibration-start.json D:/llvm-msil/build/lit-results/calibration-end.json
+33. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1  (G5 in full: fifteen upstream files change, the 5.13.5 exemption)
+34. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $req = [ordered]@{ "llvm/include/llvm/TargetParser/TripleName.def" = "dotnet"; "llvm/include/llvm/IR/RuntimeLibcalls.td" = "MSILSystemLibrary"; "llvm/include/llvm/CLI/ImageLayout.h" = "bindsNatively"; "clang/lib/Basic/Targets/MSIL.h" = "MSILPortableTargetInfo"; "clang/lib/CodeGen/Targets/MSIL.cpp" = "MSILPortableABIInfo"; "clang/lib/Driver/ToolChains/MSIL.cpp" = "DotNetToolChain"; "llvm/lib/CLI/TrailerGuard.cpp" = "GetBytes"; "llvm/include/llvm/CLI/BCLMembers.def" = "// P-1a:"; "lld/MSIL/Options.td" = "export-list"; "lld/MSIL/CLibraryNames.def" = "pthread_create"; "compiler-rt/lib/builtins/int_lib.h" = "__dotnet__"; "llvm/lib/Transforms/IPO/ExpandVariadics.cpp" = "MSILPortable"; "msil/utils/check-mscorlib-safe.py" = "IsPublic"; "msil/utils/ci/lit-legs.ps1" = "portable-smoke-wsl"; "msil/utils/run-m1-gate.ps1" = "Portable"; "msil/utils/ci/gate-select.py" = "Portable"; "msil/test/Portable/lit.local.cfg" = "msil-triple-portable"; "clang/test/Preprocessor/init-msil-portable.c" = "__WINT_TYPE__ int"; "clang/test/Driver/msil-dotnet.c" = "msil64-unknown-dotnet"; "lld/test/MSIL/portable-exports.test" = "--export-list"; "lld/test/MSIL/portable-libc-static.test" = "cannot be linked statically"; "lld/test/MSIL/portable-identity.test" = "reserved for the C library"; "lld/test/MSIL/portable-machine.test" = "CIL object for machine"; "msil/test/Portable/00-freestanding/guard-x86.test" = "msil-dotnet-x86"; "llvm/docs/MSIL/Status.md" = "msil64-unknown-dotnet" }; foreach ($k in $req.Keys) { if (-not (Select-String -LiteralPath ($r + $k) -SimpleMatch $req[$k] -Quiet -ErrorAction SilentlyContinue)) { $bad += "$k lacks $($req[$k])" } }; $n = @(Get-ChildItem -LiteralPath ($r + "msil/test/Portable/00-freestanding") -Filter *.test -Recurse -ErrorAction SilentlyContinue).Count; if ($n -lt 10) { $bad += "00-freestanding: $n tests, needs 10" }; $cmp = @(Get-ChildItem -LiteralPath ($r + "llvm/lib/CLI"), ($r + "lld/MSIL"), ($r + "llvm/lib/Target/MSIL") -Recurse -File -Include *.cpp, *.h | Where-Object { $_.Name -ne "ImageLayout.cpp" } | Select-String -Pattern "SectionRules::(COFF|ELF|Dotnet)\b" | Where-Object { $_.Line -notmatch "^\s*(case\s|//)" } | ForEach-Object { "$($_.Path):$($_.LineNumber)" }); if ($cmp.Count) { $bad += "SectionRules enumerator used outside ImageLayout.cpp: $($cmp -join ", ")" }; if ($bad.Count) { $bad; exit 1 }; "P-1a presence check: ok"'  (G6, with the SectionRules enumerator gate)
+35. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; New-Item -ItemType Directory -Force C:/llvm-msil-scratch/milestones/P-1a/gate | Out-Null; $j = "C:/llvm-msil-scratch/milestones/P-1a/gate/legs.json"; pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Describe | Set-Content -Encoding utf8 $j; if ($LASTEXITCODE) { exit 1 }; python msil/test/M2/08-semantics/Inputs/check-matrix.py --legs $j .; exit $LASTEXITCODE'  (G6)
+36. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; . msil/utils/build/msil-env.ps1; $d = @(python msil/utils/ci/gate-select.py expected-dirs); if ($LASTEXITCODE) { exit 1 }; if ($d.Count) { python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --levels O0,O2 @d; if ($LASTEXITCODE) { exit 1 }; python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --levels O0,O2 --os linux @d; exit $LASTEXITCODE }'  (G7; msil/test/Portable is in SKIPPED_DIRS)
+37. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests msil/lib"  (G8: no diff; compiler-rt/lib/builtins/int_lib.h keeps upstream's format)
+38. python D:/llvm-msil/msil/utils/ci/linux-syntax-check.py --changed-from HEAD  (Linux C++ portability check: section 12 row 'M26.l extended (Linux C++ portability check)'; clang 18 and libstdc++ 14 for x86_64-unknown-linux-gnu)
+39. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope P-1a"  (G9)
+```
+
+**Exit criteria**
+- **Triples.** `msil64-unknown-dotnet` compiles C (and freestanding C++) to IL and links; `msil32-unknown-dotnet` parses and is refused loudly (T-P1); `x86_64-unknown-dotnet` is refused; `computeDataLayout` and `getNativeFormatTriple` terminate; RuntimeLibcalls answers for msil64; no host macro, no `__ELF__`, `wint_t` is `int`.
+- **Execution.** `00-freestanding` passes from one image per test on .NET 10, TC=0, Framework 4.8 and WSL .NET 10 (steps 26-27); the guard throws T-P10's message under 32-bit .NET 8, .NET 10 and Framework (step 28); ILVerify and `msil-verify.py` accept every portable output with the existing allowed list.
+- **Link rules.** Constructors, start/stop, exports and `--export*` (archive extraction, precedence over `--exclude-libs`), N6, T-P4, T-P11, T-P12 on every triple, T-P13 and T-P14, empty archives, shared-first `-l` on dotnet only, identity `c`; no `SectionRules` enumerator outside `ImageLayout.cpp` except `case` labels (step 34).
+- **Envelope.** msil64 images and objects are PE32/I386 ILONLY with no import, stub or `.reloc`, stack 0x400000, guard first in `<Module>::.cctor`; host CIL objects and archives are byte-identical (step 30).
+- **Archive.** `clang_rt.builtins` for msil64 builds reproducibly with `int_lib.h`'s one-line branch; every triple of `--all` still compiles (step 10).
+- **Harness.** `check-mscorlib-safe.py` refuses an internal member and passes P-1a's rows (step 13); the portable lit parameters and the `Portable`-tagged legs exist, and `-Exit` selects neither; the harness leg passes with P-1a.m's self-tests; `mscorlib-safe.test` pins 24 entries.
+- **Unchanged.** il-snapshot of M1, M2 and the host llc tests equals HEAD's (step 29); G2-G9 pass; the CLITests floors (461; `CLIPEWriterTest` 23, `CLITrailerTest` 29, `CLIImageLayoutTest` 35) hold.
+
+**Review focus** (in addition to the three standing lenses)
+- No silent ELF/Linux fallthrough: every `isOSWindows()` link-rule or native-binding test in the target, lib/CLI and lld/MSIL either uses the predicates or is shown not to be a link rule; `hasWideNativeLongDouble`, `mayBindNatively`, the data-import helpers and envp constructors are off on dotnet; `getNativeVAListStructSize` is 0.
+- The ABI pair: clang's `EmitVAArg` and ExpandVariadics' `MSILPortable` class agree on every slot (`msil-abi.ll` and `portable-abi.c` pin the same cases); `_BitInt` thresholds by width; `wint_t` signed with no llvm-libc branch needed.
+- The guard: first in `<Module>::.cctor`, before any image or `'<msil>Data'` access, in both sinks; sign-extending width test; verifiable byte-order test; no FailFast.
+- Host fidelity: no host image, IL or diagnostic changes; shared-first `-l`, `--export*` and the envelope check change nothing for host links that are valid.
+- Hooks only (L2): the hot files (`MSILPrepareIR.cpp`, `MSILAsmPrinter.*`, `NativeLibraries.*`, `Trailer.cpp`) carry calls into the new or non-hot files, each feature within about 30 lines, or 5.13.1 L2's predicate substitutions.
+- Upstream surface: every upstream edit is a hook with a manifest block; `int_lib.h` is one condition; the RuntimeLibcalls rows add no f80/f128 or `*ti*` helper that the archive lacks.
+
+**Rebuild cost.** The root WPs' headers rebuild 2,481 objects, about 159 job-minutes (portable-target section 5, measured from `.ninja_deps` of 2026-11-01): about 40-45 minutes at 4 jobs on a quiet host, about 80 at the 2-process cap; relinks of every tool and unit test; the portable archive about 1 minute. The gate after the build, quiet estimates (5.17.7): steps 1 and 29 3, steps 2 and 30 2-3 each, steps 3-6 0.5, step 10 3-4, steps 11-12 1.5, step 13 1, G2 1.5, G3 7-8, G3b 3-5, G3c 2-3, G4 5-7, steps 26-27 3-5, step 28 1, G5 3, G6 1, G7 1.5-2, G8-G9 1.5: about 43-52 normalized minutes. Round 1 decides (5.17.7): only G4's run 2 may move (G3c stays: P-1a edits existing harness files); steps 26-30 carry exit criteria and never move. The portable legs, .NET 8 and the Linux syntax check of every file run after the commit (5.17.11, 5.17.6). Farm estimate (calibrated on M22, M24 and M25): 17-22 hours of wall-clock with the dependency lines above (P-1a.i starts in the second wave, P-1a.g in the third with P-1a.h, which leaves the critical path P-1a.a/b, P-1a.e/f, P-1a.h, P-1a.l, P-1a.n unchanged; 20-26 without), including one or two broad rebuilds and three or four gate rounds.
+
+### P-1b. Freestanding llvm-libc as the shared assembly c.dll
+
+**Goal.** Contract 5.19's stage 1 (5.19.1-5.19.7) (P-0's recon copies `llvm/docs/MSIL/recon/p3/portable-libc.md` and `portable-state.md` section 8), with the decision brief answers (user, 2026-11-01), cited as "brief Q<n>". After P-1b: llvm-libc builds for `msil64-unknown-dotnet` (`libc/config/dotnet`, `LIBC_TARGET_OS_IS_DOTNET`, `LIBC_TARGET_ARCH_IS_MSIL`, single-thread mode, errno EXTERNAL) from its own CMake, and `build-libc.py` links the freestanding entry points into the shared assembly `c.dll` (msil-ld `--shared`, `--export-list`, `--exclude-libs=ALL`, `--assembly-version=1.0.0.0`) and installs it, an empty `libm.a` and the generated headers into the portable sysroot (5.18.4, 5.19.3). The entry-point set is 5.19.4's measured closure (about 540 names: ctype, inttypes, locale, math without f16, bf16 or f128, search without the hash table, stdbit, the stdlib numeric and sort functions, string, strings, the pure time functions `asctime`, `asctime_r`, `difftime`, `gmtime` and `gmtime_r`, wchar, complex and wctype), plus `snprintf`, `sprintf`, `vsnprintf` and `vsprintf` (M26 precedes P-1b; `swprintf` and `strptime` are upstream stubs that only fail, so they stay absent, 5.19.4), with no `*_modular` variant and no OS-dependent function (user decision): no `exit`, `abort`, `malloc` or heap user, no clock, no environment, no stdio stream, no `rand`, no localtime family, `mktime` or `strftime` (brief Q18 (a): they would answer in UTC), no fenv function (brief Q20 (a)), no `strsignal` or `signal.h` function (brief Q21 (a)). The generated headers declare only the shipped entry points, so the user's "link errors" for absent functions show up as an undeclared-function error in C99 and C++ and as a link error with N6's line when the program supplies its own prototype. `errno` is `(*__llvm_libc_errno())` over one cell that `c.dll` exports (until P-3, brief Q16 (a)); the errno numbers are llvm-libc's generic set extended with every POSIX name (brief Q15 (b)), and `strerror` and `%m` name every number. `c.dll` has 0 pinvokeimpl and 0 moduleref, references only `mscorlib`, defines and references neither `write_to_stderr` nor `internal::exit`, exports exactly `msil/lib/libc/msil64-unknown-dotnet.exports` (brief Q17 (a)), and runs on .NET 10, TC=0, Framework 4.8 and WSL .NET 10 with programs that call it (cross-assembly `calli` comparators, errno across the assembly boundary, `&strlen` identity, `snprintf` across assemblies).
+
+Not in P-1b: every OS-dependent function (P-2, through MC-1); `libc.a` in the sysroot and `-static` (P-3: neither the installed archive nor the shared state exists before then; the driver refuses `-static`, T-P9, and msil-ld refuses a static take of the build-tree archive, T-P11); a thread mode other than single (P-3); msil32 (P-4). P-1b changes no LLVM, clang or lld source; its gate keeps G3 and G3c and adds the libc exit checks.
+
+**Depends on:** P-1a (the triple, TargetInfo, driver, `--export-list`, identity `c`, empty archives, the portable archive, the portable lit configuration and the portable legs, T-P11), M26 (variadic definitions and calls). Contract text: 5.13.5, 5.17.4, 5.18, 5.19.1-5.19.8, 5.19.14-5.19.16. Every WP reads its Reads entries and the section 12 rows for P-1b.
+
+**Header changes:** none in LLVM, clang or lld. llvm-libc's own build (a separate tree under the build directory, never the shared tree's CMake cache) compiles about 530 sources.
+
+Roles: P-1b.a `P-1b/libc-config` (root), P-1b.b `P-1b/libc-port` (root), P-1b.c `P-1b/build`, P-1b.d `P-1b/llc-tests`, P-1b.e `P-1b/exec-tests`, P-1b.f `P-1b/harness-tests`, P-1b.h `P-1b/loud-tests`, P-1b.g `P-1b/docs`. P-1b.a and P-1b.b are roots (each owns llvm-libc headers or configuration, L4). P-1b appends no BCL or trailer row and adds no unit test.
+
+**Work packages**
+
+#### P-1b.a libc/config/dotnet and the CMake triple mapping (implement, ~400 lines)
+
+- Owned files: `libc/config/dotnet/`, `libc/cmake/modules/LLVMLibCArchitectures.cmake`
+- Reads: this plan sections 5.13.5 and 5.19.2-5.19.4 and the section 12 rows for P-1b; llvm/docs/MSIL/recon/p3/portable-libc.md sections 3, 6.1 and 6.6 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-libc-files/p1bset.py; libc/config/baremetal/ (config.json, entrypoints.txt, headers.txt); libc/cmake/modules/LLVMLibCArchitectures.cmake (get_arch_and_system_from_triple, the GPU special case)
+- Provides: `libc/config/dotnet/config.json` (5.19.3: baremetal's plus errno `LIBC_ERRNO_MODE_EXTERNAL`; thread mode single; printf float, index, `%n`, `%m` and wide on, `LIBC_CONF_PRINTF_MODULAR` false; scanf float and index on; str_to_float fast paths on; math `LIBC_MATH_NO_EXCEPT | LIBC_MATH_ASSUME_ROUND_NEAREST_ONLY` only, so `MATH_ERRNO` and full accuracy are kept; null checks on); `libc/config/dotnet/msil64/entrypoints.txt` (the set of this milestone's Goal, sorted, each blocked candidate in a comment with its reason); `msil64/headers.txt` (the matching public headers, `setjmp.h` declaring `setjmp`, `longjmp`, `sigsetjmp` and `siglongjmp` without definitions); the CMake mapping (`^msil64`/`^msil32` arch regexes; OS `dotnet` read from component 2 of a three-component triple, as the GPU case does, since the generic rule would take `unknown` and select baremetal)
+
+`-fvisibility=hidden` and `-DNDEBUG` come from `build-libc.py`'s flags and `CMAKE_BUILD_TYPE=Release` (P-1b.c), so `LLVMLibCCompileOptionRules.cmake` is not edited. Checks: llvm-libc's CMake configure in scratch with the shared build's clang (configure only), which lists the entry points; the closure script `p1bset.py` re-run on the final list, `complex` and `wctype` included.
+
+#### P-1b.b The dotnet branches of llvm-libc and the errno set (implement, ~550 lines)
+
+- Owned files: `libc/src/__support/macros/properties/os.h`, `libc/src/__support/macros/properties/architectures.h`, `libc/src/__support/OSUtil/io.h`, `libc/src/__support/OSUtil/dotnet/`, `libc/include/llvm-libc-macros/generic-error-number-macros.h`, `libc/src/__support/StringUtil/platform_errors.h`, `libc/src/__support/StringUtil/tables/dotnet_platform_errors.h`, `libc/include/llvm-libc-macros/math-macros.h`, `libc/include/llvm-libc-types/__jmp_buf.h`, `libc/include/llvm-libc-types/struct_tm.h`, `libc/src/time/time_utils.h`
+- Reads: this plan sections 5.15.4 (the jmp_buf prefix table), 5.19.1, 5.19.5 and 5.19.6 and the section 12 rows for P-1b; llvm/docs/MSIL/recon/p3/portable-libc.md sections 2, 4.2, 5, 6.2-6.4 including its verifier corrections and missed sites; llvm/docs/MSIL/recon/p3/portable-state.md section 9 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-libc-files/overlay3/; libc/src/__support/macros/properties/os.h; libc/src/__support/macros/properties/architectures.h; libc/src/__support/OSUtil/io.h; libc/src/__support/OSUtil/CMakeLists.txt (the `${LIBC_TARGET_OS}_util` alias); libc/hdr/errno_macros.h; libc/include/errno.h.def; libc/include/llvm-libc-macros/generic-error-number-macros.h; libc/src/__support/StringUtil/platform_errors.h; libc/src/__support/StringUtil/tables/ (stdc_errors.h, posix_errors.h, minimal_platform_errors.h, linux_platform_errors.h); libc/include/llvm-libc-macros/wchar-macros.h; libc/include/llvm-libc-types/wint_t.h; libc/src/time/time_utils.h (gmtime_internal); libc/src/errno/libc_errno.cpp
+- Provides: `LIBC_TARGET_OS_IS_DOTNET` (from `__dotnet__`); `LIBC_TARGET_ARCH_IS_MSIL` (from `__msil32__ || __msil64__`, inside `LIBC_TARGET_ARCH_IS_VM`; never keyed on `__MSIL__`); `OSUtil/io.h`'s dotnet branch to `OSUtil/dotnet/io.h` (declares `write_to_stderr`, defines nothing); `OSUtil/dotnet/errno.cpp` (the EXTERNAL provider: `extern "C" int *__llvm_libc_errno()` over one process cell) and `OSUtil/dotnet/CMakeLists.txt` (the `dotnet_util` library that `OSUtil/CMakeLists.txt` picks up when the directory exists); the extended generic errno set; `platform_errors.h`'s dotnet branch to `tables/dotnet_platform_errors.h` (`STDC_ERRORS + POSIX_ERRORS` plus a one-entry table for `ENOTBLK`, with the matching errno-name tables); dotnet branches in `struct_tm.h` (`tm_gmtoff`, `tm_zone`: brief Q19 (a)), `time_utils.h` (`gmtime_internal` stores `tm_gmtoff` 0 and `tm_zone` `"GMT"`, as on Linux) and `math-macros.h` (`math_errhandling` = `MATH_ERRNO` only, brief Q20 (a)); an msil branch in `__jmp_buf.h` (an opaque 200-byte, 8-aligned buffer, glibc's size, holding 5.15.4's prefix)
+
+**errno numbering** (frozen at P-1b's commit; brief Q15 (b)): no dotnet errno header family exists. `libc/hdr/errno_macros.h` and `libc/include/errno.h.def` already select `llvm-libc-macros/generic-error-number-macros.h` for a full build that defines neither `__linux__` nor `__APPLE__`, so neither changes. The generic header keeps its 36 names and numbers (`EPERM` .. `EPIPE` 1-32, `EDOM` 33, `ERANGE` 34, `EOVERFLOW` 35, `EILSEQ` 84) and gains, unconditionally, the 44 names of `tables/posix_errors.h` that it lacks, each with Linux asm-generic's number except `EDEADLK`, which takes 75 because the generic `EOVERFLOW` holds Linux's 35 (5.19.5 lists every number; `ENOSYS` is 38), plus the aliases `EWOULDBLOCK` (= `EAGAIN`) and `EOPNOTSUPP` (= `ENOTSUP`): 82 names, 80 numbers. This is an upstream conflict surface with an effect outside the fork: every llvm-libc full build that takes the generic family (the baremetal configurations, the GPU targets and any other target defining neither `__linux__` nor `__APPLE__`) gains these macros in its `<errno.h>`; no existing number changes, no libc source tests an added name with `#ifdef`, their `strerror` keeps `tables/minimal_platform_errors.h`, and a program on those targets that defines one of the names itself gets a macro redefinition. If an upstream merge brings a different number for an added name, the merge keeps the frozen number by moving that name under a `__dotnet__` branch of the same header (P-1b.e's `datamodel-headers` test pins every number, so a silent change fails the post-merge run). **wint_t** needs no change here (P-1a.c, brief Q5 (b)): `wint_t.h` takes `__WINT_TYPE__` and `WEOF` is -1 of type `int`; `wctob`, `btowc` and the wctype functions handle either signedness. Each branch is keyed on dotnet's own macros: `LIBC_TARGET_OS_IS_DOTNET`/`LIBC_TARGET_ARCH_IS_MSIL` in files that include `properties/`, `__dotnet__` or `__msil64__`/`__msil32__` in the public `llvm-libc-macros`/`llvm-libc-types` headers and in `platform_errors.h` and `time_utils.h`, which test compiler macros directly; never `__MSIL__` or `__ELF__`. No definition of `write_to_stderr` or `internal::exit` anywhere (user decision: absent, link errors): a debug build of `c.dll` fails to link loudly, and release builds reference neither (portable-libc's NDEBUG closure, confirmed by its verifier). The single errno cell is shared by every .NET thread that calls `c.dll` until P-3 creates the per-thread C block; under a multi-threaded C# host it races silently (so do `strtok`, the hidden `mbstate_t` statics and `setlocale`), an exception to fail-loudly that no check can catch before MC-1, which Status.md documents (brief Q16 (a)). The upstream-able clean-ups (`HashTable/randomness.h` to `LIBC_THREAD_LOCAL`, `fputwc.cpp`'s missing include) are P-2's: neither file is in the shipped set. Checks: a scratch compile of the whole entry-point list with the shared build's clang, 0 warnings; `llvm-nm` of the objects: no undefined `__atomic_*`, `__sync_*`, `malloc`, `free`, `write_to_stderr` or `exit`.
+
+#### P-1b.c build-libc.py, the export list and the sysroot (infra, ~1,000 lines)
+
+- Owned files: `msil/utils/build/build-libc.py`, `msil/lib/libc/`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/test/lit.cfg.py`, `msil/utils/upstream-hooks.txt`
+- Depends on: P-1b.a, P-1b.b
+- Reads: this plan sections 5.6.1, 5.14.3 (A2's determinism rules), 5.17.6, 5.18.4, 5.19.3, 5.19.7, 5.19.8 and the section 12 rows for P-1b (the 5.13.5 exemption); llvm/docs/MSIL/recon/p3/portable-libc.md sections 4 and 6.1; llvm/docs/MSIL/recon/p3/portable-linkrules.md D7 and D11; msil/utils/build/build-builtins.py (as the model); msil/utils/build/msil-lock.ps1; msil/utils/ci/build.ps1; msil/utils/ci/lit-legs.ps1; msil/test/lit.cfg.py
+- Provides: `build-libc.py --build-dir <build> [--jobs N] [--check] [--check-exports] [--check-append-only OLD NEW] [--self-test]` (configures llvm-libc's CMake in `<build>/runtimes/msil64-unknown-dotnet` with the build's clang, `llvm-ar` and msil-ld and `LLVM_LIBC_FULL_BUILD=ON`, `LIBC_TARGET_TRIPLE=msil64-unknown-dotnet`, `CMAKE_C_COMPILER_TARGET`/`CMAKE_CXX_COMPILER_TARGET`, `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`, `CMAKE_SYSTEM_NAME=Generic`, `CMAKE_BUILD_TYPE=Release`, `LLVM_INCLUDE_TESTS=OFF`, `CMAKE_MAKE_PROGRAM` and `LIBC_CONFIG_PATH`, with `-fvisibility=hidden`; `cmake.exe` found through `msil-env.ps1`'s Visual Studio install; under the build directory's exclusive lock while it writes under `<build>/runtimes/` and the sysroot; full build; the intermediate archive at `<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a`, never installed before P-3; links `c.dll` with `msil-ld --shared --export-list=msil/lib/libc/msil64-unknown-dotnet.exports --exclude-libs=ALL --assembly-version=1.0.0.0` and the portable `clang_rt.builtins`; installs the headers, `c.dll` and a deterministic empty `libm.a` (an archive with no members, brief Q14 (a)) into `<build>/lib/clang-runtimes/msil64-unknown-dotnet/` (`include/` and `lib/msil64-unknown-dotnet/`); stamps; exit 0, 1 for a failed build or check, 2 for usage); `msil64-unknown-dotnet.exports` (generated from `entrypoints.txt` plus `__llvm_libc_errno`, sorted, checked in; `--check-exports` regenerates and compares); the portable legs running `build-libc.py` (stamped) after the archive setup (no CI build row: `c.dll` is built only by the legs' setup and the P-steps' explicit gate steps); lit's `msil_portable_sysroot` (default the build's sysroot) and feature `msil-portable-sysroot`, required under `msil_require_portable=1`, and the substitution `%{msil_portable_libc_cflags}` (`--sysroot=<msil_portable_sysroot>`, the C library linked by default) for the tests that use `c.dll`, while `%{msil_portable_cflags}` keeps `-nolibc -ffreestanding` for `00-freestanding`; the manifest lines of the 5.13.5 exemption for P-1b (one `fork-only` line per new file under `libc/config/dotnet/` and `libc/src/__support/OSUtil/dotnet/`, its `CMakeLists.txt` included, and for `libc/src/__support/StringUtil/tables/dotnet_platform_errors.h`; for each of the ten changed upstream libc files, `os.h`, `architectures.h`, `LLVMLibCArchitectures.cmake`, `generic-error-number-macros.h`, `platform_errors.h`, `OSUtil/io.h`, `math-macros.h`, `__jmp_buf.h`, `struct_tm.h` and `time_utils.h`, a `hook` block with `none llvm-libc's tests are not built by the fork` plus a `fork msil/test/Portable/01-libc/<test>.test` line)
+
+The export list is 5.19.7's append-only ABI: a later change may only append lines. The forced export also exports the hidden `__llvm_libc_errno` (portable-libc D1), so no upstream visibility attribute is changed. The `c.dll` link is a `--shared` output named `c`, so msil-ld records the C runtime identity `c` and does not apply T-P11 to it (P-1a.g). Copies of `c.dll` beside each test program come from `%{msil_shlibs}`-style steps in the composites. If llvm-libc's CMake cannot configure the target from a Windows host, the WP stops and reports; it does not fall back to a hand-written source list. P-0's feasibility review configured it in 60 s and built 434 entry points (437 compiles, 26 hdrgen steps) in about 8 minutes at 2 jobs with these variables; CMake's compiler identification on msil64 CIL objects is unmeasured, so the WP checks it first. If the WP exceeds its size, the export-list tooling (`--check-exports`, `--check-append-only`) may split off as a sibling WP by a section 12 row. Checks: `--self-test`; two builds into scratch, `c.dll` and `libm.a` byte-identical; `llvm-cil-dump` of `c.dll`: 0 pinvokeimpl, 0 moduleref, one assembly reference (`mscorlib`), the export class `c`, version 1.0.0.0; a scratch link of a program against the build-tree `libc.a` gives T-P11.
+
+#### P-1b.d C++ IR and link shape tests (test, ~300 lines)
+
+- Owned files: `llvm/test/CodeGen/MSIL/`, `lld/test/MSIL/`
+- Reads: this plan sections 5.18.5 and 5.19, this milestone's Goal, the P-1b.a-P-1b.c Provides lines and the section 12 rows for P-1b; llvm/docs/MSIL/recon/p3/portable-libc.md section 6.8; HEAD's llvm/test/CodeGen/MSIL/ and lld/test/MSIL/
+- Provides: `portable-cxx-libc.ll` (llvm-libc's shapes: the `LLVM_LIBC_FUNCTION` alias pattern, COMDAT inline functions, a namespace-hidden declaration, `-fno-exceptions -fno-rtti` freestanding C++ IR, at -O0 and -O2, objects and whole-program text); `lld/test/MSIL/portable-forced-export.test` (a hidden-declared, default-defined provider exported only through `--export-list`, as `__llvm_libc_errno`)
+
+From the specification only.
+
+#### P-1b.e Execution tests: msil/test/Portable/01-libc (test, ~650 lines)
+
+- Owned files: `msil/test/Portable/01-libc/`
+- Depends on: P-1b.b, P-1b.c
+- Reads: this plan sections 5.5, 5.17.4, 5.17.13, 5.19.1, 5.19.4-5.19.6 and 5.19.16, this milestone's Goal, the P-1b.c Provides line and the section 12 rows for P-1b (5.17.4's portable allowance); llvm/docs/MSIL/recon/p3/portable-libc.md sections 4.3 and 6.8; llvm/docs/MSIL/recon/p3/portable-libc-files/run/ (prog.c, fmt.c, fpid.c)
+- Provides: at least 11 tests: `strto` (strtod with its end pointer, strtol, strtoull, ERANGE), `errno-xasm` (errno set in `c.dll` read by the program and by a second `-shared` assembly), `qsort-calli` (a program comparator called from `c.dll`), `fnptr-identity` (`&strlen` equal in the program and `c.dll` on Framework and .NET 10), `math-bits` (sinf, exp, pow, sqrt against fixed bit patterns), `snprintf` (`%d|%s|%.3f|%x`, `%e|%g|%.10a|%lld|%llu`, `%Lf` as double, `%zu`, `%-3s`, `%#o`, `%m`, truncation), `snprintf-xasm` (a variadic call from a `-shared` library into `c.dll`), `string` (the string and strings families), `ctype-wchar` (with `WEOF` from `btowc(EOF)` and `wctob(WEOF)`), `strerror` (every name of 5.19.5's set through `strerror` and `%m`), `absent` (two cases, `%{msil_prog_fail_O0}`: a program that declares its own prototypes of `malloc`, `exit`, `printf`, `rand` and `localtime` and calls them fails to link with N6's line naming `c.dll`; a program that includes `<stdlib.h>` and calls `malloc` fails with clang's undeclared-function error), `datamodel-headers` (`_Static_assert`s on `sizeof(struct tm)`, `jmp_buf`, `mbstate_t`, `struct lconv`, `div_t` and the other 5.19.6 items frozen at P-1b; every errno number of 5.19.5, among them `EOVERFLOW` 35, `EDEADLK` 75, `ENOSYS` 38 and the two aliases; `WEOF == -1`, `_Generic(WEOF, int: 1)`, `(wint_t)-1 < 0` and `WINT_MIN == INT_MIN` (5.18.2 PC2)), `libm-empty` (a program linked with `-lm` links against the empty `libm.a` and takes its math from `c.dll`); P-0's probe programs (`run/`) re-run on msil64 inside these tests, because the probe used the SysV host ABI and the portable ABIInfo can change `div`/`ldiv`/`imaxdiv`/`localeconv` shapes
+
+Self-checking programs under 5.17.4's portable allowance; their expected values come from the C standard or from a generated header, never typed from a run; each run copies `c.dll` beside the program; one image per test on every runtime of the two portable legs.
+
+#### P-1b.f Harness self-tests (test, ~200 lines)
+
+- Owned files: `msil/test/harness/build-libc.test`, `msil/test/harness/libc-exports.test`, `msil/test/harness/legs/`
+- Depends on: P-1b.c
+- Reads: this plan sections 5.17.1, 5.17.5, 5.17.6 and 5.19.7, the P-1b.c text and hand-over, the section 12 rows for P-1b; msil/test/harness/
+- Provides: `build-libc.test` (`--self-test`; a usage error exits 2; `--check` against an empty directory exits 1); `libc-exports.test` (a synthetic old and new list: appending passes, deleting or reordering a line fails, through the script's `--check-append-only OLD NEW`); the portable legs' `build-libc.py` setup line in `legs/describe.test` and `legs/describe-sh.test`
+
+Each new check pins its failure path (5.17.5).
+
+#### P-1b.h Portable loud failures that persist until P-3 (test, ~250 lines)
+
+- Owned files: `msil/test/Portable/90-loud/`
+- Depends on: P-1b.c
+- Reads: this plan sections 5.17.4, 5.18.9, 5.19.8 and 5.19.16, this milestone's texts, the P-1b.c Provides line and the section 12 rows for P-1a and P-1b (5.17.4's portable allowance); HEAD's msil/test/Portable/
+- Provides: at least 5 tests with `%{msil_prog_fail_O0}` and whole-text FileCheck: `static` (`-static`: T-P9), `libc-static` (a program linked against the build-tree `libc.a` by path: T-P11), `atomic-generic` (a generic 16-byte `__atomic_load` and an `_Atomic` struct: N2's portable line), `pthread-create` (N6 naming `c.dll`; absent until P-3), `native-so` (a native `.so` given by path: T-P4; `-l` never finds a `.so` on dotnet, 5.18 PL6, so `-lfoo` is a plain library-not-found)
+
+These texts come from P-1a and P-1b and stay until P-3, so M27-M35 never re-pin them. No `sigsetjmp` case: M27 has not landed, and the first portable setjmp tests are MC-1.h's (`msil/test/Portable/03-sjlj`).
+
+#### P-1b.g Documentation (docs, ~250 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`, `msil/utils/build/README.md`
+- Depends on: P-1b.a, P-1b.b, P-1b.c, P-1b.d, P-1b.e, P-1b.f, P-1b.h
+- Reads: this plan sections 5.19 and 5.17.4, this milestone's text and the section 12 rows for P-1b; the hand-overs of P-1b.a-P-1b.f and P-1b.h
+- Provides: Status.md's managed C library section (stage 1: what ships, what is absent and why, the export list and version, errno over one cell and its thread caveat as a documented exception to fail-loudly until P-3 (a silent race under multi-threaded hosts, brief Q16 (a)), the errno numbering and its two differences from Linux (`EOVERFLOW` 35, `EDEADLK` 75), how absent functions fail (undeclared, or N6 at link time), the frozen ABI items with `int` `wint_t`, the empty `libm.a`, deployment: copying `c.dll` next to the program is the user's or the build system's job, and a missing `c.dll` fails at run time (brief Q22 (a))); GettingStarted's `snprintf` into a buffer example; READMEs: `build-libc.py`, `msil/lib/libc`, `Portable/01-libc`
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `llvm-tblgen` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '"D: has {0:N1} GB free (report only)" -f ((Get-PSDrive D).Free / 1GB)'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0)
+ 3. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: nothing of LLVM, clang or lld changes; relinks only)
+ 4. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 4
+ 5. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --triple msil64-unknown-dotnet --jobs 4
+ 6. python D:/llvm-msil/msil/utils/build/build-libc.py --build-dir D:/llvm-msil/build --jobs 4  (llvm-libc for msil64, c.dll and the empty libm.a; about 10 minutes)
+ 7. pwsh -NoProfile -Command 'python D:/llvm-msil/msil/utils/build/build-libc.py --build-dir D:/llvm-msil/build --check; if ($LASTEXITCODE) { exit 1 }; python D:/llvm-msil/msil/utils/build/build-libc.py --build-dir D:/llvm-msil/build --check-exports; exit $LASTEXITCODE'  (stamps current; the checked-in export list equals the generated one)
+ 8. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $l = "D:/llvm-msil/build/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet"; $c = "$l/c.dll"; $d = & D:/llvm-msil/build/bin/llvm-cil-dump.exe --stats-only $c; if ($LASTEXITCODE) { exit 1 }; $bad = @(); if ($d -match "^# table (ImplMap|ModuleRef) rows=[1-9]") { $bad += "c.dll has a P/Invoke or a ModuleRef" }; if (@($d -match "^# table AssemblyRef rows=1 ").Count -ne 1) { $bad += "c.dll references more than mscorlib" }; if (-not (Test-Path -LiteralPath "$l/libm.a")) { $bad += "no empty libm.a in the sysroot" } else { $m = @(& D:/llvm-msil/build/bin/llvm-ar.exe t "$l/libm.a"); if ($LASTEXITCODE -or $m.Count) { $bad += "libm.a is not an empty archive" } }; $a = "D:/llvm-msil/build/runtimes/msil64-unknown-dotnet/libc/lib/libc.a"; if (-not (Test-Path -LiteralPath $a)) { "missing $a"; exit 1 }; $nm = & D:/llvm-msil/build/bin/llvm-nm.exe $a; if ($LASTEXITCODE) { exit 1 }; if ($nm -match "write_to_stderr|internal4exit") { $bad += "libc objects define or reference write_to_stderr or internal::exit" }; if ($bad.Count) { $bad; exit 1 }; "c.dll: no native binding, no OS stubs; libm.a empty"'  (exit check: user decision, absent not trapping; brief Q14 (a))
+ 9. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $old = git show HEAD:msil/lib/libc/msil64-unknown-dotnet.exports 2>$null; if (-not $old) { "first export list"; exit 0 }; New-Item -ItemType Directory -Force C:/llvm-msil-scratch/milestones/P-1b/gate | Out-Null; $old | Set-Content -Encoding utf8 C:/llvm-msil-scratch/milestones/P-1b/gate/exports-old.txt; python msil/utils/build/build-libc.py --check-append-only C:/llvm-msil-scratch/milestones/P-1b/gate/exports-old.txt msil/lib/libc/msil64-unknown-dotnet.exports; exit $LASTEXITCODE'  (5.19.7: append-only)
+10. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe  (G2)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 461  (P-1a's floor; P-1b adds no unit test)
+12. python D:/llvm-msil/msil/utils/ci/calibrate.py --label start  (G2c)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net-core  (G3: the new llc and lld tests)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg harness  (G3c)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_dotnet_runtime=10 --param msil_also_run=10+tc0 --param msil_run_netfx=1 --param msil_require_verify=1 --param msil_require_exec=1" msil/test/Portable/00-freestanding msil/test/Portable/01-libc msil/test/Portable/90-loud  (exit check, brief Q11 (a): on .NET 10, TC=0 and Framework 4.8)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_runner=wsl --param msil_wsl_dotnet=private --param msil_dotnet_runtime=10 --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1" msil/test/Portable/00-freestanding msil/test/Portable/01-libc msil/test/Portable/90-loud  (exit check, brief Q11 (a): under WSL .NET 10)
+17. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $f = @(git diff --name-only HEAD; git ls-files --others --exclude-standard) | Where-Object { $_ -and $_ -notmatch "^(libc/|msil/|llvm/test/CodeGen/MSIL/|lld/test/MSIL/|llvm/docs/MSIL/)" }; if ($f.Count) { "P-1b changed files outside libc/, msil/ and tests: $($f -join ", ")"; exit 1 }; "no host compile or link input changed"'  (G6: the reason G3b and G4 are not in this gate)
+18. python D:/llvm-msil/msil/utils/ci/calibrate.py --label end  (G4c)
+19. python D:/llvm-msil/msil/utils/ci/calibrate.py --combine D:/llvm-msil/build/lit-results/calibration-start.json D:/llvm-msil/build/lit-results/calibration-end.json
+20. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1  (G5 in full: ten upstream libc files change)
+21. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $req = @(@("libc/config/dotnet/config.json", "LIBC_ERRNO_MODE_EXTERNAL"), @("libc/config/dotnet/msil64/entrypoints.txt", "libc.src.stdio.snprintf"), @("libc/src/__support/OSUtil/dotnet/errno.cpp", "__llvm_libc_errno"), @("libc/include/llvm-libc-macros/generic-error-number-macros.h", "#define ENOSYS 38"), @("libc/include/llvm-libc-macros/generic-error-number-macros.h", "#define EOVERFLOW 35"), @("libc/include/llvm-libc-macros/generic-error-number-macros.h", "#define EDEADLK 75"), @("libc/src/__support/StringUtil/platform_errors.h", "dotnet_platform_errors.h"), @("libc/src/__support/StringUtil/tables/dotnet_platform_errors.h", "POSIX_ERRORS"), @("libc/include/llvm-libc-types/__jmp_buf.h", "__msil64__"), @("msil/lib/libc/msil64-unknown-dotnet.exports", "__llvm_libc_errno"), @("msil/utils/build/build-libc.py", "--export-list"), @("msil/test/Portable/01-libc/absent.test", "c.dll"), @("msil/test/Portable/01-libc/datamodel-headers.test", "EDEADLK"), @("msil/test/Portable/90-loud/libc-static.test", "cannot be linked statically"), @("llvm/docs/MSIL/Status.md", "c.dll")); foreach ($p in $req) { if (-not (Select-String -LiteralPath ($r + $p[0]) -SimpleMatch $p[1] -Quiet -ErrorAction SilentlyContinue)) { $bad += "$($p[0]) lacks $($p[1])" } }; foreach ($d in @{ "msil/test/Portable/01-libc" = 11; "msil/test/Portable/90-loud" = 5 }.GetEnumerator()) { $n = @(Get-ChildItem -LiteralPath ($r + $d.Key) -Filter *.test -Recurse -ErrorAction SilentlyContinue).Count; if ($n -lt $d.Value) { $bad += "$($d.Key): $n tests, needs $($d.Value)" } }; if (Test-Path -LiteralPath ($r + "libc/include/llvm-libc-macros/dotnet/error-number-macros.h")) { $bad += "a dotnet errno header family exists" }; if (@(Get-ChildItem -LiteralPath ($r + "libc/src/__support/OSUtil/dotnet") -File | Select-String -Pattern "write_to_stderr\s*\([^)]*\)\s*\{|__builtin_trap").Count) { $bad += "OSUtil/dotnet defines an OS stub" }; if (Test-Path -LiteralPath "D:/llvm-msil/build/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet/libc.a") { $bad += "libc.a is installed in the sysroot before P-3" }; if ($bad.Count) { $bad; exit 1 }; "P-1b presence check: ok"'  (G6)
+22. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; New-Item -ItemType Directory -Force C:/llvm-msil-scratch/milestones/P-1b/gate | Out-Null; $j = "C:/llvm-msil-scratch/milestones/P-1b/gate/legs.json"; pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Describe | Set-Content -Encoding utf8 $j; if ($LASTEXITCODE) { exit 1 }; python msil/test/M2/08-semantics/Inputs/check-matrix.py --legs $j .; exit $LASTEXITCODE'  (G6: P-1b changes the leg scripts)
+23. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- libc/src/__support/OSUtil/dotnet libc/src/__support/StringUtil/tables/dotnet_platform_errors.h msil/lib"  (G8: fork files only; upstream libc files keep their format)
+24. python D:/llvm-msil/msil/utils/ci/linux-syntax-check.py --changed-from HEAD  (Linux C++ portability check: section 12 row 'M26.l extended (Linux C++ portability check)'; clang 18 and libstdc++ 14 for x86_64-unknown-linux-gnu)
+25. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope P-1b"  (G9)
+```
+
+**Exit criteria**
+- **c.dll.** Built reproducibly from llvm-libc's CMake; 0 ImplMap and 0 ModuleRef rows, one assembly reference; no OS stub (step 8); exports equal the checked-in list, which only grows (steps 7 and 9); no `libc.a` in the sysroot; an empty `libm.a` beside `c.dll`.
+- **Execution.** `01-libc` passes from one image per test on .NET 10, TC=0, Framework 4.8 and WSL .NET 10: errno, calli comparators, `&strlen` identity and `snprintf` across assemblies (steps 15-16); an absent function used through the program's own prototype fails at link time with N6's line naming `c.dll`, and through the installed headers with an undeclared-function error; `-lm` links.
+- **Loud.** `90-loud`: `-static` (T-P9), a direct link of the build-tree `libc.a` (T-P11), generic atomics (N2), `pthread_create` (N6) and a native `.so` given by path (T-P4) each fail with their whole text.
+- **ABI.** errno numbers (the generic set extended: `EOVERFLOW` 35, `EDEADLK` 75, `ENOSYS` 38), `WEOF` (-1, `int`), `struct tm`, `jmp_buf`, `mbstate_t`, `struct lconv` and `div_t` match 5.19.5-5.19.6 (`datamodel-headers`).
+- **Unchanged.** No file outside `libc/`, `msil/`, the MSIL test directories and the MSIL docs changes (step 17); G3, G3c, G5-G9 pass.
+
+**Review focus**
+- Absent means absent: no trap stub, no interim OS layer, no heap; debug builds fail to link, release builds reference nothing OS-dependent.
+- Silent wrong answers: no UTC-only time function, no dummy fenv, `math_errhandling` honest, `strerror` complete.
+- ABI freeze: every frozen item is in 5.19.6 with its value; the export list is generated, sorted and append-only; the errno extension changes no existing generic number and stays the only change other targets see.
+- No private static copy: no `libc.a` in the sysroot, and T-P11 refuses the build-tree archive.
+- Upstream surface: each libc edit is a branch keyed on dotnet's own macros (`LIBC_TARGET_OS_IS_DOTNET`, `LIBC_TARGET_ARCH_IS_MSIL`, or `__dotnet__`/`__msil64__`/`__msil32__` in files that test compiler macros), never on `__MSIL__` or `__ELF__`, except the generic errno names, which are appended for every generic-family build.
+
+**Rebuild cost.** No LLVM, clang or lld object recompiles (relinks only, about 3 minutes). llvm-libc: CMake configure plus about 530 compiles, about 8-12 minutes at 4 jobs (measured: 8 minutes 17 seconds for 434 entry points at 2 jobs on a loaded host); `c.dll` link under a minute. Gate after the build, quiet: steps 4-9 2, G2 1, G3 7-8, G3c 2-3, steps 15-16 5-7, G5 3, G6 1, G8-G9 1.5: about 23-27 normalized minutes. Nothing moves. Farm estimate: 11-16 hours of wall-clock.
+
+**P-1r. Re-pin and gating pass before M27** (an orchestration pass, not a farm milestone, so it has no `###` heading and plan-check and the extractor never treat it as one). P-1r makes M27-M35's texts true for the tree that P-1a and P-1b built, and makes sure that no Phase 3 path the user excluded from the portable triples (M28's native-callable thunks, M29's native exit table, M30's native lock path, M31's thread-exit library, M32's x86 members) can reach them. It runs after P-1b's commit as a read-only orchestration workflow, as P-0 did: its product is the section 12 rows R1-R21 below, landed by one `[MSIL] Plan:` commit (L8), each row's text starting with its id `P-1r R<n>:`, and the plan must not change during a farm run, so a farm gate could not check them. It changes no source or test file; the loud-failure tests that persist until P-3 are P-1b.h's. M27-M35's gates stay as written apart from the re-pinned numbers and citations (R13-R15, R21); the portable legs run only in post-commit runs (5.17.6). Depends on P-1b's commit (and P-1a through it).
+
+| Id | Milestone | Row (planned wording; the audit gives the final wording against the as-built tree) |
+|---|---|---|
+| R1 | M27 | 5.15.4's transformation steps 2 and 4, its prefix-table rows at offsets 64 and 72, and M27.b: "on a Linux triple" becomes "on a Linux or `*-unknown-dotnet` triple" (one condition in MSILLowerSjLj). On `msil64-unknown-dotnet` the buffer is P-1b's opaque 200 bytes with the MSJ1 prefix at 0-15, the mask flag at 64 and the saved mask at 72, `sizeof(sigset_t)` of the portable C ABI (5.19.6), inside the buffer. A `sigsetjmp(buf, nonzero)` site references `sigprocmask`, which `c.dll` lacks until the signal design (brief Q21 (a)), so the link fails with N6's line; without the condition M27 would skip the mask silently on dotnet. M27's gate stays host-only and its text gains no portable test: MC-1.h owns the first portable setjmp tests (`msil/test/Portable/03-sjlj`). |
+| R2 | M28 | On `*-unknown-dotnet`, M28's dispatch, native-callable thunks and callback rules are off. 5.15.3's `Trailer.h` block appends `Managed` to `enum class ThunkKind` ("the field holds `ldftn` of `Method`; no thunk; `*-unknown-dotnet` only"); the thunk part's emitPhase1 call emits `ldftn Method; stsfld Field` for `Managed`, byte-identical to Phase 2's loop; `fillTrailerThunks` (M28.c) and msil-ld's descriptor builder (M28.d) set `Managed` for every entry when `!cli::bindsNatively(TT)`. `MSILLowerIndirectCalls` (P11) leaves every indirect call a managed `calli`; no `'<msil>thunks'`, `'<msil>uco_*'` or trap thunk; `ThunkFilter`, `UCOThunks` and `SpilledData`'s thunk use stay false; `--uco-thunks` on a dotnet link is an error, `--uco-thunks is not supported for msil64-unknown-dotnet: the portable target's function pointers are managed` (M28.f pins it whole). M28's generic pieces (`TrailerField`, `TrailerSink::addField`, `getDelegateConstructor`, the spilled-data race fix, the FailFast and delegate BCL rows) apply on every triple. M28.e and M28.f add one portable case each (an indirect call stays `calli`; `--uco-thunks` refused); M28.g's `CLITrailerThunksTest` gains one case (`Managed` entries give Phase 2's bytes), and its floor of 12 becomes 13 (R13). |
+| R3 | M28 | M28.b's `Trailer.cpp` hook sentence "with `TwoPhase` and `SpilledData`, `<Module>::.cctor` exists and starts with `ldsfld` of `Sink.getDataField()` and `pop`" becomes "... starts, after the portable guard when `TrailerInput::Guard` is set (5.18.7), with ..."; M28's trailer unit tests keep their host expectations, and M28.g adds one `CLITrailerTest` case that pins guard-then-touch (R13). |
+| R4 | M29 | On `*-unknown-dotnet`: no exit table, runner, `msil_exit_forward.c` member (its `sources.txt` glob excludes the triple), Framework ProcessExit fallback, `wmain` or command-line definitions (`TrailerDefs` scope). The dotnet `'<msil>Main'` rules (`exit(main())` when the link resolves `exit`; the call of `__llvm_libc_set_c_main()` before `main` when the link resolves that name, brief Q28 (b)), `LowerGlobalDtorsPass` at slot `P0b` and `__dso_handle` on dotnet are P-2's; M29.a, M29.b and M29.d reuse P-2's code (ownership in R5). M29.c's retirement of `diagnoseGlobalDtors` keeps P-2's dotnet lowering. Plan section 11's question before M29 (the Framework-only exit deviation) also carries "the portable `__cxa_atexit` comes from `c.dll` (P-2)". |
+| R5 | P-2, M29 | Ownership: P-2 creates the dotnet `EntryPoint` exit field in `Trailer.h` and the synthetic `__dso_handle` in `lld/MSIL/Synthetic.cpp`; M29.a declares 5.15.5's remaining `EntryPoint` fields beside P-2's, and M29.b and M29.d extend both to the host triples instead of writing their own; M29's Provides lines cite P-2's names. P-2's own re-pin rows give the final wording. |
+| R6 | M30 | The lock path (`msil_atomic_msvc.c`, the libatomic P/Invokes, H6, the data-import retry) is host-only (its `sources.txt` globs exclude dotnet). T11's host freeze stays at M30's commit; the portable lock protocol (interned-name Monitors) is frozen at P-3's commit. On dotnet the sized 1-8-byte atomics are inline from M30 (the inline core below); the generic `__atomic_*` calls and the sized calls M30 does not inline (16-byte, misaligned) stay undefined (N2's portable line) until P-3. M30's inline core (`MSILISelLoweringAtomic.cpp`) applies to every triple; `M30/clang`'s `-fms-volatile` default stays windows-msvc only. |
+| R7 | M31 | The TLS block (5.15.7, the offset-48 wording) holds no libc state on any triple; libc per-thread state lives in 5.19.11's per-thread C block (P-3). No `c.dll` or `libc.a` object contains a `thread_local`, before or after M31 (P-3's dotnet branches keep the `LIBC_THREAD_LOCAL` objects in the C block). M31's `thread_local` core applies to user `thread_local` on dotnet through R19. The thread-exit library (`msil_thread_exit.c`, its interceptions, `__msil_thread_exit`, `__msil_thread_adopt`) is host-only (glob excludes dotnet); portable thread exit is P-3's. |
+| R8 | M32 | `msil_cpu_model.c`, `msil_crc32c.c` and `msil_rdtsc.c` are host-only (`sources.txt` globs exclude dotnet: the portable triple has no x86 intrinsics or `__x86_64__`); `__msil_pause`, `__msil_fastfail` and H1 apply to every triple; H1 on dotnet needs R19, because its state sits in M31's TLS block header. |
+| R9 | M33 | The switches and `-mmsil-<feature>` flags apply to every MSIL triple; the property oracle and `--disable-runtime-marshalling` tests run on host legs only. |
+| R10 | M34 | Structs by value at P/Invoke boundaries and in thunks are host-only (the portable triple has neither P/Invokes nor thunks). |
+| R11 | M35 | `portable-smoke` and `portable-smoke-wsl` carry the tag `Portable`, which M35's phase gate (default, `Wsl` and `Exit` legs), `exit-report.py` ('', `Wsl`, `Exit`) and `check-matrix.py` never select; M35 certifies the host triples. |
+| R12 | - | 5.15.11 and 5.15.12 gain a portable column: each feature's state on `msil64-unknown-dotnet` (supported, refused with its text, absent until a named step), from 5.18.9. |
+| R13 | M27-M35 | CLITests floors re-pinned from P-1a's committed build (5.17.7's rule): each `'*'` floor becomes P-1a's committed count plus the cases M27..Mn plan to add (the plan's floor minus M26's planned 441), plus R2's and R3's cases from M28 on. With P-1a at 461: M27 461, M28 475, M29 482, M30 483, M31 490, M32 491, M33 497, M34 503, M35 503. `CLITrailerTest` (P-1a 29; the plan's M26 floor 22): M28 30, M29 34, M30 35, M31 38, M32 39, M33 40. `CLIImageLayoutTest` (P-1a 35, the tree's 33 plus 2): M29 38, M31 40. `CLITrailerThunksTest`: M28 13, M34 15. MC-1's re-pin rows add MC-1's cases to M28-M35 later. The audit recomputes every number from the committed builds. |
+| R14 | M27-M35 | Citations: each M27-M35 Reads, Provides or work-text citation of a function that P-1a renamed, moved or replaced (P-1a.b's `SectionRules` predicates in `OutputImage::layout`, `getConstructorArgs`, `MarkLive::run`, `MSILDataSegment::finalize`'s argument, `cli::skipsNullConstructorSlots`'s switch; `searchLibraryBaseName`; `selectExports`) is rewritten to the as-built name; the audit lists every one, or states that none moved. |
+| R15 | M27-M35 | B7's planned BCL blocks keep their order after P-1a's block, and no planned block repeats a type row that P-1a or MC-1 already defines (a `CLI_BCL_TYPE` Id is an enumerator in `BCLMembers.h`, so a repeat fails the build); no plan text pins a numeric `BCLMemberId` (the audit confirms by search); the `--print-bcl-table` pins are re-derived by each milestone's L7 role as before. |
+| R16 | - | 5.13.6 reserves a dotnet-only slot `P0b` for `LowerGlobalDtorsPass` (after P0's hooks, before P1), implemented by P-2 (brief Q31 (a)); the llc-test roles of M27, M28 and M31, which update `pipeline.ll`, keep the host order and do not add the slot. |
+| R17 | - | 5.17.4's portable allowance is listed in `msil/test/README.md`'s table of hand-written files (P-1a.n did it; the audit confirms). |
+| R18 | M33 | 5.16.7 and M33.a: the type row `CLI_BCL_TYPE(BitConverter, "System", "BitConverter", true)` exists from P-1a's block (5.18.7); M33.a appends only `BitConverter_DoubleToInt64Bits` and `BitConverter_Int64BitsToDouble`, on P-1a's `BitConverter` type; M33.h re-pins `--print-bcl-table` accordingly. |
+| R19 | M31, M32 | M31.d's template classification (ImageLayout rule 7) and M31.c's `MSILLowerThreadLocal` apply under `SectionRules::Dotnet` through a new predicate `allowsTLSTemplate` (true for all three rule sets from M31), which lifts Phase 2's `thread_local` error on dotnet. M31.f and M31.g each add one msil64 case (a `.tdata` object links; the lowering on msil64), and M31.h adds `msil/test/Portable/04-tls` (a self-checking `thread_local` program, run post-commit only). M31's `'<msil>Main'` call of `__msil_thread_exit` and `__msil_thread_adopt` are not emitted on dotnet; C++ `thread_local` destructors on dotnet register through `c.dll`'s `__cxa_thread_atexit_impl` (P-3). |
+| R20 | M28, M29, M31 | Every M28-M35 link-rule decision uses P-1a's `cli::getSectionRules` predicates or an exhaustive switch, and every native-binding decision uses `cli::bindsNatively`. M29.a: `PreInitTable` only where `allowsFiniSections(Rules)`; on Dotnet `.preinit_array` stays T-P8. M29.c: `checkSections` keeps reporting `DestructorTable` and `PreInitTable` on Dotnet. M29's destructor order rule ("ELF reverse, COFF ascending") is stated per predicate. M28.c: `ThunkFilter = cli::bindsNatively(TT) && !TT.isOSWindows()`. M31.d's template rule uses R19's predicate. No later WP adds a `SectionRules::` enumerator use outside `ImageLayout.cpp` (P-1a's step 34 grep, rerun by each milestone's reviewers). |
+| R21 | M27-M35 | `msil/test/M2/05-refs/mscorlib-safe.test` pins the built-in table's size, and no M27-M35 WP owns it: each M27-M35 milestone that appends mscorlib-safe rows gains it in its lld-test or exec-test role by a planned-ownership row, re-pinning from its predecessor's count (P-1a's 24, M27's 28, MC-1's 43, then each later block's). The audit's run of P-1a's fixed `check-mscorlib-safe.py` over every planned mscorlib-safe row feeds the same rows. |
+
+**The audit** (the orchestrator's read-only workflow; hand-over about 400 lines, no tree change). Reads: this plan sections 5.13-5.17, 6 (M27-M35) and 5.18-5.19, the section 12 rows for P-1a, P-1b and P-1r; the P-1a and P-1b commits (`git show --stat` and the diffs of every file an M27-M35 WP owns or reads); llvm/docs/MSIL/recon/p3/portable-loader.md V4; llvm/docs/MSIL/recon/p3/portable-linkrules.md section 7; llvm/docs/MSIL/recon/p3/portable-state.md section 8. Provides: the final wording of R1-R21 against the as-built tree; for R14, a table (M27-M35 WP, citation, status `holds` or `now <name>`); for R13, the floors recomputed from P-1a's actual unit-test additions (never below the planned 7); for R15 and R18, a search of every planned M27-M35 BCL block for type Ids that P-1a defines (MC-1's are its own re-pin rows); for R21, P-1a's fixed `check-mscorlib-safe.py` run over every mscorlib-safe row planned for M27-M35 (5.15.x and 5.16.x blocks) as a scratch table on net48, net8, net10 and WSL net10, where any failing row becomes a section 12 row amending that milestone's block before it launches. For each M27-M35 WP, every function its Reads and work text cite in a file that P-1a or P-1b changed is found (`git grep`) or reported.
+
+**Orchestrator checks** (after the plan commit; all must succeed):
+
+```text
+1. python D:/llvm-msil/msil/utils/plan-check.py ownership
+2. python D:/llvm-msil/msil/utils/plan-check.py reads M27  (each later milestone's reads runs at its own launch: their Reads cite files that M27 and later create)
+3. pwsh -NoProfile -Command '$p = "D:/llvm-msil/llvm/docs/MSIL/ImplementationPlan.md"; $bad = @(1..21 | Where-Object { -not (Select-String -LiteralPath $p -SimpleMatch "P-1r R$($_):" -Quiet) } | ForEach-Object { "plan lacks row P-1r R$_" }); if ($bad.Count) { $bad; exit 1 }; "P-1r rows present"'
+```
+
+Cost: no build; the audit about 1-2 hours of workflow time, the checks under a minute.
+
 ### M27. setjmp/longjmp and IL exception clauses
 
 **Goal.** E1 (brief 3.5, R8, R11; contract 5.15.4; sj 3-4, 9-10). `MSILLowerSjLj` (slot P8, 5.13.6) routes every call that may `longjmp` after a setjmp site through an internal wrapper whose whole body is an IL `.try` with a fixed filter; `longjmp` becomes the per-module helper `__msil_longjmp`, which arms the target frame's status block (named by the `'MSJ1'` prefix of the `jmp_buf`) and throws `ExternalException(null, (int)status)`; the caller then branches to its dispatch block. The backend gains IL exception clauses once, for M28 and M32 to reuse. msil-ld keeps M24's N4 guard and leaves the family to code generation under `--lto-emit-asm`. D21 gains its filter part (5.17.16). Exit: `sjlj-semantics.c` and cross-assembly `longjmp` against native, zlib `contrib/puff` and `contrib/blast`, a Lua embedding driver and Lua's suite through `lua.c` with `signal`/`sigaction` stubbed in a test object, on both x86_64 triples; code without a setjmp call keeps its IL.
@@ -11955,6 +14664,153 @@ Status.md: setjmp/longjmp supported (names, copied buffers, across `-shared` lib
 - **Tests**: written from the specification; native oracles on both triples; no XFAIL or skip; the guard proven by the Linux runs; the harness self-tests by M27.i, not by M27.d.
 
 **Rebuild cost.** A CMake regeneration, most MSIL target TUs (about 30: `MSIL.h`, `MSILUtilities.h`, `MSILTargetStreamer.h`), the `BCLMembers.def` includers (B6, overlapping), two lldMSIL TUs; relinks of llc, opt, clang, lld and its copies, MSILTests, CLITests, LLDAsLibAllTests and the CLI tools; `build-builtins.py` rebuilds both archives. About 10-14 minutes, tens of MB on D:. Gate after the build about 30-37 normalized minutes: G0-G2c 2.5, fetch 0.5, net-core 7-8, p3-full 3-4, harness 2-3, mscorlib-safe 1, programs-hosted 3-5, wsl-p3 4-6, programs-hosted-wsl 3-5, il-snapshot 2.5, the rest 3.
+
+### MC-1. Managed calls from C and C++, stage 1
+
+**Goal.** Contract 5.20 (P-0's recon copy `llvm/docs/MSIL/recon/p3/portable-mc1.md`; the user's managed-calls goal of 2026-10-22, moved here by the program order of 2026-11-01), with the decision brief answers (user, 2026-11-01), cited as "brief Q<n>". A C or C++ declaration names one public .NET member, and calls to it compile to a private stub that converts the arguments, calls the member and converts the result, on every MSIL object-format triple. After MC-1: `__attribute__((msil_method("Ns.Type", "Member", "<CIL signature>"[, "assembly"])))` and the repeatable, ordered `msil_catch("Ns.Exception", code)` (GNU and `[[clang::...]]` spellings; brief Q23 (a)) are valid on prototyped, non-variadic function declarations in C and on namespace-scope C++ functions of MSIL triples; Sema checks the shape and 5.20.3's conversion table (scalars as they are; enums by an integer of the same width; strings from `char*`/`char8_t*` as UTF-8, `char16_t*` as UTF-16, `char32_t*` and 32-bit `wchar_t*` as UTF-32, decoded by throwing decoders, brief Q26 (a); reference types and non-enum value types by handle, the latter as opaque boxed handles, brief Q25 (a); a `GCHandle` as the handle itself). clang names the IR declaration `__msil_mc.<symbol>` and records the call as `msil-managed-*` function attributes on it and as an operand of `!msil.managed.calls` (5.20.4). At P0 the backend turns each declaration, in place, into an internal stub (delivery kind K5), refuses any other use of it (T-M10, on every triple) and checks that every translation unit agrees on its arguments (T-M17); the AsmPrinter writes the stub's body (M27's throw-helper pattern) with `call`, `callvirt`, `newobj`, `newarr`, `ldsfld` or `ldfld`, the conversions, and, with `msil_catch`, a `.try` plus a filter clause (M27.a's `emitExceptionClause`) that stores the first listed exception's code through the trailing `int*` and returns the zero value of the C return type; unlisted exceptions escape with their stack trace (brief Q24 (A)). Object handles are Normal GCHandles as `native int` (5.20.9: results are new strong handles that the caller frees once through a `GCHandle::Free` declaration; arguments are borrowed; process-wide; not across Framework AppDomains). msil-ld binds each member through the existing binder (the built-in table, or `--reference`), checks every enum pairing against the referenced TypeDef (the Framework JIT accepts a scalar for a struct parameter: portable-mc1 section 3.6), refuses a value-type pairing in a link without references, checks value-type and reference-type uses, and checks that each catch type derives from `System.Exception` (5.20.7). The stubs work through objects and LTO, verify, and run on .NET 10, TC=0, Framework 4.8 and WSL .NET 10 on the host triples; on `msil64-unknown-dotnet` they are proved before the commit by MC-1's llc and lld tests and after it by the post-commit portable legs (brief Q11 (a)).
+
+Not in MC-1 (5.20.14): generics, byrefs, spans, field writes and events, C++ members and templates as subjects (T-M13), taking the address of a managed declaration (T-M10; lifted with the fuller managed calls), delegates from C function pointers (brief Q27 (a): P-3's MC-3 piece, over M28's `getDelegateConstructor`), non-enum value types by value (M33/M34's value-type work), typed and delegate export overloads (FeatureIdeas item 3, with the fuller managed calls), a header generator, inline IL, the OS layer itself (P-2), and `c.dll`'s binding of `System.*` (brief Q30 (a): `--reference` to the Framework 4.8 implementation assemblies, made at P-2). No record minor, no pass slot, no `pipeline.ll` change, no `TrailerDefs` row.
+
+**Depends on:** M27 (`MSILTargetStreamer::emitExceptionClause` with filter clauses, the object writer's clause storage, AsmPrinter-written bodies with written labels and branches, `MSILStackCheck` raising `.maxstack` for written bodies, the `Exception`, `ExternalException` and `Exception::get_HResult` rows, `MSILLowerSjLj.cpp`), P-1r's plan commit (and P-1a/P-1b through it: the portable triple, the fixed `check-mscorlib-safe.py`, `c.dll` with its freestanding entry points for the portable tests), M24-M26, Phase 2 (M13's import-attribute precedent, M21's binder, M22). Contract text: 5.11.7, 5.13.1-5.13.7, 5.14.1, 5.14.2, 5.15.1, 5.17, 5.20. Every WP reads its Reads entries and the section 12 rows for MC-1, among them the 5.13.5 exemption, the amendments of 5.14.1 (K5), 5.15.1 rule 4 and 5.13.6's P0 list, and Design.md section 1's managed-calls sentence (user-approved, brief Q12) (5.20.12).
+
+**Header changes:**
+- `clang/include/clang/Basic/Attr.td` (`TargetMSIL` and the records `MSILMethod` and `MSILCatch`): about 520 clang objects, 3,500-4,000 CPU-seconds (5.6.10's class); `AttrDocs.td` with it; `DiagnosticSemaKinds.td` (138 clang objects, inside the former set)
+- `llvm/include/llvm/CLI/BCLMembers.def` (21), `llvm/include/llvm/CLI/ManagedSignature.h` (new; header-only), `MCTargetDesc/MSILMCExpr.h` (the MC layer's includers)
+
+Roles (5.20.15): MC-1.a `MC-1/lists` (root), MC-1.b `MC-1/clang`, MC-1.c `MC-1/target`, MC-1.d `MC-1/lld`, MC-1.e `MC-1/harness`, MC-1.f `MC-1/llc-tests` (with the Sema, CodeGen and unit tests), MC-1.g `MC-1/lld-tests` (all of `lld/test/MSIL/`, L7: mscorlib-safe rows), MC-1.h `MC-1/exec-tests`, MC-1.i `MC-1/docs`. Hot files: `BCLMembers.def` to `MC-1/lists`; `MSILPrepareIR.cpp` and `MSILAsmPrinter.*` to `MC-1/target`.
+
+Shared texts: T-M1-T-M17 are 5.20.3's table (Sema: T-M1-T-M6 and T-M11-T-M15; backend: T-M10 and T-M17; msil-ld: T-M7-T-M9 and T-M16). The WPs write them verbatim from there and MC-1's tests pin each whole.
+
+**Work packages**
+
+#### MC-1.a Declarations: attributes, diagnostics, the signature parser, BCL rows, MC kinds (implement, ~450 lines)
+
+- Owned files: `clang/include/clang/Basic/Attr.td`, `clang/include/clang/Basic/AttrDocs.td`, `clang/include/clang/Basic/DiagnosticSemaKinds.td`, `llvm/include/llvm/CLI/ManagedSignature.h`, `llvm/include/llvm/CLI/BCLMembers.def`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCExpr.h`
+- Reads: this plan sections 5.11.7, 5.13.5, 5.13.7, 5.14.1, 5.15.10 (M32's planned `String` row), 5.20.2-5.20.5, 5.20.13 and the section 12 rows for MC-1; llvm/docs/MSIL/recon/p3/portable-mc1.md sections 1.1-1.3 and 2.1-2.3 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-mc1-files/sec4.txt, enc.txt and probe-1.out; clang/include/clang/Basic/Attr.td (TargetWebAssemblyOrMSIL, WebAssemblyImportModule); llvm/include/llvm/CLI/BCLMembers.def; llvm/lib/Target/MSIL/MCTargetDesc/MSILMCExpr.h (MSILMemberRefExpr::Kind)
+- Provides: `TargetMSIL` (`T.isOSBinFormatMSIL()`); `MSILMethodAttr` (type, member, signature, optional assembly) and `MSILCatchAttr` (exception, code; repeatable, ordered); the Sema texts of T-M1-T-M6 and T-M11-T-M15 in the existing MSIL category (no new group); `llvm::cli::ManagedSignature` with `parseManagedSignature(StringRef) -> Expected<ManagedSignature>` (canonical listing v1 text: `[instance ]RET(PARAMS)` and `[instance ]field T`; primitives, `string`, `object`, `class T`, `valuetype T`, `T*`, `T[]`; nested types `Ns.Outer/Inner`; no generics, byrefs, modifiers or vararg), MS5's conversion codes, MR1's attribute names, MR4's metadata name and the `__msil_mc.` prefix; 5.20.13's BCL block of 15 rows, headed `// MC-1: managed calls from C and C++, stage 1 (plan 5.20)`: `GCHandle` with `Alloc(object)`, `ToIntPtr`, `FromIntPtr`, `get_Target` and `Free`; `Encoding` with `GetString(uint8*, int32)`; `UTF8Encoding` with `.ctor(bool, bool)`; `UTF32Encoding` with `.ctor(bool, bool, bool)`; the type `DecoderFallbackException`; `String` with `.ctor(char*)`; all `Required`, public on Framework 4.8 and modern .NET and mscorlib-safe, so the table's mscorlib-safe count goes from M27's 28 to 43; `MSILMemberRefExpr::Kind::ManagedMember` and `ManagedType`
+
+The `String` type row is also planned by M32 (5.15.10); MC-1's re-pin rows make M32 append only `String_Concat` on MC-1's type, and the hand-over lists every later planned type row whose Id MC-1 now defines (today `String` only; no other planned M27-M35 type Id is one of `GCHandle`, `Encoding`, `UTF8Encoding`, `UTF32Encoding`, `DecoderFallbackException` or `String`). Checks: `msil-syntax.ps1` on one includer of each header; `clang-tblgen` on `Attr.td`; `check-mscorlib-safe.py` (P-1a's accessibility probe) on the block on net48, net8, net10 and WSL net10.
+
+#### MC-1.b clang: Sema checks, the stub name and IR attributes (implement, ~750 lines)
+
+- Owned files: `clang/lib/Sema/SemaMSILManagedCall.cpp`, `clang/lib/Sema/SemaMSILManagedCall.h`, `clang/lib/Sema/SemaDeclAttr.cpp`, `clang/lib/Sema/SemaDecl.cpp`, `clang/lib/Sema/CMakeLists.txt`, `clang/lib/CodeGen/CodeGenModule.cpp`
+- Depends on: MC-1.a
+- Reads: this plan sections 5.13.5, 5.18.1 and 5.20.1-5.20.4, this milestone's texts and the section 12 rows for MC-1; llvm/docs/MSIL/recon/p3/portable-mc1.md sections 1.1 and 2.1-2.3 including its verifier corrections; clang/lib/Sema/SemaDeclAttr.cpp (ProcessDeclAttribute, handleWebAssemblyImportModuleAttr); clang/lib/Sema/SemaWasm.cpp (SemaWasm::mergeImportModuleAttr); clang/lib/Sema/SemaDecl.cpp (mergeDeclAttribute); clang/lib/CodeGen/CodeGenModule.cpp (getMangledName, addMSILImportAttributes, updateMSILImportAttributes)
+- Provides: the Sema checks MS1-MS7 in the new file (with its file-private header), called from two `ProcessDeclAttribute` cases and one `mergeDeclAttribute` hook, as `mergeImportModuleAttr` is (`Sema.h` does not change); the `getMangledName` hook naming the IR declaration `__msil_mc.<symbol>` (MR2); the IR attributes `msil-managed-type`, `msil-managed-member`, `msil-managed-sig`, `msil-managed-asm` (optional), `msil-managed-conv` (one conversion code per parameter, then `;` and the result's), `msil-managed-catch` (ordered `Type=code` list), added beside `addMSILImportAttributes` and kept across redeclarations; the `!msil.managed.calls` operand per declaration (MR4)
+
+Declarations only; prototyped; not variadic, not `main`, not a builtin; no C++ member, template or `constexpr`; `msil_method` on the first declaration (MS2); C parameters = [handle `this`] + CIL parameters + [one trailing `int*` with `msil_catch`]; exactly one conversion per pair. Wide strings are UTF-16 where `wchar_t` is 16 bits (Windows host triples), UTF-32 elsewhere and on both portable triples. Checks: `msil-syntax.ps1`; a private `clang` (the `Attr.td` rebuild class) on portable-mc1 section 2.2's cases.
+
+#### MC-1.c Backend: stubs, bodies, encodings (implement, ~1,100 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILManagedCalls.h`, `llvm/lib/Target/MSIL/MSILManagedCalls.cpp`, `llvm/lib/Target/MSIL/MSILPrepareIR.cpp`, `llvm/lib/Target/MSIL/MSILAsmPrinter.h`, `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCExpr.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp`, `llvm/lib/Target/MSIL/MSILStackCheck.cpp`, `llvm/lib/Target/MSIL/MSILLowerSjLj.cpp`, `llvm/lib/Target/MSIL/CMakeLists.txt`
+- Depends on: MC-1.a
+- Reads: this plan sections 5.13.1-5.13.3, 5.13.6 (P0), 5.14.1, 5.14.2, 5.15.4, 5.20.4-5.20.6 and 5.20.8-5.20.10, this milestone's texts and the section 12 rows for MC-1; llvm/docs/MSIL/recon/p3/portable-mc1.md sections 1.2, 1.4, 2.4, 2.5 and 3.2-3.4 including its verifier corrections; llvm/docs/MSIL/recon/p3/portable-mc1-files/mc1proto.il; llvm/docs/MSIL/recon/p3/portable-mc1-files/bx.il; llvm/docs/MSIL/recon/p3/portable-mc1-files/utf.il; llvm/lib/Target/MSIL/MSILPrepareIR.cpp (MSILPrepareIRLegacy::doInitialization, MSIL::relaxStrictInt128Conversions); llvm/lib/Target/MSIL/MSILAsmPrinter.cpp (the method-body emission, M27's throw body); llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp (parseBCLType, encodeBCLMethodSig); llvm/lib/Target/MSIL/MSILStackCheck.cpp; llvm/lib/Target/MSIL/MSILLowerSjLj.cpp
+- Provides: `bool MSIL::createManagedCallStubs(Module &M)` (declared in `MSILManagedCalls.h`; called at P0 after `relaxStrictInt128Conversions` and before M33's `outlineInt128Operations`, also in msil-ld's LTO code generation: MR4's check (T-M17), then each declaration with `"msil-managed-type"` becomes, in place, an internal `noinline` definition with an `unreachable` IR body and the attribute `"msil-managed-stub"`, so no call is redirected; any use other than a direct call of the declaration's function type is T-M10 and becomes poison, so no managed declaration's address reaches M28's thunk machinery); `void MSIL::emitManagedCallStubBody(...)` at the AsmPrinter's method-body hook point; class and valuetype encoding of `ManagedMember`/`ManagedType` in objects; the stack-check rule for stub bodies; MSILLowerSjLj treating calls to `"msil-managed-stub"` functions as calls that cannot `longjmp`
+
+Bodies: the conversions (an IL length loop and `GetString` on a throwing `UTF8Encoding(false, true)` or `UTF32Encoding(false, false, true)` for strings, `String::.ctor(char*)` for UTF-16; `GCHandle::FromIntPtr`, `box GCHandle`, `unbox GCHandle`, `get_Target`, `castclass` for handles; `GCHandle::Alloc` and `ToIntPtr` for results; `box` for a boxed value-type result), the access, the result conversion, and with `msil_catch` one `.try` whose filter tests `isinst` per listed type in order and stores the code (5.20.8). In standalone text the member's scope is `msil-managed-asm` (default `mscorlib`); objects use `[msil.bcl]` scoping (msil-ld binds). MC-1 uses M27's interfaces as M27 leaves them and does not edit `MSILMachineFunctionInfo.*` or `MCTargetDesc/MSILTargetStreamer.*` (ML5); if M27's as-built interface cannot declare a stub's locals, the hand-over says so before the body writer is written, and a section 12 row gives `MSILMachineFunctionInfo.*` to `MC-1/target`. Checks: `msil-syntax.ps1`; a private `llc` and `clang`: portable-mc1's prototype shapes compiled from C at -O0 and -O2, `-S` and `-filetype=obj`, including a string parameter (a loop with labels) and a filter clause on the object path, verified and run on .NET 10 and Framework (portable-mc1's verifier: branches in AsmPrinter-written bodies were proven only with ilasm-built objects).
+
+#### MC-1.d msil-ld: managed-call checks and LTO (implement, ~350 lines)
+
+- Owned files: `lld/MSIL/ManagedCalls.h`, `lld/MSIL/ManagedCalls.cpp`, `lld/MSIL/Writer.cpp`, `lld/MSIL/LTO.cpp`, `lld/MSIL/InputFiles.h`, `lld/MSIL/InputFiles.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`, `lld/MSIL/BCLBinder.h`, `lld/MSIL/BCLBinder.cpp`, `lld/MSIL/CMakeLists.txt`
+- Depends on: MC-1.a
+- Reads: this plan sections 5.9.13, 5.11.7, 5.14.2, 5.20.4 and 5.20.7, this milestone's texts and the section 12 rows for MC-1; llvm/docs/MSIL/recon/p3/portable-mc1.md sections 1.3, 2.6, 3.3 and 3.6 including its verifier corrections; lld/MSIL/Synthetic.cpp (OutputModule::mapTypeToken, mapBCLToken, parseBCLMethodSig); lld/MSIL/BCLBinder.cpp (BCLBinder::Impl::findBuiltinType); lld/MSIL/LTO.cpp (the explicit-import handling after the merge, the import-annotation loop); lld/MSIL/NativeLibraries.cpp (mayBindNatively); lld/MSIL/SymbolTable.cpp (bindManagedSymbol)
+- Provides: one call from `Writer.cpp` into `ManagedCalls.cpp` (MK2-MK4: T-M7, T-M8, T-M9, T-M16); the binder's queries of an enum TypeDef's underlying type, a type's kind and its base chain (a small `BCLBinder` interface); bitcode `__msil_mc.*` names (class N3) never bound by late binding and, if MK5's probe needs it, skipped as undefined before LTO code generation; `LTO.cpp`'s import-annotation loop skipping declarations with `"msil-managed-type"`
+
+The LTO case is measured first (portable-mc1's verifier: irsymtab carries no function attributes, and explicit imports are recognized after the merge in `LTO.cpp`); `InputFiles.*` and `SymbolTable.*` change only if that measurement needs them (MK6), and the hand-over says which files changed. No native library is ever consulted for a managed call. Checks: `msil-syntax.ps1`; a private `lld` on llc-written objects and `llvm-as` bitcode with `--reference` to the Framework 4.8 implementation assemblies and to the .NET 10 reference pack, each text by hand.
+
+#### MC-1.e Harness: hooks, check-msil paths and the Framework references (infra, ~150 lines)
+
+- Owned files: `msil/utils/upstream-hooks.txt`, `msil/test/CMakeLists.txt`, `msil/test/lit.cfg.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`
+- Reads: this plan sections 5.6.1, 5.13.5, 5.17.2 and 5.17.6 and the section 12 rows for MC-1; msil/utils/upstream-hooks.txt; msil/test/CMakeLists.txt; msil/test/lit.cfg.py
+- Provides: hook blocks for `Attr.td`, `AttrDocs.td`, `DiagnosticSemaKinds.td`, `SemaDeclAttr.cpp`, `SemaDecl.cpp`, `clang/lib/Sema/CMakeLists.txt` and `CodeGenModule.cpp` with `lit clang/test/Sema/attr-*.c` subsets (for example `attr-wasm.c`, the shared `TargetSpec` neighbourhood) and `fork` lines for MC-1's fork tests; `fork-only` lines for `clang/test/Sema/attr-msil-method.c`, `clang/test/SemaCXX/attr-msil-method.cpp`, `clang/lib/Sema/SemaMSILManagedCall.cpp` and `SemaMSILManagedCall.h`; the two Sema tests' paths in check-msil (`$checkMsil`, `check_msil`, `msil/test/CMakeLists.txt`; `clang/test/CodeGen/MSIL/` is already taken whole); `%{msil_refs_netfx}` (`--reference` to the Framework 4.8 implementation assemblies `mscorlib.dll` and `System.dll` in `%WINDIR%/Microsoft.NET/Framework64/v4.0.30319` on Windows hosts; feature `msil-refs-netfx`)
+
+The portable legs take `msil/test/Portable` whole, so `02-managed-calls` and `03-sjlj` need no leg path. Checks: `check-upstream-hooks.py`; `lit-legs.ps1 -Describe`.
+
+#### MC-1.f FileCheck, Sema, CodeGen and unit tests (test, ~900 lines)
+
+- Owned files: `llvm/test/CodeGen/MSIL/`, `clang/test/Sema/attr-msil-method.c`, `clang/test/SemaCXX/attr-msil-method.cpp`, `clang/test/CodeGen/MSIL/`, `llvm/unittests/CLI/ManagedSignatureTest.cpp`, `llvm/unittests/CLI/CMakeLists.txt`
+- Reads: this plan sections 5.4, 5.5, 5.17.18 and 5.20, this milestone's texts, the MC-1.a-MC-1.d Provides lines and the section 12 rows for MC-1; llvm/docs/MSIL/recon/p3/portable-mc1.md section 2; HEAD's versions of the files it changes
+- Provides: `managed-call-*.ll` (the P0 transformation, the bodies for each conversion row and member kind, the filter clause, objects through `llvm-cil-dump` with token kinds, the clause table and the branch offsets of the length loops and the filter, T-M10 pinned whole for `&f` and for a call through a cast pointer, T-M17 for two declarations with different arguments in one module's metadata, a setjmp caller not wrapping stub calls; -O0 and -O2; `-S` and objects; both host x86_64 triples and msil64); `attr-msil-method.c` and `.cpp` (T-M1-T-M6 and T-M11-T-M15 whole, both spellings, `__has_attribute`, the accepted forms, both wide-string widths through `-triple`); `clang/test/CodeGen/MSIL/msil-method.c` (MR1's attributes, `__msil_mc.<symbol>` for C and C++ mangled names, MR4's operands); `CLIManagedSignatureTest` with at least 6 cases (primitives, `class`/`valuetype`, nested types, arrays and pointers, fields, each rejected form)
+
+From the specification only. `CLITests` cannot link lld's code, so the parser's agreement with `lld::msil::parseBCLMethodSig` and the object writer's `parseBCLType` is MC-1.g's end-to-end test.
+
+#### MC-1.g msil-ld tests (test, ~400 lines)
+
+- Owned files: `lld/test/MSIL/`
+- Reads: this plan sections 5.11.1, 5.17.18 and 5.20.7, this milestone's texts, the MC-1.a and MC-1.d Provides lines and the section 12 rows for MC-1; HEAD's lld/test/MSIL/ (bcl-builtin.test, bcl-members.test, Inputs/fakepack)
+- Provides: `managed-calls.test` (and more `managed-calls-*.test` files if the role splits it; host-triple and msil64 objects): binding through `--reference` and through the built-in table, one managed call per MA3 form (the end-to-end agreement of MC-1.a's parser with lld's), a wrong return type with the binder's overload list; the no-reference refusal for a non-table member and a non-table type; T-M7 for an `int32` passed to an `int64`-backed and to a `uint8`-backed enum and for a struct passed as an integer; T-M8 without references; T-M9; T-M16; object LTO and `--lto-emit-asm` alike, and T-M17 for two `llvm-as` bitcode inputs that declare one function with different arguments; the re-pinned `--print-bcl-table` lines for MC-1's block
+
+L7: the whole directory.
+
+#### MC-1.h Execution tests: msil/test/M3/13-managed-calls and the portable directories (test, ~850 lines)
+
+- Owned files: `msil/test/M3/13-managed-calls/`, `msil/test/Portable/02-managed-calls/`, `msil/test/Portable/03-sjlj/`, `msil/test/M2/05-refs/mscorlib-safe.test`
+- Reads: this plan sections 5.5, 5.15.4 (with P-1r row R1), 5.17.4, 5.17.13 and 5.20, this milestone's texts, the MC-1.a and MC-1.e Provides lines and the section 12 rows for MC-1; llvm/docs/MSIL/recon/p3/portable-mc1.md sections 3.2-3.4 and 4; llvm/docs/MSIL/recon/p3/portable-mc1-files/mc1proto.il
+- Provides: the 11 host tests of 5.20.11 MT3 in `13-managed-calls`: `static-call` (built-in table only, no reference: `Buffer::MemoryCopy(void*, void*, int64, int64)`, `Marshal::AllocHGlobal(native int)`, `BitConverter::GetBytes(int32)` with its `uint8[]` result handle freed through `GCHandle::Free`, and `Environment::GetCommandLineArgs()`; no `Math` member, whose rows are M33's), `strings` (a UTF-8 round trip of a non-ASCII string through `Marshal::StringToHGlobalUni(string)`, and an invalid byte sequence mapped through `msil_catch("System.Text.DecoderFallbackException", EILSEQ)`), `wide-strings` (`char16_t *` and `char32_t *` on both OSes; `wchar_t *` as UTF-16 on Windows and UTF-32 on Linux), `handles` (`newobj`, `callvirt`, a property getter, `GCHandle::Free` exactly once, a wrong-type handle failing `castclass` loudly with `%{msil_prog_loud_<L>}`), and, each with `%{msil_refs_netfx}` and REQUIRES `msil-refs-netfx`, `value-types` (`DateTime`'s `.ctor`, `this-val` `get_Ticks()`, a boxed result handle), `catch-map` (a missing file through `FileStream`'s constructor gives its code; an unlisted exception escapes as `[unhandled exception: System.ArgumentException]` with `%{msil_prog_loud_<L>}`), `enum-args` (`FileMode`, `FileAccess` and `FileShare` as integers), `field-read` (`Stopwatch.Frequency`, in `System` on Framework), `console` (`Console::OpenStandardOutput()` and `Stream::Write(uint8[], int32, int32)`), `arrays` (`newarr` with `Marshal::Copy`), plus `shared` (a `-shared` library whose exported function makes a managed call, called by a C program); the portable tests of `Portable/02-managed-calls` (at least 3, self-checking, on msil64 with `c.dll` and no `--reference`, every member a table entry after MC-1's block): `handles` (`newobj EntryPointNotFoundException::.ctor(string)`, M27's `Exception::get_HResult` through `this-obj`, `GCHandle::Free` once; then the `string[]` handle of `Environment::GetCommandLineArgs()` as the `this` of `Exception::get_HResult` fails `castclass` loudly), `strings` (UTF-8 and 32-bit `wchar_t *` UTF-32 C strings through `Marshal::StringToHGlobalUni(string)`, the UTF-16 result compared in C), `catch-map` (an invalid UTF-8 argument with `msil_catch("System.Text.DecoderFallbackException", EILSEQ)` gives `c.dll`'s `EILSEQ`; the same call without `msil_catch` escapes as `[unhandled exception: System.Text.DecoderFallbackException]`); `Portable/03-sjlj` (at least 2, after M27, with P-1r row R1: a setjmp/longjmp self-check, and `sigsetjmp-mask`, where a nonzero mask fails to link with N6's line on `sigprocmask`); `msil/test/M2/05-refs/mscorlib-safe.test` re-pinned from M27's count (28) to 43 with the 15 TABLE lines (P-1r row R21)
+
+Host tests have native-oracle transcripts where the member has a C equivalent (each managed declaration sits under `#if defined(__MSIL__)` with a C fallback in `#else`) and hand-written files otherwise (5.17.4's list gains MC-1's managed-only results, with the reason "managed member, no native oracle"); they run in `p3-full` and `wsl-p3` (CF's conditions) from MC-1 on. The portable tests use 5.17.4's portable allowance and run only in the post-commit `Portable` legs; no `msil/test/Portable` test uses `--reference` before P-2.
+
+#### MC-1.i Documentation (docs, ~350 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/test/README.md`
+- Depends on: MC-1.a, MC-1.b, MC-1.c, MC-1.d, MC-1.e, MC-1.f, MC-1.g, MC-1.h
+- Reads: this plan section 5.20, this milestone's text and the section 12 rows for MC-1; the hand-overs of MC-1.a-MC-1.h
+- Provides: Status.md's managed-calls section (grammar, the conversion table, handles and their lifetime, exceptions, the Framework value-type hazard and the link check, unchecked `-S` text, what is not supported); GettingStarted's `File.Exists` example; the README's new directories and hand-written files; the hand-over of 5.20.13's re-pins with the type-Id check repeated against the plan as it stands at MC-1's commit
+
+**Build targets:** `llc` `opt` `clang` `clang-tblgen` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `llvm-tblgen` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed; no portable step, and neither the portable archive nor `c.dll` is built: brief Q11 (a)):
+
+```text
+ 1. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $b = "C:/llvm-msil-scratch/milestones/MC-1/gate/il-baseline"; if (Test-Path -LiteralPath "$b/x86_64-pc-windows-msvc-msil") { "baseline present: $b" } else { python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 4 --out $b msil/test/M1 msil/test/M2; exit $LASTEXITCODE }'
+ 2. pwsh -NoProfile -Command '"D: has {0:N1} GB free (report only)" -f ((Get-PSDrive D).Free / 1GB)'
+ 3. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0)
+ 4. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0)
+ 5. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot --builtins --clang D:/llvm-msil/build/bin/clang.exe  (G0)
+ 6. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/make-glibc-sysroot.sh /mnt/c/llvm-msil-scratch/glibc-sysroot  (G0)
+ 7. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: the Attr.td class, about 520 clang objects)
+ 8. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 4
+ 9. python D:/llvm-msil/msil/utils/check-mscorlib-safe.py --msil-ld D:/llvm-msil/build/bin/msil-ld.exe --out C:/llvm-msil-scratch/milestones/MC-1/gate/mscorlib-safe  (B4: MC-1's rows, with P-1a's accessibility probe)
+10. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe  (G2)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 467  (P-1r R13's M27 floor, 461 with P-1a's planned 7, plus MC-1.f's 6)
+12. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLIManagedSignatureTest.*' -NoSkip -MinTests 6
+13. python D:/llvm-msil/msil/utils/ci/calibrate.py --label start  (G2c)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net-core  (G3)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg p3-full  (G3b: 13-managed-calls on .NET 10, TC=0, Framework)
+16. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $s = @(python msil/utils/ci/gate-select.py harness); $s; if ($s[0] -eq "harness: run") { pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Leg harness; exit $LASTEXITCODE }'  (G3c)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-p3  (G4: 13-managed-calls under WSL .NET 10)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_pipeline=lto --param msil_dotnet_runtime=10 --param msil_run_netfx=1 --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1" msil/test/M3/13-managed-calls  (exit check: stubs through LTO)
+19. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $o = "C:/llvm-msil-scratch/milestones/MC-1/gate/il-after"; Remove-Item -Recurse -Force -LiteralPath $o -ErrorAction SilentlyContinue; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 4 --out $o --compare C:/llvm-msil-scratch/milestones/MC-1/gate/il-baseline --skip-changed msil/test/M1 msil/test/M2; exit $LASTEXITCODE'  (programs without managed calls are unchanged)
+20. python D:/llvm-msil/msil/utils/ci/calibrate.py --label end  (G4c)
+21. python D:/llvm-msil/msil/utils/ci/calibrate.py --combine D:/llvm-msil/build/lit-results/calibration-start.json D:/llvm-msil/build/lit-results/calibration-end.json
+22. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1  (G5 in full)
+23. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $req = [ordered]@{ "clang/include/clang/Basic/Attr.td" = "MSILMethod"; "clang/lib/Sema/SemaMSILManagedCall.cpp" = "msil_catch"; "clang/lib/Sema/SemaMSILManagedCall.h" = "MSIL"; "clang/lib/CodeGen/CodeGenModule.cpp" = "msil-managed-sig"; "llvm/include/llvm/CLI/ManagedSignature.h" = "__msil_mc."; "llvm/include/llvm/CLI/BCLMembers.def" = "// MC-1:"; "llvm/lib/Target/MSIL/MSILManagedCalls.cpp" = "createManagedCallStubs"; "lld/MSIL/ManagedCalls.cpp" = "not an enum of that width"; "clang/test/Sema/attr-msil-method.c" = "RUN:"; "lld/test/MSIL/managed-calls.test" = "--reference"; "msil/utils/upstream-hooks.txt" = "hook clang/include/clang/Basic/Attr.td"; "msil/test/M2/05-refs/mscorlib-safe.test" = "43"; "llvm/docs/MSIL/Status.md" = "msil_method" }; foreach ($k in $req.Keys) { if (-not (Select-String -LiteralPath ($r + $k) -SimpleMatch $req[$k] -Quiet -ErrorAction SilentlyContinue)) { $bad += "$k lacks $($req[$k])" } }; foreach ($d in @{ "msil/test/M3/13-managed-calls" = 11; "msil/test/Portable/02-managed-calls" = 3; "msil/test/Portable/03-sjlj" = 2 }.GetEnumerator()) { $n = @(Get-ChildItem -LiteralPath ($r + $d.Key) -Filter *.test -Recurse -ErrorAction SilentlyContinue).Count; if ($n -lt $d.Value) { $bad += "$($d.Key): $n tests, needs $($d.Value)" } }; if ($bad.Count) { $bad; exit 1 }; "MC-1 presence check: ok"'  (G6)
+24. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; New-Item -ItemType Directory -Force C:/llvm-msil-scratch/milestones/MC-1/gate | Out-Null; $j = "C:/llvm-msil-scratch/milestones/MC-1/gate/legs.json"; pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Describe | Set-Content -Encoding utf8 $j; if ($LASTEXITCODE) { exit 1 }; python msil/test/M2/08-semantics/Inputs/check-matrix.py --legs $j .; exit $LASTEXITCODE'  (G6)
+25. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; . msil/utils/build/msil-env.ps1; $d = @(python msil/utils/ci/gate-select.py expected-dirs); if ($LASTEXITCODE) { exit 1 }; if ($d.Count) { python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --levels O0,O2 @d; if ($LASTEXITCODE) { exit 1 }; python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --levels O0,O2 --os linux @d; exit $LASTEXITCODE }'  (G7)
+26. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests clang/lib clang/include lld/MSIL msil/lib"  (G8: no diff)
+27. python D:/llvm-msil/msil/utils/ci/linux-syntax-check.py --changed-from HEAD  (Linux C++ portability check: section 12 row 'M26.l extended (Linux C++ portability check)'; clang 18 and libstdc++ 14 for x86_64-unknown-linux-gnu)
+28. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope MC-1"  (G9)
+```
+
+**Exit criteria**
+- **Calls.** Every conversion row and member kind of 5.20.2-5.20.3 runs through objects and LTO on .NET 10, TC=0, Framework 4.8 and WSL .NET 10 on both host x86_64 triples (steps 15, 17, 18); the llc and lld tests carry msil64 cases; the portable directories run in the post-commit `Portable` legs.
+- **Exceptions.** A listed exception becomes its code; an unlisted one escapes loudly with its type.
+- **Checks.** T-M1-T-M17 pinned whole; an enum width mismatch, a value type in a link without references and a value/reference mismatch are link errors.
+- **Unchanged.** il-snapshot of M1 and M2 equals HEAD's (step 19); no record minor, pass slot or `pipeline.ll` change; G2-G9 pass and the floors (467; `CLIManagedSignatureTest` 6) hold; `mscorlib-safe.test` pins 43 entries.
+
+**Review focus**
+- The Framework hazard: no value-type pairing reaches the image unchecked; enum widths compared with the TypeDef.
+- Handles: one owner per result, borrowed arguments, no leak in the stub's error path, `Free` exactly once in tests.
+- Strings: throwing decoders; lengths from IL length loops; no `PtrToStringUTF8` or `PtrToStringAnsi`.
+- Names and LTO: `__msil_mc.<symbol>` never reaches a SYMTAB or late binding; units that disagree fail (T-M17), never merge silently.
+- Hooks only (L2): `doInitialization`'s one call, the body hook in `MSILAsmPrinter.cpp`, the `ProcessDeclAttribute` cases, the `getMangledName` hook; logic in the new files.
+- No overlap with M33/M34: no value-type field access, no `addValueType`.
+
+**Rebuild cost.** The `Attr.td` class (about 520 clang objects, 3,500-4,000 CPU-seconds), `BCLMembers.def` (21), `MSILMCExpr.h` (the MC layer), the edited sources: about 16-20 minutes at 4 jobs on a quiet host (the `Attr.td` class alone is 3,500-4,000 CPU-seconds, 15-17 minutes at 4 jobs); relinks of clang, llc, lld and the unit tests. Gate after the build, quiet: steps 1 and 19 3, G0 1, steps 8-9 1.5, G2 1.5, G3 7-8, G3b 3-5, G3c 0-3, G4 5-7, step 18 1.5, G5 3, G6 1, G7 1.5-2, G8-G9 1.5: about 30-39 normalized minutes. Round 1 decides: only G4's run 2 may move; steps 18-19 never move. Farm estimate: 16-22 hours of wall-clock.
+
+**MC-1's re-pin rows** (applied with MC-1's commit, from MC-1.i's hand-over; 5.20.13's list): the CLITests `'*'` floors of M28-M35 rise by MC-1's actual new cases (at least 6, on top of P-1r R13: 481, 488, 489, 496, 497, 503, 509, 509 with exactly 6); 5.13.6's P0 list names `MSIL::createManagedCallStubs` between M24's and M33's hooks; the hook contexts that M28-M34 cite in `MSILAsmPrinter.*`, `MSILPrepareIR.cpp`, `MCTargetDesc/MSILMCExpr.*`, `MCTargetDesc/MSILObjectWriter.*`, `MSILStackCheck.cpp`, `MSILLowerSjLj.cpp`, the target's and the CLI unit tests' `CMakeLists.txt`, `lld/MSIL/Writer.cpp`, `lld/MSIL/CMakeLists.txt`, `lld/MSIL/BCLBinder.*`, `lld/MSIL/LTO.cpp` and (only if MC-1.d's hand-over says they changed) `lld/MSIL/SymbolTable.*`/`InputFiles.*` are re-verified against MC-1's hooks; B7's later blocks follow MC-1's block, and their `--print-bcl-table` lines and counts are re-pinned; 5.15.10 and M32.a: `CLI_BCL_TYPE(String, "System", "String", true)` exists from MC-1's block, so M32.a appends only `String_Concat`, on MC-1's `String` type; `msil/test/M2/05-refs/mscorlib-safe.test`'s count continues from MC-1's 43 (P-1r R21); the quiet-minute estimates of M28-M35's G3b and G4 each rise by about 1-1.5 minutes for `13-managed-calls`, measured in MC-1's round 1.
+
+**P-2. The single-threaded OS layer over the BCL** (an outline; contract 5.19.2's stage 2, 5.19.9, 5.19.10 and 5.19.11 at major 0; its milestone text is drafted after MC-1's commit; decisions cited as brief Q<n> are the decision brief answers (user, 2026-11-01)). After MC-1, llvm-libc's `OSUtil/dotnet` becomes C/C++ that calls `System.*` through `msil_method` declarations, bound by `--reference` to the build host's Framework 4.8 implementation assemblies `mscorlib.dll` and `System.dll` (brief Q30 (a): `build-libc.py` stops with a message naming a missing file and never falls back to the built-in table or another reference set). It brings: the generic `File` class with a `DotnetFile` over a `System.IO.Stream` handle (`libc/src/__support/File/dotnet/`, the standard-stream accessors in `libc/src/stdio/dotnet/`, `stdout` and friends as lvalue macros over exported accessors), `fopen`/`fclose`/`printf`/`fprintf`/`scanf`/`sscanf`/`asprintf` and the wide streams, with exceptions mapped to errno by `msil_catch` (a derived type before its base) and file names decoded by throwing UTF-8 (`EILSEQ`); the heap (brief Q29 (a), revising the user's mapping of 2026-10-31: a two-pointer header `{base, size}` over `Marshal.AllocHGlobal`/`ReAllocHGlobal`/`FreeHGlobal` on every runtime, `malloc` 16-aligned, `NativeMemory` not used), which also unblocks `strdup`, the tree search functions, `vsscanf`, `atexit` and `hcreate`/`hsearch` (with `HashTable/randomness.h` moved to `LIBC_THREAD_LOCAL`); `internal::exit` over `Environment.Exit` after flushing; `abort` writing `abort() called` to stderr before `Environment.FailFast` (FailFast alone is silent on the Framework console); clocks (`DateTime.UtcNow`, `Stopwatch`), `TimeZoneInfo` for the localtime family, `mktime` and `strftime` (absent until here, brief Q18 (a)); the environment over `System.Environment`; `remove`/`rename`/`tmpfile`/`tmpnam`; `getopt` with its variables per copy (brief Q35 (a)). The dotnet `'<msil>Main'` becomes `exit(main(argc, argv))` when the link resolves `exit`, and calls `c.dll`'s exported `__llvm_libc_set_c_main()` before `main` when the link resolves that name (brief Q28 (b)): until that call `c.dll`'s standard streams are unbuffered, so a host that is not a C program (a C# program calling `c.dll`, which never calls `exit` and gets no `ProcessExit` handler before P-3's delegates) loses no output; after it C's buffering rules apply. `__llvm_libc_set_c_main`, `__cxa_atexit`, `__cxa_finalize` and the stdio accessors are appended to the export list. `LowerGlobalDtorsPass` runs at the reserved dotnet slot `P0b` and global destructors register through `c.dll`'s `__cxa_atexit`, with `.fini_array` staying T-P8 (brief Q31 (a)); msil-ld defines `__dso_handle` (P-1r R5: M29 reuses both). Exit handlers and the final flush run only through `exit()`. errno stays P-1b's exported cell (brief Q16 (a)); the per-thread C block is P-3's. The process root and the discovery names exist at a provisional layout major 0 with one copy (brief Q32 (a)). `TargetLibraryInfo` on dotnet is re-audited for folds into functions `c.dll` lacks (the `printf` to `puts` fold among them). Mode 2 only; tests in `msil/test/Portable/05-os`, run by P-2's own gate with `msil-lit.ps1` (brief Q11 (a)) and by the post-commit legs. Oracle: the host-native transcript of the same program built with llvm-libc's overlay mode under WSL (stdout exists from here, so 5.17.4's portable allowance ends for new tests). **P-2's re-pin rows** (like MC-1's): M29.a, M29.b and M29.d cite P-2's `EntryPoint` exit field and `__dso_handle` (P-1r R5); M31.b's `TrailerExit.cpp` edits name the file that P-2 creates or extends; the CLITrailerTest floors of M28-M35 rise by P-2's cases; 5.13.6 marks slot `P0b` implemented, and M28's and M31's llc-test roles keep any dotnet RUN line P-2 adds to `pipeline.ll`.
 
 ### M28. Native-callable function pointers and threads
 
@@ -12951,6 +15807,8 @@ Status.md: atomics as built (inline 1-8 bytes; lock path needs `-latomic` on Lin
 - **Tests.** Thread tests deterministic and bounded; hand-written Windows files only for 16- and 24-byte atomics; nothing vendored; harness self-tests written by M30.j, not M30.e.
 
 **Rebuild cost.** `MSILInstrMemory.td` and `MSILISelLowering.h` rebuild the whole MSIL target (TableGen); `BCLMembers.def` 21 objects; `Clang.cpp` and `SemaStmt.cpp` one large TU each; `NativeLibraries.cpp`, `Trailer.cpp`; a CMake regeneration; relinks; the helper archives: about 12-18 minutes, and G1b's six-triple archives 3-5 more (not counted). Gate after the build, quiet estimate 42-51 minutes: G0 and fetch 1, il-snapshot 5, unit tests 1, calibration 1, net-core 7-8, p3-full 4-6, harness 2-3, programs-hosted 6-8 (both), mscorlib-safe 1, step 26 2, wsl-p3 5-7, full upstream-hooks 3, G6-G9 5-7 (G7 builds SQLite natively at two levels on both OSes). Over 30 normalized minutes, through section 12 rows and in this order (5.17.7): step 26 moves to the post-commit run, then G4's run 2. G3c stays (M30's harness change modifies files), and steps 22-23 stay (an exit criterion names them); a total still above 30 is recorded, not a failure.
+
+**P-3. Threads, per-thread state and `-static` with shared state** (an outline; two milestones; contract 5.19.11 at major 1 and 5.19.12; drafted after M30's commit; decisions cited as brief Q<n> are the decision brief answers (user, 2026-11-01)). After M28's generic trailer pieces and M30's inline atomics: C function pointers to delegates (MC-3's piece, over M28's `getDelegateConstructor`), which also give `c.dll` its `AppDomain.ProcessExit` subscription (`__cxa_finalize(0)` and the final flush, run once against `exit` through the EXIT sub-block's state word, so C's buffering rules apply in every host from here; `__llvm_libc_set_c_main` keeps its export); `pthread`/`thrd` over `System.Threading.Thread`; the per-thread C block, created here (errno moves into it at offset 12; `__llvm_libc_errno` keeps its ABI), one per thread in the named thread data slot `<msil>v1:libc.thread` and freed for a dead thread by a trailer-defined finalizable holder `'<msil>CBlock'` (a K3 type created only in `c.dll`'s and `libc.a`'s outputs, with its own TrailerDefs row; a P-3 re-pin row lets M31.b reuse the holder's shape for `'<msil>Thread'`), with tss keys as llvm-libc's 32-bit keys and their table in the root's TSS sub-block, and thread-exit lists; `strtok`'s state per process (brief Q34). llvm-libc switches to `LIBC_THREAD_MODE_PLATFORM`, where `LIBC_THREAD_LOCAL` becomes `thread_local` (M31's feature, which comes after P-3, and a per-copy object that would break the shared state), so every shipped `LIBC_THREAD_LOCAL` or raw `thread_local` site (`error_to_string.cpp`, shipped since P-1b; `l64a.cpp`; `randomness.h`; `signal_to_string.cpp` if signals ship; `threads/thread.cpp`'s `tss_values` and `atexit_callback_mgr` if built; P-3's root WP enumerates them by grep) gets a `LIBC_TARGET_OS_IS_DOTNET` branch that keeps the object in the C block's thread-local extension, a field each, frozen with the block, and the gate checks that no shipped object has a `.tdata`/`.tbss` section or a TLS reference. `rand`/`srand` join the entry-point and append-only export lists (their `cpp::Atomic` needs M30); the wait buckets are interned-name Monitors `<msil>v1:libc.wait:<i>`; the portable lock path for the generic `__atomic_*` names uses interned-name Monitors `<msil>v1:atomic.lock:<i>`, frozen under T11 at this commit (P-1r R6). The process root lives in AppDomain data (`<msil>v1:libc.root`) and is created under the interned-name lock `<msil>v1:libc.root.lock`; its sub-blocks follow 5.19.11 (the shared descriptor offset, if descriptors exist, applied with `FileStream.Seek` on unbuffered streams on every runtime; `RandomAccess` not used). `libc.a` is installed in the sysroot, T-P9 and T-P11 are lifted and `-static` is enabled, with every copy, `-static` or `c.dll`, sharing one C state; the layout freezes as major 1 at P-3's commit, an append-only ABI between libc releases (brief Q32 (a)); a copy that finds a root or sub-block of an unknown major or a failed layout check writes both versions to stderr and calls `Environment.FailFast` (brief Q33 (a)), never a private copy. The upstream fixes come with it (the recursive `FILE` lock; `exit` closing streams). `-static` copies keep code, the `getopt` variables and `__dso_handle` private. The portable legs gain LTO runs (brief Q13 (a)); tests in `msil/test/Portable/06-threads` and `07-static`. **P-3's re-pin rows:** M31's thread-exit rule on dotnet (P-1r R7, R19), M31.b's reuse of the holder shape, T11's portable freeze, the CLITrailerTest floors of M31-M35.
 
 ### M31. thread_local and thread-exit destructors
 
@@ -14637,6 +17495,8 @@ GettingStarted.md: C programs on the host C library (`build-builtins.py` after `
 
 **Rebuild cost.** No C++ change: step 2 is a no-op build and run-m1-gate.ps1's configure reruns CMake (about 1 minute); a fix loop rebuilds per its files. Gate after the build: steps 1 and 3-18 about 12-18 minutes (`--all` 3-5); step 19, the measured phase gate, estimated 3-6 hours on the shared 4-core host (5.17.11: M23's 184-339 minutes plus 30-40%, less 25-35% for 5.17.10), never cut (row 'Q32 amended'); steps 20-33 about 30-40 minutes (Rust 17-25, `p3-full` 3-5). Section 1 rule 8 reruns every step in every round; under row 'M35 gate re-runs (documentation-only rounds)', a round that changes only M35.d's and M35.e's files reruns steps 27, 32 and 33 and keeps the other steps' results of the last round in which they passed.
 
+**P-4. msil32-unknown-dotnet** (a note; drafted after M35). Until P-4, clang accepts `msil32-unknown-dotnet` for preprocessing and syntax checks, and the backend, `PEOptions::get` and msil-ld refuse it with T-P1; no helper archive, sysroot or `c.dll` exists for it. P-4 owns (5.18.11 P4-3): the address-width parametrization of the backend (about 100 I64 sites) and the D2 mirror; 4-byte pointers in the trailer, the link-info record, constructor slots and function-address leaves; the envelope and guard for a 32-bit process (an msil32 assembly in a 64-bit process is refused loudly, the mirror of T-P10); 4-byte `Interlocked` rows; the TLS header variant; an x86 leg; and the C library's msil32 items (`jmp_buf` size, `sigset_t` words, `clock_t`, `rand`'s cell, the msil32 export list). msil32's data layout, ABI column (`_BitInt` limit 64, no `__int128`), ABI rules and predefines freeze at P-4's commit, as msil64's froze at P-1b's. P-4's own gate runs its own portable directories with `msil-lit.ps1` (brief Q11 (a), the decision brief answers (user, 2026-11-01)).
+
 ## 7. Phase outlines (phases 2-5)
 
 Phase 2 is planned in full: milestones M12-M23 (section 6) with the contracts of sections 5.6-5.12, from the recon in [recon/p2/](recon/p2/) and the user's decisions of 2026-10-21 (section 10). P2-A, P2-B and P2-C below say what each part covers and which milestones implement it; M12 (backlog fixes) and M23 (the Phase 2 exit) belong to none of them.
@@ -15805,6 +18665,30 @@ the change text ``fix-loop ownership: `<path>` -> <agent>``, for example
 | 2026-11-02 | M28 | fix-loop ownership: `msil/test/harness/ctest-lists.test` -> M28.k | the same row: RUN lines 198 and 200 check the texts that name 00189's diag entry |
 | 2026-11-02 | M26 | M26's exit criterion 'every M26 diagnostic is pinned with its whole text at -O0 and -O2' met after the leftover audit: the four `cli::classifyCall` reason lines of msil-ld's variadic signature mismatch (`the call passes <N> fixed argument(s) before the variadic ones, but the definition takes <M> fixed parameter(s)`, `only the definition is variadic`, `only the call is variadic`, `the IL signatures of a variadic call and definition must match exactly`) are pinned by `lld/test/MSIL/obj-variadic.test` (including a new case for the last text) and `obj-signatures.test`, and LowerCall's linked backstop `call of native variadic function '<f>' (<module>) was not expanded for MSIL` by a linked `aarch64-apple-macosx-msil` part of `llvm/test/CodeGen/MSIL/variadic-errors.ll` at -O0 and -O2; CHECK lines only, added by the orchestrator before the commit and run by hand | M26 leftover audit (two reproduced test gaps); user decision (2026-11-02): add the checks before the commit rather than route them to M28 |
 | 2026-11-02 | M26 | fix-loop ownership: `llvm/docs/MSIL/Design.md` -> M26.m | the user's approval (2026-11-02) of Design.md item 24, recorded at M26's commit, amends Design.md 4.7 ('Calling native variadic functions', items 1 and 2); row 'Design.md item 24 (user-approved; proposed in Status.md section 6)' |
+| 2026-11-02 | - | Contract 5.18 'The portable target (msil32/msil64-unknown-dotnet)' added (P-1a and P-1b; parts for P-2 and P-3; msil32 at P-4): 5.18.1 triples and object format, 5.18.2 clang TargetInfo and ABI (wasm-style spellings, signed `char`, `int` `wint_t` with `WEOF` -1 of type `int`), 5.18.3 predefines, 5.18.4 driver and sysroot, 5.18.5 the dotnet link-rule family, 5.18.6 msil-ld on the portable triples, 5.18.7 the PE image envelope and the width guard, 5.18.8 the helper archive, 5.18.9 what stays loud (rows for 5.15.11), 5.18.10 test legs and lit features, 5.18.11 msil32 reserved for P-4, 5.18.12 which step implements what, 5.18.13 upstream files (additions to 5.13.5), 5.18.14 interfaces; shared texts T-P1 to T-P4, T-P6 to T-P14 and the N6 line | P-0 (recon copies `llvm/docs/MSIL/recon/p3/portable-target.md`, `portable-linkrules.md`, `portable-loader.md`); user decisions of 2026-11-01; decision brief answers (user, 2026-11-01) |
+| 2026-11-02 | - | Contract 5.19 'The managed C library (LLVM libc on the portable target)' added (P-1b, completed by P-2 and P-3): 5.19.1 rules (absent until real: an absent function is an undeclared-function error through the installed headers and a link error with N6's line through the program's own prototype), 5.19.2 stages, 5.19.3 tree layout and build, 5.19.4 entry points per stage, 5.19.5 errno (EXTERNAL mode over one exported cell until P-3; numbering: llvm-libc's generic set extended, frozen at P-1b), 5.19.6 the portable C ABI item by item, 5.19.7 `c.dll` and its append-only export list `msil/lib/libc/msil64-unknown-dotnet.exports`, 5.19.8 the three C library modes, `libc.a` and `-static`, 5.19.9 the stdio model and 5.19.10 the rest of the P-2 OS layer, 5.19.11 shared state (homes, discovery names, layouts and versioning; major 0 from P-2, major 1 frozen at P-3), 5.19.12 threads and `-static` (P-3), 5.19.13 .NET Framework 4.8 and modern .NET, 5.19.14 changes to upstream `libc/` (conflict surfaces), 5.19.15 tests and the oracle, 5.19.16 what fails loudly by stage, 5.19.17 interfaces | P-0 (recon copies `llvm/docs/MSIL/recon/p3/portable-libc.md`, `portable-state.md`); user decisions of 2026-10-22, 2026-10-25, 2026-10-31 and 2026-11-01; decision brief answers (user, 2026-11-01) |
+| 2026-11-02 | - | Contract 5.20 'Managed calls from C and C++, stage 1 (MC-1)' added: 5.20.1 model, 5.20.2 attribute grammar, 5.20.3 Sema checks, 5.20.4 IR representation (the declaration named `__msil_mc.<symbol>`), 5.20.5 lowering (a non-call use of a managed declaration is T-M10 on every triple), 5.20.6 output forms, 5.20.7 msil-ld binding and checks, 5.20.8 exceptions, 5.20.9 object handles, 5.20.10 strings and arrays, 5.20.11 triples, verification and tests, 5.20.12 contract amendments, 5.20.13 the `BCLMembers.def` block (15 rows), 5.20.14 deferred to the fuller goal, 5.20.15 files and roles, 5.20.16 interfaces; shared texts T-M1 to T-M17 | P-0 (recon copy `llvm/docs/MSIL/recon/p3/portable-mc1.md`); user goal of 2026-10-22 and program order of 2026-11-01; decision brief answers (user, 2026-11-01) |
+| 2026-11-02 | - | Section 6 gains the milestone texts `### P-1a.` (the msil64-unknown-dotnet toolchain without a C library; WPs P-1a.a to P-1a.n) and `### P-1b.` (freestanding llvm-libc as the shared assembly c.dll; WPs P-1b.a to P-1b.h) after M26, followed by the P-1r paragraph (a read-only orchestration pass after P-1b's commit whose rows R1-R21 land in their own `[MSIL] Plan:` commit; no heading, so plan-check and the extractor never treat it as a milestone); `### MC-1.` (managed calls, stage 1; WPs MC-1.a to MC-1.i) after M27, followed by the P-2 outline; the P-3 outline after M30; the P-4 note after M35. The milestone texts of P-2, P-3 and P-4 are drafted later (after MC-1's, M30's and M35's commits). Phase 3's exit gate and numbering and the M27-M35 gates are unchanged apart from P-1r's and MC-1's re-pin rows | program order (user, 2026-11-01, option A); P-0 drafts |
+| 2026-11-02 | - | 5.13.5 exemptions (each changed upstream file with its hooks-manifest block, L6; each new file in an upstream directory with its own `fork-only` line): P-1a (5.18.13): `llvm/include/llvm/TargetParser/Triple.h`, `TripleName.def`, `llvm/lib/TargetParser/Triple.cpp`, `TargetDataLayout.cpp`, `llvm/lib/MC/TargetRegistry.cpp`, `llvm/include/llvm/IR/RuntimeLibcalls.td`, `llvm/lib/Transforms/IPO/ExpandVariadics.cpp` (a portable class inside M26's block), `clang/lib/Basic/Targets.cpp`, `clang/lib/CodeGen/CodeGenModule.cpp`, `clang/lib/CodeGen/TargetInfo.h`, `clang/lib/CodeGen/CMakeLists.txt`, `clang/include/clang/Basic/DiagnosticDriverKinds.td`, `compiler-rt/lib/builtins/int_lib.h` (`none` plus `fork msil/test/Portable/00-freestanding/helpers.test`) and the existing hook blocks of `llvm/unittests/TargetParser/TripleTest.cpp` and `llvm/unittests/MC/TargetRegistry.cpp`, with `fork-only` lines for `clang/lib/CodeGen/Targets/MSIL.cpp`, `clang/test/Preprocessor/init-msil-portable.c` and `clang/test/Driver/msil-dotnet.c`; P-1b (5.19.14): the ten upstream libc files `libc/src/__support/macros/properties/os.h`, `libc/src/__support/macros/properties/architectures.h`, `libc/cmake/modules/LLVMLibCArchitectures.cmake`, `libc/include/llvm-libc-macros/generic-error-number-macros.h`, `libc/src/__support/StringUtil/platform_errors.h`, `libc/src/__support/OSUtil/io.h`, `libc/include/llvm-libc-macros/math-macros.h`, `libc/include/llvm-libc-types/__jmp_buf.h`, `libc/include/llvm-libc-types/struct_tm.h` and `libc/src/time/time_utils.h`, each with `none llvm-libc's tests are not built by the fork` plus a `fork msil/test/Portable/01-libc/<test>.test` line, and one `fork-only` line per new file under `libc/config/dotnet/` and `libc/src/__support/OSUtil/dotnet/` and for `libc/src/__support/StringUtil/tables/dotnet_platform_errors.h`; MC-1 (5.20.12 item 1): `clang/include/clang/Basic/Attr.td`, `AttrDocs.td` and `DiagnosticSemaKinds.td` (`MC-1/lists`), `clang/lib/Sema/SemaDeclAttr.cpp`, `SemaDecl.cpp`, `clang/lib/Sema/CMakeLists.txt` and `clang/lib/CodeGen/CodeGenModule.cpp` (`MC-1/clang`), with `fork-only` lines for `clang/test/Sema/attr-msil-method.c`, `clang/test/SemaCXX/attr-msil-method.cpp`, `clang/lib/Sema/SemaMSILManagedCall.cpp` and `clang/lib/Sema/SemaMSILManagedCall.h`. The closing paragraph of 5.13.5 ('compiler-rt is not edited in Phase 3'; 'No Phase 3 milestone edits `Attr.td`, ... `RuntimeLibcalls.td` ...') and the matching sentence of section 11's Phase 3 summary name these exceptions | the portable target and MC-1 need these upstream edits (P-0 findings: `int_lib.h`'s one blocker, the Triple recursion, RuntimeLibcalls' MSIL system library, the llvm-libc target selectors, the attribute records) |
+| 2026-11-02 | P-1b | Upstream conflict surface (decision brief answers Q15 (b), the user's choice): P-1b.b extends llvm-libc's generic errno set in place in `libc/include/llvm-libc-macros/generic-error-number-macros.h`, unconditionally: the 44 names of `src/__support/StringUtil/tables/posix_errors.h` that it lacks, with Linux asm-generic's numbers except `EDEADLK` 75, and the aliases `EWOULDBLOCK` and `EOPNOTSUPP` (82 names, 80 numbers; the 36 existing names keep their numbers, `EOVERFLOW` 35). Every llvm-libc full build of the generic family (the baremetal configurations, the GPU targets and any target defining neither `__linux__` nor `__APPLE__`) gains these macros in its `<errno.h>`; no existing number changes, and a program on those targets that defines one of the names itself gets a macro redefinition. `libc/hdr/errno_macros.h` and `libc/include/errno.h.def` do not change, and no dotnet errno header family exists. The file's hook block records this effect outside the fork; P-1b.e's `01-libc/datamodel-headers` test pins every number; if an upstream merge brings a different number for an added name, the merge keeps the frozen number by moving that name under a `__dotnet__` branch of the same header, and the merge workflow builds the portable libc and runs P-1b's tests after each merge (5.19.5, 5.19.14) | decision brief answers (user, 2026-11-01): Q15 (b) instead of the recommended dotnet header family; an edit to a generic upstream header reaches targets other than the fork's, so every upstream merge must see it |
+| 2026-11-02 | - | Milestone ids P-<n>[a-z] and MC-<n>: 5.13.1-5.13.7 and 5.17 apply to them as to M24-M35; role names are `<id>/<role>`; a Depends-on line names WPs of its own milestone only. `msil/utils/plan-check.py` accepts `(M\d+\|P-\d+[a-z]?\|MC-\d+)` in MILESTONE_RE, WP_RE, AMENDMENT_RE's milestone cell and main()'s milestone argument; its malformed-heading guards become `^### (M\d\|P-\d\|MC-\d)` and `^#### (M\|P-\|MC-)` (section 7's `### P2-A.`/`### P3-A.` headings stay ignored), with self-test cases for a P-1a milestone, an MC-1 fix-loop row, `### P2-A.` and `scope P-1a`; this commit carries the change | plan-check rejects P-/MC- ids today (a P-1a fix-loop row would make every command exit 2) |
+| 2026-11-02 | P-1a | R21 bend (user-approved): P-1a's root WPs P-1a.a and P-1a.b land the upstream header edits `llvm/include/llvm/TargetParser/Triple.h`, `TripleName.def`, `llvm/include/llvm/IR/RuntimeLibcalls.td`, `clang/include/clang/Basic/DiagnosticDriverKinds.td` and `clang/lib/CodeGen/TargetInfo.h` mid-phase, with the fork headers `ImageLayout.h`, `Trailer.h`, `BCLMembers.def` and `PEWriter.h`, isolated so the gate pays one rebuild (union 2,481 objects, about 159 job-minutes), never while a post-commit run is active | user decision (decision brief answers Q10, user, 2026-11-01); P-0 rebuild measurement from `.ninja_deps` |
+| 2026-11-02 | - | Design.md edits (user-approved, adjusted to the decision brief answers): DM-1 goal 6; DM-2 the non-goals' managed-calls sentence; DM-3 section 3's triples paragraph; DM-4 the table's portable rows; DM-5 a portable-triples bullet (`int` `wint_t` with an `int` `WEOF` of -1, Q5 (b)); DM-6 the pointer-size bullet (the width and byte-order guard); DM-7 4.3's heap sentence (Q29 (a): a two-pointer header over `Marshal.AllocHGlobal` on every runtime); DM-8 4.4's portable threads; DM-9 4.5's representation bullet; DM-10 4.7's last bullet; DM-11 5.1's shape; DM-12 5.2's native-library step; DM-13 5.2's `-l` order (shared-first on the portable triples only, Q8 (a)); DM-14 section 6's portable libc bullet; DM-15 the 'No state shared' bullet (two substitutions); DM-16 the phase table's phase 3 row; DM-17 section 8's triple and ABI-lowering bullets (two substitutions) | user approval (decision brief answers Q12, user, 2026-11-01) |
+| 2026-11-02 | - | PE32 for the portable triples: 5.7.7 (the `PEOptions` comment 'Error until phase 5 (PE32, the mscoree stub, .reloc)' gains the measured reason that the portable triples write a stubless PE32/I386 ILONLY envelope, and the 'PE32 needs the mscoree stub and .reloc' rationale is dropped; 'PE32+, with the classic 128-byte DOS header' names the exception), 5.7.10 (the canonical `Format: PE32+ machine=0x8664` line and 'llvm-cil-copy reads an IL-only PE32+ image'), 5.8.2 O1 ('PE32+ image. COFF Machine from the triple') and section 10 Q1/B2 ('netmodule (PE32+ envelope') each name the portable PE32 envelope, and `cli-corpus-check.py`'s O1 accepts it; 5.18.7's rule: never `IMAGE_FILE_RELOCS_STRIPPED` on a DLL, never `IMAGE_FILE_32BIT_MACHINE`, never 32BITREQUIRED or 32BITPREFERRED on msil64 | P-0 loader measurement: a stubless PE32/I386 ILONLY image runs as a 64-bit process on .NET 8, .NET 10, Framework 4.8 (direct start and LoadFrom) and WSL .NET 8/10 |
+| 2026-11-02 | P-1a | 5.11.7 amended: `check-mscorlib-safe.py` proves each member public as well as present (a `call` or `newobj` probe, or reflection's `IsPublic` on Framework), with a self-test case for an internal member; P-1a's harness WP P-1a.i makes the change before P-1a's guard rows are proved, P-1r's audit re-runs the fixed tool over every mscorlib-safe row planned for M27-M35, and MC-1's gate re-proves MC-1's rows with it | P-0 (recon copy `llvm/docs/MSIL/recon/p3/portable-mc1.md` section 3.5): the `ldtoken` probe skips the access check, so Framework 4.8.1's internal `Environment::get_TickCount64()` passes it while a real call throws `MethodAccessException` |
+| 2026-11-02 | - | 5.17.4 allowance: portable tests before P-2 have no output channel, so their transcripts are the status line of self-checking programs, hand-written under `%{msil_expected_rule}` with the reason 'portable: no stdout before P-2; the program checks itself'; `msil/test/README.md` lists every use; from P-2 the oracle is a host-native transcript and the allowance ends for new tests | P-1a, P-1b and MC-1's portable tests run before the managed libc has stdout |
+| 2026-11-02 | - | 5.17.6 legs `portable-smoke` (Windows: .NET 10, TC=0, a Framework 4.8 direct start, `msil_require_x86=1` for the guard test) and `portable-smoke-wsl` (WSL .NET 10, TC=0): the user's portable smoke leg as a Windows/WSL pair split by name, as `gc-churn`/`gc-churn-wsl`; defined by P-1a, extended by P-1b and MC-1; tag `Portable`, never `Exit`, run by `lit-legs.ps1 -Portable` and `lit-legs.sh --portable`. 5.17.11's post-commit invocation becomes `run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -Portable -CorpusCache <cache>`; M35's gate keeps `-Exit` only, so M35's phase gate (default, `Wsl` and `Exit` legs), `exit-report.py` ('', `Wsl`, `Exit`) and `check-matrix.py` never select the pair. `msil/test/Portable/lit.local.cfg` marks its tests UNSUPPORTED unless the feature `msil-triple-portable` is set, net-core filters out `Portable/`, and `gate-select.py`'s SKIPPED_DIRS gains `Portable`. The portable archive and `c.dll` are built only by the legs' stamped setup and by the P-steps' explicit gate steps, never by `ci/build.ps1`/`build.sh` or the default `build-builtins.py` set, so no M27-M35 gate step changes. A P-step's own gate runs its own portable directories with `msil-lit.ps1` (decision brief answers Q11 (a)); MC-1's gate runs none; a post-commit failure becomes a fix WP of the next milestone or P-step | user decision (2026-11-01: portable smoke leg in post-commit runs only; M27-M35 gates as written); review finding: an `Exit` tag would put the leg into M35's gate |
+| 2026-11-02 | - | 5.13.3 gains rows for the new files (`P-1a/target` `llvm/lib/Target/MSIL/MSILPortable.{h,cpp}`; `P-1a/cli` `llvm/lib/CLI/TrailerGuard.cpp`; `P-1a/clang` `clang/lib/CodeGen/Targets/MSIL.cpp`; `P-1a/lld` `lld/MSIL/CLibraryNames.def`; `P-1b/libc-config` `libc/config/dotnet/`; `P-1b/libc-port` `libc/src/__support/OSUtil/dotnet/` and `libc/src/__support/StringUtil/tables/dotnet_platform_errors.h`; `P-1b/build` `msil/utils/build/build-libc.py` and `msil/lib/libc/`; `MC-1/lists` `llvm/include/llvm/CLI/ManagedSignature.h`; `MC-1/clang` `clang/lib/Sema/SemaMSILManagedCall.{h,cpp}`; `MC-1/target` `llvm/lib/Target/MSIL/MSILManagedCalls.{h,cpp}`; `MC-1/lld` `lld/MSIL/ManagedCalls.{h,cpp}`); 5.13.4 gains P-1a, P-1b and MC-1 rows from their Roles paragraphs (hot files: P-1a/target, P-1a/lists, P-1a/cli, P-1a/lld, P-1a/builtins; MC-1/lists, MC-1/target; P-1b has none); L7's milestone list gains P-1a, P-1b and MC-1 | L2-L4 and L7 rely on these tables |
+| 2026-11-02 | - | 5.13.1 L2: a behaviour-preserving substitution of a `SectionRules` comparison, selection or default by a named predicate of `llvm/include/llvm/CLI/ImageLayout.h` (`cli::getSectionRules`, `cli::bindsNatively` and the link-rule predicates) is a fourth permitted non-hook edit kind in a hot file (after retiring a diagnostic, a verbatim move and a verified fix-loop change), proved by `il-snapshot.py --compare` and `det-manifest.py compare` in the milestone's gate; P-1a's gate (G6) also fails on any `SectionRules::` enumerator in `llvm/lib/CLI`, `lld/MSIL` or `llvm/lib/Target/MSIL` outside `ImageLayout.cpp` on a line that does not start with `case` or `//` | P-0, rechecked on M26's tree: 10 `==` comparisons, 3 `isOSWindows() ? COFF : ELF` selections, an LTO constant, a default argument and two member defaults would give a third rule set COFF rules at some sites and ELF rules at others |
+| 2026-11-02 | - | 5.13.7 B2: a block heading may name a portable or managed-calls step instead of `M<n>` (`// P-1a: <purpose> (plan 5.18)`, `// MC-1: managed calls from C and C++, stage 1 (plan 5.20)`); B7 gains P-1a's four guard rows (5.18.7: `PlatformNotSupportedException` and its `.ctor(string)`, `BitConverter` and `GetBytes(int32)`) and MC-1's fifteen rows (5.20.13) | the guard and MC-1 append mscorlib-safe BCL rows |
+| 2026-11-02 | MC-1 | 5.14.1 and 5.15.1 rule 4: a fifth delivery kind, K5 managed-call stubs (internal methods `__msil_mc.<symbol>` that P0 makes from attributed declarations, with AsmPrinter-written bodies that access one .NET member named by IR attributes); 5.14.1's last sentence becomes 'no IR declaration names a BCL member, except a managed-call declaration (K5); other code that needs a .NET API calls a K2 definition'; 5.14.2's N3 row adds `__msil_mc.*` (never a SYMTAB symbol, never bound by late binding); 5.13.6's P0 list gains `MSIL::createManagedCallStubs` between M24's and M33's calls (no slot added, `pipeline.ll` unchanged) | contract 5.20.4-5.20.5 and 5.20.12 items 2-3 |
+| 2026-11-02 | - | 5.14.2: the class line N6 (an undefined C library name on `*-unknown-dotnet`: `>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide` when an input named `c.dll` takes part, else `>>> a C library function; link the managed C library c.dll (-lc)`) and N2's portable line (`__atomic_*` names undefined on dotnet: the sized ones until M30's inline lowering, the generic lock-path ones until P-3); 5.14.4 T9's portable carve-out names 5.19.11 (the C library's state, found by the libc's own code; the toolchain's private state stays per output) | contracts 5.18.6, 5.18.9 and 5.19.11 |
+| 2026-11-02 | - | 5.15.11 gains the row 'Managed calls (MC-1)' (until MC-1, `msil_method` is an unknown attribute and the call an undefined-symbol link error; from MC-1, 5.20's rules, and taking the address is T-M10) and 5.15.12 a row for MC-1 covering 5.20; their portable column is P-1r's row R12 | contract 5.20.12 items 6-7 |
+| 2026-11-02 | M32 | 5.15.10 and M32.a: the type row `CLI_BCL_TYPE(String, "System", "String", true)` exists from MC-1's block (5.20.13); M32.a drops it and appends only `String_Concat`, on MC-1's `String` type; M32's `--print-bcl-table` and B7 pins follow | a `CLI_BCL_TYPE` Id is an enumerator in `BCLMembers.h`, so a second `String` row would fail M32's gate build (contract 5.20.12 item 13) |
+| 2026-11-02 | - | 5.17.7 G1b's milestone list gains P-1a (it changes `msil/lib/builtins/sources.txt`); 5.17.13's directory list gains `msil/test/M3/13-managed-calls` (MC-1, run by `p3-full` and `wsl-p3`) and `msil/test/Portable/{00-freestanding,01-libc,02-managed-calls,03-sjlj,90-loud}` (run only by the `Portable` legs and the P-steps' own gate steps); 5.17.4's hand-written list gains MC-1's managed-only results | P-1a's archive globs touch the host triples; new test directories |
+| 2026-11-02 | - | P-0 recon copies: the six reports, each with its verifier section folded in, go to `llvm/docs/MSIL/recon/p3/portable-{target,linkrules,loader,libc,state,mc1}.md`, and the artifacts the contracts and milestone texts read to `llvm/docs/MSIL/recon/p3/portable-<key>-files/` (`portable-loader-files/guardB.il`, `dump.txt`, `wide.c`; `portable-libc-files/p1bset.py`, `overlay3/src/__support/libc_errno.h`, `run/{prog,fmt,fpid}.c`; `portable-mc1-files/mc1proto.il`, `bx.il`, `utf.il`, `enc.txt`, `probe-1.{il,out}`, `sec4.txt`), scrubbed of machine paths; every Reads line of P-1a, P-1b and MC-1 cites these copies | section 9's 'Lost inputs' rule: what a WP reads is in the repository |
+| 2026-11-02 | - | FeatureIdeas.md item 3 (typed and delegate-accepting export overloads, 'scheduled with the managed-calls goal') notes that MC-1 does not include them and that they stay with the fuller managed calls (orchestrator edit, L8) | contract 5.20.12 item 9 |
+| 2026-11-02 | - | Decision brief answers (user, 2026-11-01; the brief is `llvm/docs/MSIL/recon/p3/portable-decision-brief.md`; all as recommended except Q5 and Q15, which are the user's choices against the recommendation): Q1 (a): the width and byte-order guard throws `PlatformNotSupportedException` from `<Module>::.cctor`; Q2 (a): the guard also refuses big-endian runtimes, through `BitConverter.GetBytes(1)[0]`; Q3 (a): P/Invoke (explicit import attributes) is refused on the portable triples (T-P2); Q4 (a): wasm-style type spellings (`size_t` is `unsigned long` and `int64_t` is `long long` on both widths); Q5 (b), the user's choice against the recommended (a): `wint_t` is `int` (the wasm choice), `char` stays signed, and `WEOF` is -1 of type `int`; llvm-libc's `WEOF` and `WINT_MIN`/`WINT_MAX` follow the compiler's `__WINT_TYPE__`, so llvm-libc needs no dotnet branch or header choice for them (5.18.2, 5.19.6); Q6 (a): `max_align_t` is clang's natural 8, with `malloc` 16-aligned; Q7 (a): constructors receive no arguments; Q8 (a): shared-first `-l` on `*-unknown-dotnet` only; Q9 (a): the portable `clang_rt.builtins` lives in the resource directory; Q10: the R21 bend in P-1a.a and P-1a.b is approved; Q11 (a): the P-steps' own gates run their own portable directories with `msil-lit.ps1`, and MC-1's exit criteria are proved on the host triples; Q12: Design.md edits DM-1 to DM-17 approved, adjusted to these answers (DM-5 says `int` `wint_t`; DM-7 is the Q29 (a) version); Q13 (a): no portable LTO before P-3; Q14 (a): an empty `libm.a` ships in the portable sysroot; Q15 (b), the user's choice against the recommended (a): the errno numbering is llvm-libc's generic set extended in `libc/include/llvm-libc-macros/generic-error-number-macros.h`, `EOVERFLOW` keeps llvm-libc's 35, and no dotnet errno header family is made (an upstream conflict surface that changes baremetal and GPU users, recorded by its own row); Q16 (a): errno over one exported cell until P-3, a documented exception to fail-loudly in Status.md; Q17 (a): `c.dll`'s exports are a generated, checked-in, append-only `--export-list`; Q18 (a): the time-zone-dependent functions are absent until P-2; Q19 (a): `struct tm` has `tm_gmtoff` and `tm_zone`; Q20 (a): no fenv functions and `math_errhandling` is `MATH_ERRNO`; a software fenv only on the user's request; Q21 (a): signals are absent until a signal design, with Linux numbers then; Q22 (a): deploying `c.dll` next to a program is the user's or the build system's job; Q23 (a): `msil_method(type, member, signature[, assembly])` plus a repeatable `msil_catch(exception, code)`; Q24 (A): listed exceptions map to codes through a per-stub filter, unlisted ones escape, and MC-1 stays after M27; Q25 (a): non-enum value types as opaque boxed handles; Q26 (a): throwing UTF-8 and UTF-32 decoders; Q27 (a): no delegates in MC-1 (they come at P-3, MC-3's piece); Q28 (b): `c.dll`'s standard streams stay unbuffered until the dotnet `'<msil>Main'` calls the exported `__llvm_libc_set_c_main()` before `main` (one trailer item at P-2, in 5.18's LR11 and the P-2 outline); Q29 (a): the heap is a two-pointer header over `Marshal.AllocHGlobal` on every runtime, revising the 2026-10-31 mapping; Q30 (a): `c.dll` binds `System.*` by `--reference` to the build host's Framework 4.8 implementation assemblies (decided at P-2); Q31 (a): `LowerGlobalDtorsPass` to `__cxa_atexit`, with `.fini_array` an error; Q32 (a): provisional layout major 0 from P-2, major 1 frozen at P-3's commit; Q33 (a): a copy that finds an unknown major or a failed layout check calls `Environment.FailFast` after writing both versions to stderr; Q34: `strtok` state per process; tss keys are llvm-libc's 32-bit keys with their table in the root; Q35 (a): the `getopt` variables are per copy | user decisions (2026-11-01) |
 
 ## Appendix A. Review dispositions (plan v1 -> v2)
 

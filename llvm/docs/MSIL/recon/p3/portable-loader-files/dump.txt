@@ -1,0 +1,128 @@
+img/pe32-ilasmnostub.dll: 3084 bytes PE32 machine=014c chars=2103 imagebase=400000 sub=3 dllchars=8540 entryRVA=296e stub=ff2500204000000000000000 import=mscoree.dll!_CorDllMain
+    dirs: IMPORT=2918+53, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=974 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=00000000
+img/pe32-ilasmnostub.exe: 3084 bytes PE32 machine=014c chars=0103 imagebase=400000 sub=3 dllchars=8540 entryRVA=296e stub=ff2500204000000000000000 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=2918+53, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=974 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe32-pref32.exe: 3584 bytes PE32 machine=014c chars=0102 imagebase=400000 sub=3 dllchars=8540 entryRVA=296e stub=ff2500204000000000000000 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=2918+53, BASERELOC=4000+c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=974 ch=60000020), .reloc(va=4000 vs=c ch=42000040)
+    CLI: v2.5 flags=20003 (ILONLY|32BITREQUIRED|32BITPREFERRED) entrytoken=06000004
+img/pe32-stripped.dll: 3072 bytes PE32 machine=014c chars=2102 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2008+48
+    sections: .text(va=2000 vs=974 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=00000000
+img/pe32-stripped.exe: 3072 bytes PE32 machine=014c chars=0102 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2008+48
+    sections: .text(va=2000 vs=974 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe32-stub.dll: 3584 bytes PE32 machine=014c chars=2102 imagebase=400000 sub=3 dllchars=8540 entryRVA=296e stub=ff2500204000000000000000 import=mscoree.dll!_CorDllMain
+    dirs: IMPORT=2918+53, BASERELOC=4000+c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=974 ch=60000020), .reloc(va=4000 vs=c ch=42000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=00000000
+img/pe32-stub.exe: 3584 bytes PE32 machine=014c chars=0102 imagebase=400000 sub=3 dllchars=8540 entryRVA=296e stub=ff2500204000000000000000 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=2918+53, BASERELOC=4000+c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=974 ch=60000020), .reloc(va=4000 vs=c ch=42000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe32-writer-32bm.exe: 3072 bytes PE32 machine=014c chars=0122 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe32-writer-pref32.exe: 3072 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=20003 (ILONLY|32BITREQUIRED|32BITPREFERRED) entrytoken=06000004
+img/pe32-writer-req32.exe: 3072 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=3 (ILONLY|32BITREQUIRED) entrytoken=06000004
+img/pe32-writer.dll: 3072 bytes PE32 machine=014c chars=2022 imagebase=10000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=00000000
+img/pe32-writer.exe: 3072 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe64-ilasm-arm64.exe: 3072 bytes PE32+ machine=aa64 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=918 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe64-ilasm.dll: 3584 bytes PE32+ machine=8664 chars=2022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=297e stub=48a10020004001000000ffe0 import=mscoree.dll!_CorDllMain
+    dirs: IMPORT=2928+53, BASERELOC=4000+c, IAT=2000+10, CLR=2010+48
+    sections: .text(va=2000 vs=98a ch=60000020), .reloc(va=4000 vs=c ch=42000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=00000000
+img/pe64-ilasm.exe: 3584 bytes PE32+ machine=8664 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=297e stub=48a10020004001000000ffe0 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=2928+53, BASERELOC=4000+c, IAT=2000+10, CLR=2010+48
+    sections: .text(va=2000 vs=98a ch=60000020), .reloc(va=4000 vs=c ch=42000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe64-stripped.exe: 3072 bytes PE32+ machine=8664 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2010+48
+    sections: .text(va=2000 vs=98a ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe64-writer-arm64.exe: 3072 bytes PE32+ machine=aa64 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe64-writer-i386.exe: 3072 bytes PE32+ machine=014c chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+img/pe64-writer.dll: 3072 bytes PE32+ machine=8664 chars=2022 imagebase=180000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=00000000
+img/pe64-writer.exe: 3072 bytes PE32+ machine=8664 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=900 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000004
+real/ptr-pe32.exe: 1536 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=3a8 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+real/ptr-pe64.exe: 1536 bytes PE32+ machine=8664 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=3a8 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+real/union-pe32.exe: 1536 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=2f4 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+real/union-pe64.exe: 1536 bytes PE32+ machine=8664 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=2f4 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+real/wide-pe32.exe: 1536 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=328 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+real/wide-pe64.exe: 1536 bytes PE32+ machine=8664 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: CLR=2000+48
+    sections: .text(va=2000 vs=328 ch=60000020)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+roslyn/r-anycpu-hev.exe: 4096 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8560 entryRVA=252a stub=ff2500204000000000000000 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=24d8+4f, RESOURCE=4000+4ec, BASERELOC=6000+c, DEBUG=24bc+1c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=530 ch=60000020), .rsrc(va=4000 vs=4ec ch=40000040), .reloc(va=6000 vs=c ch=42000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+roslyn/r-anycpu.dll: 3584 bytes PE32 machine=014c chars=2022 imagebase=10000000 sub=3 dllchars=8540 entryRVA=2522 stub=ff2500200010000000000000 import=mscoree.dll!_CorDllMain
+    dirs: IMPORT=24d0+4f, RESOURCE=4000+2a8, BASERELOC=6000+c, DEBUG=24b4+1c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=528 ch=60000020), .rsrc(va=4000 vs=2a8 ch=40000040), .reloc(va=6000 vs=c ch=42000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=00000000
+roslyn/r-anycpu.exe: 4096 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=2522 stub=ff2500204000000000000000 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=24d0+4f, RESOURCE=4000+4dc, BASERELOC=6000+c, DEBUG=24b4+1c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=528 ch=60000020), .rsrc(va=4000 vs=4dc ch=40000040), .reloc(va=6000 vs=c ch=42000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+roslyn/r-anycpu32bitpreferred.exe: 4096 bytes PE32 machine=014c chars=0022 imagebase=400000 sub=3 dllchars=8540 entryRVA=253e stub=ff2500204000000000000000 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=24ec+4f, RESOURCE=4000+514, BASERELOC=6000+c, DEBUG=24d0+1c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=544 ch=60000020), .rsrc(va=4000 vs=514 ch=40000040), .reloc(va=6000 vs=c ch=42000040)
+    CLI: v2.5 flags=20003 (ILONLY|32BITREQUIRED|32BITPREFERRED) entrytoken=06000003
+roslyn/r-x64.exe: 3584 bytes PE32+ machine=8664 chars=0022 imagebase=140000000 sub=3 dllchars=8540 entryRVA=0
+    dirs: RESOURCE=4000+4cc, DEBUG=24a8+1c, CLR=2000+48
+    sections: .text(va=2000 vs=4c4 ch=60000020), .rsrc(va=4000 vs=4cc ch=40000040)
+    CLI: v2.5 flags=1 (ILONLY) entrytoken=06000003
+roslyn/r-x86.exe: 4096 bytes PE32 machine=014c chars=0102 imagebase=400000 sub=3 dllchars=8540 entryRVA=251e stub=ff2500204000000000000000 import=mscoree.dll!_CorExeMain
+    dirs: IMPORT=24cc+4f, RESOURCE=4000+4cc, BASERELOC=6000+c, DEBUG=24b0+1c, IAT=2000+8, CLR=2008+48
+    sections: .text(va=2000 vs=524 ch=60000020), .rsrc(va=4000 vs=4cc ch=40000040), .reloc(va=6000 vs=c ch=42000040)
+    CLI: v2.5 flags=3 (ILONLY|32BITREQUIRED) entrytoken=06000003

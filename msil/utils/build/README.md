@@ -324,8 +324,9 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -BuildDir C:
 
 `msil/utils/plan-check.py` (Python standard library only) checks
 `llvm/docs/MSIL/ImplementationPlan.md`: `ownership` (owned files disjoint inside every
-milestone), `reads M<n>` (every input a work package reads exists), `scope M<n>` (every staged
-path belongs to the milestone; run `git add -A` first) and `--self-test`. A plan it cannot
+milestone), `reads <id>` (every input a work package reads exists), `scope <id>` (every staged
+path belongs to the milestone; run `git add -A` first) and `--self-test`, where `<id>` is a
+milestone id: `M<n>`, `P-<n>[a-z]` (the portable steps) or `MC-<n>` (the managed-calls steps). A plan it cannot
 parse completely (a malformed milestone or work-package heading, a work package without its
 one-line `- Owned files:` list, a wrapped list, a malformed fix-loop row) fails every command
 with exit status 2 instead of dropping the work package from the checks.
