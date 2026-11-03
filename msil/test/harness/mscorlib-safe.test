@@ -1,0 +1,78 @@
+# The accessibility probe of %msil_check_mscorlib_safe (plan 5.11.7 as
+# amended in section 12 for P-1a; msil/utils/check-mscorlib-safe.py): an
+# entry of msil-ld's built-in [mscorlib] table must not only resolve through
+# [mscorlib] but also be public, since a member that exists but is not
+# public resolves through ldtoken and then fails with MethodAccessException
+# when a program calls it (the .NET Framework 4.8.1's internal
+# Environment::get_TickCount64()). On every runtime of the leg the probe
+# proves by reflection that a type is visible and that a method or field is
+# public with a visible declaring type; an entry that is not throws
+# System.MemberAccessException('check-mscorlib-safe: not public: <entry>').
+# Checks, each table with System.ValueType (public) as entry 1:
+# (1) public entries pass on every runtime: a type, a static method, and
+# System.Attribute::.ctor(), the one protected entry the probe accepts
+# (msil-ld's own request, plan 5.9.15).
+# (2) The failure paths, on every runtime: an internal field
+# (StringBuilder::m_ChunkChars), a private method
+# (StringBuilder::ExpandByABlock) and a protected method other than
+# Attribute::.ctor() (Object::MemberwiseClone) each resolve and fail the
+# probe with MemberAccessException, naming the entry, while entry 1 passes.
+# (3) On the .NET Framework only: Environment::get_TickCount64() fails
+# (internal in 4.8.1; a MissingMethodException in 4.8, which lacks it) and
+# passes on .NET 8 and .NET 10, where it is public; the internal type
+# System.Runtime.CompilerServices.JitHelpers fails the probe on the
+# Framework (on .NET, whose mscorlib facade does not forward it, it does not
+# load).
+# M2/05-refs/mscorlib-safe.test checks msil-ld's real table.
+
+# RUN: rm -rf %t && split-file %s %t
+
+# (1)
+# RUN: %msil_check_mscorlib_safe --out %t/public --table %t/public.txt > %t/public.out 2> %t/public.err
+# RUN: %{harness_check} contains %t/public.out "^check-mscorlib-safe: 3 entries from \S*public\.txt$" "^check-mscorlib-safe: \S+ \(.+\): 3 of 3 entries resolve$" "^check-mscorlib-safe: every entry resolves through \[mscorlib\] on "
+# RUN: %{harness_check} lacks %t/public.out "failing:"
+# RUN: %{harness_check} lacks %t/public.err "FAIL"
+
+# (2)
+# RUN: not %msil_check_mscorlib_safe --out %t/internal --table %t/internal.txt > %t/internal.out 2> %t/internal.err
+# RUN: %{harness_check} contains %t/internal.out "^check-mscorlib-safe: \S+ \(.+\): 1 of 2 entries resolve; failing: entry 2 \(System\.MemberAccessException\)$"
+# RUN: %{harness_check} lacks %t/internal.out "^check-mscorlib-safe: \S+ \(.+\): 2 of 2 entries resolve$" "every entry resolves"
+# RUN: %{harness_check} contains %t/internal.err "^check-mscorlib-safe: FAIL: \S+: entry 2 'field char\[\] \[mscorlib\]System\.Text\.StringBuilder::m_ChunkChars': System\.MemberAccessException: check-mscorlib-safe: not public: field char\[\] \[mscorlib\]System\.Text\.StringBuilder::m_ChunkChars$"
+# RUN: %{harness_check} lacks %t/internal.err "entry 1 "
+# RUN: not %msil_check_mscorlib_safe --out %t/private --table %t/private.txt > %t/private.out 2> %t/private.err
+# RUN: %{harness_check} contains %t/private.out "^check-mscorlib-safe: \S+ \(.+\): 1 of 2 entries resolve; failing: entry 2 \(System\.MemberAccessException\)$"
+# RUN: %{harness_check} lacks %t/private.out "^check-mscorlib-safe: \S+ \(.+\): 2 of 2 entries resolve$" "every entry resolves"
+# RUN: %{harness_check} contains %t/private.err "^check-mscorlib-safe: FAIL: \S+: entry 2 'method instance void \[mscorlib\]System\.Text\.StringBuilder::ExpandByABlock\(int32\)': System\.MemberAccessException: check-mscorlib-safe: not public: method instance void \[mscorlib\]System\.Text\.StringBuilder::ExpandByABlock\(int32\)$"
+# RUN: not %msil_check_mscorlib_safe --out %t/protected --table %t/protected.txt > %t/protected.out 2> %t/protected.err
+# RUN: %{harness_check} contains %t/protected.out "^check-mscorlib-safe: \S+ \(.+\): 1 of 2 entries resolve; failing: entry 2 \(System\.MemberAccessException\)$"
+# RUN: %{harness_check} lacks %t/protected.out "^check-mscorlib-safe: \S+ \(.+\): 2 of 2 entries resolve$" "every entry resolves"
+# RUN: %{harness_check} contains %t/protected.err "^check-mscorlib-safe: FAIL: \S+: entry 2 'method instance object \[mscorlib\]System\.Object::MemberwiseClone\(\)': System\.MemberAccessException: check-mscorlib-safe: not public: method instance object \[mscorlib\]System\.Object::MemberwiseClone\(\)$"
+
+# (3)
+# RUN: %if msil-netfx && !msil-wsl %{ not %msil_check_mscorlib_safe --out %t/tick --table %t/tick.txt > %t/tick.out 2> %t/tick.err %}
+# RUN: %if msil-netfx && !msil-wsl %{ %{harness_check} contains %t/tick.out "^check-mscorlib-safe: netfx \(.+\): 1 of 2 entries resolve; failing: entry 2 \(System\.(MemberAccessException|MissingMethodException)\)$" %}
+# RUN: %if msil-netfx && !msil-wsl && dotnet-runtime-8 %{ %{harness_check} contains %t/tick.out "^check-mscorlib-safe: net8 \(.+\): 2 of 2 entries resolve$" %}
+# RUN: %if msil-netfx && !msil-wsl && dotnet-runtime-10 %{ %{harness_check} contains %t/tick.out "^check-mscorlib-safe: net10 \(.+\): 2 of 2 entries resolve$" %}
+# RUN: %if msil-netfx && !msil-wsl %{ %{harness_check} lacks %t/tick.err "^check-mscorlib-safe: FAIL: (?!netfx:)" %}
+# RUN: %if msil-netfx && !msil-wsl %{ not %msil_check_mscorlib_safe --out %t/jithelpers --table %t/jithelpers.txt > %t/jithelpers.out 2> %t/jithelpers.err %}
+# RUN: %if msil-netfx && !msil-wsl %{ %{harness_check} contains %t/jithelpers.err "^check-mscorlib-safe: FAIL: netfx: entry 2 'type \[mscorlib\]System\.Runtime\.CompilerServices\.JitHelpers': System\.MemberAccessException: check-mscorlib-safe: not public: type \[mscorlib\]System\.Runtime\.CompilerServices\.JitHelpers$" %}
+
+#--- public.txt
+type [mscorlib]System.ValueType
+method void [mscorlib]System.Threading.Interlocked::MemoryBarrier()
+method instance void [mscorlib]System.Attribute::.ctor()
+#--- internal.txt
+type [mscorlib]System.ValueType
+field char[] [mscorlib]System.Text.StringBuilder::m_ChunkChars
+#--- private.txt
+type [mscorlib]System.ValueType
+method instance void [mscorlib]System.Text.StringBuilder::ExpandByABlock(int32)
+#--- protected.txt
+type [mscorlib]System.ValueType
+method instance object [mscorlib]System.Object::MemberwiseClone()
+#--- tick.txt
+type [mscorlib]System.ValueType
+method int64 [mscorlib]System.Environment::get_TickCount64()
+#--- jithelpers.txt
+type [mscorlib]System.ValueType
+type [mscorlib]System.Runtime.CompilerServices.JitHelpers

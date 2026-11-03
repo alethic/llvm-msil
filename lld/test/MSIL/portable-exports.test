@@ -1,0 +1,215 @@
+## Exports of a -shared library on msil64-unknown-dotnet, and the forced
+## export options on every triple (ImplementationPlan.md 5.18.6 PL7;
+## portable-linkrules D7):
+## - the selection is every name forced by --export=<sym>,
+##   --export-if-defined=<sym> or --export-list=<file> (one name per line,
+##   '#' comment lines), hidden or not, plus every default- or
+##   protected-visibility GLOBAL or WEAK definition; hidden definitions that
+##   no option names stay in <Module>;
+## - WEAK COMDAT copies stay exported on dotnet (a linkonce_odr function and
+##   a weak_odr variable in COMDAT groups), as on ELF triples;
+## - a name that --export or --export-list forces and no input defines is
+##     symbol exported via --export not found: <sym>
+##   while --export-if-defined of such a name is silent;
+## - --export and --export-list names are resolved like -u: a forced name
+##   defined only by an archive member extracts it (the member's other
+##   default-visibility definitions are then exported by the usual rule), and
+##   --export-if-defined extracts nothing (it names only what is already
+##   defined);
+## - a forced export wins over --exclude-libs: under --exclude-libs=ALL (and
+##   naming the archive) the forced name is exported, a hidden one included
+##   (the shape of c.dll's __llvm_libc_errno), and the member's other
+##   definitions are not;
+## - the options are generic: on x86_64-unknown-linux-gnu-msil they export a
+##   hidden definition and an archive-only one the same way.
+## Inputs/shared/listing.py prints the export class's members; the class is
+## named after the output ('lib').
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir sel force force2 ifdef list arch arch-list arch-ifdef excl excl-named hidden lnx lnx-arch
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet xm.ll -o xm.o
+# RUN: llc -filetype=obj xh.ll -o xh.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil lnx.ll -o lnx.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil xm.ll -o xm-lnx.o
+# RUN: llvm-ar rc libx.a xm.o
+# RUN: llvm-ar rc libh.a xh.o
+# RUN: llvm-ar rc libxl.a xm-lnx.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{members} = %python %S/Inputs/shared/listing.py members
+
+## The default selection: visibility, WEAK, COMDAT copies; hidden stays.
+# RUN: msil-ld -shared lib.o -o sel/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump sel/lib.dll > sel.txt
+# RUN: %{members} sel.txt lib | FileCheck %s --check-prefix=DEFAULT \
+# RUN:   --implicit-check-not="'stay'" --implicit-check-not="'hid'" --implicit-check-not="'hid2'" \
+# RUN:   --implicit-check-not="'hid3'" --implicit-check-not="'hid4'"
+# DEFAULT-DAG: {{^}}  .method 'pub' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# DEFAULT-DAG: {{^}}  .method 'prot' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# DEFAULT-DAG: {{^}}  .method 'wk' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# DEFAULT-DAG: {{^}}  .method 'inl' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# DEFAULT-DAG: {{^}}  .property 'sel' native int() flags=0x0000{{$}}
+
+## --export of a hidden definition, in both positions.
+# RUN: msil-ld -shared --export=hid lib.o -o force/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump force/lib.dll > force.txt
+# RUN: %{members} force.txt lib | FileCheck %s --check-prefixes=DEFAULT,HID \
+# RUN:   --implicit-check-not="'stay'" --implicit-check-not="'hid2'"
+# HID-DAG: {{^}}  .method 'hid' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# RUN: msil-ld -shared lib.o --export=hid -o force2/lib.dll 2>&1 | count 0
+# RUN: cmp force/lib.dll force2/lib.dll
+
+## --export-if-defined: a defined hidden name is exported, a missing one is
+## silent.
+# RUN: msil-ld -shared lib.o --export-if-defined=hid2 --export-if-defined=absent -o ifdef/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ifdef/lib.dll > ifdef.txt
+# RUN: %{members} ifdef.txt lib | FileCheck %s --check-prefixes=DEFAULT,HID2 \
+# RUN:   --implicit-check-not="'stay'" --implicit-check-not="'hid'" --implicit-check-not="'absent'"
+# HID2-DAG: {{^}}  .method 'hid2' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+
+## --export-list.
+# RUN: msil-ld -shared lib.o --export-list=list.txt -o list/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump list/lib.dll > list.txt.dump
+# RUN: %{members} list.txt.dump lib | FileCheck %s --check-prefixes=DEFAULT,LIST \
+# RUN:   --implicit-check-not="'stay'" --implicit-check-not="'hid'" --implicit-check-not="'hid2'"
+# LIST-DAG: {{^}}  .method 'hid3' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# LIST-DAG: {{^}}  .method 'hid4' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+
+## Names that no input defines.
+# RUN: not msil-ld -shared lib.o --export=missing -o x.dll 2>&1 | %{fc} --check-prefix=MISSING -DSYM=missing
+# RUN: not msil-ld -shared lib.o --export-list=missing.txt -o x.dll 2>&1 | %{fc} --check-prefix=MISSING -DSYM=missing2
+# MISSING: {{^}}msil-ld: error: symbol exported via --export not found: [[SYM]]{{$}}
+
+## A forced name defined only in an archive member.
+# RUN: msil-ld -shared lib.o libx.a -o arch/plain.dll 2>&1 | count 0
+# RUN: llvm-cil-dump arch/plain.dll > arch-plain.txt
+# RUN: %{members} arch-plain.txt plain | FileCheck %s --check-prefix=NO-MEMBER \
+# RUN:   --implicit-check-not="'xfn'" --implicit-check-not="'xother'"
+# NO-MEMBER: {{^}}  .method 'pub' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# RUN: msil-ld -shared lib.o libx.a --export=xfn -o arch/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump arch/lib.dll > arch.txt
+# RUN: %{members} arch.txt lib | FileCheck %s --check-prefixes=XFN,XOTHER
+# RUN: msil-ld -shared --export-list=xlist.txt lib.o libx.a -o arch-list/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump arch-list/lib.dll > arch-list.txt
+# RUN: %{members} arch-list.txt lib | FileCheck %s --check-prefixes=XFN,XOTHER
+# XFN-DAG:    {{^}}  .method 'xfn' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# XOTHER-DAG: {{^}}  .method 'xother' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# RUN: msil-ld -shared lib.o libx.a --export-if-defined=xfn -o arch-ifdef/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump arch-ifdef/lib.dll > arch-ifdef.txt
+# RUN: %{members} arch-ifdef.txt lib | FileCheck %s --check-prefix=NO-MEMBER \
+# RUN:   --implicit-check-not="'xfn'" --implicit-check-not="'xother'"
+
+## A forced export wins over --exclude-libs.
+# RUN: msil-ld -shared lib.o libx.a --exclude-libs=ALL --export=xfn -o excl/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump excl/lib.dll > excl.txt
+# RUN: %{members} excl.txt lib | FileCheck %s --check-prefix=XFN --implicit-check-not="'xother'"
+# RUN: msil-ld -shared lib.o libx.a --exclude-libs=libx.a --export-list=xlist.txt -o excl-named/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump excl-named/lib.dll > excl-named.txt
+# RUN: %{members} excl-named.txt lib | FileCheck %s --check-prefix=XFN --implicit-check-not="'xother'"
+# RUN: msil-ld -shared lib.o libh.a --exclude-libs=ALL --export=xhid -o hidden/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump hidden/lib.dll > hidden.txt
+# RUN: %{members} hidden.txt lib | FileCheck %s --check-prefix=XHID --implicit-check-not="'xhother'"
+# XHID: {{^}}  .method 'xhid' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+
+## The same options on a host triple.
+# RUN: msil-ld -shared lnx.o --export=hid -o lnx/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump lnx/lib.dll > lnx.txt
+# RUN: %{members} lnx.txt lib | FileCheck %s --check-prefix=HID --implicit-check-not="'stay'"
+# RUN: msil-ld -shared lnx.o libxl.a --exclude-libs=ALL --export=xfn -o lnx-arch/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump lnx-arch/lib.dll > lnx-arch.txt
+# RUN: %{members} lnx-arch.txt lib | FileCheck %s --check-prefix=XFN --implicit-check-not="'xother'"
+# RUN: not msil-ld -shared lnx.o --export=missing -o x.dll 2>&1 | %{fc} --check-prefix=MISSING -DSYM=missing
+
+#--- list.txt
+# Hidden definitions forced into the export class.
+hid3
+# One name per line.
+hid4
+
+#--- missing.txt
+hid3
+missing2
+
+#--- xlist.txt
+xfn
+
+#--- lib.ll
+target triple = "msil64-unknown-dotnet"
+
+$inl = comdat any
+$sel = comdat any
+
+@sel = weak_odr global i32 3, comdat, align 4
+
+define linkonce_odr i32 @inl() comdat {
+  ret i32 1
+}
+
+define i32 @pub() {
+  %r = call i32 @inl()
+  ret i32 %r
+}
+
+define protected i32 @prot() {
+  ret i32 2
+}
+
+define weak i32 @wk() {
+  ret i32 3
+}
+
+define hidden i32 @stay() {
+  ret i32 4
+}
+
+define hidden i32 @hid() {
+  ret i32 5
+}
+
+define hidden i32 @hid2() {
+  ret i32 6
+}
+
+define hidden i32 @hid3() {
+  ret i32 7
+}
+
+define hidden i32 @hid4() {
+  ret i32 8
+}
+
+#--- xm.ll
+define i32 @xfn() {
+  ret i32 10
+}
+
+define i32 @xother() {
+  ret i32 11
+}
+
+#--- xh.ll
+target triple = "msil64-unknown-dotnet"
+
+define hidden i32 @xhid() {
+  ret i32 12
+}
+
+define i32 @xhother() {
+  ret i32 13
+}
+
+#--- lnx.ll
+define i32 @pub() {
+  ret i32 1
+}
+
+define hidden i32 @stay() {
+  ret i32 4
+}
+
+define hidden i32 @hid() {
+  ret i32 5
+}

@@ -1,0 +1,183 @@
+# Variadic functions on msil64-unknown-dotnet through the MSILPortable slots: definitions and calls in the same and in another translation unit, every promoted scalar type, __int128 (16-aligned slots), long double, small and large structs by value (indirect), va_copy, a va_list handed to a v-function, and a call through a pointer to a variadic function.
+# Plan 5.18.2 PC4 (clang's EmitVAArg: a char * va_list of 8-byte slots,
+# slot alignment up to 16, aggregates by pointer) and PC5 (ExpandVariadics'
+# MSILPortable class implements the same rule), PB1 (MSILPrepareIR accepts
+# the va_arg instructions of a dotnet definition), 5.18.9 (variadic
+# definitions and calls are not loud on msil64 from P-1a). The definitions
+# in va.c walk their arguments by a type string and fold each value's bits
+# into a 64-bit hash; main.c computes the same hash without varargs
+# (hash_*) and compares, so a slot that is misplaced, misaligned or read
+# with the wrong width fails. Each failed group sets one bit of the exit
+# status.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/va.c
+# RUN: %{msil_prog}
+#--- va.h
+#include <stdarg.h>
+typedef unsigned long long u64;
+struct small {
+  short a;
+  char b;
+};
+struct big {
+  long x, y, z;
+};
+static inline u64 mix(u64 h, u64 v) { return h * 1000003u ^ v; }
+static inline u64 dbits(double d) {
+  u64 u;
+  __builtin_memcpy(&u, &d, 8);
+  return u;
+}
+u64 walk(const char *types, ...);
+u64 vwalk(const char *types, va_list ap);
+u64 walk_twice(const char *types, ...);
+int sum_ints(int n, ...);
+#--- va.c
+#include "va.h"
+// One va_arg per type letter: i int, c char, s short (both promoted to int),
+// l long, L long long, u unsigned long, p pointer, f float (promoted to
+// double), d double, D long double, q __int128, m struct small, B struct big.
+u64 vwalk(const char *types, va_list ap) {
+  u64 h = 17;
+  for (const char *t = types; *t; ++t) {
+    switch (*t) {
+    case 'i': h = mix(h, (u64)(long long)va_arg(ap, int)); break;
+    case 'c': h = mix(h, (u64)(long long)(char)va_arg(ap, int)); break;
+    case 's': h = mix(h, (u64)(long long)(short)va_arg(ap, int)); break;
+    case 'l': h = mix(h, (u64)va_arg(ap, long)); break;
+    case 'L': h = mix(h, (u64)va_arg(ap, long long)); break;
+    case 'u': h = mix(h, (u64)va_arg(ap, unsigned long)); break;
+    case 'p': h = mix(h, (u64)*va_arg(ap, int *)); break;
+    case 'f':
+    case 'd': h = mix(h, dbits(va_arg(ap, double))); break;
+    case 'D': h = mix(h, dbits((double)va_arg(ap, long double))); break;
+    case 'q': {
+      unsigned __int128 q = (unsigned __int128)va_arg(ap, __int128);
+      h = mix(mix(h, (u64)(q >> 64)), (u64)q);
+      break;
+    }
+    case 'm': {
+      struct small s = va_arg(ap, struct small);
+      h = mix(mix(h, (u64)(long long)s.a), (u64)(long long)s.b);
+      break;
+    }
+    case 'B': {
+      struct big b = va_arg(ap, struct big);
+      h = mix(mix(mix(h, (u64)b.x), (u64)b.y), (u64)b.z);
+      break;
+    }
+    default: return 0;
+    }
+  }
+  return h;
+}
+u64 walk(const char *types, ...) {
+  va_list ap;
+  va_start(ap, types);
+  u64 h = vwalk(types, ap);
+  va_end(ap);
+  return h;
+}
+// va_copy: both walks must see the same arguments.
+u64 walk_twice(const char *types, ...) {
+  va_list ap, aq;
+  va_start(ap, types);
+  va_copy(aq, ap);
+  u64 h1 = vwalk(types, ap);
+  u64 h2 = vwalk(types, aq);
+  va_end(aq);
+  va_end(ap);
+  return h1 == h2 ? h1 : 1;
+}
+int sum_ints(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int s = 0;
+  for (int i = 0; i < n; ++i)
+    s += va_arg(ap, int);
+  va_end(ap);
+  return s;
+}
+#--- main.c
+#include "va.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+// A variadic definition in this translation unit too.
+static __attribute__((noinline)) long long local_sum(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  long long s = 0;
+  for (int i = 0; i < n; ++i)
+    s += va_arg(ap, long long) * (i + 1);
+  va_end(ap);
+  return s;
+}
+
+static volatile int v_i = -5, v_target = 1234;
+static volatile long v_l = 0x123456789abcL;
+static volatile double v_d = 2.5;
+static volatile float v_f = -0.75f;
+static volatile long double v_ld = 1.0L / 3.0L;
+static volatile unsigned long long v_q[2] = {0x0102030405060708ull, 0xf0e0d0c0b0a09080ull};
+
+int main(void) {
+  int i = v_i;
+  char c = (char)(v_i * 20);
+  short s = (short)(v_i * 1000);
+  long l = v_l;
+  long long L = -v_l;
+  unsigned long u = ~0UL;
+  double d = v_d;
+  float f = v_f;
+  long double D = v_ld;
+  __int128 q = (__int128)(((unsigned __int128)v_q[0] << 64) | v_q[1]);
+  int target = v_target;
+  struct small sm = {(short)(v_i * 300), 7};
+  struct big bg = {v_l, -v_l, 42};
+  unsigned __int128 uq = (unsigned __int128)q;
+
+  /* 0: ints and the integer promotions. */
+  CHECK(0, sum_ints(5, 1, -2, i, 40, 1000) == 1034);
+  CHECK(0, walk("ics", i, c, s) == mix(mix(mix(17, (u64)(long long)i), (u64)(long long)c),
+                                       (u64)(long long)s));
+
+  /* 1: 64-bit scalars and pointers. */
+  CHECK(1, walk("lLup", l, L, u, &target) ==
+               mix(mix(mix(mix(17, (u64)l), (u64)L), (u64)u), 1234));
+
+  /* 2: double, float (promoted) and long double. */
+  CHECK(2, walk("dfD", d, f, D) ==
+               mix(mix(mix(17, dbits(d)), dbits((double)f)), dbits((double)D)));
+
+  /* 3: __int128 after an odd number of 8-byte slots (aligned to 16). */
+  u64 hq = mix(mix(mix(mix(17, (u64)(long long)i), (u64)(uq >> 64)), (u64)uq),
+               (u64)(long long)i);
+  CHECK(3, walk("iqi", i, q, i) == hq);
+  CHECK(3, walk("qq", q, q) == mix(mix(mix(mix(17, (u64)(uq >> 64)), (u64)uq),
+                                       (u64)(uq >> 64)), (u64)uq));
+
+  /* 4: structs by value (aggregates indirect). */
+  u64 hs = mix(mix(17, (u64)(long long)sm.a), (u64)(long long)sm.b);
+  u64 hb = mix(mix(mix(hs, (u64)bg.x), (u64)bg.y), (u64)bg.z);
+  CHECK(4, walk("mB", sm, bg) == hb);
+  CHECK(4, walk("BdB", bg, d, bg) ==
+               mix(mix(mix(mix(mix(mix(mix(17, (u64)bg.x), (u64)bg.y), (u64)bg.z),
+                                   dbits(d)), (u64)bg.x), (u64)bg.y), (u64)bg.z));
+
+  /* 5: va_copy, and a call through a pointer to a variadic function. */
+  CHECK(5, walk_twice("iqdB", i, q, d, bg) == walk("iqdB", i, q, d, bg));
+  u64 (*fp)(const char *, ...) = walk;
+  CHECK(5, fp("lD", l, D) == walk("lD", l, D));
+
+  /* 6: the same-TU definition. */
+  CHECK(6, local_sum(3, 10LL, (long long)i, L) == 10 - 10 + 3 * L);
+
+  return (int)fails;
+}

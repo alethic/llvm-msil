@@ -302,6 +302,102 @@ TEST(TargetRegistry, MSILRejectsOtherMarch) {
     expectOtherMarchRejected(Str);
 }
 
+/// The portable triples (ImplementationPlan.md 5.18.1, milestone P-1a), in
+/// their canonical and their explicit-format spellings, and with another
+/// vendor, which is accepted and treated as unknown (PT5).
+constexpr const char *PortableTriples[] = {
+    "msil64-unknown-dotnet",
+    "msil32-unknown-dotnet",
+    "msil64-unknown-dotnet-msil",
+    "msil64-pc-dotnet",
+};
+
+// The portable triples select the msil target through both overloads, and
+// -march=msil leaves them as they are: they are MSIL already. msil32 is found
+// too; the backend refuses it later (T-P1). No other -march compiles them.
+TEST(TargetRegistry, MSILPortableLookup) {
+  llvm::InitializeAllTargetInfos();
+  const Target *MSIL = findTargetNamed(MSILTargetName);
+  if (!MSIL)
+    GTEST_SKIP() << "the MSIL target is not built";
+
+  for (const char *Str : PortableTriples) {
+    SCOPED_TRACE(Str);
+    std::string Error;
+    EXPECT_EQ(MSIL, TargetRegistry::lookupTarget(Triple(Str), Error)) << Error;
+
+    Triple TT(Str);
+    EXPECT_EQ(MSIL, TargetRegistry::lookupTarget("", TT, Error)) << Error;
+    EXPECT_EQ(Str, TT.str());
+
+    Triple March(Str);
+    EXPECT_EQ(MSIL, TargetRegistry::lookupTarget(MSILTargetName, March, Error))
+        << Error;
+    EXPECT_EQ(Str, March.str());
+    EXPECT_TRUE(March.isOSBinFormatMSIL());
+
+    expectOtherMarchRejected(Str);
+  }
+}
+
+// The two refusals: an msil architecture outside 'dotnet' with the MSIL
+// format, or 'dotnet' with another format or another architecture, has no
+// target. In particular x86_64-unknown-dotnet, which would otherwise be a
+// generic ELF triple for the X86 target, and msil64-unknown-linux are not
+// compiled by anything; the error names the triple.
+TEST(TargetRegistry, MSILPortableRefusals) {
+  llvm::InitializeAllTargetInfos();
+  if (!anyTargetRegistered())
+    GTEST_SKIP() << "no targets are built";
+
+  for (const char *Str : {"x86_64-unknown-dotnet", "aarch64-unknown-dotnet",
+                          "msil64-unknown-dotnet-elf", "msil64-unknown-linux",
+                          "msil64-unknown-linux-gnu"}) {
+    SCOPED_TRACE(Str);
+    std::string Error;
+    EXPECT_EQ(nullptr, TargetRegistry::lookupTarget(Triple(Str), Error));
+    EXPECT_THAT(Error, HasSubstr(Str));
+
+    Triple TT(Str);
+    Error.clear();
+    EXPECT_EQ(nullptr, TargetRegistry::lookupTarget("", TT, Error));
+    EXPECT_FALSE(Error.empty());
+  }
+}
+
+// An environment component is refused too (5.18.1 PT5): it would build a
+// target distinct from msil64-unknown-dotnet whose objects and helper
+// archive do not mix with the portable ones. The reason names the
+// environment; -march=msil does not make the triple acceptable.
+TEST(TargetRegistry, MSILPortableEnvironmentRefused) {
+  llvm::InitializeAllTargetInfos();
+  if (!findTargetNamed(MSILTargetName))
+    GTEST_SKIP() << "the MSIL target is not built";
+
+  for (auto [Str, Env] : {std::pair<const char *, const char *>{
+                              "msil64-unknown-dotnet-gnu", "gnu"},
+                          {"msil64-unknown-dotnet-musl", "musl"},
+                          {"msil32-unknown-dotnet-gnu", "gnu"}}) {
+    SCOPED_TRACE(Str);
+    std::string Error;
+    EXPECT_EQ(nullptr, TargetRegistry::lookupTarget(Triple(Str), Error));
+    EXPECT_THAT(Error, HasSubstr(Str));
+    EXPECT_THAT(Error, HasSubstr("takes no environment"));
+    EXPECT_THAT(Error, HasSubstr(std::string("'") + Env + "'"));
+
+    Triple TT(Str);
+    Error.clear();
+    EXPECT_EQ(nullptr, TargetRegistry::lookupTarget("", TT, Error));
+    EXPECT_THAT(Error, HasSubstr("takes no environment"));
+
+    Triple March(Str);
+    Error.clear();
+    EXPECT_EQ(nullptr,
+              TargetRegistry::lookupTarget(MSILTargetName, March, Error));
+    EXPECT_THAT(Error, HasSubstr("takes no environment"));
+  }
+}
+
 /// Initializes \p MOFI for an IsMSIL context and checks the four logical
 /// sections that MCObjectFileInfo creates through MCContext::getMSILSection.
 void expectMSILSections(MCContext &Ctx, MCObjectFileInfo &MOFI) {

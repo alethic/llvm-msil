@@ -1,0 +1,71 @@
+# update-expected.py with a portable --target (plan 5.17.4's portable
+# allowance, 5.17.5, 5.18.10 PX2; P-1a.i): msil64-unknown-dotnet and
+# msil32-unknown-dotnet are MSIL triples themselves, with no native triple
+# and so no native oracle before P-2. Nothing is built: a test whose
+# %{msil_expected_rule} names --os's OS logs 'rule: <file> (<reason>)', and
+# a test without such a rule fails. The inputs are copies of
+# msil/test/Portable/00-freestanding/datamodel.test and its hand-written
+# expected file in %t (update-expected.py builds and checks nothing in the
+# source tree's msil/test/harness, but these copies lie under the build
+# tree's). Checks:
+# (1) --target msil64-unknown-dotnet --check on the copy, which keeps its
+#     redefinition of %{msil_expected_rule} as 'windows,linux: portable: ...':
+#     'rule: <file> (<reason>)', status 0; the same for msil32-unknown-dotnet,
+#     for --os linux (no E7 run and no Linux sysroot on a Windows host) and
+#     without --check, which writes nothing (the expected file is unchanged).
+# (2) The failure paths: the copy without that redefinition fails before
+#     anything is built ('the portable triple msil64-unknown-dotnet has no
+#     native oracle; ...' naming --os's OS, then 'FAIL (test file): <test>',
+#     status 1, with and without --check, and no expected file written); a
+#     rule that names only windows fails the same way under --os linux; the
+#     rule's file missing is 'MISSING: <file> (hand-written under
+#     %{msil_expected_rule}: <reason>)', status 1.
+# (3) A --target that ends in -msil is a usage error (status 2): the
+#     portable triple takes no suffix, and a host triple is given as its
+#     native triple ('the native triple, without -msil').
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cat %S/../../Portable/00-freestanding/datamodel.test > %t/rule.test
+# RUN: cat %S/../../Portable/00-freestanding/datamodel.expected > %t/rule.expected
+# RUN: cp %t/rule.expected %t/rule.orig
+# RUN: grep -v "msil_expected_rule" %t/rule.test > %t/norule.test
+# RUN: %{harness_check} lacks %t/norule.test "msil_expected_rule"
+# RUN: cat %t/rule.expected > %t/norule.expected
+
+# (1)
+# RUN: %{harness_update_expected} --target msil64-unknown-dotnet --check %t/rule.test > %t/1a.log 2>&1
+# RUN: %{harness_check} contains %t/1a.log "\Arule: \S*rule\.expected \(portable: no stdout before P-2; the program checks itself\)\n\Z"
+# RUN: %{harness_update_expected} --target msil32-unknown-dotnet --check %t/rule.test > %t/1b.log 2>&1
+# RUN: %{harness_check} contains %t/1b.log "\Arule: \S*rule\.expected \(portable: no stdout before P-2; the program checks itself\)\n\Z"
+# RUN: %{harness_update_expected} --target msil64-unknown-dotnet --os linux --check %t/rule.test > %t/1c.log 2>&1
+# RUN: %{harness_check} contains %t/1c.log "\Arule: \S*rule\.expected \(portable: no stdout before P-2; the program checks itself\)\n\Z"
+# RUN: %{harness_update_expected} --target msil64-unknown-dotnet %t/rule.test > %t/1d.log 2>&1
+# RUN: %{harness_check} contains %t/1d.log "\Arule: \S*rule\.expected \(portable: no stdout before P-2; the program checks itself\)\n\Z"
+# RUN: cmp %t/rule.expected %t/rule.orig
+# RUN: %{harness_check} missing %t/rule.windows.expected
+# RUN: %{harness_check} missing %t/rule.linux.expected
+
+# (2)
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --target msil64-unknown-dotnet --check %t/norule.test > %t/2a.log 2>&1
+# RUN: %{harness_check} contains %t/2a.log "^update-expected: \S*norule\.test: the portable triple msil64-unknown-dotnet has no native oracle; its (windows|linux) expected file is hand-written under a %%{msil_expected_rule} that names (windows|linux) \(plan 5\.17\.4's portable allowance, 5\.18\.10\)$" "^FAIL \(test file\): \S*norule\.test$"
+# RUN: %{harness_check} lacks %t/2a.log "^rule: " "^MISSING: " "^(OK|MISMATCH|wrote)"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --target msil64-unknown-dotnet --os linux %t/norule.test > %t/2b.log 2>&1
+# RUN: %{harness_check} contains %t/2b.log "^update-expected: \S*norule\.test: the portable triple msil64-unknown-dotnet has no native oracle; its linux expected file is hand-written under a %%{msil_expected_rule} that names linux " "^FAIL \(test file\): \S*norule\.test$"
+# RUN: cmp %t/norule.expected %t/rule.orig
+# RUN: %{harness_check} missing %t/norule.windows.expected
+# RUN: %{harness_check} missing %t/norule.linux.expected
+# RUN: %{harness_check} write %t/winonly.test "// REDEFINE: %%{msil_expected_rule} = windows: Windows only" "// RUN: %%{msil_prog}" "int main(void) { return 0; }"
+# RUN: %{harness_check} write %t/winonly.expected "[exit 0]"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --target msil64-unknown-dotnet --os linux --check %t/winonly.test > %t/2c.log 2>&1
+# RUN: %{harness_check} contains %t/2c.log "the portable triple msil64-unknown-dotnet has no native oracle; its linux expected file is hand-written under a %%{msil_expected_rule} that names linux " "^FAIL \(test file\): \S*winonly\.test$"
+# RUN: rm %t/rule.expected
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --target msil64-unknown-dotnet --check %t/rule.test > %t/2d.log
+# RUN: %{harness_check} contains %t/2d.log "\AMISSING: \S*rule\.expected \(hand-written under %%{msil_expected_rule}: portable: no stdout before P-2; the program checks itself\)\n\Z"
+# RUN: %{harness_check} missing %t/rule.expected
+
+# (3)
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --target msil64-unknown-dotnet-msil --check %t/norule.test > %t/3a.log 2>&1
+# RUN: %{harness_check} contains %t/3a.log "error: --target msil64-unknown-dotnet-msil: the native triple, without -msil \(a portable triple, such as msil64-unknown-dotnet, has none\)$"
+# RUN: %{harness_check} lacks %t/3a.log "FAIL \(test file\)" "^rule: "
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --target msil32-unknown-dotnet-msil --check %t/norule.test > %t/3b.log 2>&1
+# RUN: %{harness_check} contains %t/3b.log "error: --target msil32-unknown-dotnet-msil: the native triple, without -msil "

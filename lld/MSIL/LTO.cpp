@@ -473,11 +473,18 @@ static std::string getSymbolName(const GlobalValue &gv) {
   return name;
 }
 
-// True if \p name is __start_<X> or __stop_<X> on a non-Windows triple and a
-// definition of \p m is in section <X>: whole-program code generation defines
-// such a name (plan 5.9.6, 5.9.9), so it is neither bound nor reported.
+// True if the codegen triple's section rules define __start_<X> and
+// __stop_<X> (ELF and Dotnet; plan 5.9.9, 5.18.5 LR9).
+static bool definesStartStop() {
+  return cli::definesStartStop(cli::getSectionRules(ctx.arg.target));
+}
+
+// True if \p name is __start_<X> or __stop_<X> on a triple that defines such
+// names and a definition of \p m is in section <X>: whole-program code
+// generation defines such a name (plan 5.9.6, 5.9.9), so it is neither bound
+// nor reported.
 static bool isSectionBoundary(const Module &m, StringRef name) {
-  if (ctx.arg.target.isOSWindows())
+  if (!definesStartStop())
     return false;
   StringRef section = name;
   if (!section.consume_front("__start_") && !section.consume_front("__stop_"))
@@ -488,11 +495,12 @@ static bool isSectionBoundary(const Module &m, StringRef name) {
 }
 
 // True if \p gv, a declaration named \p name, is a strong hidden or protected
-// reference to __start_<X> or __stop_<X> on a non-Windows triple: a name that
-// only the output can define, which never binds natively (plan 5.9.6).
+// reference to __start_<X> or __stop_<X> on a triple that defines such names:
+// a name that only the output can define, which never binds natively (plan
+// 5.9.6).
 static bool isHiddenSectionBoundaryReference(const GlobalValue &gv,
                                              StringRef name) {
-  if (ctx.arg.target.isOSWindows() || gv.hasDefaultVisibility() ||
+  if (!definesStartStop() || gv.hasDefaultVisibility() ||
       gv.hasExternalWeakLinkage())
     return false;
   return name.starts_with("__start_") || name.starts_with("__stop_");
@@ -771,12 +779,13 @@ static const Function *getConstructorFunction(const Constant *c) {
 // One difference remains: a slot's offset here counts the leaves of its
 // initializer, not its bytes; in a table that code generation accepts every
 // leaf is one 8-byte function address, so both order the slots alike (any
-// other table is the link's error, and no output is written). Only
-// non-Windows triples pass constructors arguments.
+// other table is the link's error, and no output is written). Only the
+// triples whose constructors take arguments (ELF rules) pass envp; the
+// portable triples bind no environ (plan 5.18.6 PL2).
 static const Function *findEnvpConstructor(const Module &m) {
-  if (ctx.arg.target.isOSWindows())
+  cli::SectionRules rules = cli::getSectionRules(ctx.arg.target);
+  if (!cli::constructorsTakeArgs(rules))
     return nullptr;
-  constexpr cli::SectionRules rules = cli::SectionRules::ELF;
   SmallVector<cli::ConstructorEntry, 4> entries;
   SmallVector<const Function *, 4> functions;
   auto add = [&](const Constant *c, cli::ConstructorEntry entry) {
@@ -1429,7 +1438,7 @@ BitcodeCompiler::BitcodeCompiler()
   // usedStartStop): their definitions stay visible, so that LTO keeps them
   // and the output defines the symbols (plan 5.9.9). Windows triples do not
   // define such symbols.
-  if (ctx.bitcodeFiles.empty() || ctx.arg.target.isOSWindows())
+  if (ctx.bitcodeFiles.empty() || !definesStartStop())
     return;
   for (Symbol *sym : symtab->symbols()) {
     StringRef name = sym->getName();
@@ -1536,7 +1545,7 @@ void BitcodeCompiler::add(BitcodeFile &f) {
     // never exports.
     bool exportCandidate =
         ctx.arg.shared && r.Prevailing && mayBeExported(*sym) &&
-        !(ctx.arg.target.isOSWindows() && objSym.getComdatIndex() >= 0 &&
+        !(usesCOFFExportRules(ctx.arg.target) && objSym.getComdatIndex() >= 0 &&
           !isDLLExport(objSym.getIRName()));
     r.VisibleToRegularObj =
         sym->isUsedInRegularObj || sym->isNoStrip() ||

@@ -89,6 +89,22 @@
 # -lc (feature msil-linux-rtlib, %{msil_linux_rtlib}, msil-prog.py
 # --linux-rtlib; see "helper archives" below).
 #
+# From P-1a (plan 5.18.10 PX1, PX2): msil_triple may be the portable triple
+# msil64-unknown-dotnet (features msil-triple=msil64-unknown-dotnet,
+# msil-triple-portable, msil-triple-msil64), which has no native triple and
+# so no native oracle (msil_native_oracle=required is a configuration error
+# with it) and no hosted mode; its programs check themselves, and their
+# expected files are hand-written under %{msil_expected_rule} (plan 5.17.4's
+# portable allowance, 'portable: no stdout before P-2; the program checks
+# itself'). Every lit run derives msil-portable (the build's clang and
+# msil-ld build msil64-unknown-dotnet programs), msil-portable-builtins (its
+# helper archive exists) and msil-dotnet-x86 (the 32-bit starts of the guard
+# test), with msil_require_portable and msil_require_x86 making the first two
+# and the last configuration errors when missing, and substitutes
+# %msil_portable_triple, %clang_portable, %llc_portable,
+# %{msil_portable_cflags}, %msil_dotnet_x86 and %msil_set_32bitreq (see "the
+# portable target" below).
+#
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
 # compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
@@ -114,7 +130,9 @@
 # msil_pipeline=lto or obj) does the same for msil-ld and llvm-ar;
 # --param msil_require_csc=1 does it for the SDK's csc of %msil_csc (M22);
 # --param msil_require_corpus=1 (the corpus legs) does it for the exit
-# corpus; and an explicitly requested runner, runtime, leg or tool that
+# corpus; --param msil_require_portable=1 and msil_require_x86=1 (the
+# portable legs, P-1a) do it for the portable toolchain and helper archive
+# and for the 32-bit starts; and an explicitly requested runner, runtime, leg or tool that
 # cannot be used is one too.
 
 import glob
@@ -723,28 +741,64 @@ def default_msil_triple():
     return arch + "-unknown-linux-gnu-msil"
 
 
+# The portable triples (plan 5.18.1, 5.18.10 PX1; P-1a): msil32 or msil64
+# with the OS dotnet, written without a '-msil' suffix. msil-prog.py,
+# msil-equiv.py and update-expected.py have the same rule.
+PORTABLE_TRIPLE_RE = re.compile(r"^msil(32|64)-[^-]+-dotnet$")
+PORTABLE_TRIPLE = "msil64-unknown-dotnet"  # %msil_portable_triple
+
+
 msil_triple = params.get("msil_triple") or default_msil_triple()
-if not msil_triple.endswith("-msil"):
-    fatal("--param msil_triple=%s does not end in -msil" % msil_triple)
-native_triple = msil_triple[: -len("-msil")]
-triple_parts = native_triple.split("-")
-triple_arch = triple_parts[0]
+portable_triple = bool(PORTABLE_TRIPLE_RE.match(msil_triple))
+if msil_triple.endswith("-msil") and PORTABLE_TRIPLE_RE.match(
+    msil_triple[: -len("-msil")]
+):
+    fatal(
+        "--param msil_triple=%s: a portable triple takes no -msil suffix (use %s)"
+        % (msil_triple, msil_triple[: -len("-msil")])
+    )
+if not portable_triple and not msil_triple.endswith("-msil"):
+    fatal(
+        "--param msil_triple=%s does not end in -msil and is not a portable "
+        "triple (%s)" % (msil_triple, PORTABLE_TRIPLE)
+    )
 features.add("msil-triple=" + msil_triple)
-# These follow the effective triple, never the host: the WSL runner executes a
-# linux triple on Windows, so a Windows-only P/Invoke test must REQUIRE
-# msil-triple-windows, not system-windows.
-if "windows" in triple_parts:
-    features.add("msil-triple-windows")
-    triple_os = "windows"
-elif "linux" in triple_parts:
-    features.add("msil-triple-linux")
-    triple_os = "linux"
-elif any(p.startswith(("darwin", "macos")) for p in triple_parts):
-    triple_os = "darwin"
+if portable_triple:
+    # A portable triple (plan 5.18.10 PX1) has no native triple, so the
+    # native-oracle and hosted features are never set for it; triple_os is
+    # 'dotnet', and a run compares with the expected file of the OS it runs
+    # on (exec_os: linux under msil_runner=wsl, else the host's).
+    native_triple = None
+    triple_parts = msil_triple.split("-")
+    triple_os = "dotnet"
+    features.add("msil-triple-portable")
+    features.add("msil-triple-" + triple_parts[0])  # msil-triple-msil64
+    if runner == "wsl" or (not is_windows and platform.system() != "Darwin"):
+        exec_os = "linux"
+    else:
+        exec_os = "windows" if is_windows else "darwin"
 else:
-    triple_os = triple_parts[2] if len(triple_parts) > 2 else "unknown"
-if runner == "wsl" and triple_os != "linux":
-    lit_config.warning("msil: msil_runner=wsl with the non-Linux triple " + msil_triple)
+    native_triple = msil_triple[: -len("-msil")]
+    triple_parts = native_triple.split("-")
+    # These follow the effective triple, never the host: the WSL runner
+    # executes a linux triple on Windows, so a Windows-only P/Invoke test must
+    # REQUIRE msil-triple-windows, not system-windows.
+    if "windows" in triple_parts:
+        features.add("msil-triple-windows")
+        triple_os = "windows"
+    elif "linux" in triple_parts:
+        features.add("msil-triple-linux")
+        triple_os = "linux"
+    elif any(p.startswith(("darwin", "macos")) for p in triple_parts):
+        triple_os = "darwin"
+    else:
+        triple_os = triple_parts[2] if len(triple_parts) > 2 else "unknown"
+    # The OS of the expected file a run compares with (msil-run.py
+    # --expect-os).
+    exec_os = triple_os
+    if runner == "wsl" and triple_os != "linux":
+        lit_config.warning("msil: msil_runner=wsl with the non-Linux triple " + msil_triple)
+triple_arch = triple_parts[0]
 note("triple %s, runner %s" % (msil_triple, runner))
 
 # ---------------------------------------------------------------- dotnet (host)
@@ -2033,11 +2087,21 @@ e7_oracle = False
 if oracle_required or bool_param("msil_native_oracle"):
     host_target = {"x86_64": "X86", "aarch64": "AArch64"}.get(triple_arch)
     problems = []
-    if not clang_path:
+    if portable_triple:
+        # Plan 5.18.10 PX1, PX2: before P-2 a portable program checks itself
+        # and its expected files are hand-written (plan 5.17.4's portable
+        # allowance).
+        problems.append(
+            "the portable triple %s has no native triple, so no native oracle"
+            % msil_triple
+        )
+    elif not clang_path:
         problems.append("clang is not built")
-    if host_target not in config.targets_to_build:
+    if not portable_triple and host_target not in config.targets_to_build:
         problems.append("the %s target is not built" % host_target)
-    if runner == "wsl":
+    if portable_triple:
+        pass
+    elif runner == "wsl":
         if native_triple != "x86_64-unknown-linux-gnu":
             problems.append(
                 "the E7 Linux oracle of msil_runner=wsl builds "
@@ -2207,7 +2271,9 @@ linux_rtlib_tried = []
 # On a non-Windows host: (clang, the path it printed or '') for each clang
 # that auto asked, for linux_rtlib_why().
 linux_rtlib_asked = []
-if linux_rtlib_param.lower() == "auto":
+if linux_rtlib_param.lower() == "auto" and portable_triple:
+    pass  # no native triple, so no hosted Linux oracle to link it
+elif linux_rtlib_param.lower() == "auto":
     if is_windows:
         if linux_libdir:
             linux_rtlib_tried.append(os.path.join(linux_libdir, LINUX_RTLIB_NAME))
@@ -2334,6 +2400,11 @@ def hosted_headers_why():
         return (
             "the Windows triple's C headers are missing: no directory of INCLUDE holds "
             "corecrt.h (run lit from a VS x64 developer prompt)"
+        )
+    if portable_triple:
+        return (
+            "hosted mode knows the C headers of Linux and Windows triples only; the "
+            "portable triple %s gets its C library at P-1b (plan 5.18.10)" % msil_triple
         )
     return (
         "hosted mode knows the C headers of Linux and Windows triples only, not %s"
@@ -2491,6 +2562,175 @@ if link_missing and pipeline_param in ("lto", "obj"):
     )
 if link_missing and config.msil_require_link:
     fatal("msil_require_link=1, but these are missing: " + "; ".join(link_missing))
+
+# ---------------------------------------------------------------- the portable target
+# Plan 5.18.10 PX1 (P-1a), in every lit run whatever msil_triple is:
+#   msil-portable           the build's clang and msil-ld accept
+#                           msil64-unknown-dotnet: 'clang
+#                           --target=msil64-unknown-dotnet -nostdlib
+#                           -ffreestanding' compiles and links (through
+#                           msil-ld, which the driver runs) a program that
+#                           returns 0. The probe cache keeps a success while
+#                           clang and msil-ld are unchanged.
+#   msil-portable-builtins  the portable helper archive (plan 5.18.8)
+#                           exists: <resource dir>/lib/msil64-unknown-dotnet/
+#                           libclang_rt.builtins.a, which 'python
+#                           msil/utils/build/build-builtins.py --triple
+#                           msil64-unknown-dotnet' builds, and which 'clang
+#                           --target=msil64-unknown-dotnet -rtlib=compiler-rt
+#                           -print-libgcc-file-name' names (see "helper
+#                           archives").
+# --param msil_require_portable=1 (the portable legs pass it) makes a missing
+# toolchain or archive a configuration error instead of UNSUPPORTED (P-1b
+# adds the sysroot).
+#   msil-dotnet-x86         (Windows, msil_runner=local) a 32-bit dotnet.exe
+#                           (%ProgramFiles(x86)%\dotnet\dotnet.exe) with
+#                           Microsoft.NETCore.App 8.x and 10.x, and the 32-bit
+#                           .NET Framework (%WINDIR%\Microsoft.NET\Framework\
+#                           v4.0.30319\clr.dll): the 32-bit starts of the guard
+#                           test (guard-x86, plan 5.18.7). %msil_dotnet_x86 is
+#                           msil-run.py with that host (a test adds
+#                           --runtime-major 8 or 10), %msil_set_32bitreq IN OUT
+#                           writes a copy of an image with 32BITREQUIRED set,
+#                           for a 32-bit start on the Framework (%msil_exec
+#                           --netfx).
+# --param msil_require_x86=1 (the Windows portable leg passes it) makes their
+# absence a configuration error, so guard-x86 is never silently UNSUPPORTED.
+require_portable = bool_param("msil_require_portable")
+require_x86 = bool_param("msil_require_x86")
+portable_problems = []
+
+
+def probe_portable_toolchain():
+    """None when clang and msil-ld build a portable program, else why not.
+    The probe cache keeps either answer while clang and msil-ld are unchanged
+    (until P-1a's clang every host-triple run would otherwise re-probe and
+    miss)."""
+    if not clang_path:
+        return "clang is not built"
+    if not msil_ld:
+        return "msil-ld is not built"
+    name = "portable toolchain %s %s" % (
+        slashes(os.path.abspath(clang_path)),
+        slashes(os.path.abspath(msil_ld)),
+    )
+    key = {"tools": {"clang": file_stamp(clang_path), "msil-ld": file_stamp(msil_ld)}}
+    cached = probe_cache.get(name, key, lambda v: isinstance(v, str) and v != "")
+    if cached is not None:
+        return None if cached == "ok" else cached
+    why = None
+    rc = None
+    os.makedirs(config.test_exec_root, exist_ok=True)
+    probe_dir = tempfile.mkdtemp(prefix="msil-portable-", dir=config.test_exec_root)
+    try:
+        src = os.path.join(probe_dir, "probe.c")
+        exe = os.path.join(probe_dir, "probe.exe")
+        with open(src, "w", encoding="utf-8", newline="\n") as f:
+            f.write("int main(void) { return 0; }\n")
+        rc, out = run_quietly(
+            [
+                clang_path,
+                "--target=" + PORTABLE_TRIPLE,
+                "-nostdlib",
+                "-ffreestanding",
+                src,
+                "-o",
+                exe,
+            ],
+            120,
+        )
+        if rc != 0 or not os.path.isfile(exe):
+            last = (out or "").strip().splitlines()
+            why = "'clang --target=%s -nostdlib' cannot build a program (%s)" % (
+                PORTABLE_TRIPLE,
+                last[-1] if last else "exit status %s" % rc,
+            )
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+    if rc is not None:  # a run that could not start or timed out is not kept
+        probe_cache.put(name, key, why or "ok")
+    return why
+
+
+portable_why = probe_portable_toolchain()
+if portable_why:
+    portable_problems.append("no portable toolchain: " + portable_why)
+else:
+    features.add("msil-portable")
+    note("portable toolchain: clang and msil-ld build %s" % PORTABLE_TRIPLE)
+portable_archive = (
+    per_target_helper_archive(clang_path, PORTABLE_TRIPLE) if clang_path else ""
+)
+portable_named = (
+    print_libgcc_file_name(clang_path, PORTABLE_TRIPLE, per_target=portable_archive)
+    if portable_archive and "msil-portable" in features
+    else ""
+)
+if (
+    portable_archive
+    and os.path.isfile(portable_archive)
+    and os.path.normcase(portable_named) == os.path.normcase(portable_archive)
+):
+    features.add("msil-portable-builtins")
+    note("portable helper archive: " + slashes(portable_archive))
+else:
+    portable_problems.append(
+        "no portable helper archive %s (build it with 'python "
+        "msil/utils/build/build-builtins.py --triple %s', plan 5.18.8)"
+        % (slashes(portable_archive) or "(no clang)", PORTABLE_TRIPLE)
+    )
+if portable_problems:
+    if require_portable:
+        fatal("msil_require_portable=1, but " + "; ".join(portable_problems))
+    for problem in portable_problems:
+        note(problem)
+
+
+def find_dotnet_x86():
+    """(the 32-bit dotnet.exe or None, the reasons the 32-bit starts are
+    missing)."""
+    if not is_windows:
+        return None, ["the 32-bit starts need a Windows host"]
+    if runner != "local":
+        return None, ["the 32-bit starts need msil_runner=local"]
+    why = []
+    pf86 = os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
+    host = os.path.join(pf86, "dotnet", "dotnet.exe")
+    if not os.path.isfile(host):
+        why.append("no 32-bit dotnet.exe (%s)" % slashes(host))
+        host = None
+    else:
+        rc, out = cached_run(
+            "dotnet x86 --list-runtimes " + slashes(host),
+            dotnet_key(host, "shared/Microsoft.NETCore.App"),
+            [host, "--list-runtimes"],
+            60,
+        )
+        majors = set(
+            int(m)
+            for m in re.findall(r"^Microsoft\.NETCore\.App (\d+)\.", out or "", re.M)
+        ) if rc == 0 else set()
+        lacking = [str(m) for m in (8, 10) if m not in majors]
+        if lacking:
+            why.append(
+                "%s has no Microsoft.NETCore.App %s.x (x86)"
+                % (slashes(host), " or ".join(lacking))
+            )
+    windir = os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows"
+    clr32 = os.path.join(windir, "Microsoft.NET", "Framework", "v4.0.30319", "clr.dll")
+    if not os.path.isfile(clr32):
+        why.append("no 32-bit .NET Framework 4.x (%s)" % slashes(clr32))
+    return host, why
+
+
+dotnet_x86, x86_why = find_dotnet_x86()
+if not x86_why:
+    features.add("msil-dotnet-x86")
+    note("32-bit starts: %s and the 32-bit .NET Framework" % slashes(dotnet_x86))
+elif require_x86:
+    fatal("msil_require_x86=1, but " + "; ".join(x86_why))
+else:
+    note("no 32-bit starts (msil-dotnet-x86): " + "; ".join(x86_why))
 if link_missing and pipeline in ("lto", "obj"):
     note(
         "the default pipeline %s links every C test through msil-ld, but these "
@@ -3053,7 +3293,7 @@ if wsl_ilasm:
 def make_exec_cmd(runtimeconfig, env):
     """%msil_exec with the runtimeconfig.json <runtimeconfig> and the
     --env arguments <env> (text)."""
-    cmd = "%s --expect-os %s%s" % (script("msil-run.py"), triple_os, limits)
+    cmd = "%s --expect-os %s%s" % (script("msil-run.py"), exec_os, limits)
     if runner == "wsl":
         cmd += " --runner wsl --wsl-distro %s --dotnet %s" % (
             wsl_distro,
@@ -3231,7 +3471,9 @@ llc = lit.util.which("llc", config.llvm_tools_dir) or "llc-not-found"
 # them). It is empty for MinGW (msvcrt holds the math functions, libgcc the
 # helpers) and when the builtins are disabled; the composites then leave it
 # out. update-expected.py builds its native command line by the same rule.
-if triple_os != "windows":
+if portable_triple:
+    native_ldflags = ""  # no native build (plan 5.18.10)
+elif triple_os != "windows":
     native_ldflags = "-lm"
 elif msvc_native and native_rtlib:
     native_ldflags = quote("-l" + native_rtlib)
@@ -3966,8 +4208,35 @@ substitutions = [
     ("%lld_link", quote(lld_link or "lld-link-not-found")),
     ("%msil_triple", msil_triple),
     ("%clang_msil", "%s --target=%s" % (quote(clang), msil_triple)),
-    ("%clang_native", "%s --target=%s" % (quote(clang), native_triple)),
+    (
+        "%clang_native",
+        "%s --target=%s"
+        % (quote(clang), native_triple or "no-native-triple-of-" + msil_triple),
+    ),
     ("%llc_msil", "%s -mtriple=%s" % (quote(llc), msil_triple)),
+    # The portable target (plan 5.18.10 PX1; see "the portable target"):
+    # msil64-unknown-dotnet in any lit run, whatever msil_triple is.
+    ("%msil_portable_triple", PORTABLE_TRIPLE),
+    ("%clang_portable", "%s --target=%s" % (quote(clang), PORTABLE_TRIPLE)),
+    ("%llc_portable", "%s -mtriple=%s" % (quote(llc), PORTABLE_TRIPLE)),
+    # The flags of msil/test/Portable/00-freestanding's programs: no C
+    # library (the helper archive stays linked, plan 5.18.4 PV3).
+    ("%{msil_portable_cflags}", "-nolibc -ffreestanding"),
+    # The 32-bit host (feature msil-dotnet-x86): msil-run.py --dotnet
+    # <32-bit dotnet.exe> under this run's limits and --env values, with no
+    # runtimeconfig (a test adds --runtime-major 8 or 10).
+    (
+        "%msil_dotnet_x86",
+        "%s --expect-os windows%s --dotnet %s%s"
+        % (
+            script("msil-run.py"),
+            limits,
+            quote(dotnet_x86 or "dotnet-x86-not-found"),
+            env_args,
+        ),
+    ),
+    # %msil_set_32bitreq IN OUT: a copy of the image IN with 32BITREQUIRED set.
+    ("%msil_set_32bitreq", script("msil-run.py") + " --set-32bitreq"),
     ("%ilasm", ilasm_cmd),
     ("%dotnet", quote(dotnet or "dotnet-not-found")),
     ("%msil_exec", exec_cmd),

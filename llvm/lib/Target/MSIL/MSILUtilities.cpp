@@ -22,6 +22,7 @@
 #include "MSILMachineFunctionInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/TrailerDefs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -41,6 +42,16 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 using namespace llvm;
+
+bool MSIL::isSupportedTarget(const TargetMachine &TM) {
+  const Triple &TT = TM.getTargetTriple();
+  if (TT.isMSIL())
+    return TT.getArch() == Triple::msil64 && TT.isOSDotNet() &&
+           TM.getPointerSizeInBits(0) == 64;
+  return TT.isOSBinFormatMSIL() &&
+         (TT.getArch() == Triple::x86_64 || TT.getArch() == Triple::aarch64) &&
+         TM.getPointerSizeInBits(0) == 64;
+}
 
 std::string MSIL::getIRName(const GlobalValue &GV) {
   std::string Name;
@@ -243,8 +254,12 @@ static constexpr MathImport MathImports[] = {
 /// Returns the C runtime of \p TT, or std::nullopt for a triple whose C
 /// library Phase 1 does not know (decision D14 names linux-gnu, linux-musl,
 /// windows-msvc and windows-gnu; a Linux triple without an environment uses
-/// glibc, a Windows triple without one the MSVC runtime).
+/// glibc, a Windows triple without one the MSVC runtime). The portable
+/// triples bind no native C library (cli::bindsNatively, plan 5.18.5 LR2), so
+/// their standalone text imports nothing (T-P3).
 static std::optional<CRuntime> getCRuntime(const Triple &TT) {
+  if (!cli::bindsNatively(TT))
+    return std::nullopt;
   if (TT.isOSLinux()) {
     if (TT.isMusl())
       return CRuntime::Musl;

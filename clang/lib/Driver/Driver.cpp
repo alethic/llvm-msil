@@ -6193,7 +6193,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
                                       const llvm::Triple &Target) const {
 
   auto &TC = ToolChains[Target.str()];
-  if (!TC && Target.isOSBinFormatMSIL())
+  // createMSILToolChain also refuses the portable PT5 mixes (plan 5.18.1).
+  if (!TC &&
+      (Target.isOSBinFormatMSIL() || Target.isMSIL() || Target.isOSDotNet()))
     TC = toolchains::createMSILToolChain(*this, Target, Args);
   if (!TC) {
     switch (Target.getOS()) {

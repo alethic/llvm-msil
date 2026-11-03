@@ -23,8 +23,10 @@
 #include "lld/Common/Strings.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/Signature.h"
 #include "llvm/CLI/TrailerDefs.h"
 #include "llvm/IR/Instruction.h"
@@ -32,6 +34,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/StringSaver.h"
 #include <optional>
 
@@ -487,6 +490,56 @@ void SymbolTable::reportUnresolved(std::string msg, ArrayRef<Reference> refs,
   error(msg);
 }
 
+// The names of lld/MSIL/CLibraryNames.def: llvm-libc's public function names
+// that TargetLibraryInfo lacks (plan 5.18.6 PL3), sorted.
+static constexpr StringLiteral cLibraryNames[] = {
+#define C_LIBRARY_NAME(name) #name,
+#include "CLibraryNames.def"
+};
+
+// True if \p name is a C library function's (plan 5.18.6 PL3): one that
+// TargetLibraryInfo::getLibFunc knows (its C++ operator and runtime names
+// aside, which are no C library's) or one of CLibraryNames.def.
+static bool isCLibraryFunctionName(StringRef name) {
+  if (name.starts_with("_Z") || name.starts_with("?"))
+    return false;
+  static const TargetLibraryInfoImpl tli{Triple()};
+  if (tli.getLibFunc(name) != NotLibFunc)
+    return true;
+  auto less = [](StringRef a, StringRef b) { return a < b; };
+#ifndef NDEBUG
+  // Checked once: the table has over a thousand entries.
+  static const bool sorted =
+      std::is_sorted(std::begin(cLibraryNames), std::end(cLibraryNames), less);
+  assert(sorted && "CLibraryNames.def must be sorted");
+#endif
+  return std::binary_search(std::begin(cLibraryNames), std::end(cLibraryNames),
+                            name, less);
+}
+
+std::optional<std::string> getPortableNameClassLine(StringRef name,
+                                                    const Ctx &ctx) {
+  // N2: the portable triples have no libatomic (until M30 and P-3).
+  if (isAtomicLibraryName(name))
+    return "\n>>> an atomic operation (libatomic's interface), which " +
+           ctx.arg.target.str() + " does not provide yet";
+  // N1 and N3 keep their lines.
+  if (cli::isToolchainName(name) || isCompilerRuntimeName(name, ctx))
+    return std::nullopt;
+  if (!isCLibraryFunctionName(name))
+    return std::nullopt;
+  // N6: the C library is the managed c.dll; an input named c.dll takes part
+  // when the link reads it by path or through -lc.
+  bool linksCLibrary = any_of(symtab->getManagedLibraries(), [](auto *lib) {
+    return sys::path::filename(lib->getName()).equals_insensitive("c.dll");
+  });
+  if (linksCLibrary)
+    return "\n>>> a C library function that the C library c.dll (" +
+           ctx.arg.target.str() + ") does not provide";
+  return std::string("\n>>> a C library function; link the managed C library "
+                     "c.dll (-lc)");
+}
+
 // The first line of the report of an unresolved symbol (plan 5.9.14), with
 // the line of plan 5.14.2 for a name of classes N1-N3 (getNameClassLine; an
 // N1 name's line says that the helper archive does not define the name when
@@ -617,6 +670,15 @@ static void bindNative(Symbol &sym) {
 void SymbolTable::bindObjectSymbol(Symbol &sym) {
   auto it = importInfo.find(&sym);
   ImportInfo *info = it == importInfo.end() ? nullptr : &it->second;
+  // T-P2 (plan 5.18.6 PL4): the portable triples bind no native code, so an
+  // explicit import module (import_module, 5.10.7) is an error there; the
+  // symbol stays undefined. The backend reports it for bitcode inputs.
+  if (info && !info->module.empty() && !cli::bindsNatively(ctx.arg.target)) {
+    error("'" + toString(sym) + "' is declared with import module '" +
+          info->module + "', which " + ctx.arg.target.str() +
+          " does not support: the portable target binds no native code");
+    return;
+  }
   if (info && !info->module.empty()) {
     auto *e = make<NativeExport>();
     e->Module = info->module;
@@ -860,12 +922,13 @@ void SymbolTable::bindLateSymbols() {
     }
   }
 
-  // The writer defines __start_<X> and __stop_<X> on non-Windows triples
-  // when a CIL object has a segment named <X> (plan 5.9.9), so they do not
-  // bind natively.
+  // The writer defines __start_<X> and __stop_<X> under the section rules
+  // that define them (ELF and Dotnet, plan 5.18.5 LR9) when a CIL object has
+  // a segment named <X> (plan 5.9.9), so they do not bind natively.
+  bool startStop = cli::definesStartStop(cli::getSectionRules(ctx.arg.target));
   std::optional<DenseSet<StringRef>> objectSections;
   auto isObjectSectionBoundary = [&](StringRef name) {
-    if (ctx.arg.target.isOSWindows())
+    if (!startStop)
       return false;
     if (!name.consume_front("__start_") && !name.consume_front("__stop_"))
       return false;
@@ -880,12 +943,12 @@ void SymbolTable::bindLateSymbols() {
     return objectSections->contains(name);
   };
 
-  // On non-Windows triples whole-program code generation defines
-  // __start_<X> and __stop_<X> when a definition is in section <X>, so they
-  // are neither bound nor reported (plan 5.9.6, 5.9.9).
+  // Under the same rules whole-program code generation defines __start_<X>
+  // and __stop_<X> when a definition is in section <X>, so they are neither
+  // bound nor reported (plan 5.9.6, 5.9.9).
   std::optional<DenseSet<StringRef>> definedSections;
   auto isSectionBoundary = [&](StringRef name) {
-    if (ctx.arg.target.isOSWindows())
+    if (!startStop)
       return false;
     if (!name.consume_front("__start_") && !name.consume_front("__stop_"))
       return false;

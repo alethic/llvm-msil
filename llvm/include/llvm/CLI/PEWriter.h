@@ -7,12 +7,17 @@
 //===----------------------------------------------------------------------===//
 //
 // This file declares writePEImage, which wraps the metadata and IL of one
-// module in an IL-only PE32+ image with Roslyn's envelope (not ilasm's):
+// module in an IL-only PE32+ image with Roslyn's envelope (not ilasm's), or,
+// for the portable triples, in a PE32 AnyCPU image (plan 5.18.7):
 // - the classic 128-byte DOS header and stub (e_lfanew 0x80), the COFF header
-//   and a PE32+ optional header with 16 data directories, of which only the
-//   CLR directory (14) and, with debug entries, the Debug directory (6) are
-//   set: no import table, IAT, entry stub or base relocations, and
-//   AddressOfEntryPoint 0;
+//   and a PE32+ (or PE32) optional header with 16 data directories, of which
+//   only the CLR directory (14) and, with debug entries, the Debug directory
+//   (6) are set: no import table, IAT, entry stub or base relocations, and
+//   AddressOfEntryPoint 0. A PE32 image needs neither the mscoree stub nor
+//   .reloc: measured, a stubless PE32/I386 ILONLY image runs as a 64-bit
+//   process on .NET 8, .NET 10 (Windows and Linux) and .NET Framework 4.8
+//   (direct start and Assembly.LoadFrom), as Roslyn's AnyCPU image with stub
+//   and .reloc does;
 // - one .text section (0x60000020) at RVA SectionAlignment that holds, in
 //   this order, the 72-byte CLI header, the IL stream (4-aligned), the
 //   metadata (4-aligned), the debug directory and its data (4-aligned, if
@@ -60,6 +65,12 @@ namespace cli {
 
 class MetadataBuilder;
 
+/// The optional header format of an image: PE32+ (magic 0x20B, 240 bytes,
+/// 64-bit ImageBase and stack and heap fields) for the host triples, PE32
+/// (magic 0x10B, 224 bytes, BaseOfData, 32-bit ImageBase and stack and heap
+/// fields) for the portable triples' AnyCPU envelope (plan 5.18.7 PE1, PE2).
+enum class PEFormat : uint8_t { PE32Plus, PE32 };
+
 /// The shape of an image: an EXE program, a -shared DLL, or a netmodule (a
 /// CIL object, which has no Assembly row).
 enum class PEImageKind : uint8_t { Executable, Library, Module };
@@ -69,6 +80,9 @@ enum class PEImageKind : uint8_t { Executable, Library, Module };
 /// and a kind.
 struct PEOptions {
   COFF::MachineTypes Machine = COFF::IMAGE_FILE_MACHINE_AMD64;
+  /// PE32 only with machine I386, CorFlags ILONLY and neither 32BITREQUIRED
+  /// nor 32BITPREFERRED (the portable triples' AnyCPU envelope).
+  PEFormat Format = PEFormat::PE32Plus;
   PEImageKind Kind = PEImageKind::Executable;
   uint32_t CorFlags = COMIMAGE_FLAGS_ILONLY;
   /// Library and Module: 0x180000000.
@@ -84,9 +98,14 @@ struct PEOptions {
   uint8_t MajorLinkerVersion = 14, MinorLinkerVersion = 0;
 
   /// The options for \p TT and \p Kind: x86_64 is AMD64 and aarch64 is ARM64,
-  /// both PE32+. Any other architecture is an Error until phase 5 (PE32, the
-  /// mscoree stub and .reloc). Machine and CorFlags are independent of the
-  /// rest of the triple.
+  /// both PE32+; msil64 (msil64-unknown-dotnet) is the AnyCPU envelope: I386,
+  /// PE32, ImageBase 0x400000 (Executable) or 0x10000000 (Library and Module),
+  /// CorFlags ILONLY only, heap commit 0x1000 (plan 5.18.7 PE1). msil32 is
+  /// T-P1 ('target 'msil32-unknown-dotnet' is not supported yet: only
+  /// msil64-unknown-dotnet is implemented'). Any other architecture is an
+  /// Error until phase 5 (the i686 host triples need 32BITREQUIRED and their
+  /// own address width). Machine and CorFlags are independent of the rest of
+  /// the triple.
   LLVM_ABI static Expected<PEOptions> get(const Triple &TT, PEImageKind Kind);
 };
 
@@ -164,7 +183,8 @@ struct BlobContentId {
 ///   module, or a Library or Module with an entry point token;
 /// - MetadataBuilder::checkMethodBodies() fails (its error is returned
 ///   unchanged);
-/// - a machine other than AMD64 and ARM64 (only PE32+ is written), invalid
+/// - a machine other than AMD64, ARM64 and I386; I386 with the PE32+ format,
+///   without ILONLY or with 32BITREQUIRED or 32BITPREFERRED; invalid
 ///   alignments, a section name longer than 8 bytes, a COFF symbol with an
 ///   empty name, a NUL byte in its name or a section number past the
 ///   sections, too many sections, or an image larger than 4 GiB.

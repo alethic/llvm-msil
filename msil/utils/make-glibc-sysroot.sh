@@ -74,9 +74,15 @@ for line in "${uris[@]}"; do
   [[ $file == *.deb ]] || die "unexpected apt-get output: $line"
   files+=("$file")
 done
+# apt-get does not print the lines in the order of pkgs, so the package to
+# download is named by the missing file itself (NAME_VERSION_ARCH.deb).
 missing=()
-for i in "${!pkgs[@]}"; do
-  [[ -s $debs/${files[$i]} ]] || missing+=("${pkgs[$i]}")
+for f in "${files[@]}"; do
+  [[ -s $debs/$f ]] && continue
+  name=${f%%_*}
+  [[ " ${pkgs[*]} " == *" $name "* ]] ||
+    die "apt-get printed $f, which is none of ${pkgs[*]}"
+  missing+=("$name")
 done
 if ((${#missing[@]})); then
   echo "$prog: downloading ${missing[*]} into $debs"

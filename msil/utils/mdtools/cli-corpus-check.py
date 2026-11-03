@@ -203,7 +203,11 @@ with 'clang -c' and the flags above.
             - envelope, from 'llvm-cil-dump --headers' and the default
               listing: the machine of the triple's architecture (0x8664 for
               x86_64, 0xAA64 for aarch64), a PE32+ dll with characteristics
-              0x2022 and entry point token 0 (O1), the sections .text, .data,
+              0x2022 and entry point token 0 (O1; for the portable
+              architectures msil64 and msil32 the PE32 envelope of plan
+              5.18.7 PE1/PE2 instead: machine 0x014C, a PE32 dll with
+              characteristics 0x2022 and CorFlags ILONLY alone, neither
+              32BITREQUIRED nor 32BITPREFERRED), the sections .text, .data,
               .rdata and .bss, the last three with the marker flags of plan
               5.8.6 (0xC0000040, 0x40000040, 0xC0000080) and no size or raw
               data, one COFF symbol per SYMTAB symbol (5.8.6), the module row
@@ -2863,8 +2867,12 @@ OBJECT_NORMALIZE = [
     "--snan=quiet",
 ]
 # 5.8.2 O1: the COFF Machine of each triple architecture, and the
-# characteristics EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE | DLL.
-OBJECT_MACHINES = {"x86_64": 0x8664, "aarch64": 0xAA64}
+# characteristics EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE | DLL. The portable
+# architectures (plan 5.18.7 PE1, PE2; P-1a) write Roslyn's AnyCPU envelope:
+# machine I386, a PE32 optional header and CorFlags ILONLY (0x1) alone.
+OBJECT_MACHINES = {"x86_64": 0x8664, "aarch64": 0xAA64, "msil64": 0x014C, "msil32": 0x014C}
+PORTABLE_ARCHES = ("msil64", "msil32")
+COMIMAGE_FLAGS_ILONLY = 0x1
 OBJECT_CHARACTERISTICS = 0x2022
 # 5.8.6: the sections of a CIL object, .text and then the COFF view's marker
 # sections with their flags (no size, no raw data).
@@ -2903,7 +2911,7 @@ DUMP_SECTION_RE = re.compile(
     rb"^Section: (\S*) rva=0x[0-9A-F]+ vsize=0x([0-9A-F]+) raw=0x([0-9A-F]+) "
     rb"rawsize=0x([0-9A-F]+) flags=0x([0-9A-F]+)$"
 )
-DUMP_CLI_RE = re.compile(rb"^CLI: flags=0x[0-9A-F]+ entrypoint=0x([0-9A-F]+) ")
+DUMP_CLI_RE = re.compile(rb"^CLI: flags=0x([0-9A-F]+) entrypoint=0x([0-9A-F]+) ")
 # One symbol line of llvm-nm or GNU nm: an optional value, the letter, the
 # name (names of C symbols have no blanks); llvm-nm prints a bitcode
 # symbol's value as dashes.
@@ -3148,9 +3156,12 @@ def check_envelope(dump, li, arch, listing, source):
     if not fmt or not coff or not cli:
         return ["the --headers output lacks its Format, COFF or CLI line"]
     machine = OBJECT_MACHINES.get(arch)
-    if fmt.group(1) != b"PE32+" or fmt.group(3) != b"dll":
+    portable = arch in PORTABLE_ARCHES
+    want_format = b"PE32" if portable else b"PE32+"
+    if fmt.group(1) != want_format or fmt.group(3) != b"dll":
         problems.append(
-            "O1: %s %s, not a PE32+ dll" % (show(fmt.group(1)), show(fmt.group(3)))
+            "O1: %s %s, not a %s dll"
+            % (show(fmt.group(1)), show(fmt.group(3)), show(want_format))
         )
     if machine is not None and int(fmt.group(2), 16) != machine:
         problems.append(
@@ -3161,8 +3172,13 @@ def check_envelope(dump, li, arch, listing, source):
             "O1: characteristics 0x%s, not 0x%04X"
             % (show(coff.group(2)), OBJECT_CHARACTERISTICS)
         )
-    if int(cli.group(1), 16) != 0:
-        problems.append("O1: entry point token 0x%s, not 0" % show(cli.group(1)))
+    if portable and int(cli.group(1), 16) != COMIMAGE_FLAGS_ILONLY:
+        problems.append(
+            "O1: CorFlags 0x%s, not 0x%08X (ILONLY alone) for %s"
+            % (show(cli.group(1)), COMIMAGE_FLAGS_ILONLY, arch)
+        )
+    if int(cli.group(2), 16) != 0:
+        problems.append("O1: entry point token 0x%s, not 0" % show(cli.group(2)))
     names = [m.group(1) for m in sections]
     if names != [n for n, _ in OBJECT_SECTIONS]:
         problems.append(

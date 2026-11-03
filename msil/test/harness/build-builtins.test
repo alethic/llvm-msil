@@ -34,7 +34,23 @@
 # (4) a usage error exits 2 with a 'build-builtins.py: error:' line and
 #     lists, runs and writes nothing: --jobs 0, --check with --list, --out
 #     with --list, a triple that is not an MSIL triple, --self-test with
-#     another option, an unknown option and a --build-dir without bin/clang.
+#     another option, an unknown option and a --build-dir without bin/clang;
+# (5) the portable triple (plan 5.18.8, P-1a): --list --triple
+#     msil64-unknown-dotnet (no -msil suffix: the relaxed form rule, an
+#     msil32 or msil64 arch) prints only lines of that triple, in the list's
+#     format, with int_util.c and the ten -ftrapv helpers (absv, addv, mulv,
+#     negv and subv, each si and di) and the f16 conversion, 88 lines in
+#     all (one per member), and without
+#     msil_longdouble.c, any msil/lib/builtins/ source (the Windows members
+#     msil_ucrt_stdio*.c among them), atomic.c, a '*ti*' or a hosted source;
+#     --list --all and plain --list have no dotnet line (the portable archive
+#     is built only when --triple names it); msil32-unknown-dotnet passes
+#     the form rule, while x86_64-unknown-dotnet and a bare msil64 are usage
+#     errors with the new text. The self-test reports its portable checks.
+#     The failure paths: a list of host lines breaks the portable format
+#     check, the lines the portable list must lack are found in a list
+#     written with them, and neither that four-line list nor the --all list
+#     has the 88-line count.
 
 # DEFINE: %{bb} = "%python" "%S/../../utils/build/build-builtins.py"
 # DEFINE: %{bb_format} = "^(?!\S+-msil [^/\x5c ]+\.c\.o [^\x5c ]+/[^/\x5c ]+\.c$).+$"
@@ -45,6 +61,9 @@
 # DEFINE: %{bb_hosted} = "/emutls\.c$" "/enable_execute_stack\.c$" "/eprintf\.c$" "/clear_cache\.c$" "/trampoline_setup\.c$" "/os_version_check\.c$" "/apple_versioning\.c$"
 # DEFINE: %{bb_ld_msvc} = "^\S+-windows-msvc-msil \S+ \S*msil_longdouble\.c$"
 # DEFINE: %{bb_ld_other} = "^(?!(x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl|aarch64-unknown-linux-gnu|x86_64-w64-windows-gnu)-msil )\S+ \S+ \S*msil_longdouble\.c$"
+# DEFINE: %{bb_p_format} = "^(?!msil64-unknown-dotnet [^/\x5c ]+\.c\.o [^\x5c ]+/[^/\x5c ]+\.c$).+$"
+# DEFINE: %{bb_p_count} = "\A(?:.*\x0a){88}\Z"
+# DEFINE: %{bb_p_lacks} = "/msil_longdouble\.c$" " msil/lib/builtins/" "/msil_ucrt_stdio[^/ ]*\.c$" "windows"
 # DEFINE: %{bb_ld_wide} = "^x86_64-unknown-linux-gnu-msil \S+ msil/lib/builtins/msil_longdouble\.c$" "^x86_64-unknown-linux-musl-msil \S+ msil/lib/builtins/msil_longdouble\.c$" "^aarch64-unknown-linux-gnu-msil \S+ msil/lib/builtins/msil_longdouble\.c$" "^x86_64-w64-windows-gnu-msil \S+ msil/lib/builtins/msil_longdouble\.c$"
 
 # RUN: rm -rf %t && mkdir -p %t/empty
@@ -87,7 +106,7 @@
 # RUN: %{harness_check} exits 2 %{bb} --list --out %t/out > %t/usage-3.log 2>&1
 # RUN: %{harness_check} contains %t/usage-3.log "^build-builtins\.py: error: --out goes with a build or --check$"
 # RUN: %{harness_check} exits 2 %{bb} --list --triple x86_64-unknown-linux-gnu > %t/usage-4.log 2>&1
-# RUN: %{harness_check} contains %t/usage-4.log "^build-builtins\.py: error: --triple x86_64-unknown-linux-gnu is not an MSIL triple \(<arch>-\.\.\.-msil\)$"
+# RUN: %{harness_check} contains %t/usage-4.log "^build-builtins\.py: error: --triple x86_64-unknown-linux-gnu is not an MSIL triple \(<arch>-\.\.\.-msil, or an msil32 or msil64 triple such as msil64-unknown-dotnet\)$"
 # RUN: %{harness_check} exits 2 %{bb} --self-test --jobs 2 > %t/usage-5.log 2>&1
 # RUN: %{harness_check} contains %t/usage-5.log "^build-builtins\.py: error: --self-test takes no other option$"
 # RUN: %{harness_check} exits 2 %{bb} --list --frobnicate > %t/usage-6.log 2>&1
@@ -100,3 +119,27 @@
 # RUN: %{harness_check} missing %t/nobuild
 # RUN: %{harness_check} missing %t/empty/x86_64-pc-windows-msvc-msil
 # RUN: %{harness_check} missing %t/empty/x86_64-unknown-linux-gnu-msil
+
+# (5)
+# RUN: %{harness_check} contains %t/self-test.log "^ok: --all leaves out the portable triple$" "^ok: --list --triple msil64-unknown-dotnet needs no -msil suffix$" "^ok: --list --triple msil32-unknown-dotnet is accepted \(an msil arch\)$" "^ok: usage error: --triple x86_64-unknown-dotnet$" "^ok: two output directories give byte-identical portable archives$" "^ok: the repository's sources\.txt for msil64-unknown-dotnet: int_util\.c and the -ftrapv helpers, no msil/lib/builtins/ host family, no atomic or \*ti\* source "
+# RUN: %{bb} --list --triple msil64-unknown-dotnet > %t/portable.txt
+# RUN: %{harness_check} contains %t/portable.txt "^msil64-unknown-dotnet int_util\.c\.o compiler-rt/lib/builtins/int_util\.c$" "^msil64-unknown-dotnet absvsi2\.c\.o compiler-rt/lib/builtins/absvsi2\.c$" "^msil64-unknown-dotnet absvdi2\.c\.o compiler-rt/lib/builtins/absvdi2\.c$" "^msil64-unknown-dotnet addvsi3\.c\.o compiler-rt/lib/builtins/addvsi3\.c$" "^msil64-unknown-dotnet addvdi3\.c\.o compiler-rt/lib/builtins/addvdi3\.c$" "^msil64-unknown-dotnet mulvsi3\.c\.o compiler-rt/lib/builtins/mulvsi3\.c$" "^msil64-unknown-dotnet mulvdi3\.c\.o compiler-rt/lib/builtins/mulvdi3\.c$" "^msil64-unknown-dotnet negvsi2\.c\.o compiler-rt/lib/builtins/negvsi2\.c$" "^msil64-unknown-dotnet negvdi2\.c\.o compiler-rt/lib/builtins/negvdi2\.c$" "^msil64-unknown-dotnet subvsi3\.c\.o compiler-rt/lib/builtins/subvsi3\.c$" "^msil64-unknown-dotnet subvdi3\.c\.o compiler-rt/lib/builtins/subvdi3\.c$" "^msil64-unknown-dotnet extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$"
+# RUN: %{harness_check} lacks %t/portable.txt %{bb_p_format} %{bb_p_lacks} %{bb_atomic} %{bb_ti} %{bb_hosted}
+# RUN: %{harness_check} contains %t/portable.txt %{bb_p_count}
+# RUN: %{harness_check} lacks %t/all.txt "dotnet"
+# RUN: %{harness_check} lacks %t/default.txt "dotnet"
+# RUN: %{bb} --list --triple msil32-unknown-dotnet > %t/portable32.txt
+# RUN: %{harness_check} contains %t/portable32.txt "^msil32-unknown-dotnet int_util\.c\.o compiler-rt/lib/builtins/int_util\.c$"
+# RUN: %{harness_check} exits 2 %{bb} --list --triple x86_64-unknown-dotnet > %t/usage-8.log 2>&1
+# RUN: %{harness_check} contains %t/usage-8.log "^build-builtins\.py: error: --triple x86_64-unknown-dotnet is not an MSIL triple \(<arch>-\.\.\.-msil, or an msil32 or msil64 triple such as msil64-unknown-dotnet\)$"
+# RUN: %{harness_check} exits 2 %{bb} --list --triple msil64 > %t/usage-9.log 2>&1
+# RUN: %{harness_check} contains %t/usage-9.log "^build-builtins\.py: error: --triple msil64 is not an MSIL triple \(<arch>-\.\.\.-msil, or an msil32 or msil64 triple such as msil64-unknown-dotnet\)$"
+# RUN: cat %t/usage-8.log %t/usage-9.log > %t/usage-p.log
+# RUN: %{harness_check} lacks %t/usage-p.log "^\S+-dotnet \S+\.c\.o " "^ok: "
+# The failure paths.
+# RUN: %{harness_check} contains %t/default.txt %{bb_p_format}
+# RUN: %{harness_check} write %t/bad-portable.txt "msil64-unknown-dotnet msil_longdouble.sqrtl.c.o msil/lib/builtins/msil_longdouble.c" "msil64-unknown-dotnet msil_ucrt_stdio.printf.c.o msil/lib/builtins/msil_ucrt_stdio.c" "msil64-unknown-dotnet x86_64-pc-windows-msvc.c.o compiler-rt/lib/builtins/windows.c" "msil64-unknown-dotnet atomic.c.o compiler-rt/lib/builtins/atomic.c"
+# RUN: %{harness_check} lacks %t/bad-portable.txt %{bb_p_format}
+# RUN: %{harness_check} contains %t/bad-portable.txt %{bb_p_lacks} %{bb_atomic}
+# RUN: %{harness_check} lacks %t/bad-portable.txt %{bb_p_count}
+# RUN: %{harness_check} lacks %t/all.txt %{bb_p_count}

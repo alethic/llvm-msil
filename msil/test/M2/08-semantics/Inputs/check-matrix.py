@@ -1159,6 +1159,11 @@ def load_legs(repo, path, problems):
         if not isinstance(tag, str):
             problems.add(path, "leg %s: the tag is not a string" % name)
             continue
+        if tag == "Portable":
+            # P-1a's pair portable-smoke and portable-smoke-wsl (plan 5.18.10
+            # PX4): no phase or gate rule selects them, and their triple
+            # msil64-unknown-dotnet is not one of the matrix's.
+            continue
         if kind != "lit":
             if leg["runs"]:
                 problems.add(path, "leg %s of kind %s has lit runs" % (name, kind))

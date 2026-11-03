@@ -1,0 +1,123 @@
+## The PE envelope of CIL objects and images (ImplementationPlan.md 5.18.6
+## PL1, 5.18.7 PE1-PE3; P-1a's text T-P12):
+## - msil64-unknown-dotnet objects, executables and libraries are stubless
+##   AnyCPU PE32 images for machine I386 (0x14C) with CorFlags ILONLY only
+##   (never 32BITREQUIRED or 32BITPREFERRED), COFF characteristics 0x0022
+##   for an executable and 0x2022 for a library or an object, ImageBase
+##   0x400000 (executable) or 0x10000000 (library, object), DllCharacteristics
+##   0x8540, stack 0x400000/0x4000, heap 0x100000/0x1000, and no '.reloc'
+##   section; Inputs/portable/pe.py reads the format and machine from the
+##   headers on its own, as a second witness beside llvm-cil-dump;
+## - on every triple msil-ld compares each CIL object's PE format and COFF
+##   machine with the target's envelope and refuses a mismatch, T-P12:
+##     '<file>' is a <format> CIL object for machine <machine>, which <triple> does not link (it links <format> objects for machine <machine>)
+##   so an msil64 object whose COFF machine is rewritten to 0x8664 (the
+##   record's triple key still says msil64-unknown-dotnet) is refused, and
+##   so is an x86_64-pc-windows-msvc-msil object rewritten to a PE32 image
+##   for I386 (its triple key still says the host triple), and an
+##   x86_64-unknown-linux-gnu-msil object whose machine alone is rewritten;
+##   alone, after a valid object, and as an extracted archive member;
+## - the unmodified portable and host objects link as before.
+## The hex spelling of <machine> is not part of the contract beyond 'the COFF
+## value in hex', so the checks accept leading zeros and either case.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj p.ll -o p.o
+# RUN: llc -filetype=obj fn.ll -o fn.o
+# RUN: llc -filetype=obj main-fn.ll -o main-fn.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil host.ll -o w.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil host-fn.ll -o wfn.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil host.ll -o l.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{one} = --implicit-check-not=error: --implicit-check-not=warning:
+
+## The portable envelope: object, executable, library.
+# RUN: %python %S/Inputs/portable/pe.py info p.o | FileCheck %s --check-prefix=INFO32
+# INFO32: {{^}}PE32 machine=0x014C{{$}}
+# RUN: llvm-cil-dump --headers p.o | FileCheck %s --check-prefixes=HDR,HDR-LIB --implicit-check-not=.reloc
+# RUN: msil-ld p.o -o p.exe 2>&1 | count 0
+# RUN: %python %S/Inputs/portable/pe.py info p.exe | FileCheck %s --check-prefix=INFO32
+# RUN: llvm-cil-dump --headers p.exe | FileCheck %s --check-prefixes=HDR,HDR-EXE --implicit-check-not=.reloc
+# RUN: msil-ld -shared fn.o -o fn.dll 2>&1 | count 0
+# RUN: %python %S/Inputs/portable/pe.py info fn.dll | FileCheck %s --check-prefix=INFO32
+# RUN: llvm-cil-dump --headers fn.dll | FileCheck %s --check-prefixes=HDR,HDR-LIB --implicit-check-not=.reloc
+# HDR-EXE:      {{^}}Format: PE32 machine=0x014C exe{{$}}
+# HDR-LIB:      {{^}}Format: PE32 machine=0x014C dll{{$}}
+# HDR-EXE-NEXT: {{^}}COFF: sections={{[0-9]+}} timestamp=0x{{[0-9A-F]+}} characteristics=0x0022 symbols={{[0-9]+}}{{$}}
+# HDR-LIB-NEXT: {{^}}COFF: sections={{[0-9]+}} timestamp=0x{{[0-9A-F]+}} characteristics=0x2022 symbols={{[0-9]+}}{{$}}
+# HDR-EXE-NEXT: {{^}}Optional: imagebase=0x0000000000400000 sectionalign=0x{{[0-9A-F]+}} filealign=0x{{[0-9A-F]+}} subsystem={{[0-9]+}} dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x1000{{$}}
+# HDR-LIB-NEXT: {{^}}Optional: imagebase=0x0000000010000000 sectionalign=0x{{[0-9A-F]+}} filealign=0x{{[0-9A-F]+}} subsystem={{[0-9]+}} dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x1000{{$}}
+# HDR:          {{^}}CLI: flags=0x00000001 {{.*$}}
+
+## A portable object that claims machine 0x8664.
+# RUN: %python %S/Inputs/portable/pe.py set-machine fn.o fn-amd64.o 0x8664
+# RUN: %python %S/Inputs/portable/pe.py info fn-amd64.o | FileCheck %s --check-prefix=INFO-AMD64
+# INFO-AMD64: {{^}}PE32 machine=0x8664{{$}}
+# RUN: not msil-ld fn-amd64.o -o x.exe 2>&1 | %{fc} --check-prefix=PORTABLE -DFILE=fn-amd64.o
+# RUN: not msil-ld main-fn.o fn-amd64.o -o x.exe 2>&1 | %{fc} --check-prefix=PORTABLE -DFILE=fn-amd64.o
+# RUN: llvm-ar rc libbadfn.a fn-amd64.o
+# RUN: not msil-ld main-fn.o libbadfn.a -o x.exe 2>&1 | %{fc} --check-prefix=PORTABLE-MEMBER
+# PORTABLE:        {{^}}msil-ld: error: '[[FILE]]' is a PE32 CIL object for machine 0x{{0*}}8664, which msil64-unknown-dotnet does not link (it links PE32 objects for machine 0x{{0*}}{{14c|14C}}){{$}}
+# PORTABLE-MEMBER: {{^}}msil-ld: error: '{{.*}}fn-amd64.o{{.*}}' is a PE32 CIL object for machine 0x{{0*}}8664, which msil64-unknown-dotnet does not link (it links PE32 objects for machine 0x{{0*}}{{14c|14C}}){{$}}
+
+## A windows-msvc object rewritten to PE32 for I386.
+# RUN: %python %S/Inputs/portable/pe.py to-pe32 wfn.o wfn-i386.o
+# RUN: %python %S/Inputs/portable/pe.py info wfn-i386.o | FileCheck %s --check-prefix=INFO32
+# RUN: llvm-cil-dump --link-info wfn-i386.o | FileCheck %s --check-prefix=STILL-WIN
+# STILL-WIN: {{^}}LinkInfo v{{[0-9.]+}} triple=x86_64-pc-windows-msvc-msil {{.*$}}
+# RUN: not msil-ld wfn-i386.o -o x.exe 2>&1 | %{fc} --check-prefix=WIN -DFILE=wfn-i386.o
+# RUN: not msil-ld w.o wfn-i386.o -o x.exe 2>&1 | %{fc} --check-prefix=WIN -DFILE=wfn-i386.o
+# WIN: {{^}}msil-ld: error: '[[FILE]]' is a PE32 CIL object for machine 0x{{0*}}{{14c|14C}}, which x86_64-pc-windows-msvc-msil does not link (it links PE32+ objects for machine 0x{{0*}}8664){{$}}
+
+## A linux-gnu object whose machine alone says I386 (still PE32+).
+# RUN: %python %S/Inputs/portable/pe.py set-machine l.o l-i386.o 0x14c
+# RUN: %python %S/Inputs/portable/pe.py info l-i386.o | FileCheck %s --check-prefix=INFO-PLUS-I386
+# INFO-PLUS-I386: {{^}}PE32+ machine=0x014C{{$}}
+# RUN: not msil-ld l-i386.o -o x.exe 2>&1 | %{fc} --check-prefix=LNX -DFILE=l-i386.o
+# LNX: {{^}}msil-ld: error: '[[FILE]]' is a PE32+ CIL object for machine 0x{{0*}}{{14c|14C}}, which x86_64-unknown-linux-gnu-msil does not link (it links PE32+ objects for machine 0x{{0*}}8664){{$}}
+
+## The unmodified objects link as before.
+# RUN: msil-ld main-fn.o fn.o -o ok.exe 2>&1 | count 0
+# RUN: msil-ld w.o -o w.exe 2>&1 | count 0
+# RUN: msil-ld w.o wfn.o -o w2.exe 2>&1 | count 0
+# RUN: msil-ld l.o -o l.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers w.exe | FileCheck %s --check-prefix=HOST-EXE
+# RUN: llvm-cil-dump --headers l.exe | FileCheck %s --check-prefix=HOST-EXE
+# HOST-EXE: {{^}}Format: PE32+ machine=0x8664 exe{{$}}
+
+#--- p.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- fn.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @fn() {
+  ret i32 7
+}
+
+#--- main-fn.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @fn()
+
+define i32 @main() {
+  %r = call i32 @fn()
+  ret i32 %r
+}
+
+#--- host.ll
+define i32 @main() {
+  ret i32 42
+}
+
+#--- host-fn.ll
+define i32 @hostfn() {
+  ret i32 7
+}

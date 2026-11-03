@@ -10,8 +10,9 @@
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1                  # everything but the Exit legs
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Leg roundtrip
-#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -CorpusCache C:/llvm-msil-scratch/corpus-cache
-#                                                     # Phase 3's post-commit run (plan 5.17.11)
+#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -Portable -CorpusCache C:/llvm-msil-scratch/corpus-cache
+#                                                     # Phase 3's post-commit run (plan 5.17.11,
+#                                                     # with -Portable from P-1a: 5.18.10 PX4)
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache -Exit
 #                                                     # the Phase 3 exit gate's run (M35)
 #
@@ -64,7 +65,10 @@
 #        gives each leg's minutes). Since M24 msil/test/M3 runs inside net8, wsl-net10, lto and
 #        lto-wsl, and every lit leg passes msil_require_hosted=1 (plan 5.17.6). -Exit (M24, plan
 #        5.17.11) adds the Exit legs: none in M24; plan 5.17.6 gives the later ones (ctest-lto,
-#        gc-churn, gc-churn-wsl, stress, stress-wsl). The milestone gates' -Quick legs (net-core,
+#        gc-churn, gc-churn-wsl, stress, stress-wsl). -Portable (P-1a, plan 5.18.10 PX4) adds the
+#        -Portable legs, portable-smoke and (not with -NoWsl) portable-smoke-wsl: msil/test/Portable
+#        on msil64-unknown-dotnet, each after its setup 'build-builtins.py --triple
+#        msil64-unknown-dotnet'; -Exit alone adds neither. The milestone gates' -Quick legs (net-core,
 #        p3-full, harness, wsl-p3, scale; plan 5.17.7) run only when -Leg names them. A lit run
 #        that failed only by tool timeouts re-runs those tests once each (the retry of plan
 #        5.17.9, in lit-legs.ps1; see the summary below). M23's two phase-gate runs (2026-10-27,
@@ -97,8 +101,9 @@
 #        private hooks build tree on C:). CI runs it with -NoCompile -NoManifest -MinPass 250.
 #  10. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
 #                                    on every msil/utils/ci/*.sh, 'lit-legs.sh --list' must print
-#                                    the legs its header documents ('--full:' and '--exit:'
-#                                    descriptions tag a leg), and lit-legs.sh and unit-tests.sh
+#                                    the legs its header documents ('--full:', '--exit:' and
+#                                    '--portable:' descriptions tag a leg), and lit-legs.sh and
+#                                    unit-tests.sh
 #                                    must fail (exit non-zero, FAIL rows) against an empty build
 #                                    directory. The Linux job's configure, build, unit-test and
 #                                    lit steps themselves are not run here (they need a Linux
@@ -112,7 +117,7 @@
 # script that ends with a non-zero exit status without a FAIL row (an exception before its first
 # leg, for example an unknown or removed -Leg, or a killed process) gets a FAIL row, and so does
 # every expected leg without a row of its own (the legs of 'lit-legs.ps1 -List' that -NoWsl,
-# -Full, -Exit and -Leg select; -Quick legs only when -Leg names them), so a run that died
+# -Full, -Exit, -Portable and -Leg select; -Quick legs only when -Leg names them), so a run that died
 # part-way never passes. The corpus and determinism rows run with -Leg too, and so does
 # matrix-legs with -Exit. After the table and its summary line ('==== phase gate: <n> row(s), <k>
 # not PASS, <min> min ====', which plan 5.17.11 puts into the next commit body), the rows whose
@@ -129,8 +134,9 @@
 # amended'; plan 5.17.11 estimates 3-6 hours for Phase 3's post-commit run), so start it with
 # run_in_background and wait for it (a background job dies with the agent's turn).
 # -SkipConfigure/-SkipBuild reuse the current build; -Leg runs only the named lit legs (see
-# lit-legs.ps1 -List); -Exit adds the Exit legs and matrix-legs; -SkipUpstreamHooks leaves out
-# step 9; -NoWsl leaves out host-setup, the -Wsl legs, the -Exit legs named '*-wsl' and ci-sh. The
+# lit-legs.ps1 -List); -Exit adds the Exit legs and matrix-legs; -Portable adds the -Portable legs
+# (P-1a); -SkipUpstreamHooks leaves out step 9; -NoWsl leaves out host-setup, the -Wsl legs, the
+# -Exit and -Portable legs named '*-wsl' and ci-sh. The
 # upstream-hooks step always runs all of its legs, and the gate checks that each of them
 # (manifest, pins, lit, gtest, compile) has a row. The format and scope checks of the gate (plan
 # M23 gate steps 19 and 20) are not legs and are not run here.
@@ -143,6 +149,7 @@ param(
   [switch]$NoWsl,
   [switch]$Full,
   [switch]$Exit,                  # the Exit legs and the matrix-legs row (plan 5.17.11)
+  [switch]$Portable,              # the Portable legs (plan 5.18.10 PX4; P-1a)
   [string[]]$Leg = @(),
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
   [string]$CorpusCache = '',      # default: $env:MSIL_CORPUS_CACHE, else C:\llvm-msil-scratch\corpus-cache
@@ -239,8 +246,9 @@ function Test-ChildRows([string]$Step, [string]$Script, [int]$ExitCode, [string[
 
 # The legs that lit-legs.ps1 runs with the arguments the gate passes: the -Leg names, else the
 # legs of 'lit-legs.ps1 -List' without the -Wsl tag under -NoWsl, without -Full unless -Full,
-# without -Exit unless -Exit (and, like lit-legs.ps1, without the -Exit legs named '*-wsl' under
-# -NoWsl), and never the -Quick ones. $null if the list cannot be read.
+# without -Exit unless -Exit and without -Portable unless -Portable (and, like lit-legs.ps1,
+# without the -Exit and -Portable legs named '*-wsl' under -NoWsl), and never the -Quick ones.
+# $null if the list cannot be read.
 function Get-ExpectedLegs {
   $env:MSIL_CI_RESULTS = ''         # -List records no row; make sure of it
   try {
@@ -263,6 +271,8 @@ function Get-ExpectedLegs {
                 @($all | Where-Object {
                     -not (($_.Tag -eq '-Wsl' -and $NoWsl) -or ($_.Tag -eq '-Full' -and -not $Full) -or
                           ($_.Tag -eq '-Exit' -and (-not $Exit -or ($NoWsl -and $_.Name -like '*-wsl'))) -or
+                          ($_.Tag -eq '-Portable' -and
+                           (-not $Portable -or ($NoWsl -and $_.Name -like '*-wsl'))) -or
                           $_.Tag -eq '-Quick')
                   } | ForEach-Object { $_.Name })
               }
@@ -459,8 +469,8 @@ function Invoke-CiShSmoke {
     if ($LASTEXITCODE -ne 0) { $problems.Add("bash -n $($s.Name) exited $LASTEXITCODE") }
   }
 
-  # (b) 'lit-legs.sh --list' prints the legs of its header, in order, '--full:' and '--exit:' legs
-  # tagged.
+  # (b) 'lit-legs.sh --list' prints the legs of its header, in order, '--full:', '--exit:' and
+  # '--portable:' legs tagged.
   $header = @()
   $inLegs = $false
   foreach ($l in Get-Content -LiteralPath (Join-Path $ci 'lit-legs.sh')) {
@@ -471,6 +481,7 @@ function Invoke-CiShSmoke {
     if ($m.Success) {
       $tag = if ($m.Groups[2].Value -like '--full:*') { ' (--full)' }
              elseif ($m.Groups[2].Value -like '--exit:*') { ' (--exit)' }
+             elseif ($m.Groups[2].Value -like '--portable:*') { ' (--portable)' }
              else { '' }
       $header += $m.Groups[1].Value + $tag
     } elseif ($header.Count -gt 0 -and $l -notmatch '^#\s{4,}\S') { break }
@@ -533,6 +544,7 @@ if (-not $stop) {
   if (-not $NoWsl) { $legArgs += '-Wsl' }
   if ($Full) { $legArgs += '-Full' }
   if ($Exit) { $legArgs += '-Exit' }
+  if ($Portable) { $legArgs += '-Portable' }
   if ($Leg.Count -gt 0) { $legArgs += @('-Leg', ($Leg -join ',')) }
   $rc = Invoke-CiScript 'lit-legs.ps1' $legArgs
   $legs = Get-ExpectedLegs

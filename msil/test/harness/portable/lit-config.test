@@ -1,0 +1,84 @@
+# The portable triple's lit configuration (plan 5.18.10 PX1-PX3, P-1a.i):
+# nested runs of lit.cfg.py on the synthetic suite Inputs/nested-portable,
+# whose one test prints the portable substitutions and, one line each, the
+# features that tell a portable run from a host-triple run. Every nested run
+# with the portable triple passes msil_probe_cache= (empty), so its probes,
+# some of which fail where the portable toolchain is missing, neither read
+# nor replace the outer run's probe cache. Checks:
+# (1) --param msil_triple=msil64-unknown-dotnet: %msil_portable_triple,
+# %clang_portable, %llc_portable, %{msil_portable_cflags} (-nolibc
+# -ffreestanding), %msil_dotnet_x86 (msil-run.py --expect-os windows with
+# the limits and the x86 dotnet), %msil_set_32bitreq and %clang_native's
+# stand-in for a triple without a native one; the features
+# msil-triple=msil64-unknown-dotnet, msil-triple-portable and
+# msil-triple-msil64 and none of a host triple (msil-triple-windows,
+# msil-triple-linux), the native oracle or the hosted programs; and the
+# derived features msil-portable, msil-portable-builtins and msil-dotnet-x86
+# exactly when the outer run has them (the same probes). %msil_exec expects
+# the host OS's files, or linux under msil_runner=wsl (5.17.4's portable
+# allowance).
+# (2) The configuration errors, each fatal (exit 2) with its text: the -msil
+# suffix on the portable triple, x86_64-unknown-dotnet, msil_native_oracle=
+# required, and msil_require_portable and msil_require_x86 other than 0 or 1;
+# msil_native_oracle=1 is a warning and the run goes on.
+# (3) msil_require_portable=1 loads exactly when the outer run has
+# msil-portable and msil-portable-builtins, and otherwise is fatal naming
+# what is missing; msil_require_x86=1 loads exactly when the outer run has
+# msil-dotnet-x86, and is fatal under msil_runner=wsl on Windows.
+# (4) A host-triple run of msil/test/Portable (the outer run's triple when it
+# is not the portable one) reports every test UNSUPPORTED (P-1a.l's
+# lit.local.cfg) and runs none.
+# The patterns write cl[a]ng and l[l]c, which lit's tool substitutions
+# leave alone. Each check pins its failure path: (2) and the fatal branches of (3) are
+# the failures of (1) and of the loading branches.
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %{harness_lit} -a --param msil_triple=msil64-unknown-dotnet --param msil_probe_cache= %S/Inputs/nested-portable > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^PASS: MSIL :: harness/portable/Inputs/nested-portable/flags\.test " "^# \| portable triple: \[msil64-unknown-dotnet\]$" "^# \| cl[a]ng portable: \[\S*cl[a]ng(\.exe)? --target=msil64-unknown-dotnet\]$" "^# \| l[l]c portable: \[\S*l[l]c(\.exe)? -mtriple=msil64-unknown-dotnet\]$" "^# \| portable cflags: \[-nolibc -ffreestanding\]$" "^# \| cl[a]ng native: \[\S*cl[a]ng(\.exe)? --target=no-native-triple-of-msil64-unknown-dotnet\]$" "^# \| set 32bitreq: \[.*msil-run\.py --set-32bitreq\]$" "^# \| dotnet x86: \[.*msil-run\.py --expect-os windows --timeout \d+ --mem-limit-mb \d+ --dotnet .+\]$"
+# RUN: %{harness_check} contains %t/1.log "^# \| feature msil-triple=msil64-unknown-dotnet$" "^# \| feature msil-triple-portable$" "^# \| feature msil-triple-msil64$"
+# RUN: %{harness_check} lacks %t/1.log "^# \| feature msil-triple-windows$" "^# \| feature msil-triple-linux$" "^# \| feature msil-native-oracle$" "^# \| feature msil-hosted$"
+# RUN: %if msil-portable %{ %{harness_check} contains %t/1.log "^# \| feature msil-portable$" %}
+# RUN: %if !msil-portable %{ %{harness_check} lacks %t/1.log "^# \| feature msil-portable$" %}
+# RUN: %if msil-portable-builtins %{ %{harness_check} contains %t/1.log "^# \| feature msil-portable-builtins$" %}
+# RUN: %if !msil-portable-builtins %{ %{harness_check} lacks %t/1.log "^# \| feature msil-portable-builtins$" %}
+# RUN: %if msil-dotnet-x86 %{ %{harness_check} contains %t/1.log "^# \| feature msil-dotnet-x86$" "^# \| dotnet x86: \[.* --dotnet (?!dotnet-x86-not-found\])\S.*\]$" %}
+# RUN: %if !msil-dotnet-x86 %{ %{harness_check} lacks %t/1.log "^# \| feature msil-dotnet-x86$" %}
+# RUN: %if msil-wsl %{ %{harness_check} contains %t/1.log "^# \| exec: \[.*msil-run\.py --expect-os linux " %}
+# RUN: %if !msil-wsl && system-windows %{ %{harness_check} contains %t/1.log "^# \| exec: \[.*msil-run\.py --expect-os windows " %}
+# RUN: %if !msil-wsl && !system-windows %{ %{harness_check} contains %t/1.log "^# \| exec: \[.*msil-run\.py --expect-os linux " %}
+
+# (2)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet-msil --param msil_probe_cache= %S/Inputs/nested-portable > %t/2a.log 2>&1
+# RUN: %{harness_check} contains %t/2a.log "fatal: msil: --param msil_triple=msil64-unknown-dotnet-msil: a portable triple takes no -msil suffix \(use msil64-unknown-dotnet\)$"
+# RUN: %{harness_check} lacks %t/2a.log "^  MSIL :: "
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=x86_64-unknown-dotnet --param msil_probe_cache= %S/Inputs/nested-portable > %t/2b.log 2>&1
+# RUN: %{harness_check} contains %t/2b.log "fatal: msil: --param msil_triple=x86_64-unknown-dotnet does not end in -msil and is not a portable triple \(msil64-unknown-dotnet\)$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_native_oracle=required --param msil_probe_cache= %S/Inputs/nested-portable > %t/2c.log 2>&1
+# RUN: %{harness_check} contains %t/2c.log "fatal: msil: native oracle unavailable: the portable triple msil64-unknown-dotnet has no native triple, so no native oracle$"
+# RUN: %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_native_oracle=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/2d.log 2>&1
+# RUN: %{harness_check} contains %t/2d.log "warning: msil: native oracle unavailable: the portable triple msil64-unknown-dotnet has no native triple, so no native oracle$" "^  MSIL :: harness/portable/Inputs/nested-portable/flags\.test$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=2 --param msil_probe_cache= %S/Inputs/nested-portable > %t/2e.log 2>&1
+# RUN: %{harness_check} contains %t/2e.log "fatal: msil: --param msil_require_portable=2 is not a boolean \(use 0 or 1\)$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_x86=2 --param msil_probe_cache= %S/Inputs/nested-portable > %t/2f.log 2>&1
+# RUN: %{harness_check} contains %t/2f.log "fatal: msil: --param msil_require_x86=2 is not a boolean \(use 0 or 1\)$"
+
+# (3)
+# RUN: %if msil-portable && msil-portable-builtins %{ %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3a.log 2>&1 %}
+# RUN: %if msil-portable && msil-portable-builtins %{ %{harness_check} contains %t/3a.log "^  MSIL :: harness/portable/Inputs/nested-portable/flags\.test$" %}
+# RUN: %if !msil-portable || !msil-portable-builtins %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3a.log 2>&1 %}
+# RUN: %if !msil-portable || !msil-portable-builtins %{ %{harness_check} contains %t/3a.log "fatal: msil: msil_require_portable=1, but " %}
+# RUN: %if !msil-portable %{ %{harness_check} contains %t/3a.log "msil_require_portable=1, but no portable toolchain: 'cl[a]ng --target=msil64-unknown-dotnet -nostdlib' cannot build a program" %}
+# RUN: %if !msil-portable-builtins %{ %{harness_check} contains %t/3a.log "no portable helper archive \S+/msil64-unknown-dotnet/libclang_rt\.builtins\.a \(build it with 'python msil/utils/build/build-builtins\.py --triple msil64-unknown-dotnet', plan 5\.18\.8\)" %}
+# RUN: %if msil-dotnet-x86 %{ %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_x86=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3b.log 2>&1 %}
+# RUN: %if msil-dotnet-x86 %{ %{harness_check} contains %t/3b.log "^  MSIL :: harness/portable/Inputs/nested-portable/flags\.test$" %}
+# RUN: %if !msil-dotnet-x86 %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_x86=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3b.log 2>&1 %}
+# RUN: %if !msil-dotnet-x86 %{ %{harness_check} contains %t/3b.log "fatal: msil: msil_require_x86=1, but " %}
+# RUN: %if system-windows %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_x86=1 --param msil_runner=wsl --param msil_probe_cache= %S/Inputs/nested-portable > %t/3c.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} contains %t/3c.log "fatal: msil: msil_require_x86=1, but the 32-bit starts need msil_runner=local$" %}
+
+# (4)
+# RUN: %if !msil-triple-portable %{ %{harness_lit} %S/../../Portable > %t/4.log 2>&1 %}
+# RUN: %if !msil-triple-portable %{ %{harness_check} contains %t/4.log "^UNSUPPORTED: MSIL :: Portable/" "^\s*Unsupported\s*: \d+" %}
+# RUN: %if !msil-triple-portable %{ %{harness_check} lacks %t/4.log "^(PASS|FAIL|XFAIL|XPASS|UNRESOLVED|TIMEOUT): " "^\s*(Passed|Failed)\s*: " %}

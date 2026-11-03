@@ -8,20 +8,54 @@
 //
 // This file declares the parts of the trailer that cli::buildTrailer
 // (Trailer.cpp, ImplementationPlan.md 5.9.10) calls, one source file per
-// concern (5.14.5 S1, 5.13.3): the UCRT stdio options (TrailerStdio.cpp).
-// It is private to lib/CLI: the producers fill cli::TrailerInput, and only
-// the builder calls the parts.
+// concern (5.14.5 S1, 5.13.3): the UCRT stdio options (TrailerStdio.cpp) and
+// the portable width and byte-order guard (TrailerGuard.cpp). It is private
+// to lib/CLI: the producers fill cli::TrailerInput, and only the builder
+// calls the parts.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_CLI_TRAILERPARTS_H
 #define LLVM_LIB_CLI_TRAILERPARTS_H
 
+#include "llvm/CLI/ILBuilder.h"
+
 namespace llvm {
 namespace cli {
 
+class TrailerSink;
+struct PortableGuard;
 struct TrailerInput;
 struct TrailerMethod;
+
+/// The two branch targets of the portable guard in <Module>::.cctor, which
+/// emitPortableGuard creates and emitPortableGuardFailures places.
+struct PortableGuardLabels {
+  ILLabel Width; ///< guard_width: the process is not 64-bit.
+  ILLabel Order; ///< guard_order: the process is not little-endian.
+};
+
+/// Emits the width and byte-order guard of a portable output (plan 5.18.7
+/// PE5-PE7) as the first code of \p Cctor, <Module>::.cctor, which must still
+/// be empty:
+///
+///   ldc.i4.m1; conv.i; conv.u8; ldc.i8 -1; bne.un guard_width
+///   ldc.i4.1; call uint8[] BitConverter::GetBytes(int32); ldc.i4.0
+///   ldelem.u1; brfalse guard_order
+///
+/// Returns the two labels, the first of \p Cctor (ids 0 and 1), which the
+/// caller passes to emitPortableGuardFailures to place after the
+/// initializer's last 'ret'.
+PortableGuardLabels emitPortableGuard(TrailerSink &Sink, const PortableGuard &G,
+                                      TrailerMethod &Cctor);
+
+/// Appends the guard's two failure blocks to \p Cctor after its last 'ret':
+/// at each of \p Labels 'ldstr <T-P10 message>; newobj
+/// PlatformNotSupportedException::.ctor(string); throw', the width message
+/// first. \p Labels are what emitPortableGuard returned for \p Cctor.
+void emitPortableGuardFailures(TrailerSink &Sink, const PortableGuard &G,
+                               TrailerMethod &Cctor,
+                               const PortableGuardLabels &Labels);
 
 /// True when In.UCRTStdio names a function whose option word the module
 /// initializer sets (TrailerStdio.cpp; plan 5.15.2, hosted-libc H3), so that

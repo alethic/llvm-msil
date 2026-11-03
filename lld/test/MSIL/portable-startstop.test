@@ -1,0 +1,139 @@
+## Section boundary symbols on msil64-unknown-dotnet (ImplementationPlan.md
+## 5.18.5 LR9 and LR1's definesStartStop; portable-linkrules D5, D6, M3):
+## - __start_<X> and __stop_<X> keep today's non-Windows rule: the link
+##   defines them for an output section whose name is a C identifier when
+##   they are referenced, with hidden or default visibility, and they bound
+##   that section (two 4-byte variables: stop - start is 8);
+## - sections group by their verbatim name, with no '$' grouping: the
+##   variables of 'grp$a' and 'grp$b' are not part of 'grp', so
+##   __stop_grp - __start_grp is 4;
+## - an unreferenced section gets no boundary fields;
+## - a -shared library never exports them: its export class has no member
+##   for either, while the function that uses them is exported.
+## The module initializer starts with the width guard (portable-guard.test);
+## Inputs/portable/module-init.py strip-guard leaves it out so that
+## Inputs/cctor.py reads the address fields as it does for host images, and
+## module-init.py bounds prints the difference.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj hidden.ll -o hidden.o
+# RUN: llc -filetype=obj default.ll -o default.o
+# RUN: llc -filetype=obj grp.ll -o grp.o
+# RUN: llc -filetype=obj noref.ll -o noref.o
+# RUN: llc -filetype=obj lib.ll -o lib.o
+
+# DEFINE: %{bounds} = %python %S/Inputs/portable/module-init.py bounds
+# DEFINE: %{strip} = %python %S/Inputs/portable/module-init.py strip-guard
+
+## Hidden references.
+# RUN: msil-ld hidden.o -o hidden.exe 2>&1 | count 0
+# RUN: llvm-cil-dump hidden.exe > hidden.txt
+# RUN: FileCheck %s --check-prefix=FIELDS --input-file=hidden.txt
+# FIELDS-DAG: {{^}}  .field '__start_myreg' native int flags=0x{{[0-9A-F]+}}{{$}}
+# FIELDS-DAG: {{^}}  .field '__stop_myreg' native int flags=0x{{[0-9A-F]+}}{{$}}
+# RUN: %{strip} hidden.txt > hidden-body.txt
+# RUN: %python %S/Inputs/cctor.py hidden-body.txt > hidden-init.txt
+# RUN: %{bounds} hidden-init.txt myreg | FileCheck %s --check-prefix=EIGHT
+# EIGHT: {{^}}myreg: start=data+{{[0-9]+}} stop=data+{{[0-9]+}} size=8{{$}}
+
+## Default-visibility references.
+# RUN: msil-ld default.o -o default.exe 2>&1 | count 0
+# RUN: llvm-cil-dump default.exe > default.txt
+# RUN: FileCheck %s --check-prefix=FIELDS --input-file=default.txt
+# RUN: %{strip} default.txt > default-body.txt
+# RUN: %python %S/Inputs/cctor.py default-body.txt > default-init.txt
+# RUN: %{bounds} default-init.txt myreg | FileCheck %s --check-prefix=EIGHT
+
+## No '$' grouping.
+# RUN: msil-ld grp.o -o grp.exe 2>&1 | count 0
+# RUN: llvm-cil-dump grp.exe > grp.txt
+# RUN: %{strip} grp.txt > grp-body.txt
+# RUN: %python %S/Inputs/cctor.py grp-body.txt > grp-init.txt
+# RUN: %{bounds} grp-init.txt grp | FileCheck %s --check-prefix=FOUR
+# FOUR: {{^}}grp: start=data+{{[0-9]+}} stop=data+{{[0-9]+}} size=4{{$}}
+
+## No reference, no fields.
+# RUN: msil-ld noref.o -o noref.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noref.exe | FileCheck %s --check-prefix=NOREF \
+# RUN:   --implicit-check-not=__start_myreg --implicit-check-not=__stop_myreg
+# NOREF: {{^}}  .field 'a' native int flags=0x{{[0-9A-F]+}}{{$}}
+
+## A library exports neither.
+# RUN: msil-ld -shared lib.o -o lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump lib.dll > lib.txt
+# RUN: %python %S/Inputs/shared/listing.py members lib.txt lib | FileCheck %s --check-prefix=LIB \
+# RUN:   --implicit-check-not=__start_myreg --implicit-check-not=__stop_myreg
+# LIB: {{^}}  .method 'regsize' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+
+#--- hidden.ll
+target triple = "msil64-unknown-dotnet"
+
+@a = global i32 1, section "myreg", align 4
+@b = global i32 2, section "myreg", align 4
+@__start_myreg = external hidden global [0 x i32], align 4
+@__stop_myreg = external hidden global [0 x i32], align 4
+@llvm.used = appending global [2 x ptr] [ptr @a, ptr @b], section "llvm.metadata"
+
+define i32 @main() {
+  %d = sub i64 ptrtoint (ptr @__stop_myreg to i64), ptrtoint (ptr @__start_myreg to i64)
+  %t = trunc i64 %d to i32
+  ret i32 %t
+}
+
+#--- default.ll
+target triple = "msil64-unknown-dotnet"
+
+@a = global i32 1, section "myreg", align 4
+@b = global i32 2, section "myreg", align 4
+@__start_myreg = external global [0 x i32], align 4
+@__stop_myreg = external global [0 x i32], align 4
+@llvm.used = appending global [2 x ptr] [ptr @a, ptr @b], section "llvm.metadata"
+
+define i32 @main() {
+  %d = sub i64 ptrtoint (ptr @__stop_myreg to i64), ptrtoint (ptr @__start_myreg to i64)
+  %t = trunc i64 %d to i32
+  ret i32 %t
+}
+
+#--- grp.ll
+target triple = "msil64-unknown-dotnet"
+
+@g = global i32 1, section "grp", align 4
+@ga = global i32 2, section "grp$a", align 4
+@gb = global i32 3, section "grp$b", align 4
+@__start_grp = external hidden global [0 x i32], align 4
+@__stop_grp = external hidden global [0 x i32], align 4
+@llvm.used = appending global [3 x ptr] [ptr @g, ptr @ga, ptr @gb], section "llvm.metadata"
+
+define i32 @main() {
+  %d = sub i64 ptrtoint (ptr @__stop_grp to i64), ptrtoint (ptr @__start_grp to i64)
+  %t = trunc i64 %d to i32
+  ret i32 %t
+}
+
+#--- noref.ll
+target triple = "msil64-unknown-dotnet"
+
+@a = global i32 1, section "myreg", align 4
+@llvm.used = appending global [1 x ptr] [ptr @a], section "llvm.metadata"
+
+define i32 @main() {
+  %v = load i32, ptr @a, align 4
+  ret i32 %v
+}
+
+#--- lib.ll
+target triple = "msil64-unknown-dotnet"
+
+@a = hidden global i32 1, section "myreg", align 4
+@b = hidden global i32 2, section "myreg", align 4
+@__start_myreg = external hidden global [0 x i32], align 4
+@__stop_myreg = external hidden global [0 x i32], align 4
+@llvm.used = appending global [2 x ptr] [ptr @a, ptr @b], section "llvm.metadata"
+
+define i32 @regsize() {
+  %d = sub i64 ptrtoint (ptr @__stop_myreg to i64), ptrtoint (ptr @__start_myreg to i64)
+  %t = trunc i64 %d to i32
+  ret i32 %t
+}

@@ -85,6 +85,13 @@
 // RUN: not %clang_cc1 -triple aarch64-pc-windows-msil -fsyntax-only %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=BAD -DTRIPLE=aarch64-pc-windows-msil %s
 
+// The 'dotnet' operating system is the portable triples' alone, and they take no
+// other operating system (ImplementationPlan.md 5.18.1 PT5, milestone P-1a).
+// RUN: not %clang_cc1 -triple x86_64-unknown-dotnet -fsyntax-only %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=BAD -DTRIPLE=x86_64-unknown-dotnet %s
+// RUN: not %clang_cc1 -triple msil64-unknown-linux -fsyntax-only %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=BAD -DTRIPLE=msil64-unknown-linux %s
+
 // MSIL modules carry no "exception-model" module flag, even with the
 // -exception-model=seh that the MinGW driver passes (section 12 row 'M1.d
 // amended'); the native MinGW triple keeps the flag.

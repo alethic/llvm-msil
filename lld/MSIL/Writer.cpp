@@ -70,6 +70,7 @@
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/CLI/CustomAttribute.h"
 #include "llvm/CLI/ILDecoder.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/MetadataReader.h"
 #include "llvm/CLI/MethodBody.h"
 #include "llvm/CLI/PEWriter.h"
@@ -102,10 +103,11 @@ struct ExportProperty {
 
 class Writer {
 public:
+  // The section rules of the codegen triple (5.9.9 rule 1, plan 5.18.5
+  // LR1).
   Writer()
-      : out(ctx.arg.target.isOSWindows() ? SectionRules::COFF
-                                         : SectionRules::ELF),
-        image(out), symbols(out, image), calls(out, symbols) {}
+      : out(cli::getSectionRules(ctx.arg.target)), image(out),
+        symbols(out, image), calls(out, symbols) {}
 
   void run();
 
@@ -1319,6 +1321,12 @@ void Writer::run() {
   in.Entry = entry;
   addLibraryImports(in);
   addUCRTStdio(in);
+  // The width and byte-order guard of the portable triples (plan 5.18.7
+  // PE5), the first code of <Module>::.cctor.
+  if (!cli::bindsNatively(ctx.arg.target))
+    in.Guard = cli::PortableGuard{
+        static_cast<uint8_t>(ctx.arg.target.isArch64Bit() ? 8 : 4),
+        getAssemblyName(), ctx.arg.target.str()};
   in.Defs = std::move(trailerDefs);
   if (errorCount())
     return;

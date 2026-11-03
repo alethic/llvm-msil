@@ -29,18 +29,30 @@
 # (-fvisibility=hidden), so an output never exports one (A7).
 #
 # int_util.c includes <stdlib.h> on _WIN32 targets, which a freestanding
-# compile does not have, so it is listed for the Linux triples only, and so are
-# the -ftrapv helpers that call its __compilerrt_abort_impl through
-# compilerrt_abort() (absv*, addv*, mulv*, negv*, subv*): on a Windows triple
-# their link would name that missing function rather than the helper.
+# compile does not have, so it is listed for the Linux triples and the portable
+# triples (*-unknown-dotnet) only, and so are the -ftrapv helpers that call its
+# __compilerrt_abort_impl through compilerrt_abort() (absv*, addv*, mulv*,
+# negv*, subv*): on a Windows triple their link would name that missing
+# function rather than the helper. Without _WIN32 and with -ffreestanding,
+# __compilerrt_abort_impl is a weak, hidden __builtin_trap().
+#
+# The portable triple msil64-unknown-dotnet (plan 5.18.8) has its archive only
+# when 'build-builtins.py --triple msil64-unknown-dotnet' names it. It takes
+# every line without a glob, the *-unknown-dotnet lines, and no host family:
+# msil_longdouble.c (long double is double there), the windows-msvc stdio
+# files, atomic.c and the *ti* sources stay out. It defines no __ELF__, so
+# comparedf2.c and comparesf2.c (compiler-rt/lib/builtins/int_lib.h's alias
+# branch, which also takes __dotnet__) define no __cmpdf2 and __cmpsf2
+# aliases there; the backend lowers floating-point compares inline, so no MSIL
+# code calls them.
 
-compiler-rt/lib/builtins/absvdi2.c *-linux-*
-compiler-rt/lib/builtins/absvsi2.c *-linux-*
+compiler-rt/lib/builtins/absvdi2.c *-linux-*,*-unknown-dotnet
+compiler-rt/lib/builtins/absvsi2.c *-linux-*,*-unknown-dotnet
 # excluded compiler-rt/lib/builtins/absvti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 compiler-rt/lib/builtins/adddf3.c
 compiler-rt/lib/builtins/addsf3.c
-compiler-rt/lib/builtins/addvdi3.c *-linux-*
-compiler-rt/lib/builtins/addvsi3.c *-linux-*
+compiler-rt/lib/builtins/addvdi3.c *-linux-*,*-unknown-dotnet
+compiler-rt/lib/builtins/addvsi3.c *-linux-*,*-unknown-dotnet
 # excluded compiler-rt/lib/builtins/addvti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 # excluded compiler-rt/lib/builtins/apple_versioning.c: hosted: Apple OS version symbols
 compiler-rt/lib/builtins/ashldi3.c
@@ -100,7 +112,7 @@ compiler-rt/lib/builtins/floatunsisf.c
 # excluded compiler-rt/lib/builtins/floatuntidf.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 # excluded compiler-rt/lib/builtins/floatuntisf.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 compiler-rt/lib/builtins/fp_mode.c
-compiler-rt/lib/builtins/int_util.c *-linux-*
+compiler-rt/lib/builtins/int_util.c *-linux-*,*-unknown-dotnet
 compiler-rt/lib/builtins/lshrdi3.c
 # excluded compiler-rt/lib/builtins/lshrti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 compiler-rt/lib/builtins/moddi3.c
@@ -115,15 +127,15 @@ compiler-rt/lib/builtins/mulosi4.c
 compiler-rt/lib/builtins/mulsc3.c
 compiler-rt/lib/builtins/mulsf3.c
 # excluded compiler-rt/lib/builtins/multi3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
-compiler-rt/lib/builtins/mulvdi3.c *-linux-*
-compiler-rt/lib/builtins/mulvsi3.c *-linux-*
+compiler-rt/lib/builtins/mulvdi3.c *-linux-*,*-unknown-dotnet
+compiler-rt/lib/builtins/mulvsi3.c *-linux-*,*-unknown-dotnet
 # excluded compiler-rt/lib/builtins/mulvti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 compiler-rt/lib/builtins/negdf2.c
 compiler-rt/lib/builtins/negdi2.c
 compiler-rt/lib/builtins/negsf2.c
 # excluded compiler-rt/lib/builtins/negti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
-compiler-rt/lib/builtins/negvdi2.c *-linux-*
-compiler-rt/lib/builtins/negvsi2.c *-linux-*
+compiler-rt/lib/builtins/negvdi2.c *-linux-*,*-unknown-dotnet
+compiler-rt/lib/builtins/negvsi2.c *-linux-*,*-unknown-dotnet
 # excluded compiler-rt/lib/builtins/negvti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 # excluded compiler-rt/lib/builtins/os_version_check.c: hosted: Apple OS version checks
 compiler-rt/lib/builtins/paritydi2.c
@@ -136,8 +148,8 @@ compiler-rt/lib/builtins/powidf2.c
 compiler-rt/lib/builtins/powisf2.c
 compiler-rt/lib/builtins/subdf3.c
 compiler-rt/lib/builtins/subsf3.c
-compiler-rt/lib/builtins/subvdi3.c *-linux-*
-compiler-rt/lib/builtins/subvsi3.c *-linux-*
+compiler-rt/lib/builtins/subvdi3.c *-linux-*,*-unknown-dotnet
+compiler-rt/lib/builtins/subvsi3.c *-linux-*,*-unknown-dotnet
 # excluded compiler-rt/lib/builtins/subvti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
 # excluded compiler-rt/lib/builtins/trampoline_setup.c: hosted: writes executable trampolines (32-bit PowerPC)
 compiler-rt/lib/builtins/truncdfhf2.c

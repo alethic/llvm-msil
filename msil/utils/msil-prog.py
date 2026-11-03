@@ -8,7 +8,7 @@
 # ===----------------------------------------------------------------------===#
 """Build a multi-translation-unit program for the MSIL execution tests.
 
-    msil-prog.py --clang CLANG --triple <triple>-msil --level <L> --workdir DIR
+    msil-prog.py --clang CLANG --triple TRIPLE --level <L> --workdir DIR
         [--mode msil|native] [--pipeline obj|lto] [--link-output pe|il]
         [--ar AR] [--ld MSIL-LD] [--llc LLC] [--ilasm=CMD] [--out FILE]
         [--also-il FILE] [--equiv-out FILE] [--equiv-skip FILE --test PATH]
@@ -80,6 +80,16 @@ ilasm assembles, lto only):
      O6 compares the image that runs with the composite's ilasm build, which
      this script builds neither way, so it changes nothing here, and an O3
      line does not skip O6.
+
+--triple is <native>-msil, or a portable triple (plan 5.18.1, 5.18.10 PX2;
+P-1a): msil32 or msil64 with the OS dotnet, such as msil64-unknown-dotnet,
+which takes no '-msil' suffix ('msil64-unknown-dotnet-msil' is a usage error
+that names the triple without it). A portable triple has no native triple:
+--mode native, --stock-src and stock: members of --archives and --shlibs are
+usage errors ('--mode native: the portable triple T has no native triple, so
+no native oracle ...'; 'stock-clang sources compile for the native triple,
+which the portable triple T does not have'), and its expected files are
+written by hand (plan 5.17.4's portable allowance).
 
 --mode native builds the same program for the native triple, the oracle of
 plan 5.12.6 (O1): every --src, --stock-src and archive member is an ordinary
@@ -420,9 +430,32 @@ def program(value, option):
     return words
 
 
+# The portable triples (plan 5.18.1, 5.18.10 PX2; P-1a): msil32 or msil64
+# with the OS dotnet, written without a '-msil' suffix. They have no native
+# triple, so no native mode and no stock-clang sources. lit.cfg.py,
+# msil-equiv.py and update-expected.py have the same rule.
+PORTABLE_TRIPLE_RE = re.compile(r"^msil(32|64)-[^-]+-dotnet$")
+
+
+def is_portable(triple):
+    """Whether triple is a portable triple (msil64-unknown-dotnet, ...)."""
+    return bool(PORTABLE_TRIPLE_RE.match(triple))
+
+
 def native_of(triple):
+    """The native triple of <native>-msil, or None for a portable triple."""
+    if is_portable(triple):
+        return None
+    if triple.endswith("-msil") and is_portable(triple[: -len("-msil")]):
+        raise UsageError(
+            "--triple %s: a portable triple takes no -msil suffix (use %s)"
+            % (triple, triple[: -len("-msil")])
+        )
     if not triple.endswith("-msil"):
-        raise UsageError("--triple %s does not end in -msil" % triple)
+        raise UsageError(
+            "--triple %s does not end in -msil and is not a portable triple "
+            "(msil64-unknown-dotnet)" % triple
+        )
     return triple[: -len("-msil")]
 
 
@@ -1020,7 +1053,11 @@ def parse_args(argv):
     p.add_argument("--pipeline", choices=("lto", "obj"), default="obj")
     p.add_argument("--link-output", choices=("il", "pe"), default="pe")
     p.add_argument("--level", required=True, help="O0, O1, O2, O3, Os or Oz")
-    p.add_argument("--triple", required=True, help="the MSIL triple (<native>-msil)")
+    p.add_argument(
+        "--triple",
+        required=True,
+        help="the MSIL triple (<native>-msil, or a portable msil64-unknown-dotnet)",
+    )
     p.add_argument("--clang", required=True, help="clang (a program or a command)")
     p.add_argument("--ar", help="llvm-ar (a program or a command)")
     p.add_argument("--ld", help="msil-ld, passed to clang as --ld-path=")
@@ -1122,6 +1159,15 @@ def check_args(args):
     except UsageError as e:
         raise UsageError("--expected-rule: %s" % e)
     args.step_timeout = args.timeout * args.timeout_factor
+    if args.native is None:
+        # A portable triple (plan 5.18.10 PX2): no native oracle before P-2,
+        # and nothing to compile for a native triple.
+        if args.mode == "native":
+            raise UsageError(
+                "--mode native: the portable triple %s has no native triple, so "
+                "no native oracle (plan 5.18.10; its expected files are written by "
+                "hand, plan 5.17.4)" % args.triple
+            )
     if args.mode == "msil":
         if args.pipeline == "obj" and args.link_output == "il":
             raise UsageError(
@@ -1231,6 +1277,15 @@ def check_args(args):
     if args.archive_list and not args.ar_cmd:
         raise UsageError("--archives needs --ar")
     args.shlib_list = parse_shlibs(args.shlibs)
+    if args.native is None and (
+        args.stock_srcs
+        or any(stock for _, members in args.archive_list for _, stock in members)
+        or any(stock for _, _, members in args.shlib_list for _, stock in members)
+    ):
+        raise UsageError(
+            "stock-clang sources compile for the native triple, which the "
+            "portable triple %s does not have" % args.triple
+        )
     if args.shlib_list and args.mode == "msil" and args.link_output == "il":
         raise UsageError(
             "--shlibs links the program against .NET libraries, which "

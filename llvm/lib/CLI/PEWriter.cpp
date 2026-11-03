@@ -9,8 +9,10 @@
 // The PE32+ envelope of II.25 with Roslyn's layout: the headers, one .text
 // section (CLI header, IL, metadata, debug directory, mapped field data), the
 // caller's extra sections, the COFF symbol view of CIL objects, and the
-// deterministic content id. Every field is written little-endian through
-// support::endian, so the bytes do not depend on the host.
+// deterministic content id. The portable triples write the same envelope with
+// a PE32 optional header and machine I386, Roslyn's AnyCPU shape without its
+// mscoree stub and .reloc (plan 5.18.7). Every field is written little-endian
+// through support::endian, so the bytes do not depend on the host.
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,6 +23,7 @@
 #include "llvm/CLI/MetadataBuilder.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/TargetParser/Triple.h"
@@ -58,13 +61,51 @@ static constexpr uint32_t COFFHeaderOffset =
     PESignatureOffset + sizeof(COFF::PEMagic);
 static constexpr uint32_t OptionalHeaderOffset =
     COFFHeaderOffset + COFF::Header16Size;
-/// The PE32+ optional header: 112 bytes of fields, then 16 data directories.
 static constexpr uint32_t NumDataDirectories = 16;
-static constexpr uint32_t DataDirectoriesOffset = OptionalHeaderOffset + 112;
-static constexpr uint32_t OptionalHeaderSize = 112 + 8 * NumDataDirectories;
-static constexpr uint32_t SectionTableOffset =
-    OptionalHeaderOffset + OptionalHeaderSize;
-static_assert(SectionTableOffset == 0x188, "PE32+ section table offset");
+
+namespace {
+/// The parts of the headers that depend on the optional header's format
+/// (plan 5.18.7 PE2): its magic, where its data directories start, its size
+/// (SizeOfOptionalHeader) and the file offset of the section table.
+struct OptionalHeaderLayout {
+  uint16_t Magic;
+  uint32_t DataDirectoriesOffset;
+  uint32_t Size;
+  uint32_t SectionTableOffset;
+};
+} // namespace
+
+/// The layout of an optional header with \p FieldsSize bytes of fields
+/// before its 16 data directories.
+static constexpr OptionalHeaderLayout makeLayout(uint16_t Magic,
+                                                 uint32_t FieldsSize) {
+  uint32_t Size = FieldsSize + 8 * NumDataDirectories;
+  return {Magic, OptionalHeaderOffset + FieldsSize, Size,
+          OptionalHeaderOffset + Size};
+}
+
+/// PE32+: 112 bytes of fields (64-bit ImageBase, stack and heap fields).
+static constexpr OptionalHeaderLayout PE32PlusLayout =
+    makeLayout(COFF::PE32Header::PE32_PLUS, 112);
+/// PE32: 96 bytes of fields (BaseOfData, 32-bit ImageBase, stack and heap
+/// fields).
+static constexpr OptionalHeaderLayout PE32Layout =
+    makeLayout(COFF::PE32Header::PE32, 96);
+static_assert(PE32PlusLayout.Size == 0xF0 &&
+                  PE32PlusLayout.SectionTableOffset == 0x188,
+              "PE32+ optional header");
+static_assert(PE32Layout.Size == 0xE0 && PE32Layout.SectionTableOffset == 0x178,
+              "PE32 optional header");
+
+static const OptionalHeaderLayout &getLayout(PEFormat Format) {
+  switch (Format) {
+  case PEFormat::PE32Plus:
+    return PE32PlusLayout;
+  case PEFormat::PE32:
+    return PE32Layout;
+  }
+  llvm_unreachable("unknown PE format");
+}
 
 static constexpr uint32_t CLIHeaderSize = sizeof(Cor20Header);
 /// IMAGE_DEBUG_DIRECTORY.
@@ -96,8 +137,27 @@ Expected<PEOptions> PEOptions::get(const Triple &TT, PEImageKind Kind) {
   case Triple::aarch64:
     Opts.Machine = COFF::IMAGE_FILE_MACHINE_ARM64;
     break;
+  case Triple::msil64:
+    // The portable triple's AnyCPU envelope (plan 5.18.7 PE1): machine I386,
+    // PE32 and CorFlags ILONLY only, Roslyn's image bases and PE32 heap
+    // commit. The stack stays 0x400000/0x4000: on a direct .NET Framework
+    // start the image's reserve sets the main thread's stack. Measured: such
+    // an image runs as a 64-bit process on .NET 8, .NET 10 and Framework 4.8
+    // without the mscoree stub and .reloc that Roslyn adds.
+    Opts.Machine = COFF::IMAGE_FILE_MACHINE_I386;
+    Opts.Format = PEFormat::PE32;
+    Opts.Kind = Kind;
+    Opts.ImageBase = Kind == PEImageKind::Executable ? 0x400000 : 0x10000000;
+    Opts.HeapCommit = 0x1000;
+    return Opts;
+  case Triple::msil32:
+    // T-P1 (plan 5.18.11): msil32 is P-4's.
+    return makeError("target 'msil32-unknown-dotnet' is not supported yet: "
+                     "only msil64-unknown-dotnet is implemented",
+                     errc::not_supported);
   default:
-    // PE32 images (i686) need the mscoree import, the entry stub and .reloc.
+    // The i686 host triples need 32BITREQUIRED and their own address width
+    // (phase 5); the PE32 envelope itself needs no mscoree stub or .reloc.
     return makeError("architecture '" + TT.getArchName() +
                          "' is not supported until phase 5",
                      errc::not_supported);
@@ -182,12 +242,50 @@ static Error checkContent(const PEOptions &Opts, const PEContent &C) {
   if (Error E = MD->checkMethodBodies())
     return E;
 
-  if (Opts.Machine != COFF::IMAGE_FILE_MACHINE_AMD64 &&
-      Opts.Machine != COFF::IMAGE_FILE_MACHINE_ARM64)
+  // PE32+ for AMD64 and ARM64; PE32 only for the AnyCPU envelope (plan
+  // 5.18.7 PE2): I386 with ILONLY and neither 32BITREQUIRED nor
+  // 32BITPREFERRED, which P-4 defines for msil32. A PE32+ image with machine
+  // I386 loads inconsistently across the runtimes.
+  bool IsPE32 = Opts.Format == PEFormat::PE32;
+  switch (Opts.Machine) {
+  case COFF::IMAGE_FILE_MACHINE_AMD64:
+  case COFF::IMAGE_FILE_MACHINE_ARM64:
+    if (IsPE32)
+      return makeError("machine " + hex(Opts.Machine, 4) +
+                       " needs the PE32+ format (PE32 is written only for "
+                       "machine 0x014C)");
+    break;
+  case COFF::IMAGE_FILE_MACHINE_I386: {
+    if (!IsPE32)
+      return makeError("machine 0x014C needs the PE32 format");
+    const uint32_t Bitness =
+        COMIMAGE_FLAGS_32BITREQUIRED | COMIMAGE_FLAGS_32BITPREFERRED;
+    if (!(Opts.CorFlags & COMIMAGE_FLAGS_ILONLY) || (Opts.CorFlags & Bitness))
+      return makeError("machine 0x014C is written only as an AnyCPU image "
+                       "(CorFlags ILONLY without 32BITREQUIRED and "
+                       "32BITPREFERRED), not with CorFlags " +
+                       hex(Opts.CorFlags));
+    break;
+  }
+  default:
     return makeError("machine " + hex(Opts.Machine, 4) +
-                         " is not supported until phase 5 (only PE32+ "
-                         "images are written)",
+                         " is not supported (only PE32+ images for AMD64 and "
+                         "ARM64 and PE32 images for I386 are written)",
                      errc::not_supported);
+  }
+  if (IsPE32) {
+    // The 32-bit fields of the PE32 optional header.
+    const std::pair<StringRef, uint64_t> Fields[] = {
+        {"image base", Opts.ImageBase},
+        {"stack reserve", Opts.StackReserve},
+        {"stack commit", Opts.StackCommit},
+        {"heap reserve", Opts.HeapReserve},
+        {"heap commit", Opts.HeapCommit}};
+    for (const auto &[Name, Value] : Fields)
+      if (Value > UINT32_MAX)
+        return makeError("the PE32 format cannot hold the " + Name + " " +
+                         hex(Value, 16));
+  }
   if (!isPowerOf2_32(Opts.SectionAlignment) ||
       !isPowerOf2_32(Opts.FileAlignment) ||
       Opts.FileAlignment > Opts.SectionAlignment)
@@ -256,9 +354,12 @@ Error cli::writePEImage(const PEOptions &Opts, const PEContent &C,
   const MetadataBuilder &MD = *C.Metadata;
 
   // Headers and sections.
+  const OptionalHeaderLayout &OH = getLayout(Opts.Format);
+  const bool IsPE32 = Opts.Format == PEFormat::PE32;
   uint64_t NumSections = 1 + C.ExtraSections.size();
-  uint64_t SizeOfHeaders = alignTo(
-      SectionTableOffset + COFF::SectionSize * NumSections, Opts.FileAlignment);
+  uint64_t SizeOfHeaders =
+      alignTo(OH.SectionTableOffset + COFF::SectionSize * NumSections,
+              Opts.FileAlignment);
   TextLayout Text = layOutText(C);
 
   SmallVector<SectionLayout, 4> Sections;
@@ -306,6 +407,19 @@ Error cli::writePEImage(const PEOptions &Opts, const PEContent &C,
   }
   if (SizeOfImage > UINT32_MAX || FileSize > UINT32_MAX)
     return makeError("the image would be larger than 4 GiB");
+  if (IsPE32 && Opts.ImageBase + SizeOfImage > UINT32_MAX)
+    return makeError("the image would end above 4 GiB at image base " +
+                     hex(Opts.ImageBase));
+
+  // PE32's BaseOfData: the first section after .text that has data, else 0.
+  uint64_t BaseOfData = 0;
+  for (const SectionLayout &S : drop_begin(Sections))
+    if (S.VirtualSize != 0 &&
+        (S.Characteristics & (COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                              COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA))) {
+      BaseOfData = S.VirtualAddress;
+      break;
+    }
 
   uint64_t SizeOfCode = 0, SizeOfInitializedData = 0,
            SizeOfUninitializedData = 0;
@@ -350,12 +464,13 @@ Error cli::writePEImage(const PEOptions &Opts, const PEContent &C,
   W32(COFFHeaderOffset + 4, 0);
   W32(COFFHeaderOffset + 8, SymbolTable);
   W32(COFFHeaderOffset + 12, C.CoffSymbols.size());
-  W16(COFFHeaderOffset + 16, OptionalHeaderSize);
+  W16(COFFHeaderOffset + 16, OH.Size);
   W16(COFFHeaderOffset + 18, Characteristics);
 
-  // PE32+ optional header.
+  // The PE32+ or PE32 optional header. The fields up to BaseOfCode and from
+  // SectionAlignment to DllCharacteristics are at the same offsets in both.
   uint64_t P = OptionalHeaderOffset;
-  W16(P + 0, COFF::PE32Header::PE32_PLUS);
+  W16(P + 0, OH.Magic);
   Buf[P + 2] = Opts.MajorLinkerVersion;
   Buf[P + 3] = Opts.MinorLinkerVersion;
   W32(P + 4, SizeOfCode);
@@ -363,7 +478,12 @@ Error cli::writePEImage(const PEOptions &Opts, const PEContent &C,
   W32(P + 12, SizeOfUninitializedData);
   W32(P + 16, 0);       // AddressOfEntryPoint: no entry stub.
   W32(P + 20, TextRVA); // BaseOfCode
-  W64(P + 24, Opts.ImageBase);
+  if (IsPE32) {
+    W32(P + 24, BaseOfData);
+    W32(P + 28, Opts.ImageBase);
+  } else {
+    W64(P + 24, Opts.ImageBase);
+  }
   W32(P + 32, Opts.SectionAlignment);
   W32(P + 36, Opts.FileAlignment);
   W16(P + 40, 4); // MajorOperatingSystemVersion
@@ -378,14 +498,24 @@ Error cli::writePEImage(const PEOptions &Opts, const PEContent &C,
   W32(P + 64, 0); // CheckSum
   W16(P + 68, Opts.Subsystem);
   W16(P + 70, Opts.DllCharacteristics);
-  W64(P + 72, Opts.StackReserve);
-  W64(P + 80, Opts.StackCommit);
-  W64(P + 88, Opts.HeapReserve);
-  W64(P + 96, Opts.HeapCommit);
-  W32(P + 104, 0); // LoaderFlags
-  W32(P + 108, NumDataDirectories);
+  if (IsPE32) {
+    W32(P + 72, Opts.StackReserve);
+    W32(P + 76, Opts.StackCommit);
+    W32(P + 80, Opts.HeapReserve);
+    W32(P + 84, Opts.HeapCommit);
+    W32(P + 88, 0); // LoaderFlags
+    W32(P + 92, NumDataDirectories);
+  } else {
+    W64(P + 72, Opts.StackReserve);
+    W64(P + 80, Opts.StackCommit);
+    W64(P + 88, Opts.HeapReserve);
+    W64(P + 96, Opts.HeapCommit);
+    W32(P + 104, 0); // LoaderFlags
+    W32(P + 108, NumDataDirectories);
+  }
 
   // Data directories: only CLR and, with debug entries, Debug.
+  const uint32_t DataDirectoriesOffset = OH.DataDirectoriesOffset;
   if (!C.DebugEntries.empty()) {
     W32(DataDirectoriesOffset + 8 * COFF::DEBUG_DIRECTORY,
         TextRVA + Text.DebugDirectory);
@@ -397,7 +527,7 @@ Error cli::writePEImage(const PEOptions &Opts, const PEContent &C,
 
   // Section table.
   for (auto [I, S] : enumerate(Sections)) {
-    uint64_t H = SectionTableOffset + COFF::SectionSize * I;
+    uint64_t H = OH.SectionTableOffset + COFF::SectionSize * I;
     std::memcpy(Buf + H, S.Name.data(), S.Name.size());
     W32(H + 8, S.VirtualSize);
     W32(H + 12, S.VirtualAddress);

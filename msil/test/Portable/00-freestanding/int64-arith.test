@@ -1,0 +1,168 @@
+# 64-bit integer arithmetic on msil64-unknown-dotnet: the long long multiply of the guard recon's wide.c and the native int shapes of plan D2 (add, sub, mul, div, rem, shifts, compares, extensions, truncations, byte order, globals), each in a noinline function on volatile inputs.
+# Plan 5.18.7 PE4: wide.c's '(int)((a * b) >> 36) & 0xff' on two volatile
+# long long globals is 48 only when the native ints of D2 are 64 bits wide (a
+# 32-bit process gave 0 before the guard existed). The other cases cover what
+# D2 lowers as native int on a 64-bit triple: long, long long, size_t and
+# pointer arithmetic (signed and unsigned division and remainder with
+# negative operands, shifts by 0, 31, 32 and 63, signed and unsigned
+# compares across the sign bit, sign and zero extension from int, unsigned
+# int and short, truncation to int and char), the generic expansions of
+# __builtin_clzll, __builtin_ctzll, __builtin_popcountll and
+# __builtin_bswap64, __builtin_add_overflow and __builtin_mul_overflow on
+# long long, uint64 -> double (D17) and double -> int64, the little-endian
+# byte order of a long in memory, and 64-bit globals with initializers
+# (pointers into other globals included). ops.c holds one operation per
+# noinline function, so no case folds at compile time at any level; each
+# failed group sets one bit of the exit status.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+#--- ops.h
+#define NOINLINE __attribute__((noinline))
+long long mul64(long long a, long long b);
+long long add64(long long a, long long b);
+long long sub64(long long a, long long b);
+long long sdiv64(long long a, long long b);
+long long srem64(long long a, long long b);
+unsigned long long udiv64(unsigned long long a, unsigned long long b);
+unsigned long long urem64(unsigned long long a, unsigned long long b);
+long long shl64(long long a, int n);
+long long ashr64(long long a, int n);
+unsigned long long lshr64(unsigned long long a, int n);
+int slt64(long long a, long long b);
+int ult64(unsigned long long a, unsigned long long b);
+long sext32(int x);
+unsigned long zext32(unsigned x);
+long sext16(short x);
+int trunc32(long x);
+signed char trunc8(long x);
+int clz64(unsigned long long x);
+int ctz64(unsigned long long x);
+int pop64(unsigned long long x);
+unsigned long long bswap64(unsigned long long x);
+int addo64(long long a, long long b, long long *r);
+int mulo64(long long a, long long b, long long *r);
+double u64tod(unsigned long long x);
+long long dtoi64(double d);
+unsigned long long dtou64(double d);
+long ptrdiff(const long *a, const long *b);
+const long *ptradd(const long *p, long n);
+#--- ops.c
+#include "ops.h"
+NOINLINE long long mul64(long long a, long long b) { return a * b; }
+NOINLINE long long add64(long long a, long long b) { return a + b; }
+NOINLINE long long sub64(long long a, long long b) { return a - b; }
+NOINLINE long long sdiv64(long long a, long long b) { return a / b; }
+NOINLINE long long srem64(long long a, long long b) { return a % b; }
+NOINLINE unsigned long long udiv64(unsigned long long a, unsigned long long b) { return a / b; }
+NOINLINE unsigned long long urem64(unsigned long long a, unsigned long long b) { return a % b; }
+NOINLINE long long shl64(long long a, int n) { return (long long)((unsigned long long)a << n); }
+NOINLINE long long ashr64(long long a, int n) { return a >> n; }
+NOINLINE unsigned long long lshr64(unsigned long long a, int n) { return a >> n; }
+NOINLINE int slt64(long long a, long long b) { return a < b; }
+NOINLINE int ult64(unsigned long long a, unsigned long long b) { return a < b; }
+NOINLINE long sext32(int x) { return x; }
+NOINLINE unsigned long zext32(unsigned x) { return x; }
+NOINLINE long sext16(short x) { return x; }
+NOINLINE int trunc32(long x) { return (int)x; }
+NOINLINE signed char trunc8(long x) { return (signed char)x; }
+NOINLINE int clz64(unsigned long long x) { return __builtin_clzll(x); }
+NOINLINE int ctz64(unsigned long long x) { return __builtin_ctzll(x); }
+NOINLINE int pop64(unsigned long long x) { return __builtin_popcountll(x); }
+NOINLINE unsigned long long bswap64(unsigned long long x) { return __builtin_bswap64(x); }
+NOINLINE int addo64(long long a, long long b, long long *r) { return __builtin_add_overflow(a, b, r); }
+NOINLINE int mulo64(long long a, long long b, long long *r) { return __builtin_mul_overflow(a, b, r); }
+NOINLINE double u64tod(unsigned long long x) { return (double)x; }
+NOINLINE long long dtoi64(double d) { return (long long)d; }
+NOINLINE unsigned long long dtou64(double d) { return (unsigned long long)d; }
+NOINLINE long ptrdiff(const long *a, const long *b) { return a - b; }
+NOINLINE const long *ptradd(const long *p, long n) { return p + n; }
+#--- main.c
+#include "ops.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+/* The guard recon's wide.c (plan 5.18.7 PE4). */
+static volatile long long a = 1LL << 40;
+static volatile long long b = 3;
+
+static volatile long long v_big = 0x123456789abcdefLL, v_neg = -7, v_seven = 7;
+static volatile unsigned long long v_umax = 0xffffffffffffffffull;
+static volatile unsigned long long v_top = 0x8000000000000001ull;
+static volatile int v_n[] = {0, 31, 32, 63};
+static volatile int v_minus2 = -2;
+static volatile unsigned v_u = 0xfffffffeu;
+static volatile short v_s = -300;
+static volatile double v_d[] = {-9007199254740993.0, 1.8446744073709550e19, -0.75};
+
+/* 64-bit globals with initializers: values, and pointers into globals. */
+static long g_table[4] = {-1L, 0x7fffffffffffffffL, (long)0x8000000000000000UL, 42};
+static long *g_ptr = &g_table[2];
+static long **g_pptr = &g_ptr;
+static unsigned long long g_pattern = 0x0807060504030201ull;
+
+int main(void) {
+  /* 0: wide.c, and the native int multiply. */
+  long long v = a * b;
+  CHECK(0, ((int)(v >> 36) & 0xff) == 48);
+  CHECK(0, mul64(a, b) == 3LL << 40);
+  CHECK(0, mul64(v_big, v_neg) == -0x7f6e5d4c3b2a189LL);
+  CHECK(0, mul64(v_neg, v_neg) == 49 && add64(v_big, v_neg) == 0x123456789abcde8LL);
+  CHECK(0, sub64(v_neg, v_big) == -0x123456789abcdf6LL);
+
+  /* 1: division and remainder, signed and unsigned. */
+  CHECK(1, sdiv64(v_big, v_neg) == -0x299c335ccf668fLL);
+  CHECK(1, srem64(v_big, v_neg) == 6 && srem64(-v_big, v_seven) == -6);
+  CHECK(1, sdiv64(v_neg, 2) == -3 && srem64(v_neg, 2) == -1);
+  CHECK(1, udiv64(v_umax, v_seven) == 0x2492492492492492ull);
+  CHECK(1, urem64(v_umax, v_seven) == 1);
+  CHECK(1, udiv64(v_top, 2) == 0x4000000000000000ull);
+
+  /* 2: shifts by 0, 31, 32 and 63. */
+  CHECK(2, shl64(1, v_n[0]) == 1 && shl64(1, v_n[1]) == 0x80000000LL);
+  CHECK(2, shl64(1, v_n[2]) == 0x100000000LL && shl64(1, v_n[3]) == (long long)0x8000000000000000ull);
+  CHECK(2, ashr64(v_neg, v_n[3]) == -1 && ashr64(shl64(v_neg, 40), v_n[2]) == -1792);
+  CHECK(2, lshr64(v_umax, v_n[3]) == 1 && lshr64(v_top, v_n[1]) == 0x100000000ull);
+
+  /* 3: compares across the sign bit; extensions and truncations. */
+  CHECK(3, slt64(v_neg, v_seven) && !ult64(v_neg, v_seven));
+  CHECK(3, ult64(v_seven, v_top) && slt64((long long)v_top, v_seven));
+  CHECK(3, sext32(v_minus2) == -2L && zext32(v_u) == 0xfffffffeUL);
+  CHECK(3, sext16(v_s) == -300L);
+  CHECK(3, trunc32(v_big) == (int)0x89abcdef && trunc8(v_big) == (signed char)0xef);
+
+  /* 4: bit counting and byte swaps through the generic expansions. */
+  CHECK(4, clz64(v_top) == 0 && clz64(1) == 63 && clz64(v_big) == 7);
+  CHECK(4, ctz64(v_top) == 0 && ctz64(1ull << 40) == 40);
+  CHECK(4, pop64(v_umax) == 64 && pop64(v_big) == 32);
+  CHECK(4, bswap64(g_pattern) == 0x0102030405060708ull);
+
+  /* 5: overflow builtins on long long. */
+  long long r = 0;
+  CHECK(5, addo64(0x7fffffffffffffffLL, 1, &r) == 1 && r == (long long)0x8000000000000000ull);
+  CHECK(5, addo64(v_neg, v_seven, &r) == 0 && r == 0);
+  CHECK(5, mulo64(v_big, 0x40, &r) == 0 && r == 0x48d159e26af37bc0LL);
+  CHECK(5, mulo64(v_big, 0x80, &r) == 1);
+
+  /* 6: conversions between 64-bit integers and double. */
+  CHECK(6, u64tod(v_umax) == 18446744073709551616.0);
+  CHECK(6, u64tod(v_top) == 9223372036854775808.0);
+  CHECK(6, dtoi64(v_d[0]) == -9007199254740992LL && dtoi64(v_d[2]) == 0);
+  CHECK(6, dtou64(v_d[1]) == 18446744073709549568ull);
+
+  /* 7: memory: byte order, globals with relocations, pointer arithmetic. */
+  unsigned char bytes[8];
+  __builtin_memcpy(bytes, &g_pattern, 8);
+  CHECK(7, bytes[0] == 1 && bytes[7] == 8);
+  CHECK(7, **g_pptr == (long)0x8000000000000000UL && g_table[1] == 0x7fffffffffffffffL);
+  CHECK(7, ptrdiff(g_ptr, &g_table[0]) == 2 && ptradd(g_table, 3) == &g_table[3]);
+  CHECK(7, *ptradd(g_ptr, -2) == -1L && *ptradd(g_ptr, 1) == 42);
+
+  return (int)fails;
+}

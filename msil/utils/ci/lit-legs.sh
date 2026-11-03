@@ -5,8 +5,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
-#   bash msil/utils/ci/lit-legs.sh [--full] [--exit] [--leg NAME[,NAME...]] [--list] [--describe]
-#                                  [BUILD_DIR]
+#   bash msil/utils/ci/lit-legs.sh [--full] [--exit] [--portable] [--leg NAME[,NAME...]] [--list]
+#                                  [--describe] [BUILD_DIR]
 #
 # The leg set of the Phase 2 exit (plan 5.12.11, 5.12.12; M23) with Phase 3's changes (plan
 # 5.17.6; M24) for the Linux job, which runs the triple x86_64-unknown-linux-gnu-msil (the triple
@@ -20,8 +20,9 @@
 # legs (the NuGet ilasm is this job's only ilasm, so asm-oracle covers it); this job has no WSL
 # legs. M23 gate step 12 and M24 gate step 26 check 'lit-legs.sh --list' inside WSL, and
 # run-m1-gate.ps1's ci-sh row compares it with the list below, where a '--full:' description
-# marks a --full leg and an '--exit:' one an --exit leg (M26's ctest-lto is the first; plan 5.17.6
-# gives the later ones, M28's gc-churn among them).
+# marks a --full leg, an '--exit:' one an --exit leg (M26's ctest-lto is the first; plan 5.17.6
+# gives the later ones, M28's gc-churn among them) and a '--portable:' one a --portable leg (P-1a,
+# plan 5.18.10 PX4).
 # Legs, in order:
 #   net8         llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests, the
 #                llvm-cil-dump and llvm-cil-copy tests, llvm/test/MC/MSIL) and msil/test (M1, M2,
@@ -86,6 +87,12 @@
 #   lto-m1       --full: all of msil/test/M1 under lto, native oracle required
 #   upstream     --full: ninja check-llvm check-clang (regressions our hooks cause upstream;
 #                CI only: they build every tool, which the development host never does)
+#   portable-smoke  --portable: msil/test/Portable on msil64-unknown-dotnet under obj on .NET 10
+#                and, msil_also_run=10+tc0, .NET 10 with DOTNET_TieredCompilation=0,
+#                msil_require_portable=1, no native oracle (P-1a, plan 5.18.10 PX4; lit-legs.ps1's
+#                portable-smoke also runs the .NET Framework and the 32-bit starts). Setup, first:
+#                'build-builtins.py --build-dir BUILD_DIR --triple msil64-unknown-dotnet' (stamped);
+#                a failed setup fails the row ('setup failed: ...') and runs no lit
 # Removed in M23, and --leg <name> fails naming the leg that covers it: net10, net8-tc0 and
 # net10-tc0 (net8's msil_also_run entries), obj (net8; objects are the default pipeline).
 #
@@ -127,10 +134,11 @@
 # test matched, 'ok:' or 'rule:'). Every selected leg runs even after a failure; the exit status is
 # 1 if any leg failed (a SKIP row is no failure).
 #
-# --exit adds the --exit legs (plan 5.17.6; the CI never passes it, plan 5.17.17). --describe
-# prints every leg as the JSON of plan 5.17.6 (version 1, script 'lit-legs.sh'; for each leg its
-# name, tag ('' for the default set, Full, Exit, and Quick for hosted, which runs only when
-# named), kind (lit, expected, utc or upstream) and lit runs with their repository-relative
+# --exit adds the --exit legs (plan 5.17.6; the CI never passes it, plan 5.17.17), and --portable
+# the --portable legs (P-1a, plan 5.18.10 PX4; never tagged Exit, so --exit alone selects none).
+# --describe prints every leg as the JSON of plan 5.17.6 (version 1, script 'lit-legs.sh'; for
+# each leg its name, tag ('' for the default set, Full, Exit, Portable, and Quick for hosted, which
+# runs only when named), kind (lit, expected, utc or upstream) and lit runs with their repository-relative
 # paths, lit arguments, every parameter, pipeline, prog_pipeline, triple (default
 # x86_64-unknown-linux-gnu-msil), runner (default local) and also_run) and runs nothing.
 set -euo pipefail
@@ -138,6 +146,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/ci-common.sh"
 
 full=0
 exit_legs=0
+portable_legs=0
 list=0
 describe=0
 selected=()
@@ -146,6 +155,7 @@ while (($#)); do
   case $1 in
     --full) full=1 ;;
     --exit) exit_legs=1 ;;
+    --portable) portable_legs=1 ;;
     --list) list=1 ;;
     --describe) describe=1 ;;
     --leg)
@@ -169,7 +179,9 @@ build=${build:-$MSIL_REPO/build}
 
 # check-msil's paths (msil/test/CMakeLists.txt); lit-legs.ps1's $checkMsil is the same list.
 check_msil=("$MSIL_REPO/llvm/test/CodeGen/MSIL" "$MSIL_REPO/clang/test/CodeGen/MSIL"
-  "$MSIL_REPO/clang/test/Preprocessor/init-msil.c" "$MSIL_REPO/clang/test/Driver/msil-toolchain.c"
+  "$MSIL_REPO/clang/test/Preprocessor/init-msil.c"
+  "$MSIL_REPO/clang/test/Preprocessor/init-msil-portable.c"
+  "$MSIL_REPO/clang/test/Driver/msil-dotnet.c" "$MSIL_REPO/clang/test/Driver/msil-toolchain.c"
   "$MSIL_REPO/clang/test/Driver/msil-link.c" "$MSIL_REPO/clang/test/Driver/msil-lto.c"
   "$MSIL_REPO/clang/test/Driver/msil-header-search.c" "$MSIL_REPO/clang/test/Driver/msil-object.c"
   "$MSIL_REPO/clang/test/Driver/msil-shared.c" "$MSIL_REPO/lld/test/MSIL" "$MSIL_REPO/llvm/test/tools/llvm-cil-dump"
@@ -209,11 +221,13 @@ ctest=("$MSIL_REPO/msil/test/Programs/c-testsuite")
 glibc_sysroot=${MSIL_GLIBC_SYSROOT:-/}
 
 # name:kind (kind: lit, expected, utc, upstream; a 'full' suffix marks --full legs, an 'exit'
-# suffix --exit legs, an 'optional' suffix legs that run only when --leg names them)
+# suffix --exit legs, a 'portable' suffix --portable legs, an 'optional' suffix legs that run only
+# when --leg names them)
 legs=(net8:lit more-levels:lit asm-oracle:lit lto:lit det:lit refs-net48:lit refs-net8:lit
   refs-net10:lit roundtrip:lit programs:lit programs-lto:lit ctest:lit ctest-lto:lit:exit
   hosted:lit:optional
-  expected:expected utc:utc all-levels:lit:full lto-m1:lit:full upstream:upstream:full)
+  expected:expected utc:utc all-levels:lit:full lto-m1:lit:full upstream:upstream:full
+  portable-smoke:lit:portable)
 
 # The legs that M23 removed, and the leg that runs their tests and runtimes now.
 removed_leg() {
@@ -263,6 +277,7 @@ leg_paths() {
     ctest | ctest-lto) printf '%s\n' "${ctest[@]}" ;;
     hosted) echo "$MSIL_REPO/msil/test/M2/09-hosted" ;;
     all-levels) echo "$MSIL_REPO/msil/test" ;;
+    portable-smoke) echo "$MSIL_REPO/msil/test/Portable" ;;
   esac
 }
 
@@ -309,6 +324,10 @@ leg_params() {
       ;;
     all-levels) echo msil_opt_levels=O0,O1,O2,O3,Os,Oz ;;
     lto-m1) printf '%s\n' msil_pipeline=lto msil_dotnet_runtime=8 msil_native_oracle=required ;;
+    portable-smoke)
+      printf '%s\n' msil_triple=msil64-unknown-dotnet msil_pipeline=obj msil_dotnet_runtime=10 \
+        msil_also_run=10+tc0 msil_require_portable=1
+      ;;
   esac
 }
 
@@ -346,6 +365,7 @@ if ((list)); then
     case $l in
       *:full) echo "${l%%:*} (--full)" ;;
       *:exit) echo "${l%%:*} (--exit)" ;;
+      *:portable) echo "${l%%:*} (--portable)" ;;
       *) echo "${l%%:*}" ;;
     esac
   done
@@ -409,6 +429,7 @@ if ((describe)); then
     case $l in
       *:full) tag=Full ;;
       *:exit) tag=Exit ;;
+      *:portable) tag=Portable ;;
       *:optional) tag=Quick ;;
       *) tag='' ;;
     esac
@@ -589,6 +610,25 @@ run_utc_leg() {
   return $((rc != 0))
 }
 
+# A leg's setup before its lit run (the portable legs: the portable helper archive, plan 5.18.8;
+# build-builtins.py keeps its own stamp), logged to <build>/lit-results/<leg>.setup.log; on a
+# failure it sets LEG_DETAIL and returns 1.
+run_leg_setup() {
+  local name=$1 log=$results/$1.setup.log rc=0
+  case $name in
+    portable-smoke) ;;
+    *) return 0 ;;
+  esac
+  echo "[msil-ci] leg $name: setup: build-builtins.py --triple msil64-unknown-dotnet"
+  python3 "$MSIL_REPO/msil/utils/build/build-builtins.py" --build-dir "$build" \
+    --triple msil64-unknown-dotnet 2>&1 | tee "$log" || rc=$?
+  if ((rc != 0)); then
+    LEG_DETAIL="setup failed: build-builtins.py --triple msil64-unknown-dotnet (exit $rc; $log)"
+    return 1
+  fi
+  return 0
+}
+
 run_upstream_leg() {
   local log=$results/upstream.log rc=0
   ninja -C "$build" check-llvm check-clang 2>&1 | tee "$log" || rc=$?
@@ -606,6 +646,8 @@ for l in "${legs[@]}"; do
     continue
   elif [[ $l == *:exit ]] && ((!exit_legs)); then
     continue
+  elif [[ $l == *:portable ]] && ((!portable_legs)); then
+    continue
   elif [[ $l == *:optional ]]; then
     continue
   fi
@@ -622,7 +664,7 @@ for l in "${legs[@]}"; do
   LEG_DETAIL=
   status=PASS
   case $kind in
-    lit) run_lit_leg "$name" || status=FAIL ;;
+    lit) { run_leg_setup "$name" && run_lit_leg "$name"; } || status=FAIL ;;
     expected) run_expected_leg || status=FAIL ;;
     utc) run_utc_leg || status=FAIL ;;
     upstream) run_upstream_leg || status=FAIL ;;

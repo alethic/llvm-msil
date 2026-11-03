@@ -1,0 +1,107 @@
+# Managed function pointers on msil64-unknown-dotnet: calls through pointers (calli) held in locals, in initialized global tables and in structs, and the identity of &f within a translation unit, across translation units and across a -shared library and its program, in both directions.
+# Plan 5.18.9 (function pointers are managed on the portable triples:
+# ldftn and calli, never native-callable; user decision of 2026-11-01) and
+# 5.18.6 (the library is a -shared portable assembly). The library fplib
+# (%{msil_shlibs}) exports functions, returns their addresses, stores the
+# program's callbacks and calls them, and compares pointers it is given;
+# the program compares the addresses it takes itself (&fp_twice in two
+# translation units, &lib_add taken in the program and returned by the
+# library) and calls through tables of pointers that the data segment's
+# relocations fill (a global table of local and imported functions, and a
+# struct of pointers). Each failed group sets one bit of the exit status.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = fplib=%t/fplib.c
+# REDEFINE: %{msil_srcs} = %t/main.c %t/other.c
+# RUN: %{msil_prog}
+#--- fplib.h
+typedef int (*unop)(int);
+#define API __attribute__((visibility("default")))
+API int lib_add(int x);
+API unop lib_get_add(void);
+API int lib_apply(unop f, int x);
+API void lib_store(unop f);
+API int lib_call_stored(int x);
+API int lib_is_stored(unop f);
+API unop lib_get_stored(void);
+#--- fplib.c
+#include "fplib.h"
+static unop stored;
+static int lib_neg(int x) { return -x; }
+// A table in the library's data: one local and one exported function.
+static unop lib_table[2] = {lib_neg, lib_add};
+API int lib_add(int x) { return x + 100; }
+API unop lib_get_add(void) { return lib_table[1]; }
+API int lib_apply(unop f, int x) { return f(x) + lib_table[0](x); }
+API void lib_store(unop f) { stored = f; }
+API int lib_call_stored(int x) { return stored ? stored(x) : -1; }
+API int lib_is_stored(unop f) { return f == stored; }
+API unop lib_get_stored(void) { return stored; }
+#--- other.c
+#include "fplib.h"
+int fp_twice(int x);
+unop other_get_twice(void) { return fp_twice; }
+unop other_get_lib_add(void) { return lib_add; }
+#--- main.c
+#include "fplib.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+unop other_get_twice(void);
+unop other_get_lib_add(void);
+
+int fp_twice(int x) { return 2 * x; }
+static int fp_square(int x) { return x * x; }
+static long long fp_wide(long long a, int b, double c) { return a * b + (long long)c; }
+
+// Tables that the data segment's relocations fill.
+static unop table[3] = {fp_twice, fp_square, lib_add};
+struct ops {
+  unop first;
+  long long (*wide)(long long, int, double);
+  unop last;
+};
+static struct ops g_ops = {fp_square, fp_wide, fp_twice};
+
+static volatile int v_i = 7, v_sel = 1;
+
+int main(void) {
+  int x = v_i;
+
+  /* 0: calls through pointers in locals and tables. */
+  unop f = table[v_sel];
+  CHECK(0, f(x) == 49 && table[0](x) == 14 && table[2](x) == 107);
+  CHECK(0, g_ops.first(x) == 49 && g_ops.last(x) == 14);
+  CHECK(0, g_ops.wide(1LL << 40, x, 2.75) == (7LL << 40) + 2);
+
+  /* 1: identity within and across translation units. */
+  CHECK(1, table[0] == fp_twice && g_ops.last == fp_twice);
+  CHECK(1, other_get_twice() == fp_twice && other_get_twice() == table[0]);
+  CHECK(1, table[1] != table[0] && f == fp_square);
+
+  /* 2: identity of a library function across the assemblies. */
+  unop la = lib_add;
+  CHECK(2, la == lib_get_add() && table[2] == la && other_get_lib_add() == la);
+  CHECK(2, lib_get_add()(x) == 107);
+
+  /* 3: the library calls the program's functions. */
+  CHECK(3, lib_apply(fp_twice, x) == 14 - 7);
+  CHECK(3, lib_apply(table[1], x) == 49 - 7);
+  CHECK(3, lib_apply(lib_add, x) == 107 - 7);
+
+  /* 4: the library keeps a program pointer and gives it back. */
+  CHECK(4, lib_call_stored(x) == -1);
+  lib_store(fp_square);
+  CHECK(4, lib_call_stored(x) == 49 && lib_is_stored(fp_square) && !lib_is_stored(fp_twice));
+  CHECK(4, lib_get_stored() == fp_square && lib_get_stored() == table[1]);
+  lib_store(0);
+  CHECK(4, lib_get_stored() == 0 && lib_call_stored(x) == -1);
+
+  return (int)fails;
+}

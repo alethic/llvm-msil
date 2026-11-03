@@ -6,7 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file declares MSILTargetInfo, the TargetInfo of the MSIL object format.
+// This file declares MSILTargetInfo, the TargetInfo of the MSIL object format,
+// and MSILPortableTargetInfo, the TargetInfo of the portable MSIL triples.
 //
 // A "<native triple>-msil" triple, such as x86_64-unknown-linux-gnu-msil,
 // names a native platform and its C ABI, but asks for CIL (a .NET assembly)
@@ -37,6 +38,24 @@
 // compile. Local register variables need no check of their own: they matter
 // only as asm operands.
 //
+// The portable triples msil64-unknown-dotnet and msil32-unknown-dotnet name
+// no native platform: their assemblies run on any .NET runtime with the
+// pointer width of the architecture. MSILPortableTargetInfo therefore derives
+// from TargetInfo itself, not from a native TargetInfo, so that no host data
+// model, macro or ABI leaks in. Its data model is LP64 on msil64 and ILP32 on
+// msil32, with WebAssembly's type spellings, which give both widths the same
+// C++ mangling: size_t, ptrdiff_t and intptr_t are unsigned long and long, and
+// int64_t and intmax_t are long long. char is signed, wchar_t and wint_t are
+// int, long double is IEEE double, and va_list is char *. It predefines
+// __MSIL__, __msil64__ or __msil32__ and __dotnet__, and no macro of a host
+// operating system, architecture or object format (no __ELF__: the object
+// format is MSIL). An asm statement with an operand is a Sema error here:
+// validateInputSize and validateOutputSize refuse every operand, whatever its
+// constraint, because the generic constraint checks accept 'r', 'm', 'g' and
+// the like without asking the target. An asm statement without operands and
+// the 'memory' clobber are untouched; CodeGen accepts only an empty asm
+// statement without operands, as on every MSIL triple.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_LIB_BASIC_TARGETS_MSIL_H
@@ -50,6 +69,7 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/TargetParser/Triple.h"
 #include <cassert>
@@ -126,6 +146,171 @@ public:
       Diags.Report(diag::err_opt_not_valid_on_target)
           << ("-mlong-double-" + llvm::Twine(Opts.LongDoubleSize)).str();
     useDoubleForLongDouble();
+  }
+};
+
+// The TargetInfo of the portable triples msil64-unknown-dotnet (LP64) and
+// msil32-unknown-dotnet (ILP32).
+class LLVM_LIBRARY_VISIBILITY MSILPortableTargetInfo final : public TargetInfo {
+  // The same fields TargetInfo::adjust() sets for -mlong-double-64.
+  void useDoubleForLongDouble() {
+    LongDoubleWidth = DoubleWidth;
+    LongDoubleAlign = DoubleAlign;
+    LongDoubleFormat = &llvm::APFloat::IEEEdouble();
+  }
+
+public:
+  MSILPortableTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
+      : TargetInfo(Triple) {
+    assert(Triple.isMSIL() && Triple.isOSDotNet() &&
+           "not a portable MSIL triple");
+    if (Triple.getArch() == llvm::Triple::msil64) {
+      PointerWidth = PointerAlign = 64;
+      LongWidth = LongAlign = 64;
+      // __BIGGEST_ALIGNMENT__ and the default operator new alignment are 16.
+      SuitableAlign = NewAlign = 128;
+      // A _BitInt wider than 64 bits is aligned as __int128 and as the data
+      // layout aligns its IR integer type (i128:128), so that va_arg and
+      // ExpandVariadics, which sees only the IR type, give it the same slot.
+      BitIntMaxAlign = 128;
+    } else {
+      // ILP32 keeps TargetInfo's widths; both alignments are 8.
+      SuitableAlign = NewAlign = 64;
+    }
+    // WebAssembly's spellings, the same on both widths, so that the C++
+    // mangling of size_t and int64_t does not depend on the width.
+    SizeType = UnsignedLong;
+    PtrDiffType = SignedLong;
+    IntPtrType = SignedLong;
+    IntMaxType = SignedLongLong;
+    Int64Type = SignedLongLong;
+    // wchar_t is a signed 32-bit int. wint_t keeps TargetInfo's default, int,
+    // as on WebAssembly: __WINT_TYPE__ is int and __WINT_UNSIGNED__ is not
+    // defined.
+    WCharType = SignedInt;
+    // CIL has no extended-precision floating-point type.
+    useDoubleForLongDouble();
+    // _Float16 and __bf16 convert through clang_rt.builtins, as on the host
+    // MSIL triples.
+    HasFloat16 = true;
+    HasBFloat16 = true;
+    BFloat16Width = BFloat16Align = 16;
+    BFloat16Format = &llvm::APFloat::BFloat();
+    // The CLR's Interlocked operations cover 4 and 8 bytes in 32-bit and
+    // 64-bit processes alike, and nothing wider.
+    MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
+    // CIL accesses unaligned memory through the unaligned. prefix.
+    HasUnalignedAccess = true;
+    resetDataLayout();
+  }
+
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override {
+    Builder.defineMacro("__MSIL__");
+    Builder.defineMacro(getTriple().getArch() == llvm::Triple::msil64
+                            ? "__msil64__"
+                            : "__msil32__");
+    Builder.defineMacro("__dotnet__");
+    // Lock-free up to 8 bytes (MaxAtomicInlineWidth), never 16.
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+  }
+
+  llvm::SmallVector<Builtin::InfosShard> getTargetBuiltins() const override {
+    return {};
+  }
+
+  BuiltinVaListKind getBuiltinVaListKind() const override {
+    return CharPtrBuiltinVaList;
+  }
+
+  // The only CPU is generic, and there are no target features.
+  bool isValidCPUName(StringRef Name) const override {
+    return Name == "generic";
+  }
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override {
+    Values.push_back("generic");
+  }
+  bool setCPU(StringRef Name) override { return isValidCPUName(Name); }
+
+  // CIL has no machine registers: no asm operand is valid, and global
+  // register variables are rejected. TargetInfo::validateInputConstraint and
+  // validateOutputConstraint accept the generic constraints ('r', 'm', 'g',
+  // 'i', 'X', ...) without consulting validateAsmConstraint, so the refusal
+  // lives in validateInputSize and validateOutputSize, which Sema calls for
+  // every non-dependent operand: each one is an error ("invalid input size
+  // for constraint 'r'"). Operand-free asm statements are untouched.
+  ArrayRef<const char *> getGCCRegNames() const override { return {}; }
+  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
+    return {};
+  }
+  bool validateAsmConstraint(const char *&Name,
+                             TargetInfo::ConstraintInfo &Info) const override {
+    return false;
+  }
+  bool validateInputSize(const llvm::StringMap<bool> &FeatureMap,
+                         StringRef Constraint, unsigned Size) const override {
+    return false;
+  }
+  bool validateOutputSize(const llvm::StringMap<bool> &FeatureMap,
+                          StringRef Constraint, unsigned Size) const override {
+    return false;
+  }
+  std::string_view getClobbers() const override { return ""; }
+  bool validateGlobalRegisterVariable(StringRef RegName, unsigned RegSize,
+                                      bool &HasSizeMismatch) const override {
+    HasSizeMismatch = false;
+    return false;
+  }
+
+  // __int128 follows TargetInfo's rule (msil64 only), and with it the widest
+  // _BitInt passed directly: 128 bits on msil64, 64 on msil32. A wider
+  // _BitInt, up to LLVM's widest integer type as on x86, is passed
+  // indirectly (DefaultABIInfo's byval) and returned through sret.
+  bool hasBitIntType() const override { return true; }
+  size_t getMaxBitIntWidth() const override {
+    return llvm::IntegerType::MAX_INT_BITS;
+  }
+
+  // long long, not long, is the 64-bit type on both widths (int64_t,
+  // int_least64_t and int_fast64_t).
+  IntType getIntTypeByWidth(unsigned BitWidth, bool IsSigned) const override {
+    return BitWidth == 64 ? (IsSigned ? SignedLongLong : UnsignedLongLong)
+                          : TargetInfo::getIntTypeByWidth(BitWidth, IsSigned);
+  }
+  IntType getLeastIntTypeByWidth(unsigned BitWidth,
+                                 bool IsSigned) const override {
+    return BitWidth == 64
+               ? (IsSigned ? SignedLongLong : UnsignedLongLong)
+               : TargetInfo::getLeastIntTypeByWidth(BitWidth, IsSigned);
+  }
+
+  // Only CC_C is supported: TargetInfo's checkCallingConvention warns about
+  // every other convention, which is then ignored.
+
+  void adjust(DiagnosticsEngine &Diags, LangOptions &Opts,
+              const TargetInfo *Aux) override {
+    TargetInfo::adjust(Diags, Opts, Aux);
+    // TargetInfo::adjust() has just applied -mlong-double-80 or
+    // -mlong-double-128, which CIL cannot honor: diagnose and restore double.
+    if (Opts.LongDoubleSize && Opts.LongDoubleSize != DoubleWidth)
+      Diags.Report(diag::err_opt_not_valid_on_target)
+          << ("-mlong-double-" + llvm::Twine(Opts.LongDoubleSize)).str();
+    useDoubleForLongDouble();
+    // wchar_t is a signed 32-bit int, which the portable C library's wide
+    // character functions assume: diagnose -fshort-wchar and the cc1 options
+    // that change the type, and restore int.
+    if (WCharType != SignedInt) {
+      const char *Option = Opts.WCharSize == 2   ? "-fshort-wchar"
+                           : Opts.WCharSize == 1 ? "-fwchar-type=char"
+                                                 : "-fno-signed-wchar";
+      Diags.Report(diag::err_opt_not_valid_on_target) << Option;
+      WCharType = SignedInt;
+      Opts.WCharSize = 4;
+      Opts.WCharIsSigned = true;
+    }
   }
 };
 

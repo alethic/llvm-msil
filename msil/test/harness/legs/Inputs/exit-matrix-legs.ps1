@@ -27,6 +27,10 @@
 #   expected        Get-ExpectedLegs, with no switch, -Exit and -Exit -NoWsl, against a stand-in
 #                   'lit-legs.ps1 -List' that lists a leg of every tag; DIR/expected/legs.txt gets
 #                   one line '<switches>: <legs>' each ('no switch: ...' for the first)
+#   portable        the same with the P-1a tag Portable (plan 5.18.10 PX4): the stand-in -List
+#                   also lists 'portable-smoke (-Portable)' and 'portable-smoke-wsl (-Portable)',
+#                   and DIR/portable/legs.txt gets the lines of no switch, -Exit, -Portable,
+#                   -Portable -NoWsl, -Exit -Portable and -Exit -Portable -NoWsl
 # A case that cannot run (no legs file of the case pass, for example) is an error on stderr, and
 # the script then exits 1 after the other cases.
 param(
@@ -36,7 +40,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$allCases = 'pass', 'describe-fails', 'drop-legs', 'no-also-run', 'sh-script', 'expected'
+$allCases = 'pass', 'describe-fails', 'drop-legs', 'no-also-run', 'sh-script', 'expected',
+            'portable'
 $cases = @($Case | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach ($c in $cases) {
   if ($allCases -notcontains $c) { throw "unknown case '$c' (cases: $($allCases -join ', '))" }
@@ -99,16 +104,23 @@ foreach ($name in $cases) {
   Set-Content -LiteralPath $resultsFile -Value @() -Encoding utf8
   $env:MSIL_CI_RESULTS = $resultsFile
   try {
-    if ($name -eq 'expected') {
-      $ci = New-StandInCi $dir (@(
-        "'net-core (-Quick)'", "'net8'", "'wsl-net10 (-Wsl)'", "'upstream (-Full)'",
-        "'ctest-lto (-Exit)'", "'gc-churn-wsl (-Exit)'") -join "`n")
+    if ($name -in 'expected', 'portable') {
+      $listed = @("'net-core (-Quick)'", "'net8'", "'wsl-net10 (-Wsl)'", "'upstream (-Full)'",
+                  "'ctest-lto (-Exit)'", "'gc-churn-wsl (-Exit)'")
+      # Each set of switches: -Exit, -NoWsl, -Portable.
+      $sets = @(@($false, $false, $false), @($true, $false, $false), @($true, $true, $false))
+      if ($name -eq 'portable') {
+        $listed += "'portable-smoke (-Portable)'", "'portable-smoke-wsl (-Portable)'"
+        $sets = @(@($false, $false, $false), @($true, $false, $false), @($false, $false, $true),
+                  @($false, $true, $true), @($true, $false, $true), @($true, $true, $true))
+      }
+      $ci = New-StandInCi $dir ($listed -join "`n")
       $Leg = @(); $Full = $false
-      $lines = foreach ($s in @(@($false, $false), @($true, $false), @($true, $true))) {
-        $Exit, $NoWsl = $s
+      $lines = foreach ($s in $sets) {
+        $Exit, $NoWsl, $Portable = $s
         $r = Get-ExpectedLegs
-        $switches = @(@('-Exit', $Exit), @('-NoWsl', $NoWsl) | Where-Object { $_[1] } |
-                      ForEach-Object { $_[0] }) -join ' '
+        $switches = @(@('-Exit', $Exit), @('-Portable', $Portable), @('-NoWsl', $NoWsl) |
+                      Where-Object { $_[1] } | ForEach-Object { $_[0] }) -join ' '
         "$(if ($switches) { $switches } else { 'no switch' }): " +
           "$(if ($null -eq $r) { '<no list>' } else { $r.Expected -join ', ' })"
       }

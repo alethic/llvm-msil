@@ -318,6 +318,10 @@ uint64_t MSILObjectWriter::writeObject(MCAssembler &Asm,
          Twine(HasModule ? "link-info record" : "object header"));
     return 0;
   }
+  // MSILPrepareIR has reported T-P1 (plan 5.18.11) and emptied the module;
+  // the object is not written, and its envelope is no second error.
+  if (TT.getArch() == Triple::msil32)
+    return 0;
 
   cli::MetadataBuilder MB;
   MB.setModuleName(ModuleName);

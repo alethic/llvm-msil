@@ -1,0 +1,24 @@
+# Run only in a nested lit by ../../lit-config.test: prints the portable
+# substitutions of lit.cfg.py (plan 5.18.10 PX1) and, one line each, the
+# features that tell a portable run from a host-triple run.
+# RUN: echo "portable triple: [%msil_portable_triple]"
+# RUN: echo "clang portable: [%clang_portable]"
+# RUN: echo "llc portable: [%llc_portable]"
+# RUN: echo "portable cflags: [%{msil_portable_cflags}]"
+# RUN: echo "dotnet x86: [%msil_dotnet_x86]"
+# RUN: echo "set 32bitreq: [%msil_set_32bitreq]"
+# RUN: echo "clang native: [%clang_native]"
+# RUN: echo "exec: [%msil_exec]"
+# RUN: %if msil-triple=msil64-unknown-dotnet %{ echo feature msil-triple=msil64-unknown-dotnet %}
+# RUN: %if msil-triple-portable %{ echo feature msil-triple-portable %}
+# RUN: %if msil-triple-msil64 %{ echo feature msil-triple-msil64 %}
+# RUN: %if msil-portable %{ echo feature msil-portable %}
+# RUN: %if msil-portable-builtins %{ echo feature msil-portable-builtins %}
+# RUN: %if msil-dotnet-x86 %{ echo feature msil-dotnet-x86 %}
+# RUN: %if msil-triple-windows %{ echo feature msil-triple-windows %}
+# RUN: %if msil-triple-linux %{ echo feature msil-triple-linux %}
+# RUN: %if msil-native-oracle %{ echo feature msil-native-oracle %}
+# RUN: %if msil-linux-oracle %{ echo feature msil-linux-oracle %}
+# RUN: %if msil-hosted %{ echo feature msil-hosted %}
+# RUN: %if msil-linux-hosted-oracle %{ echo feature msil-linux-hosted-oracle %}
+# RUN: %if msil-wsl %{ echo feature msil-wsl %}

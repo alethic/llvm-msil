@@ -3877,6 +3877,32 @@ def WasmSystemLibrary
 def : LibraryExclusion<"libm", isWasm, [sincos, sincosf, sincosl_f128]>;
 
 //===----------------------------------------------------------------------===//
+// MSIL Runtime Libcalls
+//===----------------------------------------------------------------------===//
+
+// The portable MSIL architectures (msil32/msil64-unknown-dotnet), which name
+// no native platform. The host MSIL triples (x86_64-unknown-linux-gnu-msil,
+// ...) keep their native architecture's system library.
+def IsMSIL : LibcallPredicate<[{TT.isMSIL()}]>;
+def isMSIL : RuntimeLibcallAvailability<(all_of IsMSIL)>;
+
+// The helper archive clang_rt.builtins, the C math library and the C library;
+// the __atomic_* functions stay calls until the backend lowers atomics. long
+// double is IEEE double, so the f80, f128 and ppcf128 entries never apply.
+def MSILSystemLibrary
+    : SystemRuntimeLibrary<isMSIL, ["compiler-rt", "libatomic", "libm",
+                                    "libc"]>;
+
+// The backend expands every 128-bit integer operation inline (division and
+// conversions in the IR, shifts through the *_PARTS nodes), and the helper
+// archive has none of compiler-rt's TI functions, so none is offered. Nor are
+// the f128 helpers: there is no 128-bit floating-point type.
+def : LibraryExclusion<"compiler-rt", isMSIL,
+  !listconcat(Int128RTLibcalls,
+              !filter(entry, CompilerRtLibgccImpls_core,
+                      !match(!cast<string>(entry.Provides), "I128|F128")))>;
+
+//===----------------------------------------------------------------------===//
 // Legacy Default Runtime Libcalls
 //===----------------------------------------------------------------------===//
 

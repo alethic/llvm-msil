@@ -42,20 +42,54 @@ static bool isOrDotted(StringRef Name, StringRef Base) {
                           Name[Base.size()] == '.');
 }
 
+/// classifySection under ELF and Dotnet rules (lld/ELF's and wasm-ld's
+/// names). Under Dotnet rules the .CRT$X* sections of the MSVC CRT are
+/// rejected too (T-P8): the portable target runs constructors only from
+/// .init_array.
+static SectionClass classifyELFSection(StringRef Name, bool RejectCRT) {
+  if (isOrDotted(Name, ".init_array"))
+    return SectionClass::ConstructorTable;
+  if (isOrDotted(Name, ".fini_array"))
+    return SectionClass::DestructorTable;
+  // ld.so runs .preinit_array (DT_PREINIT_ARRAY) before every .init_array
+  // entry; MSIL has no such phase yet.
+  if (isOrDotted(Name, ".ctors") || isOrDotted(Name, ".dtors") ||
+      isOrDotted(Name, ".preinit_array"))
+    return SectionClass::Unsupported;
+  if (RejectCRT && Name.starts_with(".CRT$X"))
+    return SectionClass::Unsupported;
+  return SectionClass::Data;
+}
+
+std::optional<StringRef> cli::getUnsupportedSectionReason(StringRef Name,
+                                                          SectionRules Rules) {
+  switch (Rules) {
+  case SectionRules::ELF:
+  case SectionRules::COFF:
+    return std::nullopt;
+  case SectionRules::Dotnet:
+    break;
+  }
+  if (isOrDotted(Name, ".fini_array") || isOrDotted(Name, ".dtors"))
+    return StringRef("the portable target runs no destructor sections");
+  if (isOrDotted(Name, ".preinit_array"))
+    return StringRef("the portable target has no pre-initialization stage");
+  if (isOrDotted(Name, ".ctors") || Name.starts_with(".CRT$X"))
+    return StringRef(
+        "the portable target runs constructors only from .init_array");
+  return std::nullopt;
+}
+
 SectionClass cli::classifySection(StringRef Name, SectionRules Rules) {
   if (isOrDotted(Name, ".tdata") || isOrDotted(Name, ".tbss"))
     return SectionClass::TLS;
-  if (Rules == SectionRules::ELF) {
-    if (isOrDotted(Name, ".init_array"))
-      return SectionClass::ConstructorTable;
-    if (isOrDotted(Name, ".fini_array"))
-      return SectionClass::DestructorTable;
-    // ld.so runs .preinit_array (DT_PREINIT_ARRAY) before every
-    // .init_array entry; MSIL has no such phase yet.
-    if (isOrDotted(Name, ".ctors") || isOrDotted(Name, ".dtors") ||
-        isOrDotted(Name, ".preinit_array"))
-      return SectionClass::Unsupported;
-    return SectionClass::Data;
+  switch (Rules) {
+  case SectionRules::ELF:
+    return classifyELFSection(Name, /*RejectCRT=*/false);
+  case SectionRules::Dotnet:
+    return classifyELFSection(Name, /*RejectCRT=*/true);
+  case SectionRules::COFF:
+    break;
   }
   // COFF: the CRT's tables are sorted by the part after '$' (.CRT$XCA-XCZ
   // constructors, .CRT$XTA-XTZ terminators); the C initializers .CRT$XI*,
@@ -76,12 +110,36 @@ SectionClass cli::classifySection(StringRef Name, SectionRules Rules) {
 }
 
 StringRef cli::getOutputSectionName(StringRef Name, SectionRules Rules) {
-  if (Rules == SectionRules::COFF)
+  switch (Rules) {
+  case SectionRules::COFF:
     return Name.split('$').first;
-  for (StringRef Base : {".init_array", ".fini_array"})
-    if (isOrDotted(Name, Base))
-      return Base;
-  return Name;
+  case SectionRules::ELF:
+    for (StringRef Base : {".init_array", ".fini_array"})
+      if (isOrDotted(Name, Base))
+        return Base;
+    return Name;
+  case SectionRules::Dotnet:
+    // Only .init_array.N is collapsed (plan 5.18.5 LR9): a Dotnet output has
+    // no destructor sections (allowsFiniSections).
+    if (isOrDotted(Name, ".init_array"))
+      return ".init_array";
+    return Name;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
+/// Whether \p Rules order constructor keys and group members by priority
+/// (lld/ELF's and wasm-ld's rule), rather than by section name byte-wise
+/// (lld/COFF's).
+static bool ordersByPriority(SectionRules Rules) {
+  switch (Rules) {
+  case SectionRules::ELF:
+  case SectionRules::Dotnet:
+    return true;
+  case SectionRules::COFF:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
 }
 
 int cli::getSectionPriority(StringRef Name) {
@@ -122,14 +180,14 @@ std::optional<uint64_t> cli::getStartStopOffset(const ImageLayout &Layout,
 
 bool cli::operator<(const ConstructorKey &L, const ConstructorKey &R) {
   assert(L.Rules == R.Rules && "constructor keys of different rules");
-  if (L.Rules == SectionRules::ELF)
+  if (ordersByPriority(L.Rules))
     return L.Priority < R.Priority;
   return L.Section < R.Section;
 }
 
 bool cli::operator==(const ConstructorKey &L, const ConstructorKey &R) {
   assert(L.Rules == R.Rules && "constructor keys of different rules");
-  if (L.Rules == SectionRules::ELF)
+  if (ordersByPriority(L.Rules))
     return L.Priority == R.Priority;
   return L.Section == R.Section;
 }
@@ -138,7 +196,7 @@ ConstructorKey cli::getConstructorKey(uint32_t InitPriority,
                                       SectionRules Rules) {
   ConstructorKey K;
   K.Rules = Rules;
-  if (Rules == SectionRules::ELF) {
+  if (ordersByPriority(Rules)) {
     // clang puts the default priority in plain .init_array, whose slots have
     // priority 65536.
     K.Priority = InitPriority == 65535 ? 65536 : static_cast<int>(InitPriority);
@@ -169,7 +227,7 @@ ConstructorKey cli::getConstructorKey(StringRef SlotSection,
                                       SectionRules Rules) {
   ConstructorKey K;
   K.Rules = Rules;
-  if (Rules == SectionRules::ELF)
+  if (ordersByPriority(Rules))
     K.Priority = getSectionPriority(SlotSection);
   else
     K.Section = SlotSection.str();
@@ -304,7 +362,7 @@ Expected<ImageLayout> cli::layoutImage(const ImageInput &In) {
   for (Unit &U : Units) {
     if (U.Members.size() < 2)
       continue;
-    if (In.Rules == SectionRules::ELF)
+    if (ordersByPriority(In.Rules))
       llvm::stable_sort(U.Members, [&](uint32_t A, uint32_t B) {
         return getSectionPriority(In.Segments[A].Name) <
                getSectionPriority(In.Segments[B].Name);

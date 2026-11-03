@@ -14,6 +14,10 @@
 // links, there is no external assembler, no PIC and no unwind tables, and
 // compiles write CIL objects (LLVM bitcode with -flto).
 //
+// The portable triples msil64-unknown-dotnet and msil32-unknown-dotnet have no
+// native platform behind them: their toolchain, DotNetToolChain, takes headers
+// and libraries from its own sysroot and links the managed C library c.dll.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_MSIL_H
@@ -89,10 +93,61 @@ extern template class MSILToolChain<Linux>;
 extern template class MSILToolChain<MSVCToolChain>;
 extern template class MSILToolChain<MinGW>;
 
-/// The MSIL toolchain for an MSIL triple, never null. A triple that no native
-/// toolchain fits (decision D6 rejects it) gets a toolchain whose link,
-/// assemble and static-library tools report the triple as unknown; the
-/// frontend rejects its compiles.
+/// The toolchain of the portable triples msil64-unknown-dotnet and
+/// msil32-unknown-dotnet (plan 5.18.4). The sysroot is --sysroot, or else
+/// <InstalledDir>/../lib/clang-runtimes/<triple>; it holds the C headers in
+/// include/ (and include/<triple>/) and the managed C library c.dll in
+/// lib/<triple>/. msil-ld links, with the C library (-lc) and the
+/// compiler-rt helper archive of the triple as default libraries. There is no
+/// native assembler, PIC or unwind table, and no static C library before P-3.
+class LLVM_LIBRARY_VISIBILITY DotNetToolChain final : public ToolChain {
+public:
+  DotNetToolChain(const Driver &D, const llvm::Triple &Triple,
+                  const llvm::opt::ArgList &Args);
+
+  const char *getDefaultLinker() const override { return "msil-ld"; }
+  bool HasNativeLLVMSupport() const override { return true; }
+  bool isPICDefault() const override { return false; }
+  bool isPIEDefault(const llvm::opt::ArgList &Args) const override {
+    return false;
+  }
+  bool isPICDefaultForced() const override { return false; }
+  ToolChain::UnwindTableLevel
+  getDefaultUnwindTableLevel(const llvm::opt::ArgList &Args) const override {
+    return ToolChain::UnwindTableLevel::None;
+  }
+  // The managed C library implements math errno (plan 5.18.2 PC3), so
+  // __NO_MATH_ERRNO__ stays undefined.
+  bool IsMathErrnoDefault() const override { return true; }
+  SanitizerMask
+  getSupportedSanitizers(BoundArch BA,
+                         Action::OffloadKind DeviceOffloadKind) const override;
+  ToolChain::RuntimeLibType GetDefaultRuntimeLibType() const override {
+    return ToolChain::RLT_CompilerRT;
+  }
+  std::string computeSysRoot() const override;
+  void
+  AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                            llvm::opt::ArgStringList &CC1Args) const override;
+  void
+  addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
+                        llvm::opt::ArgStringList &CC1Args, BoundArch BA,
+                        Action::OffloadKind DeviceOffloadKind) const override;
+
+protected:
+  Tool *buildLinker() const override;
+  Tool *buildAssembler() const override;
+  Tool *buildStaticLibTool() const override;
+};
+
+/// The MSIL toolchain for a triple with the MSIL object format, an msil
+/// architecture or OS dotnet, never null: DotNetToolChain for a portable
+/// triple, MSILToolChain for a host MSIL triple. A triple that no toolchain
+/// fits (decision D6 rejects it; an msil architecture with an OS other than
+/// dotnet, another object format or an environment component; OS dotnet with
+/// a native architecture) gets a toolchain whose link, assemble and
+/// static-library tools report the triple as unknown; the frontend rejects
+/// its compiles.
 std::unique_ptr<ToolChain> createMSILToolChain(const Driver &D,
                                                const llvm::Triple &Triple,
                                                const llvm::opt::ArgList &Args);

@@ -23,6 +23,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/LinkInfo.h"
 #include "llvm/CLI/MetadataReader.h"
 #include "llvm/CLI/PEImage.h"
@@ -165,6 +166,12 @@ static StringRef getFormatName(file_magic magic) {
   }
 }
 
+std::string getNativeLibraryRefusal(StringRef file, const Triple &tt) {
+  return ("'" + file + "' is a native library, which " + tt.str() +
+          " cannot link: the portable target binds no native code")
+      .str();
+}
+
 InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
                             uint64_t offsetInArchive, bool lazy) {
   file_magic magic = identify_magic(mb.getBuffer());
@@ -198,8 +205,16 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
   // code, skipped as an unreferenced native archive member is, unless an
   // input refers to one of its definitions. The native index reads it as an
   // archive member (NativeIndex::addFile).
+  // The portable triples bind no native code (plan 5.18.6 PL2): the object
+  // is skipped, and a reference to one of its definitions stays undefined.
   if (magic == file_magic::coff_object ||
       magic == file_magic::elf_relocatable) {
+    if (!cli::bindsNatively(ctx.arg.target)) {
+      log("native object " + mb.getBufferIdentifier() +
+          ": its definitions are machine code, which " + ctx.arg.target.str() +
+          " never links");
+      return nullptr;
+    }
     log("native object " + mb.getBufferIdentifier() +
         ": its definitions are machine code, which MSIL cannot link; a "
         "reference to one of them is an error");
@@ -307,6 +322,21 @@ SmallVector<StringRef, 0> ObjFile::getDependentLibraries() const {
   return ret;
 }
 
+// True if the linker options of an input for \p tt are tokenized as
+// lld-link's directives are (/DEFAULTLIB:"my lib.lib"): under COFF rules.
+// ELF and Dotnet rules keep GNU tokenization (plan 5.18.6, portable-linkrules
+// D10).
+static bool usesWindowsOptionTokens(const Triple &tt) {
+  switch (cli::getSectionRules(tt)) {
+  case cli::SectionRules::COFF:
+    return true;
+  case cli::SectionRules::ELF:
+  case cli::SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
 // One string of a LINKER_OPTION entry is one option, except on Windows
 // triples, where clang quotes a library name with a space
 // (/DEFAULTLIB:"my lib.lib") as lld-link's directive tokenizer expects; the
@@ -314,7 +344,7 @@ SmallVector<StringRef, 0> ObjFile::getDependentLibraries() const {
 // irsymtab's linker options there (section 12 of 2026-10-22).
 SmallVector<std::string, 0> ObjFile::getLinkerOptions() const {
   SmallVector<std::string, 0> ret;
-  bool windows = Triple(record.Hdr.Triple).isOSWindows();
+  bool windows = usesWindowsOptionTokens(Triple(record.Hdr.Triple));
   for (const MSILLink::LinkerOption &opt : record.LinkerOptions) {
     if (opt.Kind != MSILLink::LinkerOptionKind::LinkerOption)
       continue;
@@ -924,7 +954,7 @@ SmallVector<std::string, 0> BitcodeFile::getLinkerOptions() const {
       ret.push_back(tok.str());
     return ret;
   };
-  if (Triple(obj->getTargetTriple()).isOSWindows())
+  if (usesWindowsOptionTokens(Triple(obj->getTargetTriple())))
     return tokenize();
 
   Expected<std::vector<BitcodeModule>> modsOrErr = getBitcodeModuleList(mb);

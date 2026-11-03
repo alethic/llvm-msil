@@ -63,6 +63,17 @@ inline constexpr size_t MaxILNameBytes = 1023;
 /// too.
 inline constexpr unsigned MaxSelectedFPConvertBits = 64;
 
+/// Whether code generation compiles for \p TM. Phase 1 compiles C for the
+/// x86_64 and aarch64 MSIL triples with 64-bit pointers only: the arch selects
+/// the C ABI, and pointers are CIL native ints (decision D2), so the ILP32
+/// environments (x86_64 gnux32, aarch64 gnu_ilp32), whose DataLayout has
+/// 32-bit pointers, are rejected too. Of the portable triples
+/// msil64-unknown-dotnet is compiled, with 64-bit pointers (plan 5.18.2 PB1);
+/// msil32-unknown-dotnet waits for P-4 (5.18.11). MSILPrepareIR reports any
+/// other target and empties the module, and text mode then writes only the
+/// module header.
+bool isSupportedTarget(const TargetMachine &TM);
+
 /// The IR spelling of GV ("@name", "@0", "@\"\01x\"") for diagnostics.
 std::string getIRName(const GlobalValue &GV);
 

@@ -1067,17 +1067,22 @@ Error Copier::copy(SmallVectorImpl<uint8_t> &Out) {
                      : R.isAssembly() ? PEImageKind::Library
                                       : PEImageKind::Module;
   // A PE32+ machine takes PEOptions::get's defaults for its kind (the image
-  // base included; get reads only the triple's architecture). Any other
-  // machine goes to writePEImage as it is, which refuses it until phase 5.
+  // base included; get reads only the triple's architecture), and so does a
+  // PE32 image for machine I386, the AnyCPU envelope of msil64 (plan 5.18.7):
+  // writePEImage accepts it only with ILONLY and neither 32BITREQUIRED nor
+  // 32BITPREFERRED. Any other machine or format goes to writePEImage as it
+  // is, which refuses it.
   PEOptions Opts;
   uint16_t Machine = Image.getMachine();
-  if (Machine == COFF::IMAGE_FILE_MACHINE_AMD64 ||
-      Machine == COFF::IMAGE_FILE_MACHINE_ARM64) {
-    Expected<PEOptions> Defaults =
-        PEOptions::get(Triple(Machine == COFF::IMAGE_FILE_MACHINE_AMD64
-                                  ? "x86_64-pc-windows-msvc-msil"
-                                  : "aarch64-pc-windows-msvc-msil"),
-                       Kind);
+  const char *DefaultsTriple = nullptr;
+  if (Machine == COFF::IMAGE_FILE_MACHINE_AMD64)
+    DefaultsTriple = "x86_64-pc-windows-msvc-msil";
+  else if (Machine == COFF::IMAGE_FILE_MACHINE_ARM64)
+    DefaultsTriple = "aarch64-pc-windows-msvc-msil";
+  else if (Machine == COFF::IMAGE_FILE_MACHINE_I386 && !Image.isPE32Plus())
+    DefaultsTriple = "msil64-unknown-dotnet";
+  if (DefaultsTriple) {
+    Expected<PEOptions> Defaults = PEOptions::get(Triple(DefaultsTriple), Kind);
     if (!Defaults)
       return Defaults.takeError();
     Opts = *Defaults;

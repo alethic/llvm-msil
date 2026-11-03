@@ -166,7 +166,23 @@ archive that was up to date), the script fails with a usage error that names it.
 `x86_64-pc-windows-msvc-msil` and `x86_64-unknown-linux-gnu-msil` by default, the triples of
 `--triple T` (repeatable) instead, and with `--all` also the x86_64 MinGW and musl triples and
 the aarch64 Linux and windows-msvc ones; `--jobs N` sets the parallel compiles (default: one per
-processor). `<archive>.stamp` holds the SHA-256 of the script, the clang and `llvm-ar` binaries,
+processor). Since P-1a it also builds the archive of the portable triple (plan 5.18.8),
+`<resource dir>/lib/msil64-unknown-dotnet/libclang_rt.builtins.a`, but only when `--triple
+msil64-unknown-dotnet` names it: the portable triple is in neither the default set nor `--all`,
+and `--check` and `--list` cover it only when it is named, so the milestone gates' and the CI's
+`build-builtins.py` steps are unchanged. The portable legs (`lit-legs.ps1 -Portable`) run
+`build-builtins.py --build-dir <build> --triple msil64-unknown-dotnet` as their setup, and
+`clang --target=msil64-unknown-dotnet -print-libgcc-file-name` names the file once it exists. A
+`--triple` must be an MSIL triple, with the `-msil` suffix or an msil arch (`msil32` or
+`msil64`, which takes no suffix); `x86_64-unknown-dotnet` or a bare `msil64` is the usage error
+`--triple <t> is not an MSIL triple (<arch>-...-msil, or an msil32 or msil64 triple such as
+msil64-unknown-dotnet)`. `msil32-unknown-dotnet` passes that check, but its compiles fail with
+the backend's `target 'msil32-unknown-dotnet' is not supported yet: only msil64-unknown-dotnet
+is implemented` until P-4. The portable members are `sources.txt`'s unglobbed lines and those
+whose glob matches `*-unknown-dotnet` (`int_util.c` and the `-ftrapv` helpers, which the Linux
+triples take too); `msil_longdouble.c`, the windows-msvc stdio sources, `atomic.c` and the `*ti*`
+sources stay out, and without `__ELF__` `comparedf2.c` and `comparesf2.c` define no
+`__cmpdf2`/`__cmpsf2` aliases. `<archive>.stamp` holds the SHA-256 of the script, the clang and `llvm-ar` binaries,
 `sources.txt`, every member's source and header, and the command lines, and an archive whose
 stamp matches is not rebuilt. A failed compile removes that triple's archive and stamp, so a
 link fails loudly instead of using a stale archive. The other modes: `--check` builds nothing
@@ -190,6 +206,8 @@ python D:/llvm-msil/msil/utils/build/build-builtins.py
 python D:/llvm-msil/msil/utils/build/build-builtins.py --check
 python D:/llvm-msil/msil/utils/build/build-builtins.py --all --jobs 4
 python D:/llvm-msil/msil/utils/build/build-builtins.py --list --triple x86_64-unknown-linux-gnu-msil
+python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-dotnet --jobs 4
+python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-dotnet --check
 ```
 
 ### msil-lit.ps1 (shared)
@@ -224,6 +242,18 @@ leg of `msil/utils/ci/lit-legs.ps1`. Since M25 the tests that call runtime helpe
 hosted directory of the Linux triple whose native oracle runs (every directory of
 `msil/test/M3`) needs E7h's native compiler-rt archive too
 (`python msil/utils/make-linux-sysroot.py --builtins`; `msil/test/README.md`).
+
+Since P-1a the execution tests of the portable triple, `msil/test/Portable`, run only under
+`--param msil_triple=msil64-unknown-dotnet` (under a host triple every one is UNSUPPORTED) and
+need the portable helper archive (`build-builtins.py --triple msil64-unknown-dotnet`, above).
+P-1a's gate runs them as the portable legs pass their parameters; `guard-x86` also needs the
+32-bit `dotnet.exe` with .NET 8 and 10 x86 and the 32-bit .NET Framework
+(`msil/test/README.md`):
+
+```powershell
+python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-dotnet
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_dotnet_runtime=10 --param msil_also_run=10+tc0 --param msil_run_netfx=1 --param msil_require_x86=1" msil/test/Portable
+```
 
 ### msil-run.ps1 (shared)
 

@@ -136,6 +136,13 @@ public:
     return slotInfo(DL, Parameter);
   }
 
+  // MSIL: the alignment that the caller's copy of the indirect variadic
+  // argument ArgNo of the call CB needs at least, beyond the preferred
+  // alignment of its type. By default none.
+  virtual MaybeAlign indirectCopyAlign(const CallBase &CB, unsigned ArgNo) {
+    return std::nullopt;
+  }
+
   // Targets implemented so far all have the same trivial lowering for these
   bool vaEndIsNop() { return true; }
   bool vaCopyIsMemcpy() { return true; }
@@ -793,6 +800,12 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
       Builder.SetCurrentDebugLocation(CB->getDebugLoc());
       Value *CallerCopy =
           Builder.CreateAlloca(UnderlyingType, nullptr, "IndirectAlloca");
+      // MSIL: the callee may load through the slot's pointer with the
+      // alignment of the call site, which may exceed the type's.
+      if (MaybeAlign CopyAlign = ABI->indirectCopyAlign(*CB, I)) {
+        auto *CopyAlloca = cast<AllocaInst>(CallerCopy);
+        CopyAlloca->setAlignment(std::max(CopyAlloca->getAlign(), *CopyAlign));
+      }
 
       Builder.SetInsertPoint(CB);
       if (IsByVal)
@@ -1328,6 +1341,15 @@ struct MSILAAPCS64 final : public VariadicABIInfo {
   }
 };
 
+// MSIL: the call site's alignment of a byval variadic argument, which clang
+// gives the C alignment of the type; the callee loads through the slot's
+// pointer with it, so the caller's copy keeps it.
+static MaybeAlign msilByValParamAlign(const CallBase &CB, unsigned ArgNo) {
+  if (!CB.paramHasAttr(ArgNo, Attribute::ByVal))
+    return std::nullopt;
+  return CB.getParamAlign(ArgNo);
+}
+
 // Windows (x86_64 and AArch64): va_list is a char * into 8-byte slots,
 // passed in an SSA register. On x86_64 a value whose size is not 1, 2, 4 or
 // 8 bytes goes by pointer to a copy of the caller's; on AArch64 one above 16
@@ -1367,9 +1389,58 @@ struct MSILCharPtr final : public VariadicABIInfo {
   }
 };
 
+// The portable triples (msil64/msil32-unknown-dotnet), which have no native
+// convention: va_list is a char * into 8-byte slots, passed in an SSA
+// register, as clang's portable ABI reads it (emitVoidPtrVAArg with an
+// 8-byte slot and higher alignment allowed). A slot is aligned to the larger
+// of 8 and the type's alignment, and an aggregate goes by pointer to a copy
+// of the caller's (clang passes aggregates byval), as does an integer wider
+// than the widest integer type: wider than 64 bits on msil32 (msil32 has no
+// __int128) and wider than 128 bits on msil64, a _BitInt that clang passes
+// byval. On msil64 an integer up to 128 bits wide is direct. The caller's
+// copy keeps the call site's byval alignment, with which the callee loads
+// through the slot's pointer.
+struct MSILPortable final : public VariadicABIInfo {
+  bool enableForTarget() override { return true; }
+  bool vaListPassedInSSARegister() override { return true; }
+
+  Type *vaListType(LLVMContext &Ctx) override {
+    return PointerType::getUnqual(Ctx);
+  }
+
+  Type *vaListParameterType(Module &M) override {
+    return PointerType::getUnqual(M.getContext());
+  }
+
+  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &Builder,
+                          AllocaInst * /*va_list*/, Value *Buffer) override {
+    return Buffer;
+  }
+
+  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) override {
+    if (Parameter->isAggregateType())
+      return {Align(8), true};
+    if (Parameter->isIntegerTy() &&
+        Parameter->getIntegerBitWidth() >
+            (DL.getPointerSizeInBits() == 32 ? 64u : 128u))
+      return {Align(8), true};
+    return {std::max(Align(8), DL.getABITypeAlign(Parameter)), false};
+  }
+
+  MaybeAlign indirectCopyAlign(const CallBase &CB, unsigned ArgNo) override {
+    return msilByValParamAlign(CB, ArgNo);
+  }
+
+  bool ignoreFunction(const Function *F) override {
+    return ignoreMSILFunction(F);
+  }
+};
+
 } // namespace
 
 static std::unique_ptr<VariadicABIInfo> createMSILABIInfo(const Triple &T) {
+  if (T.isMSIL())
+    return std::make_unique<MSILPortable>();
   if (T.isOSWindows())
     return std::make_unique<MSILCharPtr>(T.isAArch64() ? 16 : 8,
                                          /*PowerOf2Only=*/!T.isAArch64());

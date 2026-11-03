@@ -1,0 +1,79 @@
+# Skip lines qualified by a portable triple (plan section 12, 'Plan 5.12.6
+# amended (skip lines)', 5.17.5, 5.18.10 PX2; P-1a.i): the <triple> of
+# 'skip <oracle>[@<triple>][:<level>] <test path> <reason>' is an MSIL
+# triple, which is a host triple with -msil or a portable triple
+# (msil64-unknown-dotnet, msil32-unknown-dotnet) without it. The skip lines
+# here name this test. Checks:
+# (1) msil-equiv.py --test: a line qualified by msil64-unknown-dotnet, and
+#     one by msil32-unknown-dotnet, covers the test under that --triple
+#     ('<oracle> skipped: <reason>', status 0, the missing images never
+#     read), at the line's level only when it names one; the other width,
+#     another level, the portable triple with -msil and no --triple cover
+#     nothing (the run goes on to the missing image, status 2, nothing said
+#     about skipping). A qualifier that is no MSIL triple
+#     (x86_64-unknown-dotnet: the portable triples are msil32 and msil64
+#     only; msil64-unknown-linux) is a usage error.
+# (2) msil-prog.py --equiv-skip FILE --test PATH with the same files: under
+#     --triple msil64-unknown-dotnet (and msil32-unknown-dotnet) at the
+#     covered level it prints 'msil-prog: O3 skipped: <reason>' before its
+#     first compile, which passes --target=<the portable triple> with no
+#     -msil suffix; another width or level prints no skip line. The
+#     compiler is Inputs/no-cc.py, which fails, so each run ends at that
+#     compile (status 1). The bad qualifiers are usage errors (status 2)
+#     before anything runs.
+
+# RUN: rm -rf %t && split-file %s %t
+
+# (1)
+# RUN: %msil_equiv --allowed %t/allow.txt --test %s --triple msil64-unknown-dotnet --level O2 %t/none-a %t/none-b > %t/1a.log
+# RUN: %{harness_check} contains %t/1a.log "\AO3 skipped: msil64 at -O2\n\Z"
+# RUN: %msil_equiv --allowed %t/allow.txt --test %s --triple msil32-unknown-dotnet --level O0 %t/none-a %t/none-b > %t/1b.log
+# RUN: %{harness_check} contains %t/1b.log "\AO3 skipped: msil32 at every level\n\Z"
+# RUN: %msil_equiv --allowed %t/allow.txt --oracle O4 --test %s --triple msil64-unknown-dotnet --level Oz %t/none-a %t/none-b > %t/1c.log
+# RUN: %{harness_check} contains %t/1c.log "\AO4 skipped: O4 on msil64\n\Z"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/allow.txt --test %s --triple msil64-unknown-dotnet --level O0 %t/none-a %t/none-b > %t/1d.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/allow.txt --oracle O4 --test %s --triple msil32-unknown-dotnet --level O2 %t/none-a %t/none-b > %t/1e.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/allow.txt --test %s --triple msil64-unknown-dotnet-msil --level O2 %t/none-a %t/none-b > %t/1f.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/allow.txt --test %s %t/none-a %t/none-b > %t/1g.log 2>&1
+# RUN: %{harness_check} contains %t/1d.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/1e.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/1f.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/1g.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} lacks %t/1d.log "skipped"
+# RUN: %{harness_check} lacks %t/1e.log "skipped"
+# RUN: %{harness_check} lacks %t/1f.log "skipped"
+# RUN: %{harness_check} lacks %t/1g.log "skipped"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-x86.txt --test %s --triple x86_64-unknown-dotnet --level O2 %t/none-a %t/none-b > %t/1h.log 2>&1
+# RUN: %{harness_check} contains %t/1h.log "^msil-equiv: error: \S*bad-x86\.txt:1: the triple x86_64-unknown-dotnet of the skip line is not an MSIL triple \(it does not end in -msil and is not a portable triple such as msil64-unknown-dotnet\)$"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-os.txt --test %s --triple msil64-unknown-linux --level O2 %t/none-a %t/none-b > %t/1i.log 2>&1
+# RUN: %{harness_check} contains %t/1i.log "^msil-equiv: error: \S*bad-os\.txt:1: the triple msil64-unknown-linux of the skip line is not an MSIL triple "
+
+# (2)
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/msil-prog.py --clang='%python %S/Inputs/no-cc.py' --triple msil64-unknown-dotnet --level O2 --pipeline obj --workdir %t/p1 --out %t/p1/prog.exe --equiv-out %t/p1-equiv.exe --equiv-skip %t/allow.txt --test %s --src %t/main.c > %t/2a.log 2>&1
+# RUN: %{harness_check} contains %t/2a.log "\Amsil-prog: O3 skipped: msil64 at -O2\nmsil-prog: .*no-cc\.py\S* --target=msil64-unknown-dotnet -O2 -c \.\./main\.c -o obj/main\.o\nno-cc: --target=msil64-unknown-dotnet " "^msil-prog: error: the compile of \S*main\.c failed \(exit status 3\)$"
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/msil-prog.py --clang='%python %S/Inputs/no-cc.py' --triple msil32-unknown-dotnet --level O1 --pipeline obj --workdir %t/p2 --out %t/p2/prog.exe --equiv-out %t/p2-equiv.exe --equiv-skip %t/allow.txt --test %s --src %t/main.c > %t/2b.log 2>&1
+# RUN: %{harness_check} contains %t/2b.log "\Amsil-prog: O3 skipped: msil32 at every level\n" "--target=msil32-unknown-dotnet -O1 -c "
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/msil-prog.py --clang='%python %S/Inputs/no-cc.py' --triple msil64-unknown-dotnet --level O0 --pipeline obj --workdir %t/p3 --out %t/p3/prog.exe --equiv-out %t/p3-equiv.exe --equiv-skip %t/allow.txt --test %s --src %t/main.c > %t/2c.log 2>&1
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/msil-prog.py --clang='%python %S/Inputs/no-cc.py' --triple msil32-unknown-dotnet --level O2 --pipeline lto --link-output pe --workdir %t/p4 --out %t/p4/prog.exe --also-il %t/p4.il --equiv-out %t/p4-equiv.exe --equiv-skip %t/allow.txt --test %s --src %t/main.c > %t/2d.log 2>&1
+# RUN: %{harness_check} contains %t/2c.log "\Amsil-prog: .*no-cc\.py\S* --target=msil64-unknown-dotnet -O0 -c "
+# RUN: %{harness_check} contains %t/2d.log "\Amsil-prog: .*no-cc\.py\S* --target=msil32-unknown-dotnet .*-flto"
+# RUN: %{harness_check} lacks %t/2c.log "skipped"
+# RUN: %{harness_check} lacks %t/2d.log "skipped"
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/msil-prog.py --clang='%python %S/Inputs/no-cc.py' --triple msil64-unknown-dotnet --level O2 --pipeline obj --workdir %t/p5 --equiv-skip %t/bad-x86.txt --test %s --src %t/main.c > %t/2e.log 2>&1
+# RUN: %{harness_check} contains %t/2e.log "^msil-prog: error: --equiv-skip: \S*bad-x86\.txt:1: the triple x86_64-unknown-dotnet of the skip line is not an MSIL triple \(it does not end in -msil and is not a portable triple such as msil64-unknown-dotnet\)$"
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/msil-prog.py --clang='%python %S/Inputs/no-cc.py' --triple msil64-unknown-dotnet --level O2 --pipeline obj --workdir %t/p6 --equiv-skip %t/bad-os.txt --test %s --src %t/main.c > %t/2f.log 2>&1
+# RUN: %{harness_check} contains %t/2f.log "^msil-prog: error: --equiv-skip: \S*bad-os\.txt:1: the triple msil64-unknown-linux of the skip line is not an MSIL triple \(it does not end in -msil and is not a portable triple such as msil64-unknown-dotnet\)$"
+# RUN: %{harness_check} lacks %t/2e.log "no-cc:"
+# RUN: %{harness_check} lacks %t/2f.log "no-cc:"
+
+#--- allow.txt
+# Skip lines for this test, qualified by the portable triples.
+skip O3@msil64-unknown-dotnet:O2 msil/test/harness/portable/skip-lines.test msil64 at -O2
+skip O3@msil32-unknown-dotnet msil/test/harness/portable/skip-lines.test msil32 at every level
+skip O4@msil64-unknown-dotnet msil/test/harness/portable/skip-lines.test O4 on msil64
+#--- bad-x86.txt
+skip O3@x86_64-unknown-dotnet:O2 msil/test/harness/portable/skip-lines.test no portable triple
+#--- bad-os.txt
+skip O3@msil64-unknown-linux:O2 msil/test/harness/portable/skip-lines.test no MSIL triple
+#--- main.c
+int main(void) { return 0; }

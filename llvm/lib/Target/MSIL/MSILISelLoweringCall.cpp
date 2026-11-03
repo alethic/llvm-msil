@@ -79,12 +79,14 @@
 #include "MSILAsmPrinter.h"
 #include "MSILISelLowering.h"
 #include "MSILMachineFunctionInfo.h"
+#include "MSILPortable.h"
 #include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
 #include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -428,6 +430,11 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       if (!MSIL::getPInvokeModule(TT, Name, Named)) {
         if (Name.starts_with("__"))
           return Reject(MSIL::getRuntimeHelperText(Name));
+        // A portable triple binds no native code, and its standalone text
+        // imports nothing: any other library call is T-P3, as an undefined
+        // function of the module is (plan 5.18.6 PL5).
+        if (!cli::bindsNatively(TT))
+          return Reject(MSIL::getStandaloneUndefinedText(Name));
         return Reject(Twine("library call '") + Name +
                       "' is not a Phase-1 import");
       }

@@ -20,6 +20,7 @@
 #include "MCTargetDesc/MSILTargetStreamer.h"
 #include "MSILAsmPrinter.h"
 #include "MSILMCInstLower.h"
+#include "MSILPortable.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -34,12 +35,35 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cassert>
 #include <utility>
 
 using namespace llvm;
+
+static cl::opt<std::string> MSILAssemblyName(
+    "msil-assembly-name",
+    cl::desc("MSIL: the name of the emitted assembly (default: the stem of "
+             "the module's source file name, or 'module')"),
+    cl::value_desc("name"));
+
+std::string MSIL::getAssemblyName(const Module &M) {
+  if (!MSILAssemblyName.empty())
+    return MSILAssemblyName;
+  if (const auto *Flag =
+          dyn_cast_or_null<MDString>(M.getModuleFlag("msil-assembly-name"));
+      Flag && !Flag->getString().empty())
+    return Flag->getString().str();
+  StringRef Stem =
+      sys::path::stem(M.getSourceFileName(), sys::path::Style::windows);
+  if (Stem.empty() || Stem == "." || Stem == "..")
+    return "module";
+  return Stem.str();
+}
 
 cli::EntityRef MSILTrailerTextSink::addEntity(Entity E) {
   Entities.push_back(std::move(E));
@@ -295,4 +319,22 @@ void MSILAsmPrinter::fillTrailerUCRTStdio(Module &M, MSILTrailerTextSink &Sink,
   Options.ScanfOptions = Lookup("__local_stdio_scanf_options");
   if (Options.PrintfOptions || Options.ScanfOptions)
     In.UCRTStdio = Options;
+}
+
+void MSILAsmPrinter::fillTrailerGuard(Module &M, MSILTrailerTextSink &Sink,
+                                      cli::TrailerInput &In) {
+  // AnyCPU images also load into 32-bit and big-endian processes, where
+  // pointer-sized native ints and the little-endian data image would compute
+  // wrong results silently, so every portable output refuses them first
+  // (plan 5.18.7 PE4-PE6). The messages name the assembly and the triple;
+  // cli::buildTrailer makes <Module>::.cctor, which now always exists, start
+  // with the guard.
+  const Triple &TT = TM.getTargetTriple();
+  if (!TT.isOSDotNet())
+    return;
+  cli::PortableGuard G;
+  G.PointerSize = M.getDataLayout().getPointerSize(0);
+  G.Assembly = MSIL::getAssemblyName(M);
+  G.Triple = MSIL::getTripleText(TT);
+  In.Guard = std::move(G);
 }

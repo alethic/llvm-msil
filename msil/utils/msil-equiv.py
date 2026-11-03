@@ -37,8 +37,9 @@ and exits 1. A lister that fails, or an image that ilasm cannot build, exits
                   (plan section 12, 'Plan 5.12.6 amended (skip lines)'), whose
                   oracle is O3, O4 or O6 (O6 lines are msil-verify.py's: this
                   script compares O3 and O4 only and never matches them),
-                  whose optional triple is an MSIL triple (it ends in '-msil')
-                  and whose optional level is one of O0, O1, O2, O3, Os and
+                  whose optional triple is an MSIL triple (it ends in '-msil',
+                  or is a portable triple such as msil64-unknown-dotnet, plan
+                  5.18.10) and whose optional level is one of O0, O1, O2, O3, Os and
                   Oz, as in
                   'skip O3@x86_64-pc-windows-msvc-msil:O2 <path> <reason>'.
                   A malformed line, or a name given twice, is a usage error.
@@ -105,6 +106,9 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SKIP_KEY_RE = re.compile(
     r"^(?P<oracle>[^@:]+)(?:@(?P<triple>[^@:]+))?(?::(?P<level>[^@:]+))?$"
 )
+# The portable triples (plan 5.18.1, 5.18.10 PX2; P-1a): msil32 or msil64
+# with the OS dotnet and no '-msil' suffix; msil-prog.py has the same rule.
+PORTABLE_TRIPLE_RE = re.compile(r"^msil(32|64)-[^-]+-dotnet$")
 MAX_LINES = 40
 TOOL_TIMEOUT = 600
 
@@ -147,10 +151,15 @@ class Allowed:
                         % where
                     )
                 triple, level = key.group("triple"), key.group("level")
-                if triple is not None and not triple.endswith("-msil"):
+                if (
+                    triple is not None
+                    and not triple.endswith("-msil")
+                    and not PORTABLE_TRIPLE_RE.match(triple)
+                ):
                     raise UsageError(
                         "%s: the triple %s of the skip line is not an MSIL "
-                        "triple (it does not end in -msil)" % (where, triple)
+                        "triple (it does not end in -msil and is not a portable "
+                        "triple such as msil64-unknown-dotnet)" % (where, triple)
                     )
                 if level is not None and level not in LEVELS:
                     raise UsageError(

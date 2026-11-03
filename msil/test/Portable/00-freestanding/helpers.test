@@ -1,0 +1,180 @@
+# The msil64-unknown-dotnet helper archive (clang_rt.builtins) at run time: _Float16 conversions and arithmetic, complex multiply and divide (__muldc3, __divdc3, __mulsc3, __divsc3), __powidf2 and __powisf2, and the -ftrapv helpers and int_util.c that only the portable and Linux triples take, linked by default under -nolibc.
+# Plan 5.18.4 PV3 (-nolibc drops -lc and keeps the helper archive, so the
+# f16, complex and -ftrapv helpers still come from it), 5.18.8 PH1-PH3 (the
+# archive in the resource directory; int_lib.h's __dotnet__ branch; the
+# portable glob on int_util.c and the -ftrapv helpers absv, addv, mulv,
+# negv and subv), PH4 (members are hidden). This file is the test that
+# msil/utils/upstream-hooks.txt names for compiler-rt's int_lib.h.
+# The expected bit patterns are those of native compiler-rt for the same
+# inputs (msil/test/M3/03-helpers/helpers.expected, from the host oracle):
+# complex products and quotients with infinite, NaN, zero and huge
+# operands, _Float16 sums, products, quotients and conversions to and from
+# float, double and int, a double -> _Float16 conversion with a subnormal
+# result and a float -> _Float16 tie that rounds to even, and powi. The
+# -ftrapv helpers are called directly (clang's -ftrapv checks inline) with
+# operands that do not overflow, so their trap path (int_util.c's
+# __compilerrt_abort_impl) is linked but never taken. ops.c holds one
+# operation per noinline function on volatile inputs from main.c, so no
+# case folds at compile time; each failed group sets one bit of the exit
+# status.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+# The -O2 image holds the archive members themselves, int_util.c's
+# __compilerrt_abort_impl (which the -ftrapv helpers reference) among them.
+# RUN: %if msil-cil-dump %{ %msil_cil_dump %t.O2.d/prog.exe > %t.members.txt %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=MEMBERS --input-file %t.members.txt %}
+# MEMBERS-DAG: {{^}}  .method '__muldc3' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__divdc3' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__mulsc3' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__divsc3' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__extendhfsf2' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__truncsfhf2' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__truncdfhf2' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__powidf2' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__powisf2' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__addvsi3' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__subvdi3' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__mulvdi3' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__negvsi2' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__absvdi2' {{.*}}{{$}}
+# MEMBERS-DAG: {{^}}  .method '__compilerrt_abort_impl' {{.*}}{{$}}
+#--- ops.h
+#define NOINLINE __attribute__((noinline))
+double _Complex cmul(double _Complex a, double _Complex b);
+double _Complex cdiv(double _Complex a, double _Complex b);
+float _Complex fcmul(float _Complex a, float _Complex b);
+float _Complex fcdiv(float _Complex a, float _Complex b);
+_Float16 hadd(_Float16 a, _Float16 b);
+_Float16 hmul(_Float16 a, _Float16 b);
+_Float16 hdiv(_Float16 a, _Float16 b);
+float h2f(_Float16 h);
+double h2d(_Float16 h);
+_Float16 f2h(float f);
+_Float16 d2h(double d);
+int h2i(_Float16 h);
+_Float16 i2h(int i);
+double powi_d(double x, int n);
+float powi_f(float x, int n);
+// The -ftrapv helpers of compiler-rt (si: int, di: long long).
+int __absvsi2(int a);
+long long __absvdi2(long long a);
+int __addvsi3(int a, int b);
+long long __addvdi3(long long a, long long b);
+int __mulvsi3(int a, int b);
+long long __mulvdi3(long long a, long long b);
+int __negvsi2(int a);
+long long __negvdi2(long long a);
+int __subvsi3(int a, int b);
+long long __subvdi3(long long a, long long b);
+#--- ops.c
+#include "ops.h"
+NOINLINE double _Complex cmul(double _Complex a, double _Complex b) { return a * b; }
+NOINLINE double _Complex cdiv(double _Complex a, double _Complex b) { return a / b; }
+NOINLINE float _Complex fcmul(float _Complex a, float _Complex b) { return a * b; }
+NOINLINE float _Complex fcdiv(float _Complex a, float _Complex b) { return a / b; }
+NOINLINE _Float16 hadd(_Float16 a, _Float16 b) { return a + b; }
+NOINLINE _Float16 hmul(_Float16 a, _Float16 b) { return a * b; }
+NOINLINE _Float16 hdiv(_Float16 a, _Float16 b) { return a / b; }
+NOINLINE float h2f(_Float16 h) { return (float)h; }
+NOINLINE double h2d(_Float16 h) { return (double)h; }
+NOINLINE _Float16 f2h(float f) { return (_Float16)f; }
+NOINLINE _Float16 d2h(double d) { return (_Float16)d; }
+NOINLINE int h2i(_Float16 h) { return (int)h; }
+NOINLINE _Float16 i2h(int i) { return (_Float16)i; }
+NOINLINE double powi_d(double x, int n) { return __builtin_powi(x, n); }
+NOINLINE float powi_f(float x, int n) { return __builtin_powif(x, n); }
+#--- main.c
+#include "ops.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+typedef unsigned long long u64;
+typedef unsigned int u32;
+static u64 b64(double d) { u64 u; __builtin_memcpy(&u, &d, 8); return u; }
+static u32 b32(float f) { u32 u; __builtin_memcpy(&u, &f, 4); return u; }
+static unsigned short b16(_Float16 h) { unsigned short u; __builtin_memcpy(&u, &h, 2); return u; }
+static int c64(double _Complex z, u64 re, u64 im) {
+  return b64(__real__ z) == re && b64(__imag__ z) == im;
+}
+static int c32(float _Complex z, u32 re, u32 im) {
+  return b32(__real__ z) == re && b32(__imag__ z) == im;
+}
+static double _Complex mk(double re, double im) {
+  double _Complex z;
+  __real__ z = re;
+  __imag__ z = im;
+  return z;
+}
+static float _Complex mkf(float re, float im) {
+  float _Complex z;
+  __real__ z = re;
+  __imag__ z = im;
+  return z;
+}
+
+// Every input is a volatile object: nothing folds at compile time.
+static volatile double v_zero = 0.0, v_one = 1.0, v_d1 = 1.5, v_d2 = -2.25;
+static volatile double v_big = 1e300, v_tiny = 1.0e-7;
+static volatile float v_fzero = 0.0f, v_fone = 1.0f, v_f1 = 1.5f, v_f2 = -2.25f;
+static volatile float v_fmax = 65504.0f, v_ftwo = 2.0f;
+// Halfway between the _Float16 values 0x3c01 and 0x3c02.
+static volatile float v_halfway = 1.00146484375f;
+static volatile int v_e = 7, v_i = -21;
+static volatile long long v_ll = 0x123456789LL;
+
+int main(void) {
+  double inf = v_one / v_zero, qnan = v_zero / v_zero;
+  float finf = v_fone / v_fzero, fqnan = v_fzero / v_fzero;
+  double d1 = v_d1, d2 = v_d2, one = v_one, zero = v_zero, big = v_big;
+  float f1 = v_f1, f2 = v_f2, fone = v_fone;
+
+  /* 0: double _Complex (__muldc3 on the NaN recovery path, __divdc3). */
+  double _Complex a = mk(d1, d2), b = mk(d2, d1), inf_nan = mk(inf, qnan);
+  CHECK(0, c64(cmul(a, b), 0x0000000000000000ull, 0x401d400000000000ull));
+  CHECK(0, c64(cdiv(a, b), 0xbfed89d89d89d89eull, 0x3fd89d89d89d89d9ull));
+  CHECK(0, c64(cmul(inf_nan, mk(one, one)), 0x7ff0000000000000ull, 0x7ff0000000000000ull));
+  CHECK(0, c64(cdiv(mk(one, one), mk(zero, zero)), 0x7ff0000000000000ull, 0x7ff0000000000000ull));
+  CHECK(0, c64(cdiv(mk(one, one), inf_nan), 0, 0));
+  CHECK(0, c64(cdiv(mk(big, big), mk(big, one)), 0x3ff0000000000000ull, 0x3ff0000000000000ull));
+
+  /* 1: float _Complex (__mulsc3, __divsc3). */
+  float _Complex fa = mkf(f1, f2), fb = mkf(f2, f1);
+  CHECK(1, c32(fcmul(fa, fb), 0x00000000u, 0x40ea0000u));
+  CHECK(1, c32(fcdiv(fa, fb), 0xbf6c4ec5u, 0x3ec4ec4fu));
+  CHECK(1, c32(fcmul(mkf(finf, fqnan), mkf(fone, fone)), 0x7f800000u, 0x7f800000u));
+
+  /* 2: _Float16 arithmetic (__extendhfsf2, __truncsfhf2, __truncdfhf2). */
+  _Float16 h1 = d2h(d1), h2 = f2h(f2), h3 = f2h(v_fmax);
+  _Float16 hs = hadd(h1, h2), hm = hmul(h1, h2), hd = hdiv(h1, h3);
+  _Float16 ho = hmul(h3, f2h(v_ftwo));
+  CHECK(2, b16(h1) == 0x3e00 && b16(hs) == 0xba00 && b16(hm) == 0xc2c0);
+  CHECK(2, b16(hd) == 0x0180 && b16(ho) == 0x7c00);
+
+  /* 3: _Float16 conversions, a subnormal result and a tie to even. */
+  CHECK(3, b32(h2f(hm)) == 0xc0580000u && b64(h2d(hd)) == 0x3ef8000000000000ull);
+  CHECK(3, b16(d2h(v_tiny)) == 0x0002 && b16(f2h(v_halfway)) == 0x3c02);
+  CHECK(3, h2i(hm) == -3 && b16(i2h(v_e)) == 0x4700);
+
+  /* 4: powi (__powidf2, __powisf2). */
+  CHECK(4, b64(powi_d(d1, v_e)) == 0x4031160000000000ull);
+  CHECK(4, b32(powi_f(f2, -v_e)) == 0xbb607e24u);
+
+  /* 5: the -ftrapv helpers, without overflow. */
+  int i = v_i;
+  long long ll = v_ll;
+  CHECK(5, __absvsi2(i) == 21 && __absvdi2(-ll) == 0x123456789LL);
+  CHECK(5, __addvsi3(i, 100) == 79 && __addvdi3(ll, ll) == 0x2468acf12LL);
+  CHECK(5, __mulvsi3(i, -3) == 63 && __mulvdi3(ll, 16) == 0x1234567890LL);
+  CHECK(5, __negvsi2(i) == 21 && __negvdi2(ll) == -0x123456789LL);
+  CHECK(5, __subvsi3(i, 9) == -30 && __subvdi3(0, ll) == -0x123456789LL);
+
+  return (int)fails;
+}

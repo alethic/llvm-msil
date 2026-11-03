@@ -20,7 +20,12 @@
 # 'harness: run' with exactly the harness files, and the directories of the
 # tests outside Inputs/ and Output/. (d) After a commit of all of it: skip
 # against HEAD, and the lists of (c) with --base HEAD~1. (e) A deleted
-# harness file: run, naming it; a deleted test: no directory.
+# harness file: run, naming it; a deleted test: no directory. (f) P-1a (plan
+# 5.18.10 PX4): msil/test/Portable is no expected directory (its tests run
+# only in the Portable legs): after a commit, a changed .c, .test and
+# .expected under msil/test/Portable/00-freestanding and a changed test under
+# msil/test/M3: skip, and expected-dirs names the M3 directory alone; a
+# changed msil/test/Portable/lit.local.cfg is a harness file.
 # (3) A --base that git does not know and a --repo that is no repository exit
 # 1 with git's message; usage errors exit 2.
 # REQUIRES: msil-git
@@ -70,6 +75,17 @@
 # RUN: %{harness_check} contains %t/2e.log "\Aharness: run\nmsil/test/harness/a\.test\n\Z"
 # RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs > %t/2e-dirs.log
 # RUN: %{harness_check} equals %t/2e-dirs.log
+
+# (2f)
+# RUN: %python %S/Inputs/git-scratch.py commit %t/repo
+# RUN: %python %S/Inputs/git-scratch.py change %t/repo msil/test/Portable/00-freestanding/x.c msil/test/Portable/00-freestanding/x.test msil/test/Portable/00-freestanding/x.expected msil/test/M3/08-atomics/t.c
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness > %t/2f.log
+# RUN: %{harness_check} contains %t/2f.log "\Aharness: skip\n\Z"
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs > %t/2f-dirs.log
+# RUN: %{harness_check} contains %t/2f-dirs.log "\Amsil/test/M3/08-atomics\n\Z"
+# RUN: %python %S/Inputs/git-scratch.py change %t/repo msil/test/Portable/lit.local.cfg
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness > %t/2f-cfg.log
+# RUN: %{harness_check} contains %t/2f-cfg.log "\Aharness: run\nmsil/test/Portable/lit\.local\.cfg\n\Z"
 
 # (3)
 # RUN: %{harness_check} exits 1 %python %S/Inputs/git-scratch.py select %t/repo harness --base no-such-rev > %t/3a.log 2>&1

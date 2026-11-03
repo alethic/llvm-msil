@@ -290,6 +290,12 @@ public:
 // bitcode file with module-level inline assembly, after D26's error (plan
 // 5.9.14), and a PE with a CLI header that is no valid CIL object, after
 // ObjFile's error or, for a .NET assembly in an archive, its warning.
+// T-P4 (plan 5.18.6 PL2): the error for the native library \p file (a shared
+// object, a native DLL, an import library or an archive without CIL or
+// bitcode members) in a link for the portable triple \p tt, which binds no
+// native code.
+std::string getNativeLibraryRefusal(StringRef file, const llvm::Triple &tt);
+
 InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName = "",
                             uint64_t offsetInArchive = 0, bool lazy = false);
 

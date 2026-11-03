@@ -1,0 +1,141 @@
+# Floating-point bit patterns on msil64-unknown-dotnet: float and double bit casts both ways, signed zeros, infinities, NaNs, subnormals, fabs and copysign, conversions between float, double, long double and the integer types, and correctly rounded arithmetic, each operation in a noinline function on volatile inputs.
+# Plan 5.18.2 PC2 (float binary32, double and long double binary64), D16
+# (fabs, copysign and the bit casts through their generic expansions), D17
+# (uint64 -> float and double rounded once). Every result is compared by its
+# bit pattern, so a wrong sign of zero or a quieted NaN payload fails; no
+# libm function is used (none exists before P-1b, and math errno makes
+# __builtin_sqrt a library call, plan 5.18.2 PC3). Each failed group sets one
+# bit of the exit status. The NaN payloads are quiet NaNs, which every
+# conversion keeps.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+#--- ops.h
+#define NOINLINE __attribute__((noinline))
+typedef unsigned int u32;
+typedef unsigned long long u64;
+u32 fbits(float f);
+float bitsf(u32 u);
+u64 dbits(double d);
+double bitsd(u64 u);
+u64 ldbits(long double d);
+double fabs_d(double d);
+float fabs_f(float f);
+double copysign_d(double a, double b);
+float copysign_f(float a, float b);
+double f2d(float f);
+float d2f(double d);
+long double d2ld(double d);
+float u64tof(u64 x);
+double u64tod(u64 x);
+float i64tof(long long x);
+double i32tod(int x);
+int d2i32(double d);
+unsigned d2u32(double d);
+double addd(double a, double b);
+double muld(double a, double b);
+double divd(double a, double b);
+float addf(float a, float b);
+double negd(double d);
+int isnan_d(double d);
+int lt_d(double a, double b);
+#--- ops.c
+#include "ops.h"
+NOINLINE u32 fbits(float f) { u32 u; __builtin_memcpy(&u, &f, 4); return u; }
+NOINLINE float bitsf(u32 u) { union { u32 u; float f; } x; x.u = u; return x.f; }
+NOINLINE u64 dbits(double d) { union { double d; u64 u; } x; x.d = d; return x.u; }
+NOINLINE double bitsd(u64 u) { double d; __builtin_memcpy(&d, &u, 8); return d; }
+NOINLINE u64 ldbits(long double d) { u64 u; __builtin_memcpy(&u, &d, 8); return u; }
+NOINLINE double fabs_d(double d) { return __builtin_fabs(d); }
+NOINLINE float fabs_f(float f) { return __builtin_fabsf(f); }
+NOINLINE double copysign_d(double a, double b) { return __builtin_copysign(a, b); }
+NOINLINE float copysign_f(float a, float b) { return __builtin_copysignf(a, b); }
+NOINLINE double f2d(float f) { return f; }
+NOINLINE float d2f(double d) { return (float)d; }
+NOINLINE long double d2ld(double d) { return d; }
+NOINLINE float u64tof(u64 x) { return (float)x; }
+NOINLINE double u64tod(u64 x) { return (double)x; }
+NOINLINE float i64tof(long long x) { return (float)x; }
+NOINLINE double i32tod(int x) { return x; }
+NOINLINE int d2i32(double d) { return (int)d; }
+NOINLINE unsigned d2u32(double d) { return (unsigned)d; }
+NOINLINE double addd(double a, double b) { return a + b; }
+NOINLINE double muld(double a, double b) { return a * b; }
+NOINLINE double divd(double a, double b) { return a / b; }
+NOINLINE float addf(float a, float b) { return a + b; }
+NOINLINE double negd(double d) { return -d; }
+NOINLINE int isnan_d(double d) { return d != d; }
+NOINLINE int lt_d(double a, double b) { return a < b; }
+#--- main.c
+#include "ops.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static volatile double v_zero = 0.0, v_one = 1.0, v_tenth = 0.1, v_fifth = 0.2;
+static volatile double v_three = 3.0, v_big = 1e308, v_min = 2.2250738585072014e-308;
+static volatile float v_fone = 1.0f, v_ftenth = 0.1f;
+static volatile u64 v_u64[] = {0xffffffffffffffffull, 0x8000000000000001ull,
+                               0x0020000000000001ull, 0x0000000100000001ull};
+static volatile u32 v_payload = 0x7fc00123u;
+static volatile u64 v_dpayload = 0xfff8000000000123ull;
+static volatile double v_d[] = {-2.5, 3.99, 4294967295.0, -2147483648.0};
+
+int main(void) {
+  double zero = v_zero, one = v_one;
+  double inf = divd(one, zero), nan = divd(zero, zero);
+  double nzero = negd(zero);
+
+  /* 0: bit casts both ways. */
+  CHECK(0, fbits(v_fone) == 0x3f800000u && dbits(one) == 0x3ff0000000000000ull);
+  CHECK(0, bitsf(0x40490fdbu) == 3.14159274f && bitsd(0x400921fb54442d18ull) == 3.141592653589793);
+  CHECK(0, fbits(bitsf(v_payload)) == 0x7fc00123u);
+  CHECK(0, dbits(bitsd(v_dpayload)) == 0xfff8000000000123ull);
+  CHECK(0, ldbits(d2ld(v_tenth)) == 0x3fb999999999999aull);
+
+  /* 1: signed zeros, infinities and NaNs. */
+  CHECK(1, dbits(nzero) == 0x8000000000000000ull && nzero == zero);
+  CHECK(1, dbits(inf) == 0x7ff0000000000000ull && dbits(negd(inf)) == 0xfff0000000000000ull);
+  CHECK(1, isnan_d(nan) && !isnan_d(inf) && !lt_d(nan, one) && !lt_d(one, nan));
+  CHECK(1, dbits(divd(one, nzero)) == 0xfff0000000000000ull);
+  CHECK(1, dbits(muld(nzero, v_three)) == 0x8000000000000000ull);
+
+  /* 2: fabs and copysign keep payloads and signs. */
+  CHECK(2, dbits(fabs_d(nzero)) == 0 && dbits(fabs_d(-v_three)) == 0x4008000000000000ull);
+  CHECK(2, fbits(fabs_f(bitsf(v_payload | 0x80000000u))) == 0x7fc00123u);
+  CHECK(2, dbits(copysign_d(v_three, nzero)) == 0xc008000000000000ull);
+  CHECK(2, fbits(copysign_f(v_fone, -0.0f)) == 0xbf800000u);
+  CHECK(2, dbits(copysign_d(inf, -v_one)) == 0xfff0000000000000ull);
+
+  /* 3: float <-> double <-> long double. */
+  CHECK(3, dbits(f2d(v_ftenth)) == 0x3fb99999a0000000ull);
+  CHECK(3, fbits(d2f(v_tenth)) == 0x3dcccccdu);
+  CHECK(3, fbits(d2f(v_big)) == 0x7f800000u && fbits(d2f(v_min)) == 0);
+  CHECK(3, fbits(d2f(bitsd(0x3ff0000010000000ull))) == 0x3f800000u);
+  CHECK(3, sizeof(long double) == 8 && d2ld(v_tenth) == (long double)0.1);
+
+  /* 4: unsigned and signed 64-bit integers to float and double (D17). */
+  CHECK(4, dbits(u64tod(v_u64[0])) == 0x43f0000000000000ull);
+  CHECK(4, dbits(u64tod(v_u64[1])) == 0x43e0000000000000ull);
+  CHECK(4, dbits(u64tod(v_u64[2])) == 0x4340000000000000ull);
+  CHECK(4, fbits(u64tof(v_u64[3])) == 0x4f800000u && fbits(u64tof(v_u64[0])) == 0x5f800000u);
+  CHECK(4, fbits(i64tof(-(long long)v_u64[3])) == 0xcf800000u);
+
+  /* 5: double <-> 32-bit integers. */
+  CHECK(5, d2i32(v_d[0]) == -2 && d2i32(v_d[1]) == 3 && d2i32(v_d[3]) == -2147483647 - 1);
+  CHECK(5, d2u32(v_d[2]) == 4294967295u && i32tod(-2147483647 - 1) == -2147483648.0);
+
+  /* 6: correctly rounded arithmetic. */
+  CHECK(6, dbits(addd(v_tenth, v_fifth)) == 0x3fd3333333333334ull);
+  CHECK(6, dbits(divd(one, v_three)) == 0x3fd5555555555555ull);
+  CHECK(6, fbits(addf(v_ftenth, 0.2f)) == 0x3e99999au);
+  CHECK(6, dbits(muld(v_min, 0.5)) == 0x0008000000000000ull);
+  CHECK(6, dbits(muld(v_big, 10.0)) == 0x7ff0000000000000ull);
+
+  return (int)fails;
+}

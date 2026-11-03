@@ -28,7 +28,10 @@ msil/test/lit.cfg.py and msil/test/lit.site.cfg.py.in; every lit.local.cfg
 and every .py file under msil/test; msil/test/harness/**.
 
 expected-dirs prints, sorted and one per line, each directory under msil/test
-(repository-relative, outside every Inputs/ and Output/ directory) that holds
+(repository-relative, outside every Inputs/, Output/ and Portable/ directory;
+msil/test/Portable's expected files are hand-written and have no native
+oracle, plan 5.17.4's portable allowance and 5.18.10, so G7 never selects
+them) that holds
 an added or changed .c, .ll, .test or .expected file (.linux.expected
 included) that exists; a deleted file selects nothing. Step G7 passes them to
 'update-expected.py --check --levels O0,O2' for both oracles, which walks
@@ -57,7 +60,9 @@ REPO = os.path.normpath(
 NOT_HARNESS = ("msil/utils/corpus/manifest.json", "msil/utils/upstream-hooks.txt")
 HARNESS_FILES = ("msil/test/lit.cfg.py", "msil/test/lit.site.cfg.py.in")
 EXPECTED_SUFFIXES = (".c", ".ll", ".test", ".expected")
-SKIPPED_DIRS = ("Inputs", "Output")
+# Portable (P-1a, plan 5.18.10 PX4): msil/test/Portable runs only on the
+# portable triples, which have no native oracle for update-expected.py.
+SKIPPED_DIRS = ("Inputs", "Output", "Portable")
 
 
 class GitError(Exception):

@@ -36,8 +36,8 @@
 //              [mscorlib] table (plan 5.11.7) contains it.
 //
 // Each macro is expanded only when it is defined; the file #undef's both at
-// the end. Entries are only ever added (M20, M21 and M22 add theirs); the
-// order fixes the BCLMemberId values.
+// the end. Entries are only ever added (M20, M21, M22 and P-1a add theirs);
+// the order fixes the BCLMemberId values.
 //
 //===----------------------------------------------------------------------===//
 
@@ -114,6 +114,20 @@ CLI_BCL_METHOD(AttributeUsageAttribute_ctor, AttributeUsageAttribute, ".ctor",
 CLI_BCL_METHOD(AttributeUsageAttribute_set_AllowMultiple,
                AttributeUsageAttribute, "set_AllowMultiple", true, "void",
                "bool", Required, "", true)
+
+// P-1a: the portable width and byte-order guard (plan 5.18.7)
+// The first code of <Module>::.cctor in every msil64-unknown-dotnet output
+// throws PlatformNotSupportedException in a 32-bit process ...
+CLI_BCL_TYPE(PlatformNotSupportedException, "System",
+             "PlatformNotSupportedException", true)
+CLI_BCL_METHOD(PlatformNotSupportedException_ctor,
+               PlatformNotSupportedException, ".ctor", true, "void", "string",
+               Required, "", true)
+// ... and in a big-endian one, which BitConverter::GetBytes(1)[0] == 0 tells
+// (a verifiable check, unlike an ldind.u1 of an int32 local).
+CLI_BCL_TYPE(BitConverter, "System", "BitConverter", true)
+CLI_BCL_METHOD(BitConverter_GetBytes, BitConverter, "GetBytes", false,
+               "uint8[]", "int32", Required, "", true)
 
 #undef CLI_BCL_TYPE
 #undef CLI_BCL_METHOD

@@ -28,7 +28,11 @@
 //   band of clang's COFF lowering (TargetLoweringObjectFileImpl.cpp:
 //   2066-2101), and sortConstructors' stable order (inputs in link order;
 //   within one input its slots in (segment, offset) order before its INIT
-//   entries of equal key).
+//   entries of equal key);
+// - the dotnet rule set of msil64-unknown-dotnet (5.18.5 LR1, P-1a):
+//   getSectionRules and bindsNatively per triple, the link-rule predicates
+//   for the three rule sets, and dotnet's ELF-style grouping that collapses
+//   only .init_array.N, with ELF's constructor keys and order.
 // Expected values come from the plan, from lld's sources and from the IL that
 // HEAD's llc printed for the two FileCheck tests, never from the
 // implementation.
@@ -39,7 +43,9 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/MSILLink.h"
+#include "llvm/CLI/Trailer.h"
 #include "llvm/Support/Error.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -939,6 +945,172 @@ TEST(CLIImageLayoutTest, SortConstructorsIsStableForEqualEntries) {
     E.push_back(initEntry(K, 0, 100 + I));
   EXPECT_EQ(sortedIds(E),
             (std::vector<uint32_t>{100, 101, 102, 103, 104, 105}));
+}
+
+//===----------------------------------------------------------------------===//
+// The dotnet rule set (5.18.5 LR1, P-1a)
+//===----------------------------------------------------------------------===//
+
+// getSectionRules picks the rule set from the triple: Dotnet for the portable
+// triples (both widths, either spelling), ELF for the Linux '-msil' triples,
+// COFF for the Windows ones; bindsNatively is false only for dotnet. The
+// predicates, one per link rule: start/stop symbols on ELF and dotnet; '$'
+// grouping on COFF only; constructor arguments (argc, argv, envp) on ELF
+// only; a null constructor slot is an error on dotnet only (T-P7) and
+// skipped on COFF only; dotnet runs no .fini_array (T-P8).
+TEST(CLIImageLayoutTest, DotnetPredicates) {
+  struct Case {
+    const char *TT;
+    SectionRules Rules;
+    bool Native;
+  } Cases[] = {
+      {"msil64-unknown-dotnet", SectionRules::Dotnet, false},
+      {"msil32-unknown-dotnet", SectionRules::Dotnet, false},
+      {"msil64-unknown-dotnet-msil", SectionRules::Dotnet, false},
+      {"x86_64-unknown-linux-gnu-msil", SectionRules::ELF, true},
+      {"x86_64-unknown-linux-musl-msil", SectionRules::ELF, true},
+      {"aarch64-unknown-linux-gnu-msil", SectionRules::ELF, true},
+      {"x86_64-pc-windows-msvc-msil", SectionRules::COFF, true},
+      {"x86_64-w64-windows-gnu-msil", SectionRules::COFF, true},
+      {"aarch64-pc-windows-msvc-msil", SectionRules::COFF, true},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.TT);
+    Triple TT(C.TT);
+    EXPECT_TRUE(getSectionRules(TT) == C.Rules);
+    EXPECT_EQ(bindsNatively(TT), C.Native);
+  }
+
+  EXPECT_TRUE(definesStartStop(SectionRules::ELF));
+  EXPECT_FALSE(definesStartStop(SectionRules::COFF));
+  EXPECT_TRUE(definesStartStop(SectionRules::Dotnet));
+
+  EXPECT_FALSE(groupsDollarSections(SectionRules::ELF));
+  EXPECT_TRUE(groupsDollarSections(SectionRules::COFF));
+  EXPECT_FALSE(groupsDollarSections(SectionRules::Dotnet));
+
+  EXPECT_TRUE(constructorsTakeArgs(SectionRules::ELF));
+  EXPECT_FALSE(constructorsTakeArgs(SectionRules::COFF));
+  EXPECT_FALSE(constructorsTakeArgs(SectionRules::Dotnet));
+
+  EXPECT_FALSE(rejectsNullConstructorSlots(SectionRules::ELF));
+  EXPECT_FALSE(rejectsNullConstructorSlots(SectionRules::COFF));
+  EXPECT_TRUE(rejectsNullConstructorSlots(SectionRules::Dotnet));
+
+  EXPECT_FALSE(skipsNullConstructorSlots(SectionRules::ELF));
+  EXPECT_TRUE(skipsNullConstructorSlots(SectionRules::COFF));
+  EXPECT_FALSE(skipsNullConstructorSlots(SectionRules::Dotnet));
+
+  EXPECT_FALSE(allowsFiniSections(SectionRules::Dotnet));
+}
+
+// Dotnet groups as ELF does by verbatim name, collapsing only .init_array.N
+// into .init_array, sorted by priority (plain -> 65536, stable); '$' names
+// stay separate groups; constructor keys and their order are ELF's.
+TEST(CLIImageLayoutTest, DotnetInitArrayGrouping) {
+  const SectionRules R = SectionRules::Dotnet;
+  {
+    InputBuilder B(R);
+    uint32_t A = B.fill(".init_array", 3, 8, 0xA);
+    uint32_t P300a = B.fill(".init_array.300", 3, 8, 0xB);
+    uint32_t P101 = B.fill(".init_array.101", 3, 8, 0xC);
+    uint32_t P300b = B.fill(".init_array.300", 3, 8, 0xD);
+    uint32_t P65535 = B.fill(".init_array.65535", 3, 8, 0xE);
+    ImageLayout L = layoutOrFail(B.In);
+    EXPECT_EQ(L.SegmentOffset[P101], 0u);
+    EXPECT_EQ(L.SegmentOffset[P300a], 8u);
+    EXPECT_EQ(L.SegmentOffset[P300b], 16u);
+    EXPECT_EQ(L.SegmentOffset[P65535], 24u);
+    EXPECT_EQ(L.SegmentOffset[A], 32u);
+    expectSection(L, ".init_array", 0, 40);
+    EXPECT_EQ(findSection(L, ".init_array.101"), nullptr);
+  }
+  {
+    InputBuilder B(R);
+    uint32_t Rb = B.data("reg$b", 2, le32(0xB));
+    uint32_t Ra = B.data("reg$a", 2, le32(0xA));
+    uint32_t R0 = B.data("reg", 2, le32(0x10));
+    uint32_t Rb2 = B.data("reg$b", 2, le32(0xB2));
+    ImageLayout L = layoutOrFail(B.In);
+    EXPECT_EQ(L.SegmentOffset[Rb], 0u);
+    EXPECT_EQ(L.SegmentOffset[Rb2], 4u);
+    EXPECT_EQ(L.SegmentOffset[Ra], 8u);
+    EXPECT_EQ(L.SegmentOffset[R0], 12u);
+    expectSection(L, "reg$b", 0, 8);
+    expectSection(L, "reg$a", 8, 4);
+    expectSection(L, "reg", 12, 4);
+  }
+  {
+    // Start and stop symbols of a C-identifier section.
+    InputBuilder B(R);
+    B.data(".data", 2, le32(1));
+    B.data("mysec", 2, le32(2));
+    B.data("mysec", 2, le32(3));
+    ImageLayout L = layoutOrFail(B.In);
+    EXPECT_EQ(getStartStopOffset(L, "__start_mysec"),
+              std::optional<uint64_t>(4));
+    EXPECT_EQ(getStartStopOffset(L, "__stop_mysec"),
+              std::optional<uint64_t>(12));
+  }
+
+  EXPECT_EQ(StringRef(getOutputSectionName(".init_array.101", R)),
+            ".init_array");
+  EXPECT_EQ(StringRef(getOutputSectionName(".init_array.00200", R)),
+            ".init_array");
+  EXPECT_EQ(StringRef(getOutputSectionName(".init_array", R)), ".init_array");
+  EXPECT_EQ(StringRef(getOutputSectionName(".fini_array.7", R)),
+            ".fini_array.7");
+  EXPECT_EQ(StringRef(getOutputSectionName("reg$a", R)), "reg$a");
+  EXPECT_EQ(StringRef(getOutputSectionName(".CRT$XCU", R)), ".CRT$XCU");
+  EXPECT_EQ(StringRef(getOutputSectionName("mysec", R)), "mysec");
+
+  for (StringRef N : {".init_array", ".init_array.101", ".init_array.65535"})
+    EXPECT_EQ(classifySection(N, R), SectionClass::ConstructorTable) << N.str();
+  for (StringRef N : {".tdata", ".tbss"})
+    EXPECT_EQ(classifySection(N, R), SectionClass::TLS) << N.str();
+  for (StringRef N : {".data", ".rodata", ".bss", "mysec", ".data.custom",
+                      ".rodata.x", "myreg", "reg$a"})
+    EXPECT_EQ(classifySection(N, R), SectionClass::Data) << N.str();
+
+  struct {
+    uint32_t Priority;
+    int Key;
+  } Inits[] = {{0, 0}, {101, 101}, {200, 200}, {65534, 65534}, {65535, 65536}};
+  for (auto &C : Inits)
+    EXPECT_EQ(getConstructorKey(C.Priority, R).Priority, C.Key) << C.Priority;
+  struct {
+    const char *Section;
+    int Key;
+  } Slots[] = {{".init_array", 65536},
+               {".init_array.101", 101},
+               {".init_array.00200", 200},
+               {".init_array.65535", 65535}};
+  for (auto &C : Slots)
+    EXPECT_EQ(getConstructorKey(StringRef(C.Section), R).Priority, C.Key)
+        << C.Section;
+
+  // SortConstructorsElf's entries under dotnet keys: the same order.
+  auto Init = [&](uint32_t P, uint32_t Input, uint32_t Id) {
+    return initEntry(getConstructorKey(P, R), Input, Id);
+  };
+  auto Slot = [&](StringRef S, uint32_t Input, uint32_t Seg, uint64_t Off,
+                  uint32_t Id) {
+    return slotEntry(getConstructorKey(S, R), Input, Seg, Off, Id);
+  };
+  std::vector<ConstructorEntry> E = {
+      Init(65535, 0, 10),
+      Init(101, 0, 11),
+      Init(200, 0, 12),
+      Init(101, 0, 13),
+      Slot(".init_array", 0, 5, 8, 20),
+      Slot(".init_array", 0, 5, 0, 21),
+      Slot(".init_array.101", 0, 3, 0, 22),
+      Slot(".init_array.300", 0, 4, 8, 23),
+      Slot(".init_array.300", 0, 4, 0, 24),
+      Slot(".init_array", 0, 2, 0, 25),
+  };
+  EXPECT_EQ(sortedIds(E),
+            (std::vector<uint32_t>{22, 11, 13, 12, 24, 23, 25, 21, 20, 10}));
 }
 
 } // namespace

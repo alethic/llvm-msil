@@ -1,0 +1,40 @@
+# lld/MSIL/CLibraryNames.def is current (plan 5.18.6 PL3, 5.17.5; P-1a):
+# its C_LIBRARY_NAME entries, msil-ld's N6 hint names on the portable
+# triples, are the 'name' of every 'functions:' entry of
+# libc/include/**/*.yaml less the names of
+# llvm/include/llvm/Analysis/TargetLibraryInfo.td, sorted by byte value.
+# msil/utils/gen-clibrary-names.py --check regenerates that list without
+# writing and compares. Checks:
+# (1) The tree's .def (the default --def under the default --src-root, and
+#     the same named with --src-root and --def) is current: status 0 and
+#     'CLibraryNames.def is current (<n> names)'. A failure here means a
+#     source changed: run 'python msil/utils/gen-clibrary-names.py'.
+# (2) The failure paths, on copies in %t through --def (which --check never
+#     writes): one entry removed ('stale: 1 missing, 0 extra', 'missing:
+#     a64l'), one name added that neither source has ('extra:'), and a name
+#     repeated out of order, which leaves both sets equal ('the entries are
+#     not sorted or not unique'); each exits 1 with the remedy line.
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %python %S/../../../utils/gen-clibrary-names.py --check > %t/1a.log 2>&1
+# RUN: %{harness_check} contains %t/1a.log "\ACLibraryNames\.def is current \(\d+ names\)\n\Z"
+# RUN: %python %S/../../../utils/gen-clibrary-names.py --check --src-root %S/../../../.. --def %S/../../../../lld/MSIL/CLibraryNames.def > %t/1b.log 2>&1
+# RUN: %{harness_check} contains %t/1b.log "\ACLibraryNames\.def is current \(\d+ names\)\n\Z"
+
+# (2)
+# RUN: grep -v "^C_LIBRARY_NAME(a64l)$" %S/../../../../lld/MSIL/CLibraryNames.def > %t/missing.def
+# RUN: cp %t/missing.def %t/missing.orig
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/gen-clibrary-names.py --check --def %t/missing.def > %t/2a.log
+# RUN: %{harness_check} contains %t/2a.log "\ACLibraryNames\.def is stale: 1 missing, 0 extra\nmissing: a64l\nregenerate with: python msil/utils/gen-clibrary-names\.py\n\Z"
+# RUN: cmp %t/missing.def %t/missing.orig
+# RUN: grep -v "^#undef C_LIBRARY_NAME$" %S/../../../../lld/MSIL/CLibraryNames.def > %t/body.def
+# RUN: %{harness_check} write %t/extra-entry.txt "C_LIBRARY_NAME(zz_not_a_libc_function)"
+# RUN: cat %t/body.def %t/extra-entry.txt > %t/extra.def
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/gen-clibrary-names.py --check --def %t/extra.def > %t/2b.log
+# RUN: %{harness_check} contains %t/2b.log "\ACLibraryNames\.def is stale: 0 missing, 1 extra\nextra: zz_not_a_libc_function\nregenerate with: python msil/utils/gen-clibrary-names\.py\n\Z"
+# RUN: %{harness_check} write %t/repeat-entry.txt "C_LIBRARY_NAME(a64l)"
+# RUN: cat %t/body.def %t/repeat-entry.txt > %t/repeat.def
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/gen-clibrary-names.py --check --def %t/repeat.def > %t/2c.log
+# RUN: %{harness_check} contains %t/2c.log "\ACLibraryNames\.def is stale: 0 missing, 0 extra\nthe entries are not sorted or not unique\nregenerate with: python msil/utils/gen-clibrary-names\.py\n\Z"

@@ -136,6 +136,47 @@ static const Target *findTargetByName(StringRef Name) {
   return I == TargetRegistry::targets().end() ? nullptr : &*I;
 }
 
+/// The portable MSIL architectures (msil32, msil64) and the OS dotnet only go
+/// together, with the MSIL object format and no environment:
+/// msil64-unknown-dotnet. Refuse every other combination with the reason.
+/// Without this, x86_64-unknown-dotnet would silently become a generic native
+/// ELF target, and an msil64 triple with another OS or object format would fail
+/// without saying why.
+static bool checkPortableMSILTriple(const Triple &TT, std::string &Error) {
+  if (!TT.isMSIL() && !TT.isOSDotNet())
+    return true;
+  std::string Reason;
+  StringRef Arch = Triple::getArchTypeName(TT.getArch());
+  if (!TT.isMSIL())
+    Reason = "the OS 'dotnet' needs the architecture msil64 or msil32 "
+             "(msil64-unknown-dotnet)";
+  else if (!TT.isOSDotNet())
+    Reason = ("the architecture '" + Arch + "' needs the OS 'dotnet' (" + Arch +
+              "-unknown-dotnet)")
+                 .str();
+  else if (!TT.isOSBinFormatMSIL())
+    Reason = ("the architecture '" + Arch + "' produces only MSIL, not the '" +
+              Triple::getObjectFormatTypeName(TT.getObjectFormat()) +
+              "' object format")
+                 .str();
+  else if (TT.getEnvironment() != Triple::UnknownEnvironment)
+    // An environment (msil64-unknown-dotnet-gnu) would build a distinct
+    // target whose objects and helper archive do not mix with the portable
+    // ones. The object format suffix (msil64-unknown-dotnet-msil) and an
+    // explicit "unknown" (msil64-unknown-dotnet-unknown) parse as no
+    // environment and stay accepted; Triple::normalize drops both from the
+    // triple text.
+    Reason = ("the architecture '" + Arch +
+              "' with the OS 'dotnet' takes no environment, not '" +
+              Triple::getEnvironmentTypeName(TT.getEnvironment()) + "' (" +
+              Arch + "-unknown-dotnet)")
+                 .str();
+  else
+    return true;
+  Error = "unable to get target for '" + TT.str() + "': " + Reason;
+  return false;
+}
+
 const Target *TargetRegistry::lookupTarget(StringRef ArchName,
                                            Triple &TheTriple,
                                            std::string &Error) {
@@ -155,6 +196,8 @@ const Target *TargetRegistry::lookupTarget(StringRef ArchName,
       // select the C ABI) and only switches the object format to MSIL.
       if (!TheTriple.isOSBinFormatMSIL())
         TheTriple.setObjectFormat(Triple::MSIL);
+      if (!checkPortableMSILTriple(TheTriple, Error))
+        return nullptr;
       return TheTarget;
     }
     if (TheTriple.isOSBinFormatMSIL()) {
@@ -170,13 +213,17 @@ const Target *TargetRegistry::lookupTarget(StringRef ArchName,
     Triple::ArchType Type = Triple::getArchTypeForLLVMName(ArchName);
     if (Type != Triple::UnknownArch)
       TheTriple.setArch(Type);
+    if (!checkPortableMSILTriple(TheTriple, Error))
+      return nullptr;
   } else {
     // Get the target specific parser.
     std::string TempError;
     TheTarget = TargetRegistry::lookupTarget(TheTriple, TempError);
     if (!TheTarget) {
-      // For an MSIL triple, keep the explanation of how to build the target.
-      if (TheTriple.isOSBinFormatMSIL())
+      // For an MSIL triple, keep the explanation of how to build the target
+      // or why the portable triple is refused.
+      if (TheTriple.isOSBinFormatMSIL() || TheTriple.isMSIL() ||
+          TheTriple.isOSDotNet())
         Error = std::move(TempError);
       else
         Error = "unable to get target for '" + TheTriple.getTriple() +
@@ -196,6 +243,9 @@ const Target *TargetRegistry::lookupTarget(const Triple &TT,
             "\" (no targets are registered)";
     return nullptr;
   }
+
+  if (!checkPortableMSILTriple(TT, Error))
+    return nullptr;
 
   // An MSIL triple (x86_64-unknown-linux-gnu-msil, ...) names a native
   // architecture only to select the C ABI. It is always compiled by the MSIL

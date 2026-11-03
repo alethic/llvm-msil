@@ -1,0 +1,152 @@
+## The C runtime identity and assembly names on msil64-unknown-dotnet
+## (ImplementationPlan.md 5.18.6 PL8; portable-loader R5; P-1a's texts T-P13
+## and T-P14):
+## - the C library is the --shared output whose assembly name is c (c.dll):
+##   its symbol table records the C runtime identity 'c' although it does
+##   not link -lc;
+## - every other output records 'c' when it links -lc and 'none' otherwise
+##   (getCRuntimeIdentity's rule): a user library with and without -lc; a
+##   program that links -lc references the assembly 'c';
+## - an output whose simple name equals a referenced assembly's is T-P13
+##     output assembly '<name>' has the simple name of the referenced assembly '<file>': the .NET host can load one in place of the other
+##   for a --reference assembly (an executable named mscorlib bound to
+##   Inputs/fakepack/PortableMscorlib.yaml, which host triples link
+##   silently), and for the built-in table's scope assembly mscorlib when no
+##   --reference is given (the image references mscorlib all the same), with
+##   '<file>' naming '<built-in mscorlib table>'; the names compare
+##   case-insensitively, as the .NET host compares them (MSCORLIB.exe is
+##   T-P13 naming 'MSCORLIB'); for a toolchain library assembly, named by
+##   path or found by -l, M22's older error
+##     <file>: library assembly '<name>' has the name of the output; the CLR loads one assembly of a name
+##   already refuses the link on every triple, and the plan does not say
+##   which of the two a dotnet link reports, so either is accepted there;
+## - the assembly name c is reserved for the C library: an output named c
+##   (or C) that is not --shared is T-P14, with or without -lc,
+##     the assembly name 'c' is reserved for the C library on msil64-unknown-dotnet: only a --shared link may produce c.dll
+## - both rules are dotnet's: on x86_64-unknown-linux-gnu-msil a program
+##   named like its reference assembly, and a program named c, link as
+##   before.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir crt withc noc same shared-same lsame refs ref-same ref-upper builtin-same upper host
+# RUN: yaml2obj %S/Inputs/fakepack/PortableMscorlib.yaml -o refs/mscorlib.dll
+# RUN: llc -filetype=obj cstub.ll -o cstub.o
+# RUN: llc -filetype=obj u.ll -o u.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj foo.ll -o foo.o
+# RUN: llc -filetype=obj prog-foo.ll -o prog-foo.o
+# RUN: llc -filetype=obj lib-foo.ll -o lib-foo.o
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{runtime} = FileCheck %s --check-prefix=RUNTIME
+
+## Identities.
+# RUN: msil-ld -shared cstub.o -o crt/c.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt/c.dll | %{runtime} -DCRT=c
+# RUN: msil-ld -shared u.o -L crt -lc -o withc/u.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info withc/u.dll | %{runtime} -DCRT=c
+# RUN: msil-ld -shared u.o -o noc/u.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info noc/u.dll | %{runtime} -DCRT=none
+# RUNTIME: {{^}}SymbolTable v{{[0-9.]+}} triple=msil64-unknown-dotnet abi={{[0-9]+}} runtime='[[CRT]]' datamodel=8,8,4,8{{$}}
+# RUN: msil-ld prog.o -L crt -lc -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe | FileCheck %s --check-prefix=USES-C
+# USES-C: {{^}}assemblyref 'c' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+
+## T-P13: a reference assembly.
+# RUN: msil-ld ret42.o --reference=refs/mscorlib.dll -o ref-ok.exe 2>&1 | count 0
+# RUN: not msil-ld ret42.o --reference=refs/mscorlib.dll -o ref-same/mscorlib.exe 2>&1 | %{fc} --check-prefix=REF-SAME
+# RUN: not msil-ld ret42.o --reference=refs/mscorlib.dll -o ref-upper/MSCORLIB.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=REF-UPPER
+# REF-SAME:  {{^}}msil-ld: error: output assembly 'mscorlib' has the simple name of the referenced assembly '{{.*}}mscorlib.dll': the .NET host can load one in place of the other{{$}}
+# REF-UPPER: {{^}}msil-ld: error: output assembly 'MSCORLIB' has the simple name of the referenced assembly '{{.*}}mscorlib.dll': the .NET host can load one in place of the other{{$}}
+# RUN: not ls ref-same/mscorlib.exe
+# RUN: not ls ref-upper/MSCORLIB.exe
+
+## T-P13: the built-in table's mscorlib, without --reference.
+# RUN: not msil-ld ret42.o -o builtin-same/mscorlib.exe 2>&1 | %{fc} --check-prefix=BUILTIN-SAME
+# BUILTIN-SAME: {{^}}msil-ld: error: output assembly 'mscorlib' has the simple name of the referenced assembly '<built-in mscorlib table>': the .NET host can load one in place of the other{{$}}
+# RUN: not ls builtin-same/mscorlib.exe
+
+## T-P13 or M22's error: a toolchain library assembly.
+# RUN: msil-ld -shared foo.o -o foo.dll 2>&1 | count 0
+# RUN: not msil-ld prog-foo.o foo.dll -o same/foo.exe 2>&1 | %{fc} --check-prefix=SAME
+# RUN: not msil-ld prog-foo.o -L . -lfoo -o lsame/foo.exe 2>&1 | %{fc} --check-prefix=SAME
+# RUN: not msil-ld -shared lib-foo.o foo.dll -o shared-same/foo.dll 2>&1 | %{fc} --check-prefix=SAME
+# SAME: {{^}}msil-ld: error: {{(output assembly 'foo' has the simple name of the referenced assembly '.*foo\.dll': the \.NET host can load one in place of the other|.*foo\.dll: library assembly 'foo' has the name of the output; the CLR loads one assembly of a name)}}{{$}}
+
+## T-P14.
+# RUN: not msil-ld ret42.o -o c.exe 2>&1 | %{fc} --check-prefix=RESERVED
+# RUN: not msil-ld prog.o -L crt -lc -o c.exe 2>&1 | %{fc} --check-prefix=RESERVED
+# RUN: not msil-ld ret42.o -o upper/C.exe 2>&1 | %{fc} --check-prefix=RESERVED
+# RESERVED: {{^}}msil-ld: error: the assembly name 'c' is reserved for the C library on msil64-unknown-dotnet: only a --shared link may produce c.dll{{$}}
+
+## Host triples are not affected.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil foo.ll -o host/foo.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil ret42.ll -o host/ret42.o
+# RUN: msil-ld host/ret42.o --reference=refs/mscorlib.dll -o host/mscorlib.exe 2>&1 | count 0
+# RUN: mkdir host/builtin
+# RUN: msil-ld host/ret42.o -o host/builtin/mscorlib.exe 2>&1 | count 0
+# RUN: msil-ld host/ret42.o -o host/c.exe 2>&1 | count 0
+# RUN: msil-ld -shared host/foo.o -o host/c.dll 2>&1 | count 0
+
+#--- cstub.ll
+target triple = "msil64-unknown-dotnet"
+
+define i64 @strlen(ptr %s) {
+  ret i64 0
+}
+
+#--- u.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @ufn() {
+  ret i32 3
+}
+
+#--- prog.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i64 @strlen(ptr)
+
+define i32 @main() {
+  %n = call i64 @strlen(ptr null)
+  %r = trunc i64 %n to i32
+  ret i32 %r
+}
+
+#--- foo.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @foofn() {
+  ret i32 4
+}
+
+#--- prog-foo.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @foofn()
+
+define i32 @main() {
+  %r = call i32 @foofn()
+  ret i32 %r
+}
+
+#--- lib-foo.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @foofn()
+
+define i32 @wrapper() {
+  %r = call i32 @foofn()
+  ret i32 %r
+}
+
+#--- ret42.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @main() {
+  ret i32 42
+}

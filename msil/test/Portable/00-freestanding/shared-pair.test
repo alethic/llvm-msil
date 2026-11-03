@@ -1,0 +1,105 @@
+# A -shared msil64-unknown-dotnet library and a program, both guarded: the library exports a hidden function only through msil-ld's --export, default-visibility functions and data, and the result of its own constructor; the program calls and reads them, and both images start their <Module>::.cctor with the width and byte-order guard.
+# Plan 5.18.6 PL7 (--export forces the export of a hidden symbol, wasm-ld's
+# semantics; default- and protected-visibility definitions are exported),
+# 5.18.5 LR5 (the library's constructors run in its module initializer,
+# before any export is called), 5.18.7 PE5-PE6 (every portable output,
+# executable and -shared alike, starts <Module>::.cctor with the guard, whose
+# messages name the output's assembly: 'splib' and 'prog'), brief Q22 (a)
+# (the library sits beside the program at run time: %{msil_deps}).
+# The library is linked by hand once, at -O2, with -Wl,--export=sp_hidden,
+# so the option reaches only its link; without the option sp_hidden is not
+# exported and the program's link fails (NOEXPORT). Every level's program
+# links against the library (%{msil_libs}) and runs with it beside it.
+# Each failed group sets one bit of the exit status. The listings
+# (llvm-cil-dump) show the guard as the first code of each image's
+# <Module>::.cctor and sp_hidden in the library's export class.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t %t.lib %t.noexp && split-file %s %t && mkdir -p %t.lib %t.noexp
+# RUN: %clang_portable %{msil_cflags} -O2 -c %t/splib.c -o %t.lib/splib.o
+# RUN: %clang_portable %{msil_ldflags} -O2 -shared -Wl,--export=sp_hidden %t.lib/splib.o -o %t.lib/splib.dll
+# RUN: %msil_verify %t.lib/splib.dll
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_libs} = %t.lib/splib.dll
+# REDEFINE: %{msil_deps} = %t.lib/splib.dll
+# RUN: %{msil_prog}
+#
+# Without --export, the hidden function stays private to the library.
+# RUN: %clang_portable %{msil_ldflags} -O2 -shared %t.lib/splib.o -o %t.noexp/splib.dll
+# RUN: %clang_portable %{msil_cflags} -O2 -c %t/main.c -o %t.noexp/main.o
+# RUN: not %clang_portable %{msil_ldflags} -O2 %t.noexp/main.o %t.noexp/splib.dll -o %t.noexp/prog.exe 2>&1 | FileCheck %s --check-prefix=NOEXPORT --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# NOEXPORT: undefined symbol: sp_hidden
+#
+# RUN: %if msil-cil-dump %{ %msil_cil_dump --order=decl %t.lib/splib.dll > %t.lib.txt %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefixes=GUARD,LIB --input-file %t.lib.txt %}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump --order=decl %t.O2.d/prog.exe > %t.prog.txt %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefixes=GUARD,PROG --input-file %t.prog.txt %}
+# GUARD:      {{^}}pe PE32 machine=0x014C
+# GUARD:      {{^}}.class '<Module>'
+# GUARD:      {{^}}  .method '.cctor' void()
+# GUARD-NEXT: {{^}}    .maxstack
+# GUARD-NEXT: {{^}}    L0: ldc.i4.m1{{$}}
+# GUARD-NEXT: {{^}}    L1: conv.i{{$}}
+# GUARD-NEXT: {{^}}    L2: conv.u8{{$}}
+# GUARD-NEXT: {{^}}    L3: ldc.i8 -1{{$}}
+# GUARD-NEXT: {{^}}    L4: bne.un{{(\.s)?}} L[[WIDTH:[0-9]+]]{{$}}
+# GUARD-NEXT: {{^}}    L5: ldc.i4.1{{$}}
+# GUARD-NEXT: {{^}}    L6: call uint8[](int32) [{{[^]]+}}]System.BitConverter::'GetBytes'{{$}}
+# GUARD-NEXT: {{^}}    L7: ldc.i4.0{{$}}
+# GUARD-NEXT: {{^}}    L8: ldelem.u1{{$}}
+# GUARD-NEXT: {{^}}    L9: brfalse{{(\.s)?}} L[[ORDER:[0-9]+]]{{$}}
+# LIB:        {{^}}    L[[WIDTH]]: ldstr "splib is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit"{{$}}
+# PROG:       {{^}}    L[[WIDTH]]: ldstr "prog is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit"{{$}}
+# GUARD-NEXT: {{^}}    L{{[0-9]+}}: newobj instance void(string) [{{[^]]+}}]System.PlatformNotSupportedException::'.ctor'{{$}}
+# GUARD-NEXT: {{^}}    L{{[0-9]+}}: throw{{$}}
+# LIB-NEXT:   {{^}}    L[[ORDER]]: ldstr "splib is built for msil64-unknown-dotnet and needs a little-endian .NET process"{{$}}
+# PROG-NEXT:  {{^}}    L[[ORDER]]: ldstr "prog is built for msil64-unknown-dotnet and needs a little-endian .NET process"{{$}}
+# GUARD-NEXT: {{^}}    L{{[0-9]+}}: newobj instance void(string) [{{[^]]+}}]System.PlatformNotSupportedException::'.ctor'{{$}}
+# GUARD-NEXT: {{^}}    L{{[0-9]+}}: throw{{$}}
+# LIB:        {{^}}.class 'splib'
+# LIB:        {{^}}  .method 'sp_hidden' int32(int32)
+#--- splib.c
+#define API __attribute__((visibility("default")))
+static int ctor_seen;
+static long base = 1000;
+static long *base_ptr = &base;
+// The library's constructor runs in its module initializer, after the guard
+// and the image relocations (base_ptr), before any export is called.
+__attribute__((constructor)) static void splib_init(void) {
+  ctor_seen = (int)*base_ptr + 7;
+}
+API int sp_ctor_value(void) { return ctor_seen; }
+// Hidden: exported only through -Wl,--export=sp_hidden.
+__attribute__((visibility("hidden"))) int sp_hidden(int x) { return x * 3 + 1; }
+API long long sp_mul(long long a, long long b) { return a * b + *base_ptr; }
+API int sp_data[4] = {11, 22, 33, 44};
+API int sp_sum_data(void) { return sp_data[0] + sp_data[1] + sp_data[2] + sp_data[3]; }
+#--- main.c
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+int sp_ctor_value(void);
+int sp_hidden(int x);
+long long sp_mul(long long a, long long b);
+extern int sp_data[4];
+int sp_sum_data(void);
+
+static volatile int v_i = 13;
+
+int main(void) {
+  /* 0: the library's constructor ran before the first call. */
+  CHECK(0, sp_ctor_value() == 1007);
+  /* 1: the hidden function, exported by --export. */
+  CHECK(1, sp_hidden(v_i) == 40);
+  /* 2: a default-visibility function with 64-bit arguments. */
+  CHECK(2, sp_mul(1LL << 33, v_i) == (13LL << 33) + 1000);
+  /* 3: exported data, read and written from the program. */
+  CHECK(3, sp_data[2] == 33 && sp_sum_data() == 110);
+  sp_data[3] = v_i;
+  CHECK(3, sp_sum_data() == 79);
+  return (int)fails;
+}

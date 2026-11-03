@@ -47,6 +47,7 @@
 #include "MSILDataSegment.h"
 #include "MSILMCInstLower.h"
 #include "MSILMachineFunctionInfo.h"
+#include "MSILPortable.h"
 #include "MSILSubtarget.h"
 #include "MSILTargetMachine.h"
 #include "MSILTrailerTextSink.h"
@@ -132,12 +133,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "msil-asm-printer"
 
-static cl::opt<std::string> MSILAssemblyName(
-    "msil-assembly-name",
-    cl::desc("MSIL: the name of the emitted assembly (default: the stem of "
-             "the module's source file name, or 'module')"),
-    cl::value_desc("name"));
-
 static cl::opt<unsigned> RelocLoopThreshold(
     "msil-reloc-loop-threshold",
     cl::desc("MSIL: apply the data relocations of the module initializer "
@@ -160,25 +155,6 @@ static unsigned getRelocLoopThreshold(const Module &M) {
           M.getModuleFlag("msil-reloc-loop-threshold")))
     return Flag->getLimitedValue(std::numeric_limits<unsigned>::max());
   return RelocLoopThreshold;
-}
-
-/// The name of the assembly (decision D28 as amended for M14):
-/// -msil-assembly-name, else the module flag "msil-assembly-name", which
-/// msil-ld sets on its merged LTO module (named ld-temp.o), else the stem of
-/// the source file name. Windows separators are recognized on every host, so
-/// a module compiled on Windows gets the same name everywhere.
-static std::string getAssemblyName(const Module &M) {
-  if (!MSILAssemblyName.empty())
-    return MSILAssemblyName;
-  if (const auto *Flag =
-          dyn_cast_or_null<MDString>(M.getModuleFlag("msil-assembly-name"));
-      Flag && !Flag->getString().empty())
-    return Flag->getString().str();
-  StringRef Stem =
-      sys::path::stem(M.getSourceFileName(), sys::path::Style::windows);
-  if (Stem.empty() || Stem == "." || Stem == "..")
-    return "module";
-  return Stem.str();
 }
 
 /// The Module row's name of an object (rule O3): the base name of the IR
@@ -358,6 +334,7 @@ std::string MSIL::getRuntimeHelperText(StringRef Name) {
 /// calls them.
 static std::array<std::pair<StringRef, MSIL::Signature>, 2>
 getDataImportFunctions(const Triple &TT) {
+  assert(cli::bindsNatively(TT) && "no native data on the portable triples");
   using MSIL::ValType;
   MSIL::Signature Load, GetSymbol;
   Load.Results = {ValType::NativeInt};
@@ -375,17 +352,18 @@ getDataImportFunctions(const Triple &TT) {
 
 /// The number of glibc's .init_array arguments (int argc, char **argv, char
 /// **envp) that a constructor with the IL signature \p S takes, or
-/// std::nullopt if it takes other arguments: off Windows its parameters may
-/// be a prefix of (int32, native int, native int), on Windows triples there
-/// are none (plan section 12, 'M22.b extended', defect 4), as msil-ld decides
-/// it (lld/MSIL OutputSegment.cpp). The module initializer builds argc and
-/// argv once, and '<msil>Main' passes main the same ones; envp is the C
-/// library's environ (cli::TrailerInput::CtorArgs).
+/// std::nullopt if it takes other arguments: under ELF rules its parameters
+/// may be a prefix of (int32, native int, native int), under COFF and Dotnet
+/// rules there are none (cli::constructorsTakeArgs; plan section 12, 'M22.b
+/// extended', defect 4; plan 5.18.5 LR5), as msil-ld decides it (lld/MSIL
+/// OutputSegment.cpp). The module initializer builds argc and argv once, and
+/// '<msil>Main' passes main the same ones; envp is the C library's environ
+/// (cli::TrailerInput::CtorArgs).
 static std::optional<unsigned> getConstructorArgs(const MSIL::Signature &S,
-                                                  const Triple &TT) {
+                                                  cli::SectionRules Rules) {
   if (S.Params.empty())
     return 0;
-  if (TT.isOSWindows() || S.Params.size() > 3)
+  if (!cli::constructorsTakeArgs(Rules) || S.Params.size() > 3)
     return std::nullopt;
   for (auto [I, T] : enumerate(S.Params))
     if (T != (I == 0 ? MSIL::ValType::I32 : MSIL::ValType::NativeInt))
@@ -429,6 +407,8 @@ getListedDataImport(const Module &M, StringRef Name) {
 /// environ from it when a constructor takes envp and the module imports no
 /// environ itself (plan section 12, 'M22.b extended', defect 4).
 static StringRef getCLibrarySoname(const Triple &TT) {
+  assert(cli::bindsNatively(TT) &&
+         "no native C library on the portable triples");
   return TT.isMusl() ? "libc.so" : "libc.so.6";
 }
 
@@ -684,7 +664,7 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
   // entry point strings of the P/Invoke declarations, which come from the
   // "msil-import-*" attributes (the names of library calls are ASCII) and,
   // in msil-ld's linked text, from the strings of !msil.imports.
-  std::string AssemblyName = getAssemblyName(M);
+  std::string AssemblyName = MSIL::getAssemblyName(M);
   auto HasNonASCIIImport = [](const Function &F) {
     for (StringRef Kind : {"msil-import-module", "msil-import-name"})
       if (!isASCII(F.getFnAttribute(Kind).getValueAsString()))
@@ -735,6 +715,13 @@ void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
   // link-info record (plan 5.8).
   if (ObjectMode)
     return emitObjectEnd(M);
+  // MSILPrepareIR has reported a target that code generation refuses (T-P1
+  // for msil32-unknown-dotnet, plan 5.18.11) and emptied the module: only
+  // the module header is written. Its trailer would be the first output with
+  // a 4-byte portable guard, which is P-4's (cli::emitPortableGuard refuses
+  // it).
+  if (!MSIL::isSupportedTarget(TM))
+    return;
 
   // Every global variable has been added (emitGlobalVariable runs for each
   // one before this hook). The layout comes first: a relocation can name a
@@ -775,8 +762,7 @@ void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
 }
 
 cli::SectionRules MSILAsmPrinter::getSectionRules() const {
-  return TM.getTargetTriple().isOSWindows() ? cli::SectionRules::COFF
-                                            : cli::SectionRules::ELF;
+  return cli::getSectionRules(TM.getTargetTriple());
 }
 
 void MSILAsmPrinter::checkSections(const Module &M) {
@@ -795,6 +781,13 @@ void MSILAsmPrinter::checkSections(const Module &M) {
   StringRef File = M.getSourceFileName();
   cli::SectionRules Rules = getSectionRules();
   for (const MSILDataSegment::Entry *E : Entries) {
+    // T-P8: the sections that the Dotnet rules refuse by name (plan 5.18.5
+    // LR7).
+    if (std::optional<std::string> Msg =
+            MSIL::getUnsupportedSectionText(E->Section, Rules)) {
+      Ctx.emitError(*Msg);
+      continue;
+    }
     switch (cli::classifySection(E->Section, Rules)) {
     case cli::SectionClass::Data:
     case cli::SectionClass::ConstructorTable:
@@ -854,10 +847,12 @@ void MSILAsmPrinter::collectExternGlobals(const Module &M) {
   // only by an available_externally function, which is not compiled) is
   // not. Two kinds resolve here, as a one-object link resolves them (plan
   // 5.9.9, 5.10.12): off Windows, __start_<X> and __stop_<X> of an output
-  // section <X> (Windows triples keep the error, as native links leave them
-  // undefined); and in msil-ld's linked text, native data.
-  bool StartStop = !TM.getTargetTriple().isOSWindows();
+  // section <X> (cli::definesStartStop; Windows triples keep the error, as
+  // native links leave them undefined); and in msil-ld's linked text, native
+  // data, except on the portable triples, which bind no native code.
+  bool StartStop = cli::definesStartStop(getSectionRules());
   bool Linked = MSIL::isLinkedModule(M);
+  bool Native = cli::bindsNatively(TM.getTargetTriple());
   for (const GlobalVariable &GV : M.globals()) {
     if (!UsedExternGlobals.contains(&GV))
       continue;
@@ -866,7 +861,7 @@ void MSILAsmPrinter::collectExternGlobals(const Module &M) {
     if (StartStop)
       Offset = cli::getStartStopOffset(Data->Layout, ILName);
     std::optional<std::pair<std::string, std::string>> Import;
-    if (!Offset && Linked)
+    if (!Offset && Linked && Native)
       Import = getLinkedDataImport(M, GV, ILName);
     if (Offset)
       StartStopFields.push_back({&GV, *Offset});
@@ -987,6 +982,34 @@ isNullConstructorSlot(const MSILDataSegment &Data,
                 [](uint8_t B) { return B == 0; });
 }
 
+/// Reports the link rules that refuse the segment \p E of section \p Section
+/// in an object (plan 5.18.5 LR5, LR7): T-P8 for a section that the rules
+/// refuse by name, else T-P7 for each NULL slot of a constructor table that
+/// the rules call every slot of. Whole-program text reports the same texts
+/// (checkSections, collectConstructors), so a portable object is refused by
+/// the compiler, not left to msil-ld. Only the Dotnet rules refuse either;
+/// the host triples' objects leave their sections to msil-ld (plan 5.8.10).
+static void
+checkObjectSegmentRules(const Module &M, const MSILDataSegment &Data,
+                        const MSILDataSegment::Entry &E, StringRef Section,
+                        cli::SectionRules Rules,
+                        const DenseMap<uint64_t, const MSILReloc *> &RelocAt) {
+  LLVMContext &Ctx = M.getContext();
+  if (std::optional<std::string> Msg =
+          MSIL::getUnsupportedSectionText(Section, Rules)) {
+    Ctx.emitError(*Msg);
+    return;
+  }
+  if (!cli::rejectsNullConstructorSlots(Rules) ||
+      cli::classifySection(Section, Rules) !=
+          cli::SectionClass::ConstructorTable)
+    return;
+  for (uint64_t Off = 0; Off < E.Size; Off += 8)
+    if (isNullConstructorSlot(Data, E, Off, RelocAt))
+      Ctx.emitError(
+          MSIL::getNullConstructorSlotText(Section, M.getSourceFileName()));
+}
+
 SmallVector<const Function *, 8>
 MSILAsmPrinter::collectConstructors(const Module &M) {
   cli::SectionRules Rules = getSectionRules();
@@ -995,14 +1018,13 @@ MSILAsmPrinter::collectConstructors(const Module &M) {
   SmallVector<cli::ConstructorEntry, 8> Entries;
   SmallVector<const Function *, 8> Fns;
   // The module initializer calls each constructor without arguments (C's
-  // __attribute__((constructor)) functions take none), or off Windows with
-  // argc, argv and envp as glibc calls an .init_array entry
+  // __attribute__((constructor)) functions take none), or under ELF rules
+  // with argc, argv and envp as glibc calls an .init_array entry
   // (getConstructorArgs), and drops a result.
-  const Triple &TT = TM.getTargetTriple();
   auto Add = [&](const Function &F, cli::ConstructorEntry E) {
-    if (!getConstructorArgs(getSignature(F), TT)) {
-      F.getContext().emitError("global constructor '" + MSIL::getILName(F, TM) +
-                               "' takes arguments, which MSIL does not pass");
+    if (!getConstructorArgs(getSignature(F), Rules)) {
+      F.getContext().emitError(
+          MSIL::getConstructorArgsText(MSIL::getILName(F, TM), Rules));
       return;
     }
     if (F.isDeclarationForLinker())
@@ -1060,6 +1082,13 @@ MSILAsmPrinter::collectConstructors(const Module &M) {
       if (!R && cli::skipsNullConstructorSlots(Rules) &&
           isNullConstructorSlot(*Data, *T, Off, RelocAt))
         continue;
+      // A portable output calls every slot (T-P7, plan 5.18.5 LR5).
+      if (!R && cli::rejectsNullConstructorSlots(Rules) &&
+          isNullConstructorSlot(*Data, *T, Off, RelocAt)) {
+        M.getContext().emitError(MSIL::getNullConstructorSlotText(
+            T->Section, M.getSourceFileName()));
+        continue;
+      }
       if (!F || F->isIntrinsic()) {
         M.getContext().emitError(
             "constructor table entry at " + T->Section + "+" + Twine(Off) +
@@ -1243,6 +1272,8 @@ static void reportNotImported(LLVMContext &Ctx, const Triple &TT,
     return;
   if (!IsLibCall && LTO)
     Ctx.emitError("undefined symbol: " + Name);
+  else if (!IsLibCall && !cli::bindsNatively(TT))
+    Ctx.emitError(MSIL::getStandaloneUndefinedText(Name));
   else if (!IsLibCall)
     Ctx.emitError("undefined function '" + Name +
                   "' is not defined in this module and is not a Phase-1 "
@@ -1775,6 +1806,7 @@ void MSILAsmPrinter::emitTrailer(Module &M,
 
   fillTrailerDefs(M, Sink, In);
   fillTrailerUCRTStdio(M, Sink, In);
+  fillTrailerGuard(M, Sink, In);
   cli::buildTrailer(In, Sink);
   emitDataSegment(Sink);
   if (EnvironImportField) {
@@ -2303,14 +2335,15 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
   MSILTargetStreamer &TS = getTargetStreamer();
   // Every global variable has been added; an object keeps the symbol
   // differences (DIFF relocations).
-  Data->finalize();
+  Data->finalize(getSectionRules());
 
   MSILLink::Record R;
 
-  // The header (plan 5.8.8, 5.8.9): the normalized triple, ABI version 1, no
+  // The header (plan 5.8.8, 5.8.9): the normalized triple (a portable
+  // triple's vendor reduced to unknown, plan 5.18.1 PT5), ABI version 1, no
   // flags, and the data model. clang writes the wchar_size flag only when it
   // differs from the triple's default.
-  R.Hdr.Triple = Triple::normalize(TT.str());
+  R.Hdr.Triple = MSIL::getTripleText(TT);
   unsigned WCharSize = TT.getDefaultWCharSize();
   if (const auto *Flag = mdconst::dyn_extract_or_null<ConstantInt>(
           M.getModuleFlag("wchar_size")))
@@ -2442,6 +2475,10 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
   DenseMap<const GlobalVariable *, const MSILDataSegment::Entry *> EntryOf;
   for (const MSILDataSegment::Entry &E : Data->Entries)
     EntryOf[E.GV] = &E;
+  // The relocation at each image offset, for the NULL constructor slots.
+  DenseMap<uint64_t, const MSILReloc *> RelocAt;
+  for (const MSILReloc &Rel : Data->Relocs)
+    RelocAt.try_emplace(Rel.Site, &Rel);
   // The segment of each defined global, and the address fields to emit, in
   // SYMTAB order: FieldDef row i + 1 is the field of Fields[i], and FieldOf
   // maps an IL name to its row.
@@ -2523,6 +2560,10 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
       SectionKind Kind = TargetLoweringObjectFile::getKindForGlobal(&GV, TM);
       Seg.emplace();
       Seg->Name = MSILDataSegment::getSegmentName(GV, Kind);
+      // T-P8 and T-P7 (plan 5.18.5): the segment stays in the record, as
+      // whole-program text keeps the data; the compile fails.
+      checkObjectSegmentRules(M, *Data, *E, Seg->Name, getSectionRules(),
+                              RelocAt);
       if (Kind.isMergeable1ByteCString())
         Seg->Flags |= MSILLink::SegStrings;
       if (Used.contains(&GV))
@@ -2707,8 +2748,8 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
 
   // INIT_FINI (plan 5.8.8): llvm.global_ctors in array order, each with the
   // comdat of its associated global. Each constructor is a function that the
-  // object defines, called without arguments, or off Windows with argc, argv
-  // and envp as far as its signature takes them (getConstructorArgs); a
+  // object defines, called without arguments, or under ELF rules with argc,
+  // argv and envp as far as its signature takes them (getConstructorArgs); a
   // result is popped.
   if (const GlobalVariable *Ctors = M.getNamedGlobal("llvm.global_ctors");
       Ctors && Ctors->hasInitializer()) {
@@ -2752,9 +2793,9 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
         const auto *F = dyn_cast<Function>(FnGV);
         if (const auto *GA = dyn_cast<GlobalAlias>(FnGV))
           F = dyn_cast_or_null<Function>(getAliasedObject(*GA, Offset));
-        if (F && !getConstructorArgs(getSignature(*F), TM.getTargetTriple())) {
-          Ctx.emitError("global constructor '" + MSIL::getILName(*FnGV, TM) +
-                        "' takes arguments, which MSIL does not pass");
+        if (F && !getConstructorArgs(getSignature(*F), getSectionRules())) {
+          Ctx.emitError(MSIL::getConstructorArgsText(MSIL::getILName(*FnGV, TM),
+                                                     getSectionRules()));
           continue;
         }
         MSILLink::InitEntry Entry;

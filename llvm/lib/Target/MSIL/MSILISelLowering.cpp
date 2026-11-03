@@ -45,9 +45,10 @@ using namespace llvm;
 /// Returns the size in bytes of the native va_list structure of \p TT
 /// (Design.md 4.7): the SysV x86-64 __va_list_tag (24 bytes) or the AAPCS64
 /// structure (32 bytes). Returns 0 where va_list is a plain char*: on Windows
-/// (msvc and gnu, x64 and ARM64) and on Apple ARM64.
+/// (msvc and gnu, x64 and ARM64), on Apple ARM64 and on the portable triples,
+/// which have no native va_list (plan 5.18.2 PB1).
 static unsigned getNativeVAListStructSize(const Triple &TT) {
-  if (TT.isOSWindows() || (TT.isAArch64() && TT.isOSDarwin()))
+  if (TT.isMSIL() || TT.isOSWindows() || (TT.isAArch64() && TT.isOSDarwin()))
     return 0;
   return TT.isAArch64() ? 32 : 24;
 }

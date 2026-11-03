@@ -1,0 +1,192 @@
+## The width and byte-order guard of msil64-unknown-dotnet images
+## (ImplementationPlan.md 5.18.7 PE5, PE6 and PE8; P-1a's text T-P10):
+## - every portable output's <Module>::.cctor exists and starts with the
+##   guard, an executable and a -shared library alike, also one with no data,
+##   no constructor and no library input (whose <Module>::.cctor host triples
+##   do not emit):
+##     ldc.i4.m1; conv.i; conv.u8; ldc.i8 -1; bne.un FAIL_WIDTH
+##     ldc.i4.1; call uint8[] System.BitConverter::GetBytes(int32);
+##     ldc.i4.0; ldelem.u1; brfalse FAIL_ORDER
+## - each failure label is ldstr of its T-P10 message, newobj
+##   System.PlatformNotSupportedException::.ctor(string), throw:
+##     <assembly> is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit
+##     <assembly> is built for msil64-unknown-dotnet and needs a little-endian .NET process
+##   (the plan does not say whether <assembly> carries the file extension, so
+##   both spellings are accepted);
+## - in a -shared library with a library input, the guard comes before
+##   phase 2's ldtoken of the library's export class;
+## - the guard binds the same members through --reference to a reference
+##   mscorlib that has them (Inputs/fakepack/PortableMscorlib.yaml); a
+##   reference set without them (Inputs/fakepack/FakeMscorlib.yaml, which
+##   lacks the PORTABLE rows) fails the link with one error per missing type
+##   and writes no image;
+## - host triples have no guard: no PlatformNotSupportedException and no
+##   BitConverter in their images;
+## - another vendor is reduced to unknown wherever msil-ld forms a triple
+##   text (5.18.1 PT5, the section 12 row of 2026-11-02): under
+##   --target=msil64-pc-dotnet, and in a link whose first input llc wrote
+##   for msil64-pc-dotnet, the T-P10 strings name msil64-unknown-dotnet,
+##   and such an object links with msil64-unknown-dotnet objects in either
+##   order; the object-format suffix -msil stays accepted, while an
+##   environment component (msil64-unknown-dotnet-gnu, -musl) is refused
+##   for good (5.18.1 PT5) with TargetRegistry's reason, as llc reports it,
+##   not with T-P1's 'not supported yet' text.
+## The listing is llvm-cil-dump --forms=canon's (short branches print long),
+## so the labels are instruction numbers: the guard is L0 to L9.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs norows bound host vendor suffix
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj base.ll -o base.o
+# RUN: llc -filetype=obj two.ll -o two.o
+# RUN: yaml2obj %S/Inputs/fakepack/PortableMscorlib.yaml -o refs/mscorlib.dll
+
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+# DEFINE: %{guard} = FileCheck %s --check-prefix=GUARD
+
+## An executable with data.
+# RUN: msil-ld prog.o -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon prog.exe > prog.txt
+# RUN: %{listing} method prog.txt '<Module>' .cctor | %{guard} -DASM=prog
+
+## An executable with nothing to initialize.
+# RUN: msil-ld ret42.o -o ret42.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon ret42.exe > ret42.txt
+# RUN: %{listing} method ret42.txt '<Module>' .cctor | %{guard} -DASM=ret42
+
+## A -shared library with nothing to initialize, and one with data.
+# RUN: msil-ld -shared base.o -o base.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon base.dll > base.txt
+# RUN: %{listing} method base.txt '<Module>' .cctor | %{guard} -DASM=base
+# RUN: msil-ld -shared lib.o -o lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon lib.dll > lib.txt
+# RUN: %{listing} method lib.txt '<Module>' .cctor | %{guard} -DASM=lib
+
+## Two-phase: the guard, then the ldtoken.
+# RUN: msil-ld -shared two.o base.dll -o two.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon two.dll > two.txt
+# RUN: %{listing} method two.txt '<Module>' .cctor > two-cctor.txt
+# RUN: %{guard} -DASM=two --input-file=two-cctor.txt
+# RUN: FileCheck %s --check-prefix=TWO --input-file=two-cctor.txt
+# TWO:      {{^}}    L9: brfalse L{{[0-9]+}}{{$}}
+# TWO:      {{^}}    L{{[0-9]+}}: ldtoken [base]base{{$}}
+
+## Bound through --reference.
+# RUN: msil-ld ret42.o --reference=refs/mscorlib.dll -o bound/ret42.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon bound/ret42.exe > bound.txt
+# RUN: %{listing} method bound.txt '<Module>' .cctor | %{guard} -DASM=ret42
+
+## A reference set without the guard's types fails loudly.
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o norows/mscorlib.dll
+# RUN: not msil-ld ret42.o --reference=norows/mscorlib.dll -o norows/ret42.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NO-ROWS --implicit-check-not=error: --implicit-check-not=warning:
+# NO-ROWS-DAG: {{^}}msil-ld: error: type 'System.BitConverter' is not defined in the references (1 assemblies){{$}}
+# NO-ROWS-DAG: {{^}}msil-ld: error: type 'System.PlatformNotSupportedException' is not defined in the references (1 assemblies){{$}}
+# RUN: not ls norows/ret42.exe
+
+## Another vendor names msil64-unknown-dotnet: by --target, and by the first
+## input, an object that llc wrote for msil64-pc-dotnet, which links with
+## msil64-unknown-dotnet objects in either order.
+# DEFINE: %{no-pc} = FileCheck %s --check-prefix=HOST --implicit-check-not=msil64-pc-dotnet
+# RUN: llc -filetype=obj -mtriple=msil64-pc-dotnet base.ll -o vendor/base-pc.o
+# RUN: llvm-cil-dump --link-info vendor/base-pc.o | FileCheck %s --check-prefix=PC-KEY
+# PC-KEY: {{^}}LinkInfo v{{[0-9.]+}} triple=msil64-unknown-dotnet {{.*$}}
+# RUN: msil-ld --target=msil64-pc-dotnet ret42.o -o vendor/ret42.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon vendor/ret42.exe > vendor-ret42.txt
+# RUN: %{listing} method vendor-ret42.txt '<Module>' .cctor | %{guard} -DASM=ret42
+# RUN: %{no-pc} --input-file=vendor-ret42.txt
+# RUN: msil-ld prog.o vendor/base-pc.o -o vendor/mixed.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon vendor/mixed.exe > vendor-mixed.txt
+# RUN: %{listing} method vendor-mixed.txt '<Module>' .cctor | %{guard} -DASM=mixed
+# RUN: %{no-pc} --input-file=vendor-mixed.txt
+# RUN: msil-ld vendor/base-pc.o prog.o -o vendor/mixed-pc.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon vendor/mixed-pc.exe > vendor-mixed-pc.txt
+# RUN: %{listing} method vendor-mixed-pc.txt '<Module>' .cctor | %{guard} -DASM=mixed-pc
+# RUN: %{no-pc} --input-file=vendor-mixed-pc.txt
+
+## The -msil suffix is accepted; an environment component is refused.
+# RUN: msil-ld --target=msil64-unknown-dotnet-msil ret42.o -o suffix/ret42.exe 2>&1 | count 0
+# RUN: cmp ret42.exe suffix/ret42.exe
+# RUN: not msil-ld --target=msil64-unknown-dotnet-gnu ret42.o -o x.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ENV -DTRIPLE=msil64-unknown-dotnet-gnu -DENV=gnu
+# RUN: not msil-ld --target=msil64-unknown-dotnet-musl ret42.o -o x.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ENV -DTRIPLE=msil64-unknown-dotnet-musl -DENV=musl
+# ENV:     {{^}}msil-ld: error: unable to get target for '[[TRIPLE]]': the architecture 'msil64' with the OS 'dotnet' takes no environment, not '[[ENV]]' (msil64-unknown-dotnet){{$}}
+# ENV-NOT: error:
+
+# GUARD:      {{^}}  .method '.cctor' void() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# GUARD:      {{^}}    L0: ldc.i4.m1{{$}}
+# GUARD-NEXT: {{^}}    L1: conv.i{{$}}
+# GUARD-NEXT: {{^}}    L2: conv.u8{{$}}
+# GUARD-NEXT: {{^}}    L3: ldc.i8 -1{{$}}
+# GUARD-NEXT: {{^}}    L4: bne.un L[[#WIDTH:]]{{$}}
+# GUARD-NEXT: {{^}}    L5: ldc.i4.1{{$}}
+# GUARD-NEXT: {{^}}    L6: call uint8[](int32) [mscorlib]System.BitConverter::'GetBytes'{{$}}
+# GUARD-NEXT: {{^}}    L7: ldc.i4.0{{$}}
+# GUARD-NEXT: {{^}}    L8: ldelem.u1{{$}}
+# GUARD-NEXT: {{^}}    L9: brfalse L[[#ORDER:]]{{$}}
+# GUARD-DAG:  {{^}}    L[[#WIDTH]]: ldstr "[[ASM]]{{(\.exe|\.dll)?}} is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit"{{$}}
+# GUARD-DAG:  {{^}}    L[[#WIDTH+1]]: newobj instance void(string) {{(class )?}}[mscorlib]System.PlatformNotSupportedException::'.ctor'{{$}}
+# GUARD-DAG:  {{^}}    L[[#WIDTH+2]]: throw{{$}}
+# GUARD-DAG:  {{^}}    L[[#ORDER]]: ldstr "[[ASM]]{{(\.exe|\.dll)?}} is built for msil64-unknown-dotnet and needs a little-endian .NET process"{{$}}
+# GUARD-DAG:  {{^}}    L[[#ORDER+1]]: newobj instance void(string) {{(class )?}}[mscorlib]System.PlatformNotSupportedException::'.ctor'{{$}}
+# GUARD-DAG:  {{^}}    L[[#ORDER+2]]: throw{{$}}
+
+## Host triples: no guard.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil prog.ll -o host/prog.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil lib.ll -o host/lib.o
+# RUN: msil-ld host/prog.o -o host/prog.exe 2>&1 | count 0
+# RUN: msil-ld -shared host/lib.o -o host/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump host/prog.exe | FileCheck %s --check-prefix=HOST \
+# RUN:   --implicit-check-not=PlatformNotSupportedException --implicit-check-not=BitConverter
+# RUN: llvm-cil-dump host/lib.dll | FileCheck %s --check-prefix=HOST \
+# RUN:   --implicit-check-not=PlatformNotSupportedException --implicit-check-not=BitConverter
+# HOST: {{^}}.class '<Module>' flags=0x{{[0-9A-F]+}}{{.*}}
+
+#--- prog.ll
+target triple = "msil64-unknown-dotnet"
+
+@g = global i32 5, align 4
+
+define i32 @main() {
+  %v = load i32, ptr @g, align 4
+  ret i32 %v
+}
+
+#--- ret42.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- base.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @base_fn() {
+  ret i32 3
+}
+
+#--- lib.ll
+target triple = "msil64-unknown-dotnet"
+
+@v = global i32 7, align 4
+
+define i32 @get() {
+  %r = load i32, ptr @v, align 4
+  ret i32 %r
+}
+
+#--- two.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @base_fn()
+
+define i32 @twice() {
+  %a = call i32 @base_fn()
+  %b = add i32 %a, %a
+  ret i32 %b
+}

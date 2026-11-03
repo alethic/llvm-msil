@@ -1,0 +1,644 @@
+## Constructors and named sections on msil64-unknown-dotnet (ImplementationPlan.md
+## 5.18.5 LR5 and LR7; P-1a's texts T-P6, T-P7 and T-P8; brief Q7 (a)):
+## - llvm.global_ctors entries (INIT) and '.init_array' / '.init_array.N'
+##   slots run in one list sorted stably by priority, ties in input order
+##   and, within one object, slots before entries (today's ELF order and
+##   wasm-ld's): a.o has the entry c1 (200), the slot s_default
+##   ('.init_array', 65535), the entry c2 (65535) and the slot s100
+##   ('.init_array.100'); b.o has the slot sb and the entry c3 (both 65535).
+##   The order is s100, c1, s_default, c2, sb, c3 (portable-linkrules M3
+##   measured c1, slot, c2), after the width guard;
+## - a constructor never receives arguments: an entry or a slot whose
+##   function takes parameters, glibc's (int, char **, char **) shape
+##   included, is T-P6
+##     constructor '<f>' takes arguments, which msil64-unknown-dotnet does not pass
+## - a null '.init_array' slot, written as a null pointer or as a null
+##   element of an array, is T-P7
+##     null constructor slot in '<section>' of '<file>': msil64-unknown-dotnet calls every slot
+## - '.fini_array' and '.dtors' (no destructor sections), '.preinit_array'
+##   (no pre-initialization stage), '.ctors' and '.CRT$X*' (constructors only
+##   from '.init_array') are T-P8 with their reasons, their priority forms
+##   ('.fini_array.101', '.dtors.7', '.preinit_array.5', '.ctors.65535')
+##   included
+##     section '<name>' is not supported for msil64-unknown-dotnet: <reason>
+## - '.tdata' is not T-P8: it keeps Phase 2's thread-local storage error
+##   until M31.
+## Which tool reports each case is pinned: llc refuses a module whose
+## constructor entry takes arguments, whose '.init_array' slot is null, or
+## that names a T-P8 section, while it writes the object (its 'error: '
+## lines carry no tool name); msil-ld reports T-P6 for a slot (llc writes
+## slots without looking at their functions), T-P7 for a slot that holds an
+## undefined extern_weak function (it resolves to null only at the link) and
+## the '.tdata' error. msil-ld's T-P6 check of a slot covers glibc's
+## (int, char **, char **) shape too, which a host triple would bind to
+## environ instead. msil-ld's own T-P7 and T-P8 checks also run on objects
+## that llc would not write: llc writes a clean object whose section is
+## named '.xnit_array', '.xini_array', '.xtors', '.xreinit_array' or
+## '.xRT$XCU', and 'Inputs/portable/pe.py rename-section' renames it in the
+## object to '.init_array', '.fini_array', '.dtors', '.ctors',
+## '.preinit_array' or '.CRT$XCU' (same length, nothing moves), the same
+## kind of byte rewrite as portable-machine.test's. Every special section is
+## kept alive with llvm.used, so no error depends on --gc-sections.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{rename} = %python %S/Inputs/portable/pe.py rename-section
+
+## The order.
+# RUN: msil-ld a.o b.o -o order.exe 2>&1 | count 0
+# RUN: llvm-cil-dump order.exe > order.txt
+# RUN: %python %S/Inputs/portable/module-init.py strip-guard order.txt > order-body.txt
+# RUN: %python %S/Inputs/cctor.py order-body.txt | FileCheck %s --check-prefix=ORDER
+# ORDER:      {{^}}call s100{{$}}
+# ORDER-NEXT: {{^}}call c1{{$}}
+# ORDER-NEXT: {{^}}call s_default{{$}}
+# ORDER-NEXT: {{^}}call c2{{$}}
+# ORDER-NEXT: {{^}}call sb{{$}}
+# ORDER-NEXT: {{^}}call c3{{$}}
+# ORDER-NOT:  {{^}}call
+
+## The input order decides ties across objects.
+# RUN: msil-ld b.o a.o -o order-ba.exe 2>&1 | count 0
+# RUN: llvm-cil-dump order-ba.exe > order-ba.txt
+# RUN: %python %S/Inputs/portable/module-init.py strip-guard order-ba.txt > order-ba-body.txt
+# RUN: %python %S/Inputs/cctor.py order-ba-body.txt | FileCheck %s --check-prefix=ORDER-BA
+# ORDER-BA:      {{^}}call s100{{$}}
+# ORDER-BA-NEXT: {{^}}call c1{{$}}
+# ORDER-BA-NEXT: {{^}}call sb{{$}}
+# ORDER-BA-NEXT: {{^}}call c3{{$}}
+# ORDER-BA-NEXT: {{^}}call s_default{{$}}
+# ORDER-BA-NEXT: {{^}}call c2{{$}}
+# ORDER-BA-NOT:  {{^}}call
+
+## T-P6: llc refuses a constructor entry, msil-ld a slot.
+# RUN: llc -filetype=obj slot-args.ll -o slot-args.o
+# RUN: not msil-ld slot-args.o -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ARGS-LD -DCTOR=init_slot --implicit-check-not="global constructor"
+# RUN: llc -filetype=obj slot-glibc.ll -o slot-glibc.o
+# RUN: not msil-ld slot-glibc.o -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ARGS-LD -DCTOR=init_slot --implicit-check-not="global constructor" \
+# RUN:     --implicit-check-not=envp --implicit-check-not=environ
+# ARGS-LD: {{^}}msil-ld: error: constructor '[[CTOR]]' takes arguments, which msil64-unknown-dotnet does not pass{{$}}
+# RUN: not llc -filetype=obj glibc-args.ll -o glibc-args.o 2>&1 \
+# RUN:   | %{fc} --check-prefix=ARGS -DCTOR=init_glibc --implicit-check-not="global constructor"
+# RUN: not llc -filetype=obj one-arg.ll -o one-arg.o 2>&1 \
+# RUN:   | %{fc} --check-prefix=ARGS -DCTOR=init_one --implicit-check-not="global constructor"
+# ARGS: {{^}}error: constructor '[[CTOR]]' takes arguments, which msil64-unknown-dotnet does not pass{{$}}
+
+## T-P7: llc refuses a null slot that it would write.
+# RUN: not llc -filetype=obj nul.ll -o nul.o 2>&1 \
+# RUN:   | %{fc} --check-prefix=NULL-SLOT -DSECTION=.init_array -DFILE=nul.ll
+# RUN: not llc -filetype=obj nul-array.ll -o nul-array.o 2>&1 \
+# RUN:   | %{fc} --check-prefix=NULL-SLOT -DSECTION=.init_array -DFILE=nul-array.ll
+# RUN: not llc -filetype=obj nul-prio.ll -o nul-prio.o 2>&1 \
+# RUN:   | %{fc} --check-prefix=NULL-SLOT -DSECTION=.init_array.300 -DFILE=nul-prio.ll
+# NULL-SLOT: {{^}}error: null constructor slot in '[[SECTION]]' of '[[FILE]]': msil64-unknown-dotnet calls every slot{{$}}
+
+## T-P7 at msil-ld: a slot that holds an undefined extern_weak function,
+## which llc accepts, and null slots that llc would not write (a lone null
+## slot, the null second element of an array, a null slot of priority 300),
+## forged by renaming '.xnit_array'. The unrenamed object links: its
+## '.xnit_array' is plain data.
+# RUN: llc -filetype=obj weak-slot.ll -o weak-slot.o
+# RUN: not msil-ld weak-slot.o -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NULL-SLOT-LD -DSECTION=.init_array -DFILE=weak-slot.o \
+# RUN:     --implicit-check-not="not a function address"
+# RUN: llc -filetype=obj xnul.ll -o xnul.o
+# RUN: llc -filetype=obj xnul-array.ll -o xnul-array.o
+# RUN: llc -filetype=obj xnul-prio.ll -o xnul-prio.o
+# RUN: msil-ld xnul.o -o xnul.exe 2>&1 | count 0
+# RUN: %{rename} xnul.o forged-nul.o .xnit_array .init_array
+# RUN: %{rename} xnul-array.o forged-nul-array.o .xnit_array .init_array
+# RUN: %{rename} xnul-prio.o forged-nul-prio.o .xnit_array.300 .init_array.300
+# RUN: llvm-cil-dump --link-info forged-nul-array.o | FileCheck %s --check-prefix=FORGED-NUL
+# FORGED-NUL: {{^}}Segment {{[0-9]+}} '.init_array' align=8 size=16{{( .*)?$}}
+# RUN: not msil-ld forged-nul.o -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NULL-SLOT-LD -DSECTION=.init_array -DFILE=forged-nul.o
+# RUN: not msil-ld forged-nul-array.o -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NULL-SLOT-LD -DSECTION=.init_array -DFILE=forged-nul-array.o
+# RUN: not msil-ld forged-nul-prio.o -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NULL-SLOT-LD -DSECTION=.init_array.300 -DFILE=forged-nul-prio.o
+# NULL-SLOT-LD:     {{^}}msil-ld: error: null constructor slot in '[[SECTION]]' of '[[FILE]]': msil64-unknown-dotnet calls every slot{{$}}
+# NULL-SLOT-LD-NOT: null constructor slot
+
+## T-P8, one section kind at a time: llc refuses the module.
+# DEFINE: %{section} = %{fc} --check-prefix=SECTION --implicit-check-not="is not supported yet"
+# RUN: not llc -filetype=obj fini.ll -o fini.o 2>&1 \
+# RUN:   | %{section} -DNAME=.fini_array '-DREASON=the portable target runs no destructor sections'
+# RUN: not llc -filetype=obj dtors.ll -o dtors.o 2>&1 \
+# RUN:   | %{section} -DNAME=.dtors '-DREASON=the portable target runs no destructor sections'
+# RUN: not llc -filetype=obj preinit.ll -o preinit.o 2>&1 \
+# RUN:   | %{section} -DNAME=.preinit_array '-DREASON=the portable target has no pre-initialization stage'
+# RUN: not llc -filetype=obj ctors.ll -o ctors.o 2>&1 \
+# RUN:   | %{section} -DNAME=.ctors '-DREASON=the portable target runs constructors only from .init_array'
+# RUN: not llc -filetype=obj crt-xcu.ll -o crt-xcu.o 2>&1 \
+# RUN:   | %{section} '-DNAME=.CRT$XCU' '-DREASON=the portable target runs constructors only from .init_array'
+# RUN: not llc -filetype=obj crt-xia.ll -o crt-xia.o 2>&1 \
+# RUN:   | %{section} '-DNAME=.CRT$XIA' '-DREASON=the portable target runs constructors only from .init_array'
+# RUN: not llc -filetype=obj fini-prio.ll -o fini-prio.o 2>&1 \
+# RUN:   | %{section} -DNAME=.fini_array.101 '-DREASON=the portable target runs no destructor sections'
+# RUN: not llc -filetype=obj dtors-prio.ll -o dtors-prio.o 2>&1 \
+# RUN:   | %{section} -DNAME=.dtors.7 '-DREASON=the portable target runs no destructor sections'
+# RUN: not llc -filetype=obj preinit-prio.ll -o preinit-prio.o 2>&1 \
+# RUN:   | %{section} -DNAME=.preinit_array.5 '-DREASON=the portable target has no pre-initialization stage'
+# RUN: not llc -filetype=obj ctors-prio.ll -o ctors-prio.o 2>&1 \
+# RUN:   | %{section} -DNAME=.ctors.65535 '-DREASON=the portable target runs constructors only from .init_array'
+# SECTION: {{^}}error: section '[[NAME]]' is not supported for msil64-unknown-dotnet: [[REASON]]{{$}}
+
+## T-P8 at msil-ld, on objects that llc would not write: '.fini_array',
+## '.fini_array.101', '.dtors', '.preinit_array', '.ctors' and '.CRT$XCU'
+## slots, each renamed from a same-length data section that holds a
+## function pointer, which links unrenamed.
+# DEFINE: %{section-ld} = %{fc} --check-prefix=SECTION-LD --implicit-check-not="is not supported yet" \
+# DEFINE:   --implicit-check-not="global destructors"
+# RUN: llc -filetype=obj xfini.ll -o xfini.o
+# RUN: llc -filetype=obj xtors.ll -o xtors.o
+# RUN: llc -filetype=obj xpreinit.ll -o xpreinit.o
+# RUN: llc -filetype=obj xfini-prio.ll -o xfini-prio.o
+# RUN: llc -filetype=obj xcrt.ll -o xcrt.o
+# RUN: msil-ld xfini.o -o xfini.exe 2>&1 | count 0
+# RUN: msil-ld xfini-prio.o -o xfini-prio.exe 2>&1 | count 0
+# RUN: msil-ld xcrt.o -o xcrt.exe 2>&1 | count 0
+# RUN: %{rename} xfini.o forged-fini.o .xini_array .fini_array
+# RUN: %{rename} xtors.o forged-dtors.o .xtors .dtors
+# RUN: %{rename} xtors.o forged-ctors.o .xtors .ctors
+# RUN: %{rename} xpreinit.o forged-preinit.o .xreinit_array .preinit_array
+# RUN: %{rename} xfini-prio.o forged-fini-prio.o .xini_array.101 .fini_array.101
+# RUN: %{rename} xcrt.o forged-crt.o '.xRT$XCU' '.CRT$XCU'
+# RUN: llvm-cil-dump --link-info forged-fini.o | FileCheck %s --check-prefix=FORGED-FINI
+# FORGED-FINI: {{^}}Segment {{[0-9]+}} '.fini_array' align=8 size=8{{( .*)?$}}
+# RUN: not msil-ld forged-fini.o -o x.exe 2>&1 \
+# RUN:   | %{section-ld} -DNAME=.fini_array '-DREASON=the portable target runs no destructor sections'
+# RUN: not msil-ld forged-dtors.o -o x.exe 2>&1 \
+# RUN:   | %{section-ld} -DNAME=.dtors '-DREASON=the portable target runs no destructor sections'
+# RUN: not msil-ld forged-preinit.o -o x.exe 2>&1 \
+# RUN:   | %{section-ld} -DNAME=.preinit_array '-DREASON=the portable target has no pre-initialization stage'
+# RUN: not msil-ld forged-ctors.o -o x.exe 2>&1 \
+# RUN:   | %{section-ld} -DNAME=.ctors '-DREASON=the portable target runs constructors only from .init_array'
+# RUN: not msil-ld forged-fini-prio.o -o x.exe 2>&1 \
+# RUN:   | %{section-ld} -DNAME=.fini_array.101 '-DREASON=the portable target runs no destructor sections'
+# RUN: not msil-ld forged-crt.o -o x.exe 2>&1 \
+# RUN:   | %{section-ld} '-DNAME=.CRT$XCU' '-DREASON=the portable target runs constructors only from .init_array'
+# SECTION-LD: {{^}}msil-ld: error: section '[[NAME]]' is not supported for msil64-unknown-dotnet: [[REASON]]{{$}}
+
+## '.tdata' keeps the thread-local storage error, at msil-ld.
+# RUN: llc -filetype=obj tdata.ll -o tdata.o
+# RUN: not msil-ld tdata.o -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=TLS --implicit-check-not="not supported for msil64-unknown-dotnet"
+# TLS: {{^}}msil-ld: error: thread-local storage is not supported yet{{.*$}}
+
+#--- a.ll
+target triple = "msil64-unknown-dotnet"
+
+@trace = global i32 0, align 4
+@slot = internal global ptr @s_default, section ".init_array", align 8
+@slot100 = internal global ptr @s100, section ".init_array.100", align 8
+@llvm.used = appending global [2 x ptr] [ptr @slot, ptr @slot100], section "llvm.metadata"
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 200, ptr @c1, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @c2, ptr null }]
+
+define internal void @step(i32 %k) {
+  %t = load i32, ptr @trace, align 4
+  %m = mul i32 %t, 10
+  %n = add i32 %m, %k
+  store i32 %n, ptr @trace, align 4
+  ret void
+}
+
+define internal void @s100() {
+  call void @step(i32 1)
+  ret void
+}
+
+define internal void @c1() {
+  call void @step(i32 2)
+  ret void
+}
+
+define internal void @s_default() {
+  call void @step(i32 3)
+  ret void
+}
+
+define internal void @c2() {
+  call void @step(i32 4)
+  ret void
+}
+
+define i32 @main() {
+  %t = load i32, ptr @trace, align 4
+  %r = and i32 %t, 255
+  ret i32 %r
+}
+
+#--- b.ll
+target triple = "msil64-unknown-dotnet"
+
+@trace = external global i32, align 4
+@slotb = internal global ptr @sb, section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slotb], section "llvm.metadata"
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @c3, ptr null }]
+
+define internal void @sb() {
+  %t = load i32, ptr @trace, align 4
+  %n = add i32 %t, 5
+  store i32 %n, ptr @trace, align 4
+  ret void
+}
+
+define internal void @c3() {
+  %t = load i32, ptr @trace, align 4
+  %n = add i32 %t, 6
+  store i32 %n, ptr @trace, align 4
+  ret void
+}
+
+#--- slot-args.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@slot = internal global ptr @init_slot, section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @init_slot(i32 %argc) {
+  store i32 %argc, ptr @log, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- slot-glibc.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@slot = internal global ptr @init_slot, section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @init_slot(i32 %argc, ptr %argv, ptr %envp) {
+  store i32 %argc, ptr @log, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- glibc-args.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init_glibc, ptr null }]
+
+define internal void @init_glibc(i32 %argc, ptr %argv, ptr %envp) {
+  store i32 %argc, ptr @log, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- one-arg.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init_one, ptr null }]
+
+define internal void @init_one(i32 %argc) {
+  store i32 %argc, ptr @log, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- nul.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@nul = internal global ptr null, section ".init_array", align 8
+@slot = internal global ptr @init, section ".init_array", align 8
+@llvm.used = appending global [2 x ptr] [ptr @nul, ptr @slot], section "llvm.metadata"
+
+define internal void @init() {
+  store i32 7, ptr @log, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- nul-array.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@slots = internal global [2 x ptr] [ptr @init, ptr null], section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slots], section "llvm.metadata"
+
+define internal void @init() {
+  store i32 7, ptr @log, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- nul-prio.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@nul = internal global ptr null, section ".init_array.300", align 8
+@llvm.used = appending global [1 x ptr] [ptr @nul], section "llvm.metadata"
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- tdata.ll
+target triple = "msil64-unknown-dotnet"
+
+@tv = global i32 5, section ".tdata", align 4
+
+define i32 @main() {
+  %v = load i32, ptr @tv, align 4
+  ret i32 %v
+}
+
+#--- fini.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".fini_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- dtors.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".dtors", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- preinit.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".preinit_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- ctors.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".ctors", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- fini-prio.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".fini_array.101", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- dtors-prio.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".dtors.7", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- preinit-prio.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".preinit_array.5", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- ctors-prio.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".ctors.65535", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- crt-xcu.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".CRT$XCU", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- crt-xia.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".CRT$XIA", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- weak-slot.ll
+target triple = "msil64-unknown-dotnet"
+
+declare extern_weak void @maybe_init()
+
+@slot = internal global ptr @maybe_init, section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xnul.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@nul = internal global ptr null, section ".xnit_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @nul], section "llvm.metadata"
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- xnul-array.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@slots = internal global [2 x ptr] [ptr @init, ptr null], section ".xnit_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slots], section "llvm.metadata"
+
+define internal void @init() {
+  store i32 7, ptr @log, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- xnul-prio.ll
+target triple = "msil64-unknown-dotnet"
+
+@log = global i32 0, align 4
+@nul = internal global ptr null, section ".xnit_array.300", align 8
+@llvm.used = appending global [1 x ptr] [ptr @nul], section "llvm.metadata"
+
+define i32 @main() {
+  %v = load i32, ptr @log, align 4
+  ret i32 %v
+}
+
+#--- xfini.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".xini_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xtors.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".xtors", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xfini-prio.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".xini_array.101", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xcrt.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".xRT$XCU", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xpreinit.ll
+target triple = "msil64-unknown-dotnet"
+
+@slot = internal global ptr @fn, section ".xreinit_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @fn() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}

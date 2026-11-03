@@ -21,6 +21,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -406,6 +407,17 @@ private:
 };
 
 extern SymbolTable *symtab;
+
+struct Ctx;
+
+// The class line of plan 5.14.2 that the portable triples give the undefined
+// symbol \p name (plan 5.18.6 PL3), which getNameClassLine returns there:
+// N2's portable line for an '__atomic_*' name; N6's for a C library name
+// (one that TargetLibraryInfo::getLibFunc knows, or one of
+// lld/MSIL/CLibraryNames.def), which names c.dll; std::nullopt for every
+// other name, which keeps getNameClassLine's N1 and N3 lines or none.
+std::optional<std::string> getPortableNameClassLine(llvm::StringRef name,
+                                                    const Ctx &ctx);
 } // namespace lld::msil
 
 #endif

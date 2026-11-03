@@ -45,6 +45,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/Magic.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/TrailerDefs.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/COFF.h"
@@ -277,6 +278,8 @@ bool isSetjmpFamilyName(StringRef name) {
 }
 
 bool mayBindNatively(StringRef name, const Ctx &ctx) {
+  if (!cli::bindsNatively(ctx.arg.target))
+    return false; // P-1a: the portable triples (plan 5.18.6 PL2)
   // libatomic.so.1 is the lock path of a native Linux build (user decisions
   // R4/R5 (5)); the Windows triples have no such library.
   if (isAtomicLibraryName(name))
@@ -326,6 +329,9 @@ static bool isHelperArchiveLinked(const Ctx &ctx) {
 }
 
 std::string getNameClassLine(StringRef name, const Ctx &ctx) {
+  if (!cli::bindsNatively(ctx.arg.target)) // P-1a: N2, N6 (plan 5.18.6 PL3)
+    if (std::optional<std::string> line = getPortableNameClassLine(name, ctx))
+      return *line;
   if (isAtomicLibraryName(name))
     return ctx.arg.target.isOSWindows()
                ? "\n>>> an atomic operation (libatomic's interface)"
@@ -394,6 +400,8 @@ std::string getDataImportUnavailableText(StringRef name, StringRef module) {
 bool findDataImportFunctions(const Triple &tt, const NativeIndex &index,
                              SmallVectorImpl<DataImportFunction> &out) {
   out.clear();
+  if (!cli::bindsNatively(tt))
+    return false; // P-1a: the portable triples (plan 5.18.6 PL2)
   // Windows triples: kernel32.dll's loader (verified on .NET Framework 4.8
   // and .NET 8, native-imports-files/data-win.il). Every Windows process
   // maps kernel32.dll, so it needs no library on the command line.
@@ -490,6 +498,8 @@ bool isNativeLongDoubleFunction(StringRef name) {
 }
 
 bool hasWideNativeLongDouble(const Triple &tt) {
+  if (!cli::bindsNatively(tt))
+    return false; // P-1a: plan 5.18.6 PL9
   if (!tt.isOSWindows())
     return true;
   return tt.getArch() == Triple::x86_64 && !tt.isWindowsMSVCEnvironment();
@@ -591,6 +601,8 @@ void NativeIndex::clear() {
 //===----------------------------------------------------------------------===//
 
 std::string getOtherFormatMessage(const Twine &path, const Triple &tt) {
+  if (!cli::bindsNatively(tt))
+    return getNativeLibraryRefusal(path.str(), tt); // P-1a: T-P4
   return (path + ": " + (tt.isOSWindows() ? "ELF" : "PE/COFF") +
           " file cannot be imported for target " + tt.str())
       .str();
@@ -602,6 +614,8 @@ std::string getOtherFormatMessage(const Twine &path, const Triple &tt) {
 // import members. An empty triple (no --target and no bitcode input) accepts
 // both formats.
 static bool isOtherFormat(bool isCOFF, const Triple &tt) {
+  if (!cli::bindsNatively(tt))
+    return true; // P-1a: every format (plan 5.18.6 PL2)
   return !tt.str().empty() && isCOFF != tt.isOSWindows();
 }
 
@@ -671,6 +685,8 @@ static StringRef getCOFFMachineName(uint16_t machine) {
 // triple (no --target and no bitcode input) accepts any machine.
 static bool isCompatibleELF(uint16_t machine, bool is64, bool isLE,
                             const Triple &tt) {
+  if (!cli::bindsNatively(tt))
+    return false; // P-1a: plan 5.18.6 PL2
   if (tt.str().empty())
     return true;
   if (!is64 || !isLE)
@@ -683,6 +699,8 @@ static bool isCompatibleELF(uint16_t machine, bool is64, bool isLE,
 }
 
 static bool isCompatibleCOFF(uint16_t machine, const Triple &tt) {
+  if (!cli::bindsNatively(tt))
+    return false; // P-1a: plan 5.18.6 PL2
   if (tt.str().empty() || machine == COFF::IMAGE_FILE_MACHINE_UNKNOWN)
     return true;
   if (tt.getArch() == Triple::x86_64)

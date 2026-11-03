@@ -54,6 +54,7 @@
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/CLI/ImageLayout.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <tuple>
 
 #define DEBUG_TYPE "lld"
@@ -137,6 +138,19 @@ void MarkLive::enqueueSection(const InputSegment *seg) {
     enqueue(member);
 }
 
+// True if \p rules keep every explicit section outside a COMDAT group
+// (lld-link's /OPT:REF): COFF rules only.
+static bool keepsExplicitSections(cli::SectionRules rules) {
+  switch (rules) {
+  case cli::SectionRules::COFF:
+    return true;
+  case cli::SectionRules::ELF:
+  case cli::SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
 void MarkLive::run() {
   // Add GC root symbols: the entry symbol, which '<msil>Main' calls, and the
   // -u symbols.
@@ -150,10 +164,14 @@ void MarkLive::run() {
     if (sym->isNoStrip())
       enqueue(sym);
 
+  // The section rules of the triple (plan 5.9.9 rule 1, 5.18.5 LR1), as the
+  // writer chooses them.
+  cli::SectionRules rules = cli::getSectionRules(ctx.arg.target);
+
   // The sections that a referenced __start_<X> or __stop_<X> names, on the
-  // triples that define such symbols (plan 5.9.9).
+  // triples that define such symbols (plan 5.9.9, 5.18.5 LR9).
   DenseSet<StringRef> startStopSections;
-  if (!ctx.arg.target.isOSWindows()) {
+  if (cli::definesStartStop(rules)) {
     for (Symbol *sym : symtab->symbols()) {
       if (!sym->isUndefined() && !(sym->isLazy() && sym->isWeak()))
         continue;
@@ -163,12 +181,6 @@ void MarkLive::run() {
         startStopSections.insert(name);
     }
   }
-
-  // The section rules of the triple (plan 5.9.9 rule 1), as the writer
-  // chooses them.
-  cli::SectionRules rules = ctx.arg.target.isOSWindows()
-                                ? cli::SectionRules::COFF
-                                : cli::SectionRules::ELF;
 
   for (ObjFile *f : ctx.objectFiles) {
     for (InputSegment *seg : f->segments())
@@ -192,7 +204,7 @@ void MarkLive::run() {
     for (InputSegment *seg : f->segments())
       if (seg->isRetained() || isTableSection(seg->sectionName, rules) ||
           startStopSections.contains(seg->sectionName) ||
-          (rules == cli::SectionRules::COFF && seg->comdat < 0 &&
+          (keepsExplicitSections(rules) && seg->comdat < 0 &&
            isExplicitSection(seg->sectionName)))
         enqueue(seg);
   }

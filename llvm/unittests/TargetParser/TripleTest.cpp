@@ -3732,6 +3732,186 @@ TEST(TripleTest, MSILIsCompatibleWith) {
                 .merge(Triple("x86_64-w64-windows-gnu")));
 }
 
+// The portable triples msil64-unknown-dotnet and msil32-unknown-dotnet
+// (ImplementationPlan.md 5.18.1 PT1-PT6, milestone P-1a): MSIL is the
+// architecture (msil64, msil32; prefix "msil") and dotnet the OS. The object
+// format defaults to MSIL, so the triple is not ELF; "-msil" may be spelled
+// and normalizes away; getNativeFormatTriple() is the triple itself (there is
+// no native triple underneath); the data layouts are the target's own; the two
+// widths are each other's 32/64-bit variants and are compatible with neither
+// each other nor any host MSIL triple.
+TEST(TripleTest, MSILPortableTriples) {
+  struct {
+    const char *Str;
+    Triple::ArchType Arch;
+    unsigned PointerBits;
+    const char *DataLayout;
+  } Cases[] = {
+      {"msil64-unknown-dotnet", Triple::msil64, 64,
+       "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"},
+      {"msil32-unknown-dotnet", Triple::msil32, 32,
+       "e-m:e-p:32:32-i64:64-i128:128-n8:16:32:64-S128"},
+  };
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Str);
+    Triple T(C.Str);
+    EXPECT_EQ(C.Arch, T.getArch());
+    EXPECT_EQ(Triple::NoSubArch, T.getSubArch());
+    EXPECT_EQ(Triple::UnknownVendor, T.getVendor());
+    EXPECT_EQ(Triple::DotNet, T.getOS());
+    EXPECT_EQ(Triple::UnknownEnvironment, T.getEnvironment());
+    EXPECT_TRUE(T.isMSIL());
+    EXPECT_TRUE(T.isOSDotNet());
+
+    // The default object format is MSIL.
+    EXPECT_EQ(Triple::MSIL, T.getObjectFormat());
+    EXPECT_EQ(Triple::MSIL, T.getDefaultObjectFormat());
+    EXPECT_TRUE(T.isOSBinFormatMSIL());
+    EXPECT_FALSE(T.isOSBinFormatELF());
+    EXPECT_FALSE(T.isOSBinFormatCOFF());
+    EXPECT_FALSE(T.isOSBinFormatMachO());
+    EXPECT_FALSE(T.isOSBinFormatWasm());
+
+    // No host OS.
+    EXPECT_FALSE(T.isOSLinux());
+    EXPECT_FALSE(T.isOSWindows());
+    EXPECT_FALSE(T.isOSDarwin());
+    EXPECT_FALSE(T.isOSGlibc());
+    EXPECT_FALSE(T.isMusl());
+
+    // Width and byte order.
+    EXPECT_EQ(C.PointerBits == 64, T.isArch64Bit());
+    EXPECT_EQ(C.PointerBits == 32, T.isArch32Bit());
+    EXPECT_FALSE(T.isArch16Bit());
+    EXPECT_EQ(C.PointerBits, T.getArchPointerBitWidth());
+    EXPECT_TRUE(T.isLittleEndian());
+    EXPECT_EQ(Triple::msil32, T.get32BitArchVariant().getArch());
+    EXPECT_EQ(Triple::msil64, T.get64BitArchVariant().getArch());
+    EXPECT_EQ(Triple::DotNet, T.get32BitArchVariant().getOS());
+    EXPECT_EQ(Triple::DotNet, T.get64BitArchVariant().getOS());
+
+    // The spelling is canonical: str() and normalize() round-trip.
+    EXPECT_EQ(C.Str, T.str());
+    EXPECT_EQ(C.Str, Triple::normalize(C.Str));
+    EXPECT_EQ(C.Str, Triple(Triple::normalize(C.Str)).str());
+
+    // The explicit "-msil" spelling names the same target and normalizes to
+    // the canonical one.
+    std::string WithFormat = std::string(C.Str) + "-msil";
+    Triple F(WithFormat);
+    EXPECT_EQ(C.Arch, F.getArch());
+    EXPECT_EQ(Triple::DotNet, F.getOS());
+    EXPECT_EQ(Triple::UnknownEnvironment, F.getEnvironment());
+    EXPECT_EQ(Triple::MSIL, F.getObjectFormat());
+    EXPECT_EQ(C.Str, Triple::normalize(WithFormat));
+
+    // A fourth component that names no environment ("unknown") is dropped
+    // the same way: the target takes no environment, and no triple text,
+    // sysroot or library path may keep it (section 12, P-1a, PT5).
+    std::string WithUnknownEnv = std::string(C.Str) + "-unknown";
+    EXPECT_EQ(C.Str, Triple::normalize(WithUnknownEnv));
+    EXPECT_EQ(C.Str, Triple(Triple::normalize(WithUnknownEnv)).str());
+
+    // There is no native triple underneath.
+    EXPECT_TRUE(T.getNativeFormatTriple() == T);
+    EXPECT_EQ(C.Str, T.getNativeFormatTriple().str());
+    EXPECT_EQ(Triple::MSIL, T.getNativeFormatTriple().getObjectFormat());
+
+    // The target's own data layout.
+    EXPECT_EQ(C.DataLayout, T.computeDataLayout());
+    EXPECT_EQ(C.DataLayout, F.computeDataLayout());
+
+    // CIL has its own exception model.
+    EXPECT_EQ(ExceptionHandling::None, T.getDefaultExceptionHandling());
+  }
+
+  // The short spelling.
+  EXPECT_EQ("msil64-unknown-dotnet", Triple::normalize("msil64-dotnet"));
+  EXPECT_EQ("msil32-unknown-dotnet", Triple::normalize("msil32-dotnet"));
+
+  // An "unknown" environment is dropped under any vendor; reducing the vendor
+  // to unknown is the driver's and the target's job, not normalize's. A real
+  // environment or another object format stays, for the target registry to
+  // refuse.
+  EXPECT_EQ("msil64-unknown-dotnet",
+            Triple::normalize("msil64-unknown-dotnet-unknown"));
+  EXPECT_EQ("msil32-unknown-dotnet",
+            Triple::normalize("msil32-unknown-dotnet-unknown"));
+  EXPECT_EQ("msil64-pc-dotnet", Triple::normalize("msil64-pc-dotnet-unknown"));
+  EXPECT_EQ("msil64-pc-dotnet", Triple::normalize("msil64-pc-dotnet-msil"));
+  EXPECT_EQ("msil64-unknown-dotnet-gnu",
+            Triple::normalize("msil64-unknown-dotnet-gnu"));
+  EXPECT_EQ("msil64-unknown-dotnet-elf",
+            Triple::normalize("msil64-unknown-dotnet-elf"));
+
+  // Names.
+  EXPECT_EQ("msil64", Triple::getArchTypeName(Triple::msil64));
+  EXPECT_EQ("msil32", Triple::getArchTypeName(Triple::msil32));
+  EXPECT_EQ("msil", Triple::getArchTypePrefix(Triple::msil64));
+  EXPECT_EQ("msil", Triple::getArchTypePrefix(Triple::msil32));
+  EXPECT_EQ("dotnet", Triple::getOSTypeName(Triple::DotNet));
+  EXPECT_EQ(Triple::msil64, Triple::getArchTypeForLLVMName("msil64"));
+  EXPECT_EQ(Triple::msil32, Triple::getArchTypeForLLVMName("msil32"));
+  // "msil" alone is still the target name, not an architecture.
+  EXPECT_EQ(Triple::UnknownArch, Triple::getArchTypeForLLVMName("msil"));
+
+  // The predicates are independent: a host MSIL triple is neither, and a
+  // non-msil architecture with OS dotnet (which the target registry and
+  // clang refuse) is dotnet but not MSIL, while an msil architecture under
+  // another OS is MSIL but not dotnet.
+  for (const char *S :
+       {"x86_64-unknown-linux-gnu-msil", "x86_64-pc-windows-msvc-msil",
+        "aarch64-unknown-linux-gnu-msil", "x86_64-unknown-linux-gnu"}) {
+    SCOPED_TRACE(S);
+    EXPECT_FALSE(Triple(S).isMSIL());
+    EXPECT_FALSE(Triple(S).isOSDotNet());
+  }
+  Triple X("x86_64-unknown-dotnet");
+  EXPECT_EQ(Triple::x86_64, X.getArch());
+  EXPECT_TRUE(X.isOSDotNet());
+  EXPECT_FALSE(X.isMSIL());
+  Triple L("msil64-unknown-linux");
+  EXPECT_EQ(Triple::msil64, L.getArch());
+  EXPECT_TRUE(L.isMSIL());
+  EXPECT_FALSE(L.isOSDotNet());
+  EXPECT_TRUE(L.isOSLinux());
+
+  // Compatibility: each width only with itself (either spelling); never with
+  // the other width or a host triple, MSIL or native.
+  struct {
+    const char *A;
+    const char *B;
+    bool Result;
+  } Compat[] = {
+      {"msil64-unknown-dotnet", "msil64-unknown-dotnet", true},
+      {"msil64-unknown-dotnet", "msil64-unknown-dotnet-msil", true},
+      {"msil32-unknown-dotnet", "msil32-unknown-dotnet", true},
+      {"msil64-unknown-dotnet", "msil32-unknown-dotnet", false},
+      {"msil64-unknown-dotnet-msil", "msil32-unknown-dotnet-msil", false},
+      {"msil64-unknown-dotnet", "x86_64-unknown-linux-gnu-msil", false},
+      {"msil64-unknown-dotnet", "aarch64-unknown-linux-gnu-msil", false},
+      {"msil64-unknown-dotnet", "x86_64-pc-windows-msvc-msil", false},
+      {"msil64-unknown-dotnet", "x86_64-w64-windows-gnu-msil", false},
+      {"msil64-unknown-dotnet", "x86_64-unknown-linux-gnu", false},
+      {"msil64-unknown-dotnet", "x86_64-unknown-dotnet", false},
+      {"msil32-unknown-dotnet", "i686-pc-windows-msvc-msil", false},
+      {"msil32-unknown-dotnet", "i686-unknown-linux-gnu", false},
+  };
+  auto DoTest = [](const char *A, const char *B,
+                   bool Result) -> testing::AssertionResult {
+    if (Triple(A).isCompatibleWith(Triple(B)) != Result) {
+      return testing::AssertionFailure()
+             << llvm::formatv("Triple {0} and {1} were expected to be {2}", A,
+                              B, Result ? "compatible" : "incompatible");
+    }
+    return testing::AssertionSuccess();
+  };
+  for (const auto &C : Compat) {
+    EXPECT_TRUE(DoTest(C.A, C.B, C.Result));
+    EXPECT_TRUE(DoTest(C.B, C.A, C.Result));
+  }
+}
+
 TEST(TripleTest, SupportsDebugEntryValues) {
   EXPECT_TRUE(Triple("i686-unknown-linux-gnu").supportsDebugEntryValues());
   EXPECT_TRUE(Triple("x86_64-apple-macosx").supportsDebugEntryValues());

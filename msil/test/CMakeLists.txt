@@ -106,6 +106,10 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
   list(APPEND _msil_lit_paths
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/CodeGen/MSIL
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Preprocessor/init-msil.c
+    # The portable triples' predefines and driver (P-1a, plan 5.18.10 PX5); msil/test/Portable
+    # stays out of check-msil (the portable legs of lit-legs.ps1 and lit-legs.sh run it).
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Preprocessor/init-msil-portable.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-dotnet.c
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-toolchain.c
     # The MSIL toolchain's link, LTO and header-search tests (M14).
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-link.c

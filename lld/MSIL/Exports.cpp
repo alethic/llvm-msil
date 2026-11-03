@@ -13,7 +13,10 @@
 // on Windows triples the dllexport definitions when any input has one, as
 // link.exe does, and otherwise every default-visibility definition, as GNU
 // ld's automatic export for PE DLLs does, except the copies in COMDAT groups
-// (section 12 row 'Q22 as implemented' of 2026-10-26).
+// (section 12 row 'Q22 as implemented' of 2026-10-26). On the portable
+// triples there is no dllexport mode (plan 5.18.6 PL7). On every triple the
+// names that --export, --export-if-defined and --export-list force are
+// exported too, hidden or not, and whatever --exclude-libs says.
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,12 +26,15 @@
 #include "InputFiles.h"
 #include "Symbols.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/CLI.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MSILLink.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/SymbolTable.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Triple.h"
@@ -71,7 +77,51 @@ bool mayBeExported(const Symbol &sym) {
          !ctx.excludedSymbols.contains(&sym);
 }
 
+// A name that --export, --export-if-defined or --export-list forces (plan
+// 5.18.6 PL7) is exported if it is a GLOBAL or WEAK definition of an input,
+// whatever its visibility and --exclude-libs say; linker-defined symbols and
+// the reserved names never are.
+static bool mayBeForcedExport(const Symbol &sym) {
+  if ((!sym.isDefined() && !sym.isCommon()) || isa<SyntheticData>(&sym))
+    return false;
+  if (!sym.isGlobal() && !sym.isWeak())
+    return false;
+  return !isReservedName(sym.getName());
+}
+
+bool usesCOFFExportRules(const Triple &tt) {
+  switch (cli::getSectionRules(tt)) {
+  case cli::SectionRules::COFF:
+    return true;
+  case cli::SectionRules::ELF:
+  case cli::SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
+// The assembly name: --assembly-name or -soname, else the stem of -o (only
+// the last extension is dropped; plan 5.9.12), as the writer names the
+// Assembly row.
+static std::string getAssemblyName() {
+  if (!ctx.arg.assemblyName.empty())
+    return ctx.arg.assemblyName.str();
+  StringRef stem = sys::path::stem(ctx.arg.outputFile);
+  if (stem.empty())
+    stem = sys::path::filename(ctx.arg.outputFile);
+  return stem.str();
+}
+
+bool isCLibraryOutput() {
+  return !cli::bindsNatively(ctx.arg.target) && ctx.arg.shared &&
+         StringRef(getAssemblyName()).equals_insensitive("c");
+}
+
 std::string getCRuntimeIdentity() {
+  // The C library of the portable triples records its own identity, whether
+  // or not it links -lc (plan 5.18.6 PL8).
+  if (isCLibraryOutput())
+    return "c";
   for (StringRef name : ctx.arg.libraries)
     if (name == "c" || name == "msvcrt" || name == "ucrt" ||
         name == "ucrtbase" || name == "crtdll" || name.starts_with("msvcr"))
@@ -128,6 +178,9 @@ struct Candidate {
   uint32_t index;
   Symbol *sym;
   bool dllExport;
+  // Named by --export, --export-if-defined or --export-list (plan 5.18.6
+  // PL7): exported whatever the dllexport and COMDAT rules say.
+  bool forced;
 };
 
 // The COMDAT groups of an object, by member: the FUNCTION symbols (SYMTAB
@@ -178,9 +231,16 @@ struct ComdatMembers {
 // definition shadowing a library's fire for every program that includes the
 // header. LTO objects carry the merged module's groups, so the rule applies
 // to the bitcode definitions that LTO kept visible (plan 5.9.13).
+//
+// A forced name (plan 5.18.6 PL7) is a candidate if mayBeForcedExport()
+// accepts its definition, and stays one under the Windows rules.
 static SmallVector<Candidate, 0> selectExports() {
   SmallVector<Candidate, 0> candidates;
-  bool windows = ctx.arg.target.isOSWindows();
+  bool windows = usesCOFFExportRules(ctx.arg.target);
+  DenseSet<StringRef> forcedNames;
+  forcedNames.insert(ctx.arg.exports.begin(), ctx.arg.exports.end());
+  forcedNames.insert(ctx.arg.exportIfDefined.begin(),
+                     ctx.arg.exportIfDefined.end());
   for (ObjFile *file : ctx.objectFiles) {
     const MSILLink::Record &record = file->getRecord();
     std::optional<ComdatMembers> comdats;
@@ -191,20 +251,26 @@ static SmallVector<Candidate, 0> selectExports() {
           (s.Flags & MSILLink::BindingMask) == MSILLink::BindingLocal)
         continue;
       Symbol *sym = file->getSymbol(i);
-      if (!sym || sym->getFile() != file || !mayBeExported(*sym))
+      if (!sym || sym->getFile() != file)
+        continue;
+      bool forced = forcedNames.contains(sym->getName());
+      if (forced ? !mayBeForcedExport(*sym) : !mayBeExported(*sym))
         continue;
       bool dllExport = s.Flags & MSILLink::DLLExport;
-      if (!dllExport && comdats && comdats->contains(record, i))
+      if (!dllExport && !forced && comdats && comdats->contains(record, i))
         continue;
-      candidates.push_back({file, static_cast<uint32_t>(i), sym, dllExport});
+      candidates.push_back(
+          {file, static_cast<uint32_t>(i), sym, dllExport, forced});
     }
   }
 
   // Windows triples: the dllexport definitions when there are any, unless
   // --export-all-symbols.
-  if (ctx.arg.target.isOSWindows() && !ctx.arg.exportAllSymbols &&
+  if (windows && !ctx.arg.exportAllSymbols &&
       any_of(candidates, [](const Candidate &c) { return c.dllExport; }))
-    llvm::erase_if(candidates, [](const Candidate &c) { return !c.dllExport; });
+    llvm::erase_if(candidates, [](const Candidate &c) {
+      return !c.dllExport && !c.forced;
+    });
   return candidates;
 }
 
@@ -213,18 +279,6 @@ void markExportsLive() {
   for (const Candidate &c : selectExports())
     if (!c.sym->isTLS())
       c.sym->noStrip = true;
-}
-
-// The assembly name: --assembly-name or -soname, else the stem of -o (only
-// the last extension is dropped; plan 5.9.12), as the writer names the
-// Assembly row.
-static std::string getAssemblyName() {
-  if (!ctx.arg.assemblyName.empty())
-    return ctx.arg.assemblyName.str();
-  StringRef stem = sys::path::stem(ctx.arg.outputFile);
-  if (stem.empty())
-    stem = sys::path::filename(ctx.arg.outputFile);
-  return stem.str();
 }
 
 // The triple of the symbol table: the codegen triple without its environment

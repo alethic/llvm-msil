@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
 # ===----------------------------------------------------------------------===#
-"""Prove that every entry of msil-ld's built-in [mscorlib] table resolves.
+"""Prove that every entry of msil-ld's built-in [mscorlib] table resolves and is public.
 
     check-mscorlib-safe.py --msil-ld PATH --out DIR [--table FILE]
         [--ilasm PATH] [--runtimes netfx,net8,net10,wsl-net10] [--dotnet PATH]
@@ -23,9 +23,13 @@ mscorlib defines it, and .NET 8 and .NET 10, whose mscorlib facade forwards
 the type to the assembly that defines it, where the member must then exist
 (a forwarded type is not a member that exists: Math::FusedMultiplyAdd
 resolves on modern .NET only; llvm/docs/MSIL/recon/p2/bcl-binding.md 2.4,
-whose tool/mscorlib_safe.py followed the forwarders statically). This script
-proves it by running code. An entry joins BCLMembers.def's table only with a
-passing run (plan 5.11.7).
+whose tool/mscorlib_safe.py followed the forwarders statically). The entry
+must also be public (plan 5.11.7 as amended in section 12 for P-1a): a member
+that exists but is internal, such as the .NET Framework 4.8.1's
+Environment::get_TickCount64(), resolves through ldtoken and then fails with
+MethodAccessException when a program calls it. This script proves both by
+running code. An entry joins BCLMembers.def's table only with a passing run
+(plan 5.11.7).
 
 The table is the output of 'msil-ld --print-bcl-table' (plan 5.11.1), or
 --table FILE in the same form: one entry per line, 'type ', 'method ' or
@@ -46,7 +50,18 @@ System.Exception('check-mscorlib-safe: entry <i> failed: <entry>') and
 rethrows it, and that returns 42 when every call returned. The JIT resolves
 an ldtoken operand when it compiles the method, so a type the runtime cannot
 load is a TypeLoadException and a member it does not define a
-MissingMethodException (or MissingFieldException) at that call. --ilasm
+MissingMethodException (or MissingFieldException) at that call. The same
+method then proves by reflection, on every runtime, that the entry is public
+(the accessibility probe): a type's Type::GetTypeFromHandle(...).IsVisible
+(public, and so is every type it is nested in); a method's
+MethodBase::GetMethodFromHandle(...), whose DeclaringType must be IsVisible
+and which must be IsPublic; a field's FieldInfo::GetFieldFromHandle(...)
+likewise. An entry that fails it throws System.MemberAccessException
+('check-mscorlib-safe: not public: <entry>'). One entry is accepted as
+protected (IsFamily or IsFamilyOrAssembly): 'method instance void
+[mscorlib]System.Attribute::.ctor()', msil-ld's own request (the base
+constructor call of the attribute classes it emits, section 12 row of
+2026-10-26), which a derived class may call. --ilasm
 assembles the probe ('-exe', and '-pe64 -x64' or '-pe64 -arm64' on 64-bit
 hosts) into DIR/<runtime>/probe-<n>.exe, an EXE image, which runs on the
 .NET Framework and under 'dotnet exec' alike, and msil/utils/msil-run.py runs
@@ -72,12 +87,20 @@ fails the runtime with msil-run.py's transcript.
 --self-test checks the probe itself, without msil-ld: a malformed table is
 rejected, and a table of Phase 1's six entities (System.ValueType and the
 five members of plan D10) with 'method float32
-[mscorlib]System.MathF::Sqrt(float32)' as its second entry runs on every
-runtime of --runtimes: the six must resolve everywhere, and MathF::Sqrt must
-fail on the .NET Framework, whose mscorlib has no MathF, with a
-TypeLoadException that names it (on .NET 8 and .NET 10 the mscorlib facade
-forwards MathF, so it resolves there; that is reported, not required).
-Without netfx in --runtimes the MathF half is noted as not checked.
+[mscorlib]System.MathF::Sqrt(float32)' as its second entry, followed by the
+three entries of the accessibility probe, runs on every runtime of
+--runtimes: the six must resolve everywhere, and MathF::Sqrt must fail on the
+.NET Framework, whose mscorlib has no MathF, with a TypeLoadException that
+names it (on .NET 8 and .NET 10 the mscorlib facade forwards MathF, so it
+resolves there; that is reported, not required). 'method int64
+[mscorlib]System.Environment::get_TickCount64()' must fail on the .NET
+Framework (MemberAccessException 'not public' on 4.8.1, where it is
+internal; MissingMethodException on 4.8, which lacks it) and resolve on
+.NET <N>; 'method instance object [mscorlib]System.Object::MemberwiseClone()'
+(protected) must fail everywhere with MemberAccessException 'not public'; and
+'method instance void [mscorlib]System.Attribute::.ctor()' (protected, the
+accepted entry) must resolve everywhere. Without netfx in --runtimes the
+MathF and TickCount64 halves are noted as not checked.
 
 Exit status: 0 when every entry resolves on every runtime (or the self-test
 passes); 1 when one does not; 2 on a usage or configuration error.
@@ -120,6 +143,17 @@ PHASE1_SIX = (
     "method void [mscorlib]System.Threading.Interlocked::MemoryBarrier()",
 )
 MATHF_SQRT = "method float32 [mscorlib]System.MathF::Sqrt(float32)"
+# The accessibility probe's self-test entries (plan 5.11.7 as amended): an
+# internal member of the .NET Framework 4.8.1 (public on .NET <N>), a
+# protected member, and the one protected member the probe accepts.
+TICKCOUNT64 = "method int64 [mscorlib]System.Environment::get_TickCount64()"
+MEMBERWISE_CLONE = "method instance object [mscorlib]System.Object::MemberwiseClone()"
+ATTRIBUTE_CTOR = "method instance void [mscorlib]System.Attribute::.ctor()"
+# The entries accepted as protected (IsFamily or IsFamilyOrAssembly) instead
+# of public: msil-ld's own request, the base constructor call of the
+# attribute classes it emits (BCLMembers.def's row of 2026-10-26).
+PROTECTED_ALLOWED = frozenset((ATTRIBUTE_CTOR,))
+NOT_PUBLIC = "check-mscorlib-safe: not public: "
 
 
 class UsageError(Exception):
@@ -245,19 +279,7 @@ def probe_text(numbered):
         "",
     ]
     for index, (kind, ref) in numbered:
-        target = scoped(ref)
-        operand = target if kind == "type" else "%s %s" % (kind, target)
-        out += [
-            "// entry %d: %s %s" % (index, kind, ref),
-            ".method public static void 'entry%d'() cil managed noinlining" % index,
-            "{",
-            "  .maxstack 1",
-            "  ldtoken %s" % operand,
-            "  pop",
-            "  ret",
-            "}",
-            "",
-        ]
+        out += entry_method(index, kind, ref)
     out += [
         ".method public static int32 'Main'() cil managed",
         "{",
@@ -288,6 +310,89 @@ def probe_text(numbered):
         ]
     out += ["  ldc.i4.s 42", "  ret", "}", ""]
     return "\n".join(out)
+
+
+# The reflection of the accessibility probe, through [mscorlib] as the entries
+# are (the .NET <N> facade forwards these types too).
+REFLECT = {
+    "type": (
+        "class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle("
+        "valuetype [mscorlib]System.RuntimeTypeHandle)"
+    ),
+    "method": (
+        "class [mscorlib]System.Reflection.MethodBase "
+        "[mscorlib]System.Reflection.MethodBase::GetMethodFromHandle("
+        "valuetype [mscorlib]System.RuntimeMethodHandle)"
+    ),
+    "field": (
+        "class [mscorlib]System.Reflection.FieldInfo "
+        "[mscorlib]System.Reflection.FieldInfo::GetFieldFromHandle("
+        "valuetype [mscorlib]System.RuntimeFieldHandle)"
+    ),
+}
+MEMBER_CLASS = {
+    "method": "[mscorlib]System.Reflection.MethodBase",
+    "field": "[mscorlib]System.Reflection.FieldInfo",
+}
+IS_VISIBLE = "callvirt instance bool [mscorlib]System.Type::get_IsVisible()"
+DECLARING_TYPE = (
+    "callvirt instance class [mscorlib]System.Type "
+    "[mscorlib]System.Reflection.MemberInfo::get_DeclaringType()"
+)
+
+
+def entry_method(index, kind, ref):
+    """The IL lines of the method that probes entry index: the ldtoken that
+    resolves it, then the accessibility probe (see the module docstring)."""
+    target = scoped(ref)
+    operand = target if kind == "type" else "%s %s" % (kind, target)
+    entry = "%s %s" % (kind, ref)
+    lines = [
+        "// entry %d: %s" % (index, entry),
+        ".method public static void 'entry%d'() cil managed noinlining" % index,
+        "{",
+        "  .maxstack 2",
+    ]
+    if kind == "type":
+        lines += [
+            "  ldtoken %s" % operand,
+            "  call %s" % REFLECT[kind],
+            "  " + IS_VISIBLE,
+            "  brtrue PUBLIC",
+        ]
+    else:
+        member = MEMBER_CLASS[kind]
+        lines += [
+            "  .locals init (class %s V_0)" % member,
+            "  ldtoken %s" % operand,
+            "  call %s" % REFLECT[kind],
+            "  stloc.0",
+            "  ldloc.0",
+            "  " + DECLARING_TYPE,
+            "  " + IS_VISIBLE,
+            "  brfalse NOTPUBLIC",
+            "  ldloc.0",
+            "  callvirt instance bool %s::get_IsPublic()" % member,
+            "  brtrue PUBLIC",
+        ]
+        if entry in PROTECTED_ALLOWED:
+            for prop in ("get_IsFamily", "get_IsFamilyOrAssembly"):
+                lines += [
+                    "  ldloc.0",
+                    "  callvirt instance bool %s::%s()" % (member, prop),
+                    "  brtrue PUBLIC",
+                ]
+        lines.append("NOTPUBLIC:")
+    lines += [
+        "  ldstr %s" % il_string(NOT_PUBLIC + entry),
+        "  newobj instance void [mscorlib]System.MemberAccessException::.ctor(string)",
+        "  throw",
+        "PUBLIC:",
+        "  ret",
+        "}",
+        "",
+    ]
+    return lines
 
 
 def ilasm_flags():
@@ -610,9 +715,16 @@ def self_test(args, runtimes):
         except UsageError:
             pass
     entries = parse_table(
-        "\n".join(PHASE1_SIX[:1] + (MATHF_SQRT,) + PHASE1_SIX[1:]), "<self-test>"
+        "\n".join(
+            PHASE1_SIX[:1]
+            + (MATHF_SQRT,)
+            + PHASE1_SIX[1:]
+            + (TICKCOUNT64, MEMBERWISE_CLONE, ATTRIBUTE_CTOR)
+        ),
+        "<self-test>",
     )
     mathf = 2
+    tick, clone, attr = len(entries) - 2, len(entries) - 1, len(entries)
     args.out = os.path.join(args.out, "self-test")
     os.makedirs(args.out, exist_ok=True)
     check(args, entries, runtimes, "self-test: failure: ", sys.stdout)
@@ -620,11 +732,50 @@ def self_test(args, runtimes):
         if r.broken:
             problems.append("%s: %s" % (r.name, r.broken))
             continue
-        six = [i for i in r.failed if i != mathf]
+        six = [i for i in r.failed if i not in (mathf, tick, clone, attr)]
         if six:
             problems.append(
                 "%s: Phase 1 entities failed: %s"
                 % (r.name, ", ".join("entry %d" % i for i in six))
+            )
+        # The accessibility probe (plan 5.11.7 as amended).
+        if attr in r.failed:
+            problems.append(
+                "%s: System.Attribute::.ctor() (protected, accepted) failed with "
+                "%s: %s" % ((r.name,) + r.failed[attr])
+            )
+        exc = r.failed.get(clone)
+        if not exc:
+            problems.append(
+                "%s: Object::MemberwiseClone() (protected) passed, it must fail as "
+                "not public" % r.name
+            )
+        elif exc[0] != "System.MemberAccessException" or NOT_PUBLIC not in exc[1]:
+            problems.append(
+                "%s: Object::MemberwiseClone() failed with %s: %s, not the "
+                "accessibility probe's MemberAccessException" % ((r.name,) + exc)
+            )
+        exc = r.failed.get(tick)
+        if r.name == "netfx":
+            if not exc:
+                problems.append(
+                    "netfx: Environment::get_TickCount64() passed, it must fail (not "
+                    "public on 4.8.1, missing on 4.8)"
+                )
+            elif exc[0] not in (
+                "System.MemberAccessException",
+                "System.MissingMethodException",
+            ):
+                problems.append(
+                    "netfx: Environment::get_TickCount64() failed with %s: %s, not "
+                    "MemberAccessException or MissingMethodException" % exc
+                )
+            else:
+                say("self-test: netfx: get_TickCount64 fails: %s: %s" % exc)
+        elif exc:
+            problems.append(
+                "%s: Environment::get_TickCount64() (public on .NET <N>) failed with "
+                "%s: %s" % ((r.name,) + exc)
             )
         if r.name == "netfx":
             exc = r.failed.get(mathf)
@@ -642,18 +793,20 @@ def self_test(args, runtimes):
             )
     if not any(r.name == "netfx" for r in runtimes):
         say(
-            "self-test: note: MathF::Sqrt's failure is checked on netfx, which "
-            "--runtimes does not name"
+            "self-test: note: the failures of MathF::Sqrt and get_TickCount64 are "
+            "checked on netfx, which --runtimes does not name"
         )
     for p in problems:
         say("self-test: FAIL: %s" % p, sys.stderr)
     if problems:
         return 1
     say(
-        "self-test passed: the six Phase 1 entities resolve on %s%s"
+        "self-test passed: the six Phase 1 entities and System.Attribute::.ctor() "
+        "resolve on %s, Object::MemberwiseClone() is not public there%s"
         % (
             ", ".join(r.name for r in runtimes),
-            "; MathF::Sqrt fails on netfx with System.TypeLoadException"
+            "; MathF::Sqrt fails on netfx with System.TypeLoadException and "
+            "get_TickCount64 fails there"
             if any(r.name == "netfx" for r in runtimes)
             else "",
         )
@@ -723,7 +876,8 @@ def parse_args(argv):
         "--self-test",
         action="store_true",
         help="check the probe: Phase 1's six entities resolve, MathF::Sqrt fails "
-        "on the .NET Framework",
+        "on the .NET Framework, and the accessibility probe tells public from "
+        "protected and internal members",
     )
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)

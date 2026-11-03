@@ -19,6 +19,7 @@ add_llvm_component_library(LLVMCLI
   TableSchema.cpp
   Trailer.cpp
   TrailerDefs.cpp
+  TrailerGuard.cpp
   TrailerStdio.cpp
 
   ADDITIONAL_HEADER_DIRS

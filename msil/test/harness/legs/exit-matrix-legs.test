@@ -18,6 +18,9 @@
 # (3) Get-ExpectedLegs' -Exit filter, against a stand-in -List with a leg of
 # every tag: -Exit adds the Exit legs, -NoWsl leaves out the Wsl legs and the
 # Exit legs named *-wsl, and the Quick and Full legs are never expected.
+# (4) The same with P-1a's tag Portable (plan 5.18.10 PX4): -Portable adds the
+# pair portable-smoke and portable-smoke-wsl, -Exit alone adds neither, and
+# -NoWsl leaves out portable-smoke-wsl.
 # REQUIRES: msil-ci-pwsh
 
 # RUN: rm -rf %t && mkdir -p %t
@@ -37,3 +40,6 @@
 
 # (3)
 # RUN: %{harness_check} equals %t/expected/legs.txt "no switch: net8, wsl-net10" "-Exit: net8, wsl-net10, ctest-lto, gc-churn-wsl" "-Exit -NoWsl: net8, ctest-lto"
+
+# (4)
+# RUN: %{harness_check} equals %t/portable/legs.txt "no switch: net8, wsl-net10" "-Exit: net8, wsl-net10, ctest-lto, gc-churn-wsl" "-Portable: net8, wsl-net10, portable-smoke, portable-smoke-wsl" "-Portable -NoWsl: net8, portable-smoke" "-Exit -Portable: net8, wsl-net10, ctest-lto, gc-churn-wsl, portable-smoke, portable-smoke-wsl" "-Exit -Portable -NoWsl: net8, ctest-lto, portable-smoke"

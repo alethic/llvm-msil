@@ -31,6 +31,18 @@
 namespace llvm {
 class MSILAsmPrinter;
 class MSILMemberRefExpr;
+class Module;
+
+namespace MSIL {
+/// The name of the assembly (decision D28 as amended for M14):
+/// -msil-assembly-name, else the module flag "msil-assembly-name", which
+/// msil-ld sets on its merged LTO module (named ld-temp.o), else the stem of
+/// the source file name. Windows separators are recognized on every host, so
+/// a module compiled on Windows gets the same name everywhere. The header of
+/// whole-program text names it, and so does the width guard's message
+/// (MSILAsmPrinter::fillTrailerGuard).
+std::string getAssemblyName(const Module &M);
+} // namespace MSIL
 
 /// The text sink of cli::buildTrailer (plan 5.9.10). The trailer's entities
 /// are the MSILMemberRefExprs that code uses, so its instructions are CIL_

@@ -390,8 +390,8 @@ private:
   const DenseMap<const MCSymbol *, const GlobalValue *> &
   getSymToGV(const Module &M);
 
-  /// The section rules of the target triple (plan 5.9.9): COFF for Windows
-  /// triples, ELF for the others.
+  /// The section rules of the target triple (plan 5.9.9, 5.18.5 LR1):
+  /// cli::getSectionRules of it.
   cli::SectionRules getSectionRules() const;
 
   /// Reports the global variables in named sections that the one-object
@@ -469,6 +469,13 @@ private:
   /// linked text, else the default bits (MSILTrailerTextSink.cpp).
   void fillTrailerUCRTStdio(Module &M, MSILTrailerTextSink &Sink,
                             cli::TrailerInput &In);
+
+  /// On the portable triples (*-unknown-dotnet), sets In.Guard, so that the
+  /// module initializer starts with the width and byte-order guard (plan
+  /// 5.18.7 PE5-PE7): the pointer size of the data layout, the assembly name
+  /// and the normalized triple (MSILTrailerTextSink.cpp).
+  void fillTrailerGuard(Module &M, MSILTrailerTextSink &Sink,
+                        cli::TrailerInput &In);
 
   /// Object mode: records the ABI descriptors of the IR calls in \p Caller
   /// (CallABIs) and warns about a call that conflicts with an earlier one of

@@ -27,6 +27,7 @@ add_lld_library(lldMSIL
 
   LINK_COMPONENTS
   ${LLVM_TARGETS_TO_BUILD}
+  Analysis
   BinaryFormat
   BitWriter
   BitReader

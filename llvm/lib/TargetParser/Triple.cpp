@@ -91,6 +91,10 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
     return "mips";
   case mipsel:
     return "mipsel";
+  case msil32:
+    return "msil32";
+  case msil64:
+    return "msil64";
   case msp430:
     return "msp430";
   case nvptx64:
@@ -364,6 +368,10 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
   case csky:
     return "csky";
 
+  case msil32:
+  case msil64:
+    return "msil";
+
   case loongarch32:
   case loongarch64:
     return "loongarch";
@@ -522,6 +530,8 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
       .Case("renderscript32", renderscript32)
       .Case("renderscript64", renderscript64)
       .Case("ve", ve)
+      .Case("msil32", msil32)
+      .Case("msil64", msil64)
       .Case("csky", csky)
       .Case("loongarch32", loongarch32)
       .Case("loongarch64", loongarch64)
@@ -672,6 +682,8 @@ Triple::ArchType Triple::parseArch(StringRef ArchName) {
           .Case("renderscript64", Triple::renderscript64)
           .Case("shave", Triple::shave)
           .Case("ve", Triple::ve)
+          .Case("msil32", Triple::msil32)
+          .Case("msil64", Triple::msil64)
           .Case("wasm32", Triple::wasm32)
           .Case("wasm64", Triple::wasm64)
           .Case("csky", Triple::csky)
@@ -1044,6 +1056,12 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
 
   case Triple::dxil:
     return Triple::DXContainer;
+
+  // The portable MSIL architectures name no native platform: they only
+  // produce MSIL, so msil64-unknown-dotnet needs no "-msil" suffix.
+  case Triple::msil32:
+  case Triple::msil64:
+    return Triple::MSIL;
   }
   llvm_unreachable("unknown architecture");
 }
@@ -1053,7 +1071,8 @@ Triple::ObjectFormatType Triple::getDefaultObjectFormat() const {
 }
 
 Triple Triple::getNativeFormatTriple() const {
-  if (!isOSBinFormatMSIL())
+  // A portable MSIL triple (msil64-unknown-dotnet) has no native platform.
+  if (!isOSBinFormatMSIL() || isMSIL())
     return *this;
   // parseFormat() matched a trailing "msil" on the environment component,
   // e.g. "gnu-msil", "msvc19.40.0-msil", or just "msil" (no environment).
@@ -1384,6 +1403,21 @@ std::string Triple::normalize(StringRef Str, CanonicalForm Form) {
   // SUSE uses "gnueabi" to mean "gnueabihf"
   if (Vendor == Triple::SUSE && Environment == llvm::Triple::GNUEABI)
     Components[3] = "gnueabihf";
+
+  // A portable MSIL architecture produces only MSIL, so an "msil" object
+  // format component is redundant: msil64-unknown-dotnet-msil normalizes to
+  // msil64-unknown-dotnet. A portable triple (OS dotnet) also takes no
+  // environment, so a fourth component that names none ("unknown") is dropped
+  // the same way: msil64-unknown-dotnet-unknown normalizes to
+  // msil64-unknown-dotnet, and no triple text, sysroot or library path keeps
+  // it. A real environment (msil64-unknown-dotnet-gnu) or another object
+  // format stays, for the target registry to refuse.
+  if ((Arch == Triple::msil32 || Arch == Triple::msil64) &&
+      Components.size() == 4 &&
+      (Components[3] == "msil" ||
+       (OS == Triple::DotNet && Environment == UnknownEnvironment &&
+        (ObjectFormat == UnknownObjectFormat || ObjectFormat == Triple::MSIL))))
+    Components.resize(3);
 
   if (OS == Triple::Win32) {
     Components.resize(4);
@@ -1784,6 +1818,7 @@ unsigned Triple::getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
   case llvm::Triple::m68k:
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
+  case llvm::Triple::msil32:
   case llvm::Triple::nvptx:
   case llvm::Triple::ppc:
   case llvm::Triple::ppcle:
@@ -1816,6 +1851,7 @@ unsigned Triple::getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
   case llvm::Triple::loongarch64:
   case llvm::Triple::mips64:
   case llvm::Triple::mips64el:
+  case llvm::Triple::msil64:
   case llvm::Triple::nvptx64:
   case llvm::Triple::ppc64:
   case llvm::Triple::ppc64le:
@@ -1895,6 +1931,7 @@ Triple Triple::get32BitArchVariant() const {
   case Triple::m68k:
   case Triple::mips:
   case Triple::mipsel:
+  case Triple::msil32:
   case Triple::nvptx:
   case Triple::ppc:
   case Triple::ppcle:
@@ -1938,6 +1975,9 @@ Triple Triple::get32BitArchVariant() const {
     break;
   case Triple::mips64el:
     T.setArch(Triple::mipsel, getSubArch());
+    break;
+  case Triple::msil64:
+    T.setArch(Triple::msil32);
     break;
   case Triple::nvptx64:
     T.setArch(Triple::nvptx);
@@ -2012,6 +2052,7 @@ Triple Triple::get64BitArchVariant() const {
   case Triple::loongarch64:
   case Triple::mips64:
   case Triple::mips64el:
+  case Triple::msil64:
   case Triple::nvptx64:
   case Triple::ppc64:
   case Triple::ppc64le:
@@ -2052,6 +2093,9 @@ Triple Triple::get64BitArchVariant() const {
     break;
   case Triple::mipsel:
     T.setArch(Triple::mips64el, getSubArch());
+    break;
+  case Triple::msil32:
+    T.setArch(Triple::msil64);
     break;
   case Triple::nvptx:
     T.setArch(Triple::nvptx64);
@@ -2118,6 +2162,8 @@ Triple Triple::getBigEndianArchVariant() const {
   case Triple::kalimba:
   case Triple::loongarch32:
   case Triple::loongarch64:
+  case Triple::msil32:
+  case Triple::msil64:
   case Triple::msp430:
   case Triple::nvptx64:
   case Triple::nvptx:
@@ -2258,6 +2304,8 @@ bool Triple::isLittleEndian() const {
   case Triple::loongarch64:
   case Triple::mips64el:
   case Triple::mipsel:
+  case Triple::msil32:
+  case Triple::msil64:
   case Triple::msp430:
   case Triple::nvptx64:
   case Triple::nvptx:
@@ -2305,9 +2353,12 @@ bool Triple::isCompatibleWith(const Triple &Other) const {
   // An MSIL triple is compatible with the native triple it derives from, and
   // two MSIL triples are compatible when their native triples are, so the IR
   // linker mixes stock and MSIL bitcode without a triple mismatch warning
-  // (llvm/docs/MSIL: plan D3, recon lld-flavor 3.3 item 7). A malformed
-  // triple whose native form is still MSIL (x86_64-unknown-linux-msil-msil)
-  // takes the plain comparison below instead of recursing.
+  // (llvm/docs/MSIL: plan D3, recon lld-flavor 3.3 item 7). A portable
+  // triple (msil64-unknown-dotnet), which has no native platform, and a
+  // malformed triple whose native form is still MSIL
+  // (x86_64-unknown-linux-msil-msil) take the plain comparison below instead
+  // of recursing, so the portable triples are compatible only with
+  // themselves.
   if (isOSBinFormatMSIL() || Other.isOSBinFormatMSIL()) {
     Triple Native = getNativeFormatTriple();
     Triple OtherNative = Other.getNativeFormatTriple();

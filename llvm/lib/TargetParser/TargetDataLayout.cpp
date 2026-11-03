@@ -466,11 +466,24 @@ static std::string computeVEDataLayout(const Triple &T) {
          "v1024:64:64-v2048:64:64-v4096:64:64-v8192:64:64-v16384:64:64";
 }
 
+static std::string computeMSILDataLayout(const Triple &TT) {
+  // The portable MSIL triples (msil32/msil64-unknown-dotnet) have no native
+  // platform: little-endian, ELF-style symbol names, 64-bit integers and
+  // doubles aligned to 8 and i128 to 16 on both widths (CIL's int64 is a
+  // stack type everywhere), and a 16-byte stack alignment. Only the pointer
+  // width differs. Each string is part of its width's compiler-level ABI.
+  return TT.getArch() == Triple::msil64
+             ? "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+             : "e-m:e-p:32:32-i64:64-i128:128-n8:16:32:64-S128";
+}
+
 std::string Triple::computeDataLayout(StringRef ABIName) const {
   // MSIL code keeps the exact data layout (including the symbol mangling
   // component) of the native platform it targets, so C struct layout and
-  // bitcode produced by a stock clang for that platform match.
-  if (isOSBinFormatMSIL())
+  // bitcode produced by a stock clang for that platform match. A portable
+  // MSIL triple has no native platform (getNativeFormatTriple returns it
+  // unchanged) and takes its own case below instead of recursing.
+  if (isOSBinFormatMSIL() && !isMSIL())
     return getNativeFormatTriple().computeDataLayout(ABIName);
 
   switch (getArch()) {
@@ -569,6 +582,9 @@ std::string Triple::computeDataLayout(StringRef ABIName) const {
     return computeWebAssemblyDataLayout(*this);
   case Triple::ve:
     return computeVEDataLayout(*this);
+  case Triple::msil32:
+  case Triple::msil64:
+    return computeMSILDataLayout(*this);
 
   case Triple::amdil:
   case Triple::amdil64:

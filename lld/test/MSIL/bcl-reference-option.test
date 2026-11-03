@@ -43,7 +43,10 @@
 ##   M22's six attribute entries (M22.a item 6: System.Attribute, its
 ##   constructor, System.AttributeUsageAttribute, System.AttributeTargets,
 ##   AttributeUsageAttribute's constructor and set_AllowMultiple), whose
-##   parameter lists print as BCLMembers.def writes them.
+##   parameter lists print as BCLMembers.def writes them; then P-1a's four
+##   rows of the msil64-unknown-dotnet guard (5.18.7 PE8:
+##   System.PlatformNotSupportedException, its constructor(string),
+##   System.BitConverter and GetBytes(int32)).
 ## The pack is Inputs/fakepack (gen.py): FakeCore (the core library),
 ## FakeInterop (Marshal) and FakeThreading (Interlocked). p1.o requests every
 ## Phase 1 member (data with a relocation, a variable-length memmove, a fence
@@ -203,6 +206,10 @@
 # TABLE-NEXT: {{^}}type [mscorlib]System.AttributeTargets{{$}}
 # TABLE-NEXT: {{^}}method instance void [mscorlib]System.AttributeUsageAttribute::.ctor(valuetype System.AttributeTargets){{$}}
 # TABLE-NEXT: {{^}}method instance void [mscorlib]System.AttributeUsageAttribute::set_AllowMultiple(bool){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.PlatformNotSupportedException{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.PlatformNotSupportedException::.ctor(string){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.BitConverter{{$}}
+# TABLE-NEXT: {{^}}method uint8[] [mscorlib]System.BitConverter::GetBytes(int32){{$}}
 # TABLE-NOT:  {{.}}
 
 #--- notes.txt

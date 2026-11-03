@@ -1,0 +1,147 @@
+# __int128 on msil64-unknown-dotnet: arithmetic, division and remainder (expanded inline, no *ti* helper), shifts, compares, conversions to and from double, and __int128 parameters, results, globals and struct members, each operation in a noinline function on volatile inputs.
+# Plan 5.18.2 PC2 (__int128 on msil64, size and alignment 16) and PC4
+# (__int128 is passed direct on msil64), 5.18.1 PT7 and 5.18.8 PH3 (the
+# backend expands i128 division inline and the helper archive has no *ti*
+# member, so this links without one), PB1 (no passInt128ByPointer on
+# msil64). ops.c holds one operation per noinline function, so each is a
+# real call with __int128 arguments and results at every level; main.c
+# builds the inputs from volatile 64-bit halves and compares the results'
+# halves. Each failed group sets one bit of the exit status.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+#--- ops.h
+#define NOINLINE __attribute__((noinline))
+typedef __int128 i128;
+typedef unsigned __int128 u128;
+struct pair {
+  char tag;
+  i128 value;
+};
+i128 add128(i128 a, i128 b);
+i128 sub128(i128 a, i128 b);
+i128 mul128(i128 a, i128 b);
+i128 sdiv128(i128 a, i128 b);
+i128 srem128(i128 a, i128 b);
+u128 udiv128(u128 a, u128 b);
+u128 urem128(u128 a, u128 b);
+i128 shl128(i128 a, int n);
+i128 ashr128(i128 a, int n);
+u128 lshr128(u128 a, int n);
+int slt128(i128 a, i128 b);
+int ult128(u128 a, u128 b);
+double i128tod(i128 a);
+double u128tod(u128 a);
+i128 dtoi128(double d);
+u128 dtou128(double d);
+i128 mix128(int a, i128 b, long c, i128 d, char e, u128 f);
+struct pair mkpair(char tag, i128 v);
+i128 pairsum(struct pair p, struct pair q);
+#--- ops.c
+#include "ops.h"
+NOINLINE i128 add128(i128 a, i128 b) { return a + b; }
+NOINLINE i128 sub128(i128 a, i128 b) { return a - b; }
+NOINLINE i128 mul128(i128 a, i128 b) { return (i128)((u128)a * (u128)b); }
+NOINLINE i128 sdiv128(i128 a, i128 b) { return a / b; }
+NOINLINE i128 srem128(i128 a, i128 b) { return a % b; }
+NOINLINE u128 udiv128(u128 a, u128 b) { return a / b; }
+NOINLINE u128 urem128(u128 a, u128 b) { return a % b; }
+NOINLINE i128 shl128(i128 a, int n) { return (i128)((u128)a << n); }
+NOINLINE i128 ashr128(i128 a, int n) { return a >> n; }
+NOINLINE u128 lshr128(u128 a, int n) { return a >> n; }
+NOINLINE int slt128(i128 a, i128 b) { return a < b; }
+NOINLINE int ult128(u128 a, u128 b) { return a < b; }
+NOINLINE double i128tod(i128 a) { return (double)a; }
+NOINLINE double u128tod(u128 a) { return (double)a; }
+NOINLINE i128 dtoi128(double d) { return (i128)d; }
+NOINLINE u128 dtou128(double d) { return (u128)d; }
+// Mixed scalar and __int128 parameters: each keeps its own slot.
+NOINLINE i128 mix128(int a, i128 b, long c, i128 d, char e, u128 f) {
+  return (i128)a + b + (i128)c + d + (i128)e + (i128)f;
+}
+NOINLINE struct pair mkpair(char tag, i128 v) {
+  struct pair p;
+  p.tag = tag;
+  p.value = v;
+  return p;
+}
+NOINLINE i128 pairsum(struct pair p, struct pair q) {
+  return p.value + q.value + p.tag + q.tag;
+}
+#--- main.c
+#include "ops.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+typedef unsigned long long u64;
+static volatile u64 v_hi[] = {0x0123456789abcdefull, 0xffffffffffffffffull,
+                              0x8000000000000000ull, 0x0000000000000001ull};
+static volatile u64 v_lo[] = {0xfedcba9876543210ull, 0xfffffffffffffff9ull,
+                              0x0000000000000000ull, 0x0000000000000000ull};
+static volatile int v_n[] = {0, 1, 63, 64, 65, 127};
+static volatile double v_d[] = {1.0e30, -3.5, 1.7014118346046923e38};
+
+static i128 mk(int i) { return (i128)(((u128)v_hi[i] << 64) | v_lo[i]); }
+static int eq(u128 x, u64 hi, u64 lo) {
+  return (u64)(x >> 64) == hi && (u64)x == lo;
+}
+
+/* __int128 globals with initializers, and a struct member. */
+static i128 g_min = (i128)((u128)1 << 127);
+static u128 g_mask = ~(u128)0 >> 1;
+static struct pair g_pair = {3, ((i128)1 << 100) + 5};
+
+int main(void) {
+  i128 x = mk(0), m7 = mk(1), min = mk(2), two64 = mk(3);
+
+  /* 0: add, subtract, multiply with carries across the halves. */
+  CHECK(0, eq(add128(x, m7), 0x0123456789abcdefull, 0xfedcba9876543209ull));
+  CHECK(0, eq(add128(two64, m7), 0, 0xfffffffffffffff9ull));
+  CHECK(0, eq(sub128(two64, 1), 0, 0xffffffffffffffffull));
+  CHECK(0, eq(mul128(x, m7), 0xf8091a2b3c4d5e70ull, 0x07f6e5d4c3b2a190ull));
+  CHECK(0, eq(mul128(two64, two64), 0, 0));
+
+  /* 1: division and remainder, signed and unsigned (inline expansion). */
+  CHECK(1, eq(sdiv128(x, m7), 0xffd663cca3309970ull, 0x00299c335ccf6690ull));
+  CHECK(1, eq(srem128(x, m7), 0, 0) && srem128(-x, m7 - 993) == -40);
+  CHECK(1, eq(sdiv128(x, m7 - 993), 0xffffb56f41a78219ull, 0x1aa00907870cb73full));
+  CHECK(1, eq(udiv128(x, two64), 0, 0x0123456789abcdefull));
+  CHECK(1, eq(urem128(x, two64), 0, 0xfedcba9876543210ull));
+  CHECK(1, eq(udiv128((u128)m7, 0x100000000ull), 0xffffffffull, 0xffffffffffffffffull));
+  CHECK(1, eq(sdiv128(min, two64 >> 63), 0xc000000000000000ull, 0));
+
+  /* 2: shifts across the halves. */
+  CHECK(2, eq(shl128(1, v_n[3]), 1, 0) && eq(shl128(1, v_n[5]), 0x8000000000000000ull, 0));
+  CHECK(2, eq(shl128(x, v_n[0]), 0x0123456789abcdefull, 0xfedcba9876543210ull));
+  CHECK(2, eq(ashr128(min, v_n[5]), 0xffffffffffffffffull, 0xffffffffffffffffull));
+  CHECK(2, eq(ashr128(min, v_n[4]), 0xffffffffffffffffull, 0xc000000000000000ull));
+  CHECK(2, eq(lshr128((u128)min, v_n[2]), 1, 0));
+  CHECK(2, eq(lshr128((u128)min, v_n[1]), 0x4000000000000000ull, 0));
+  CHECK(2, eq(lshr128((u128)x, v_n[3]), 0, 0x0123456789abcdefull));
+
+  /* 3: compares. */
+  CHECK(3, slt128(min, m7) && slt128(m7, x) && !slt128(x, x));
+  CHECK(3, ult128((u128)x, (u128)m7) && !ult128((u128)min, (u128)x));
+
+  /* 4: conversions to and from double. */
+  CHECK(4, i128tod(m7) == -7.0 && i128tod(min) == -1.7014118346046923e38);
+  CHECK(4, u128tod((u128)min) == 1.7014118346046923e38);
+  CHECK(4, eq((u128)dtoi128(v_d[1]), 0xffffffffffffffffull, 0xfffffffffffffffdull));
+  CHECK(4, eq(dtou128(v_d[0]), 0x0000000c9f2c9cd0ull, 0x4675000000000000ull));
+  CHECK(4, eq(dtou128(v_d[2]), 0x8000000000000000ull, 0));
+
+  /* 5: parameters, results, globals and struct members. */
+  CHECK(5, mix128(1, two64, -2L, m7, 9, (u128)two64) == ((i128)2 << 64) + 1);
+  struct pair p = mkpair(4, x);
+  CHECK(5, p.tag == 4 && p.value == x);
+  CHECK(5, pairsum(p, g_pair) == x + ((i128)1 << 100) + 12);
+  CHECK(5, g_min == min && g_mask == (u128)~min);
+
+  return (int)fails;
+}

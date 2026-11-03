@@ -8,8 +8,9 @@
 # ===----------------------------------------------------------------------===#
 """Run msil/utils/ci/lit-legs.ps1 or lit-legs.sh against a stand-in build
 directory, for ci-legs-corpus.test, ci-legs-corpus-sh.test and M24's leg
-tests (describe*.test, exit-tag*.test, timeout-retry*.test), and give
-calibrate-label.test a build whose lit plays a scenario.
+tests (describe*.test, exit-tag*.test, timeout-retry*.test) and P-1a's
+(portable-tag*.test), and give calibrate-label.test a build whose lit plays
+a scenario.
 
     ci-legs.py setup BUILD
         Make BUILD/bin/llvm-lit.py (what msil-lit.ps1 runs) and
@@ -52,8 +53,21 @@ calibrate-label.test a build whose lit plays a scenario.
         stderr and 'one stdout line' to stdout and exits 1; 'bad-path'
         prints the line 'llvm/test/CodeGen/MSIL/call.ll' and exits 0;
         'dot-path' prints 'msil/test/../llvm/test/CodeGen/MSIL/call.ll' and
-        exits 0; 'silent' prints nothing and exits 3. It appends each
-        command line it receives ('argv: <a> <b> ...') to DIR/calls.log.
+        exits 0; 'silent' prints nothing and exits 3. When its first
+        argument is a file named build-builtins.py and $MSIL_FAKE_BUILTINS
+        is set (P-1a: the portable legs' setup, plan 5.18.10 PX4), it plays
+        that script: 'ok' prints 'stand-in build-builtins.py: <args>' and
+        exits 0, 'fail' prints 'stand-in build-builtins.py: planted failure'
+        and exits 1. It appends each command line it receives ('argv: <a>
+        <b> ...') to DIR/calls.log.
+    ci-legs.py python3 DIR ok|fail
+        Make DIR/python3, a POSIX shell script that stands in for
+        lit-legs.sh's python3 when DIR comes first on PATH
+        (portable-tag-sh.test): when its first argument is a file named
+        build-builtins.py it plays that script as 'ci-legs.py python' does
+        with MSIL_FAKE_BUILTINS=ok or fail and appends 'argv: <a> <b> ...'
+        to DIR/calls.log; any other command line runs the python3 that
+        PATH without its first entry finds.
     ci-legs.py error-message LOG
         Print 'error-message: <text>' for each error that pwsh reported in
         LOG (the output of 'ci-legs.py ps1') in its concise view
@@ -250,7 +264,37 @@ if mode and args and os.path.basename(args[0]) == "check-matrix.py":
         sys.exit(3)
     sys.stderr.write("stand-in python: unknown MSIL_FAKE_P3 %r\n" % mode)
     sys.exit(2)
+builtins = os.environ.get("MSIL_FAKE_BUILTINS", "")
+if builtins and args and os.path.basename(args[0]) == "build-builtins.py":
+    if builtins == "ok":
+        print("stand-in build-builtins.py: %s" % " ".join(args[1:]))
+        sys.exit(0)
+    if builtins == "fail":
+        print("stand-in build-builtins.py: planted failure")
+        sys.exit(1)
+    sys.stderr.write("stand-in python: unknown MSIL_FAKE_BUILTINS %r\n" % builtins)
+    sys.exit(2)
 sys.exit(subprocess.call([sys.executable] + args))
+"""
+
+# The stand-in python3 of 'ci-legs.py python3' (lit-legs.sh's python3, found
+# on PATH); @MODE@ is ok or fail.
+STAND_IN_PYTHON3 = r"""#!/bin/sh
+here=$(cd "$(dirname "$0")" && pwd)
+case "$1" in
+*/build-builtins.py|build-builtins.py)
+    printf 'argv: %s\n' "$*" >> "$here/calls.log"
+    if [ "@MODE@" = ok ]; then
+        shift
+        echo "stand-in build-builtins.py: $*"
+        exit 0
+    fi
+    echo "stand-in build-builtins.py: planted failure"
+    exit 1
+    ;;
+esac
+PATH=${PATH#*:}
+exec python3 "$@"
 """
 
 
@@ -272,6 +316,17 @@ def python_stand_in(directory):
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, script))
         os.chmod(path, 0o755)
+    print(path.replace("\\", "/"))
+    return 0
+
+
+def python3_stand_in(directory, mode):
+    directory = os.path.abspath(directory)
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, "python3")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(STAND_IN_PYTHON3.replace("@MODE@", mode))
+    os.chmod(path, 0o755)
     print(path.replace("\\", "/"))
     return 0
 
@@ -428,6 +483,8 @@ def main(argv):
         return scenario(argv[1], argv[2:])
     if len(argv) == 2 and argv[0] == "python":
         return python_stand_in(argv[1])
+    if len(argv) == 3 and argv[0] == "python3" and argv[2] in ("ok", "fail"):
+        return python3_stand_in(argv[1], argv[2])
     if len(argv) == 2 and argv[0] == "error-message":
         return error_messages(argv[1])
     try:
@@ -447,7 +504,7 @@ def main(argv):
         return usage(str(e))
     return usage(
         "usage: setup BUILD | scenario BUILD [--no-xunit] NAME=OUTCOME... | python DIR | "
-        "error-message LOG | "
+        "python3 DIR ok|fail | error-message LOG | "
         "ps1 BUILD [VAR=VALUE...] -- [ARG...] | "
         "sh [--distro D] BUILD [VAR=VALUE...] -- [ARG...]"
     )

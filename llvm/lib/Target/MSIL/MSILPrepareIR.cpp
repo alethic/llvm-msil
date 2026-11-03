@@ -14,9 +14,13 @@
 /// so the rest of the pipeline must see valid IR without the construct.
 ///
 /// - A target triple that is not an x86_64 or aarch64 MSIL triple with 64-bit
-///   pointers is an error. Every function body is deleted, and every alias,
+///   pointers, or msil64-unknown-dotnet, is an error (msil32-unknown-dotnet's
+///   is T-P1, plan 5.18.11). Every function body is deleted, and every alias,
 ///   ifunc and global variable (llvm.used and the like excepted) is erased,
 ///   so only the module header is printed.
+/// - On the portable triples, which bind no native code, a declaration with
+///   an import module is an error (MSIL::checkPortableModule, plan 5.18.6
+///   PL4).
 /// - The stack protector and SafeStack attributes are removed with a warning.
 /// - The function entry instrumentation attributes (patchable function entry
 ///   and prefix, fentry calls) are removed, with a warning when one of them
@@ -169,6 +173,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILPortable.h"
 #include "MSILPreExpand.h"
 #include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
@@ -179,6 +184,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -383,17 +389,6 @@ INITIALIZE_PASS_END(MSILPrepareIRLegacy, DEBUG_TYPE,
 
 ModulePass *llvm::createMSILPrepareIRLegacyPass() {
   return new MSILPrepareIRLegacy();
-}
-
-/// Phase 1 compiles C for the x86_64 and aarch64 MSIL triples with 64-bit
-/// pointers only: the arch selects the C ABI, and pointers are CIL native
-/// ints (decision D2), so the ILP32 environments (x86_64 gnux32, aarch64
-/// gnu_ilp32), whose DataLayout has 32-bit pointers, are rejected too.
-static bool isSupportedTarget(const TargetMachine &TM) {
-  const Triple &TT = TM.getTargetTriple();
-  return TT.isOSBinFormatMSIL() &&
-         (TT.getArch() == Triple::x86_64 || TT.getArch() == Triple::aarch64) &&
-         TM.getPointerSizeInBits(0) == 64;
 }
 
 /// Removes the stack protector and SafeStack attributes of \p F with a
@@ -1069,10 +1064,11 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
 
   // Variadic definitions and calls are ExpandVariadics' (MSILPassConfig's
   // slot P7). It expands the va_arg instructions of a char * va_list (the
-  // Windows triples) and assumes that layout for every va_arg, so on the
-  // other triples, whose va_list is a structure, each one is an error.
+  // Windows and portable triples, plan 5.18.2 PB1) and assumes that layout
+  // for every va_arg, so on the other triples, whose va_list is a structure,
+  // each one is an error.
   const Triple &TT = F.getParent()->getTargetTriple();
-  bool VAArgIsExpanded = TT.isOSWindows();
+  bool VAArgIsExpanded = TT.isOSWindows() || TT.isOSDotNet();
   bool ReportedVAArg = false;
 
   // On a triple for which ExpandVariadics has no MSIL ABI (AArch64 Darwin),
@@ -1803,9 +1799,10 @@ static void replaceGlobalCtor(Module &M, const Function &F,
 /// which metadata may still name. A variable is null in every use and is
 /// erased, except a thread-local one, which stays: like any other
 /// thread-local variable it is an error (runOnModule) until phase 3 (P3-A).
-/// Off Windows a __start_<X> or __stop_<X> variable stays too while a global
-/// variable definition is in section <X>: the one-object link defines it
-/// (plan 5.9.9; the AsmPrinter checks that <X> names an output section).
+/// Where the section rules define them (off Windows, cli::definesStartStop) a
+/// __start_<X> or __stop_<X> variable stays too while a global variable
+/// definition is in section <X>: the one-object link defines it (plan 5.9.9;
+/// the AsmPrinter checks that <X> names an output section).
 static bool lowerExternWeak(Module &M, const TargetMachine &TM) {
   const Triple &TT = TM.getTargetTriple();
   bool Linked = MSIL::isLinkedModule(M);
@@ -1815,7 +1812,7 @@ static bool lowerExternWeak(Module &M, const TargetMachine &TM) {
                   : MSIL::getPInvokeModule(TT, Name, &F).has_value();
   };
   StringSet<> Sections;
-  if (!TT.isOSWindows())
+  if (cli::definesStartStop(cli::getSectionRules(TT)))
     for (const GlobalVariable &GV : M.globals())
       if (GV.hasSection() && !GV.isDeclarationForLinker())
         Sections.insert(GV.getSection());
@@ -2232,15 +2229,22 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   // supplies the DataLayout, and its triple is the one that -march=msil
   // switched to the MSIL object format.
   auto &TM = getAnalysis<TargetPassConfig>().getTM<TargetMachine>();
-  if (!isSupportedTarget(TM)) {
-    Ctx.emitError("unsupported target triple '" + TM.getTargetTriple().str() +
-                  "' for MSIL (Phase 1 supports x86_64 and aarch64 with "
-                  "64-bit pointers)");
+  if (!MSIL::isSupportedTarget(TM)) {
+    const Triple &TT = TM.getTargetTriple();
+    if (TT.getArch() == Triple::msil32)
+      Ctx.emitError(MSIL::getUnsupportedPortableTargetText(TT));
+    else
+      Ctx.emitError("unsupported target triple '" + TT.str() +
+                    "' for MSIL (Phase 1 supports x86_64 and aarch64 with "
+                    "64-bit pointers)");
     dropModuleContents(M);
     return true;
   }
 
   bool Changed = MSIL::resetExceptionModel(M);
+  // The portable triples bind no native code (plan 5.18.6 PL4).
+  if (!cli::bindsNatively(TM.getTargetTriple()))
+    Changed |= MSIL::checkPortableModule(M);
   Changed |= disableMetadataSections(M, TM);
 
   // Whole-program mode (-S, llc and msil-ld's --lto-emit-asm text) lowers

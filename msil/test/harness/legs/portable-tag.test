@@ -1,0 +1,86 @@
+# The leg tag Portable (plan 5.18.10 PX4, P-1a): lit-legs.ps1 -Portable adds
+# the legs tagged Portable, portable-smoke and portable-smoke-wsl, to the legs
+# that a run takes, where portable-smoke-wsl (a name ending in -wsl) also
+# needs -Wsl, as an Exit leg does; -List marks them 'name (-Portable)'. Each
+# Portable leg first runs its setup, 'build-builtins.py --triple
+# msil64-unknown-dotnet' with the build directory, through $MsilPython, and a
+# failed setup is the leg's FAIL row without a lit run. Against the stand-in
+# build of Inputs/ci-legs.py, whose lit passes, Inputs/legs-check.py checks:
+# (1) -List and -Describe name the same legs in the same order, each listed
+# with the switch of its tag, and the Portable legs are exactly the pair.
+# (2) The rows (MSIL_CI_RESULTS) of a run with -Portable, with -Wsl -Portable
+# and with -Exit are exactly the legs of that set: -Portable takes
+# portable-smoke, -Wsl -Portable both, -Exit neither. The stand-in build has
+# no bin/clang.exe, so the real build-builtins.py fails each setup (exit 2)
+# and each Portable leg is a FAIL row naming its setup log; with the non-lit
+# legs, which the stand-in cannot pass, each run exits 1.
+# (3) With a stand-in Python (Inputs/ci-legs.py python, MSIL_PYTHON) that
+# plays build-builtins.py: MSIL_FAKE_BUILTINS=ok makes -Leg portable-smoke
+# and -Leg portable-smoke-wsl PASS rows whose setup ran with the build
+# directory and the portable triple and whose one lit invocation passes
+# exactly the paths, params and lit arguments of -Describe; =fail makes
+# portable-smoke a FAIL row with exit status 1 and no lit run.
+# (4) The failure path: a planted tag fails the checks it must fail:
+# portable-smoke untagged the -List check; portable-smoke planted as Exit
+# the -Portable run, which has it, and the -Exit run, which lacks it; and
+# the -Portable rows checked without --portable.
+# portable-tag-sh.test checks lit-legs.sh --portable; exit-matrix-legs.test
+# checks run-m1-gate.ps1's -Portable (Get-ExpectedLegs).
+# REQUIRES: msil-ci-pwsh
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/ci-legs.py setup %t/build
+
+# (1)
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build -- -List > %t/list.txt
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build -- -Describe > %t/describe.json
+# RUN: %python %S/Inputs/legs-check.py tags ps1 %t/list.txt %t/describe.json > %t/1.log
+# RUN: %{harness_check} contains %t/1.log "^legs-check: \d+ legs, the list's tags are the JSON's \(.*Portable 2, .*\); Exit legs: " "^legs-check: Portable legs: portable-smoke, portable-smoke-wsl$"
+# RUN: %{harness_check} contains %t/list.txt "^portable-smoke \(-Portable\)$" "^portable-smoke-wsl \(-Portable\)$"
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+
+# (2)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-portable -- -Portable > %t/portable.log
+# RUN: %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-portable --portable > %t/2-portable.log
+# RUN: %{harness_check} contains %t/2-portable.log "^legs-check: \d+ rows, the legs of portable; Exit legs among them: none$" "^legs-check: Portable legs among them: portable-smoke$"
+# RUN: %{harness_check} contains %t/rows-portable "^lit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-builtins\.py --triple msil64-unknown-dotnet \(exit 2; \S*portable-smoke\.setup\.log\)$"
+# RUN: %{harness_check} contains %t/build/lit-results/portable-smoke.setup.log "^build-builtins\.py: error: \S*clang\.exe does not exist "
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-wsl-portable -- -Wsl -Portable > %t/wsl-portable.log
+# RUN: %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-wsl-portable --wsl --portable > %t/2-wsl-portable.log
+# RUN: %{harness_check} contains %t/2-wsl-portable.log "^legs-check: \d+ rows, the legs of wsl portable; Exit legs among them: none$" "^legs-check: Portable legs among them: portable-smoke, portable-smoke-wsl$"
+# RUN: %{harness_check} contains %t/rows-wsl-portable "^lit-legs\tportable-smoke-wsl\tFAIL\t\d+\tsetup failed: build-builtins\.py --triple msil64-unknown-dotnet \(exit 2; \S*portable-smoke-wsl\.setup\.log\)$"
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-exit -- -Exit > %t/exit.log
+# RUN: %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-exit --exit > %t/2-exit.log
+# RUN: %{harness_check} contains %t/2-exit.log "^legs-check: \d+ rows, the legs of exit; Exit legs among them: (\S+, )*ctest-lto(, \S+)*$" "^legs-check: Portable legs among them: none$"
+# RUN: %{harness_check} lacks %t/rows-exit "^lit-legs\tportable-smoke"
+
+# (3)
+# RUN: %python %S/Inputs/ci-legs.py python %t/py > %t/py.txt
+# DEFINE: %{portable_py} = %t/py/python.cmd
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b3
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b3 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=ok MSIL_CI_RESULTS=%t/rows-3 -- -Leg portable-smoke > %t/3a.log
+# RUN: %{harness_check} contains %t/rows-3 "\Alit-legs\tportable-smoke\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
+# RUN: %{harness_check} contains %t/py/calls.log "^argv: \S*build-builtins\.py --build-dir \S*b3 --triple msil64-unknown-dotnet$"
+# RUN: %{harness_check} contains %t/b3/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: --build-dir \S*b3 --triple msil64-unknown-dotnet$"
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke %t/b3/lit-calls.log > %t/3a-calls.log
+# RUN: %{harness_check} contains %t/3a-calls.log "^legs-check: portable-smoke: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/b3/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b3 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=ok MSIL_CI_RESULTS=%t/rows-3b -- -Leg portable-smoke-wsl > %t/3b.log
+# RUN: %{harness_check} contains %t/rows-3b "\Alit-legs\tportable-smoke-wsl\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke-wsl %t/b3/lit-calls.log > %t/3b-calls.log
+# RUN: %{harness_check} contains %t/3b-calls.log "^legs-check: portable-smoke-wsl: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b4
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/b4 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=fail MSIL_CI_RESULTS=%t/rows-3c -- -Leg portable-smoke > %t/3c.log
+# RUN: %{harness_check} contains %t/rows-3c "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-builtins\.py --triple msil64-unknown-dotnet \(exit 1; \S*b4/lit-results/portable-smoke\.setup\.log\)\n\Z"
+# RUN: %{harness_check} contains %t/b4/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: planted failure$"
+# RUN: %{harness_check} missing %t/b4/lit-calls.log
+
+# (4)
+# RUN: not %python %S/Inputs/legs-check.py tags ps1 %t/list.txt %t/describe.json --plant portable-smoke= > %t/4a.log
+# RUN: %{harness_check} contains %t/4a.log "^legs-check: error: leg portable-smoke: listed with '-Portable', its tag ''$"
+# RUN: not %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-portable --portable --plant portable-smoke=Exit > %t/4b.log
+# RUN: %{harness_check} contains %t/4b.log "^legs-check: error: the run's legs \[[^]]*'portable-smoke'[^]]*\], not \[(?![^]]*'portable-smoke')[^]]*\]$"
+# RUN: not %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-exit --exit --plant portable-smoke=Exit > %t/4c.log
+# RUN: %{harness_check} contains %t/4c.log "^legs-check: error: the run's legs \[(?![^]]*'portable-smoke')[^]]*\], not \[[^]]*'portable-smoke'[^]]*\]$"
+# RUN: not %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-portable > %t/4d.log
+# RUN: %{harness_check} contains %t/4d.log "^legs-check: error: the run's legs \[[^]]*'portable-smoke'[^]]*\], not \[(?![^]]*'portable-smoke')[^]]*\]$"

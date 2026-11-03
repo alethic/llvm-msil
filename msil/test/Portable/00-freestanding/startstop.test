@@ -1,0 +1,86 @@
+# Section boundaries on msil64-unknown-dotnet: __start_<sec> and __stop_<sec> of a C-identifier section that two objects fill bracket every entry of both objects (and nothing else), and a second section gets its own pair.
+# Plan 5.18.5 LR9 (today's non-Windows rule on the portable triples:
+# __start_<X> and __stop_<X> are defined for a C-identifier output section
+# when referenced, per assembly, a GC root; sections group by verbatim name,
+# with no '$' grouping). Entries are 'used' records in section 'msil_set'
+# (three in main.c, two in reg.c) and one long in 'msil_other'; main walks
+# [__start_msil_set, __stop_msil_set) and checks the count, the sum of the
+# ids, that each known entry lies inside the range, and that each entry's
+# pointer (a relocation inside a named section) points at its own name
+# string. Each failed group sets one bit of the exit status.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/reg.c
+# RUN: %{msil_prog}
+#--- set.h
+struct entry {
+  long id;
+  const char *name;
+};
+#define ENTRY(var, n, s)                                                       \
+  static const struct entry var                                                \
+      __attribute__((section("msil_set"), used, aligned(8))) = {n, s}
+extern const struct entry __start_msil_set[], __stop_msil_set[];
+extern const struct entry *reg_first(void);
+extern const struct entry *reg_second(void);
+#--- reg.c
+#include "set.h"
+ENTRY(reg_a, 100, "reg_a");
+ENTRY(reg_b, 200, "reg_b");
+const struct entry *reg_first(void) { return &reg_a; }
+const struct entry *reg_second(void) { return &reg_b; }
+#--- main.c
+#include "set.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+ENTRY(main_a, 1, "main_a");
+ENTRY(main_b, 2, "main_b");
+ENTRY(main_c, 3, "main_c");
+
+static long other __attribute__((section("msil_other"), used)) = 4242;
+extern long __start_msil_other[], __stop_msil_other[];
+
+static int inside(const struct entry *e) {
+  return e >= __start_msil_set && e < __stop_msil_set;
+}
+static int same(const char *a, const char *b) {
+  while (*a && *a == *b)
+    ++a, ++b;
+  return *a == *b;
+}
+
+int main(void) {
+  const struct entry *b = __start_msil_set, *e = __stop_msil_set;
+  long n = e - b, sum = 0;
+  int names = 1;
+  for (const struct entry *p = b; p < e; ++p) {
+    sum += p->id;
+    char buf[8] = "main_";
+    if (p->id < 100) {
+      buf[5] = (char)('a' + p->id - 1);
+      buf[6] = 0;
+    } else {
+      buf[0] = 'r', buf[1] = 'e', buf[2] = 'g', buf[3] = '_';
+      buf[4] = (char)('a' + p->id / 100 - 1);
+      buf[5] = 0;
+    }
+    names &= same(p->name, buf);
+  }
+  /* 0: five entries from two objects, and nothing else. */
+  CHECK(0, n == 5 && sum == 306);
+  /* 1: every entry lies between the boundaries. */
+  CHECK(1, inside(&main_a) && inside(&main_b) && inside(&main_c));
+  CHECK(1, inside(reg_first()) && inside(reg_second()));
+  /* 2: the pointers inside the section were relocated. */
+  CHECK(2, names);
+  /* 3: another section has its own boundaries. */
+  CHECK(3, __stop_msil_other - __start_msil_other == 1 && __start_msil_other[0] == 4242);
+  CHECK(3, __start_msil_other == &other);
+  return (int)fails;
+}

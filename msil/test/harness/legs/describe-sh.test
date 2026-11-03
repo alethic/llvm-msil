@@ -25,7 +25,15 @@
 # without msil_require_hosted=1 or without msil_glibc_sysroot, an lto run
 # whose prog_pipeline is obj, a leg named ctest-wsl) is reported, and so is
 # each M26 fault: programs-lto without its hosted program, ctest-lto without
-# its tag Exit, net8 without msil-abi.ll.
+# its tag Exit, net8 without msil-abi.ll. The P-1a rows (plan 5.18.10 PX4,
+# PX5): portable-smoke is the one leg tagged Portable, one lit run of
+# msil/test/Portable with exactly obj, .NET 10, 10+tc0,
+# msil_require_portable=1 and msil_glibc_sysroot=/ (no Framework, no x86);
+# no other leg passes the portable triple or names msil/test/Portable; and
+# check_msil (net8) holds init-msil-portable.c and msil-dotnet.c. Each P-1a
+# fault is reported: portable-smoke untagged, or tagged Exit, or without
+# msil_require_portable, and net8 without init-msil-portable.c; the
+# lit-legs.ps1 fault portable-no-x86 is a usage error here.
 # describe.test checks lit-legs.ps1 -Describe.
 # REQUIRES: msil-ci-bash
 
@@ -38,6 +46,8 @@
 # RUN: %python %S/Inputs/legs-check.py describe sh %t/describe.json > %t/1.log
 # RUN: %{harness_check} contains %t/1.log "\Alegs-check: lit-legs\.sh: \d+ legs, \d+ lit runs: OK\nlegs-check: hosted programs: msil/test/Programs/zlib-full( \S+)*\n\Z"
 # RUN: %{harness_check} contains %t/describe.json '"name": "ctest-lto",\s*"tag": "Exit"'
+# RUN: %{harness_check} contains %t/describe.json '"name": "portable-smoke",\s*"tag": "Portable"' '"clang/test/Preprocessor/init-msil-portable\.c"' '"clang/test/Driver/msil-dotnet\.c"'
+# RUN: %{harness_check} lacks %t/describe.json '"name": "portable-smoke-wsl"'
 # RUN: %{harness_check} lacks %t/describe.json '"name": "programs-hosted'
 
 # (2)
@@ -92,3 +102,13 @@
 # RUN: %{harness_check} contains %t/4f.log "^legs-check: error: ctest-lto: tag '', kind 'lit', 1 runs; not 'Exit', lit, 1$"
 # RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant check-msil > %t/4g.log
 # RUN: %{harness_check} contains %t/4g.log "^legs-check: error: net8: paths lack llvm/test/Transforms/ExpandVariadics/msil-abi\.ll \([$]checkMsil, M26\)$"
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant portable-untagged > %t/4h.log
+# RUN: %{harness_check} contains %t/4h.log "^legs-check: error: the legs tagged Portable are \[\], not \['portable-smoke'\]$" "^legs-check: error: portable-smoke run 1 \(tag ''\) passes msil_triple=msil64-unknown-dotnet$" "^legs-check: error: portable-smoke run 1 \(tag ''\) names msil/test/Portable$"
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant portable-exit > %t/4i.log
+# RUN: %{harness_check} contains %t/4i.log "^legs-check: error: the legs tagged Portable are \[\], not \['portable-smoke'\]$" "^legs-check: error: portable-smoke run 1 \(tag 'Exit'\) passes msil_triple=msil64-unknown-dotnet$"
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant portable-no-require > %t/4j.log
+# RUN: %{harness_check} contains %t/4j.log "^legs-check: error: portable-smoke: params \{(?![^}]*msil_require_portable)[^}]*\}, not \{[^}]*'msil_require_portable': '1'"
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant check-msil-portable > %t/4k.log
+# RUN: %{harness_check} contains %t/4k.log "^legs-check: error: net8: paths lack clang/test/Preprocessor/init-msil-portable\.c \([$]checkMsil, P-1a\)$"
+# RUN: %{harness_check} exits 2 %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant portable-no-x86 > %t/4l.log 2>&1
+# RUN: %{harness_check} contains %t/4l.log "^legs-check: --plant portable-no-x86: for lit-legs\.sh one of .*, portable-untagged, portable-exit, portable-no-require, check-msil-portable$"

@@ -16,7 +16,11 @@
 //
 // It also classifies named sections (constructor and destructor tables, the
 // unsupported and thread-local ones) and orders the constructor list, for
-// both users.
+// both users, and it selects the link-rule family of a triple (plan 5.18.5):
+// cli::getSectionRules, the predicates on a rule set and cli::bindsNatively
+// are the only code outside ImageLayout.cpp that names a SectionRules
+// enumerator other than as a 'case' label, so a new rule set cannot silently
+// take another's behaviour.
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,6 +31,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -38,9 +44,113 @@ class raw_ostream;
 
 namespace cli {
 
-/// The section rules of a triple (5.9.9 rule 1): COFF for Windows triples,
-/// ELF for every other one.
-enum class SectionRules : uint8_t { ELF, COFF };
+/// The section rules of a triple (5.9.9 rule 1, plan 5.18.5 LR1): Dotnet for
+/// the portable triples (msil64/msil32-unknown-dotnet), COFF for Windows
+/// triples, ELF for every other one. Code outside this header and
+/// ImageLayout.cpp names an enumerator only as a 'case' label of a switch
+/// without a 'default'; everything else asks getSectionRules and the
+/// predicates below.
+enum class SectionRules : uint8_t { ELF, COFF, Dotnet };
+
+/// The section rules of \p TT.
+inline SectionRules getSectionRules(const Triple &TT) {
+  if (TT.isOSDotNet())
+    return SectionRules::Dotnet;
+  if (TT.isOSWindows())
+    return SectionRules::COFF;
+  return SectionRules::ELF;
+}
+
+/// Whether outputs of \p TT bind native code: native libraries, P/Invokes,
+/// the native data imports, the host C runtime and its ABI (plan 5.18.5 LR2's
+/// native-binding sites). False for the portable triples, which bind no
+/// native code (brief Q3).
+inline bool bindsNatively(const Triple &TT) {
+  switch (getSectionRules(TT)) {
+  case SectionRules::ELF:
+  case SectionRules::COFF:
+    return true;
+  case SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
+/// Whether a link under \p Rules defines __start_<X> and __stop_<X> for a
+/// referenced output section whose name is a C identifier (5.9.9, LR9): ELF
+/// and Dotnet; never under COFF rules.
+inline bool definesStartStop(SectionRules Rules) {
+  switch (Rules) {
+  case SectionRules::ELF:
+  case SectionRules::Dotnet:
+    return true;
+  case SectionRules::COFF:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
+/// Whether \p Rules group input sections by the part of their name before
+/// the first '$' and sort the members by full name (lld/COFF's grouping):
+/// COFF only. ELF and Dotnet group by verbatim name with only .init_array.N
+/// (and, under ELF, .fini_array.N) collapsed (LR9).
+inline bool groupsDollarSections(SectionRules Rules) {
+  switch (Rules) {
+  case SectionRules::COFF:
+    return true;
+  case SectionRules::ELF:
+  case SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
+/// Whether a constructor under \p Rules may take arguments: ELF only, where
+/// glibc passes argc, argv and envp to an .init_array entry (TrailerInput::
+/// CtorArgs). The MSVC CRT passes none, and under Dotnet rules a constructor
+/// with parameters is T-P6 (LR5, brief Q7).
+inline bool constructorsTakeArgs(SectionRules Rules) {
+  switch (Rules) {
+  case SectionRules::ELF:
+    return true;
+  case SectionRules::COFF:
+  case SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
+/// Whether a null slot of a constructor table is the Dotnet error T-P7
+/// ('null constructor slot in '<section>' of '<file>': msil64-unknown-dotnet
+/// calls every slot', LR5): Dotnet only. COFF skips such a slot
+/// (skipsNullConstructorSlots in llvm/CLI/Trailer.h), and ELF keeps its own
+/// error for a slot that is not a function address.
+inline bool rejectsNullConstructorSlots(SectionRules Rules) {
+  switch (Rules) {
+  case SectionRules::Dotnet:
+    return true;
+  case SectionRules::ELF:
+  case SectionRules::COFF:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
+
+/// Whether \p Rules have destructor and pre-initialization sections at all
+/// (.fini_array and .preinit_array under ELF rules, .CRT$XT* under COFF
+/// rules): ELF and COFF. Under Dotnet rules .fini_array, .preinit_array,
+/// .ctors, .dtors and .CRT$X* are T-P8 (LR7); destructors register through
+/// __cxa_atexit instead (LR6).
+inline bool allowsFiniSections(SectionRules Rules) {
+  switch (Rules) {
+  case SectionRules::ELF:
+  case SectionRules::COFF:
+    return true;
+  case SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
+}
 
 /// One live input segment (a SEGMENTS entry of the link-info record, plan
 /// 5.8.8, or one global variable of a whole-program module). Flags are the
@@ -79,7 +189,10 @@ struct ImageInput {
   /// The number of 8-byte address slots of the relocation loop (rule 4,
   /// countAddressSlots in llvm/CLI/Trailer.h).
   unsigned NumSlots = 0;
-  SectionRules Rules = SectionRules::ELF;
+  /// The rules of the target: always getSectionRules(TT). There is no
+  /// default, so that no construction picks a rule set by accident (plan
+  /// 5.18.5 LR1).
+  SectionRules Rules;
   /// Lay out an image above rule 5's limit instead of failing: whole-program
   /// output, which reports the limit with Phase 1's text and still writes its
   /// module (plan section 2, 'Diagnostics leave well-formed output').
@@ -123,15 +236,17 @@ struct ImageLayout {
 enum class SectionClass : uint8_t {
   Data,
   /// Every 8-byte slot is a constructor: .init_array and .init_array.N (ELF
-  /// rules), .CRT$XC* (COFF rules).
+  /// and Dotnet rules), .CRT$XC* (COFF rules).
   ConstructorTable,
-  /// Destructors (phase 3): .fini_array and .fini_array.N (ELF rules),
-  /// .CRT$XT* (COFF rules).
+  /// Destructors (phase 3): .fini_array and .fini_array.N (ELF and Dotnet
+  /// rules; a Dotnet output refuses them, allowsFiniSections), .CRT$XT* (COFF
+  /// rules).
   DestructorTable,
   /// Rejected by name: .ctors, .dtors and their .N (and, under COFF rules,
-  /// $) forms; under ELF rules .preinit_array and .preinit_array.N; under
-  /// COFF rules every other .CRT$X* section (.CRT$XI*, .CRT$XL*, .CRT$XP*,
-  /// ...).
+  /// $) forms; under ELF and Dotnet rules .preinit_array and
+  /// .preinit_array.N; under COFF rules every other .CRT$X* section
+  /// (.CRT$XI*, .CRT$XL*, .CRT$XP*, ...), and under Dotnet rules every
+  /// .CRT$X* section (T-P8, plan 5.18.5 LR7).
   Unsupported,
   /// Thread-local data (phase 3): .tdata, .tbss and their .N forms; under
   /// COFF rules also .tls and .tls$*.
@@ -141,15 +256,23 @@ enum class SectionClass : uint8_t {
 /// The class of the input section \p Name under \p Rules.
 LLVM_ABI SectionClass classifySection(StringRef Name, SectionRules Rules);
 
+/// T-P8's reason (plan 5.18.5 LR7) for the section \p Name that \p Rules
+/// refuse by name, or std::nullopt if \p Rules accept it; only the Dotnet
+/// rules give a reason.
+LLVM_ABI std::optional<StringRef>
+getUnsupportedSectionReason(StringRef Name, SectionRules Rules);
+
 /// The output section of the input section \p Name (rule 1): .init_array.N
-/// and .fini_array.N give .init_array and .fini_array under ELF rules, and
-/// the part before the first '$' is the output name under COFF rules
-/// (lld/COFF's grouping); otherwise the name itself.
+/// gives .init_array under ELF and Dotnet rules and .fini_array.N gives
+/// .fini_array under ELF rules, and the part before the first '$' is the
+/// output name under COFF rules (lld/COFF's grouping, groupsDollarSections);
+/// otherwise the name itself.
 LLVM_ABI StringRef getOutputSectionName(StringRef Name, SectionRules Rules);
 
 /// lld/ELF's priority of the input section \p Name (elf::getPriority): N for
 /// a name that ends in '.N', 65535 - N for .ctors.N and .dtors.N, and 65536
-/// otherwise. Members of an output section are sorted by it under ELF rules.
+/// otherwise. Members of an output section are sorted by it under ELF and
+/// Dotnet rules.
 LLVM_ABI int getSectionPriority(StringRef Name);
 
 /// Whether \p Name is a C identifier, the condition under which a section
@@ -159,18 +282,20 @@ LLVM_ABI bool isCIdentifier(StringRef Name);
 /// The offset in \p Layout that the symbol \p Symbol stands for when it is
 /// __start_<X> or __stop_<X> and <X> is a C identifier that names one of
 /// its output sections: the section's start or end. std::nullopt otherwise.
-/// Whether the symbol is defined at all is the caller's rule (5.9.9: not on
-/// Windows triples).
+/// Whether the symbol is defined at all is the caller's rule
+/// (definesStartStop: not under COFF rules).
 LLVM_ABI std::optional<uint64_t> getStartStopOffset(const ImageLayout &Layout,
                                                     StringRef Symbol);
 
-/// The key by which the constructor list is sorted (5.9.9): under ELF rules
-/// a priority (an INIT entry's, with 65535 mapped to 65536, or the priority
-/// of a slot's input section), compared numerically; under COFF rules a
-/// section name (the name clang's COFF lowering gives an INIT entry's
+/// The key by which the constructor list is sorted (5.9.9): under ELF and
+/// Dotnet rules a priority (an INIT entry's, with 65535 mapped to 65536, or
+/// the priority of a slot's input section), compared numerically; under COFF
+/// rules a section name (the name clang's COFF lowering gives an INIT entry's
 /// priority, or a slot's input section), compared byte-wise.
 struct ConstructorKey {
-  SectionRules Rules = SectionRules::ELF;
+  /// The rules of the target (getConstructorKey sets them); no default, as
+  /// for ImageInput::Rules.
+  SectionRules Rules;
   int Priority = 65536;
   std::string Section;
 
@@ -181,15 +306,15 @@ struct ConstructorKey {
 };
 
 /// The key of an INIT entry (llvm.global_ctors) of priority \p InitPriority:
-/// ELF 65535 -> 65536, else the priority; COFF 65535 -> .CRT$XCU, below 200
-/// -> .CRT$XCA<5 digits>, 200 -> .CRT$XCC, 201-399 -> .CRT$XCC<5 digits>, 400
-/// -> .CRT$XCL, above 400 -> .CRT$XCT<5 digits>
+/// ELF and Dotnet 65535 -> 65536, else the priority; COFF 65535 -> .CRT$XCU,
+/// below 200 -> .CRT$XCA<5 digits>, 200 -> .CRT$XCC, 201-399 -> .CRT$XCC<5
+/// digits>, 400 -> .CRT$XCL, above 400 -> .CRT$XCT<5 digits>
 /// (TargetLoweringObjectFileImpl.cpp, getCOFFStaticStructorSection).
 LLVM_ABI ConstructorKey getConstructorKey(uint32_t InitPriority,
                                           SectionRules Rules);
 /// The key of an 8-byte slot of the constructor-table input section
-/// \p SlotSection: its priority (getSectionPriority) under ELF rules, its full
-/// name under COFF rules.
+/// \p SlotSection: its priority (getSectionPriority) under ELF and Dotnet
+/// rules, its full name under COFF rules.
 LLVM_ABI ConstructorKey getConstructorKey(StringRef SlotSection,
                                           SectionRules Rules);
 
@@ -256,8 +381,8 @@ private:
 /// 1. Units: a segment named .rodata, .data or .bss is a unit by itself;
 ///    every other name is a group of all segments of one output section
 ///    (getOutputSectionName) at its first segment's position, its members
-///    sorted by getSectionPriority (ELF rules) or by full name byte-wise
-///    (COFF rules), stably.
+///    sorted by getSectionPriority (ELF and Dotnet rules) or by full name
+///    byte-wise (COFF rules), stably.
 /// 2. The initialized part: the units with a non-ZERO segment in input
 ///    order, each member at its alignment, ZERO members of a mixed group as
 ///    zero bytes, zero padding. InitSize is the end of the last such unit.

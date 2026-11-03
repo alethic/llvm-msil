@@ -1,0 +1,94 @@
+# Constructors on msil64-unknown-dotnet: __attribute__((constructor)) entries with and without priorities and hand-written .init_array and .init_array.N slots in three objects run before main, after the image relocations, sorted stably by priority with ties in input order (per object: slots, then entries).
+# Plan 5.18.5 LR5 (llvm.global_ctors entries and .init_array[.N] slots,
+# sorted stably by priority, ties in input order, per object slots before
+# entries, which is today's ELF order and wasm-ld's; no arguments; they run
+# in the module initializer after the guard, the image relocations and the
+# cross-assembly relocations). Each constructor appends its number to a log
+# kept in log.c (an object without constructors, so that no constructor can
+# be evaluated at compile time) and checks that pointers that the data
+# segment's relocations set already hold their values (a.c's points into
+# log.c's data). The expected order, with the objects in link order main.c,
+# a.c, b.c, log.c:
+#   1 a.c constructor(101)
+#   2 main.c slot in .init_array.150
+#   3 main.c constructor(200)      (tie at 200: main.c first)
+#   4 a.c constructor(200)
+#   5 b.c constructor(300)
+#   6 main.c slot in .init_array   (default priority: main.c's slot first,
+#   7 main.c constructor           then its entry,
+#   8 a.c constructor              then a.c's entry,
+#   9 b.c slot in .init_array      then b.c's slot)
+# Bit 0 of the exit status: a wrong count; bit 1: a wrong order; bit 2: a
+# constructor saw an unrelocated pointer; bit 3: a wrong log total.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/a.c %t/b.c %t/log.c
+# RUN: %{msil_prog}
+#--- log.h
+void record(int id);
+int log_count(void);
+int log_entry(int i);
+int log_bad_reloc(void);
+extern int target;
+extern int *target_ptr;
+#--- main.c
+#include "log.h"
+static void slot150_fn(void) { record(2); }
+static void slot_fn(void) { record(6); }
+static void (*slot150)(void) __attribute__((section(".init_array.150"), used)) = slot150_fn;
+static void (*slot)(void) __attribute__((section(".init_array"), used)) = slot_fn;
+__attribute__((constructor(200))) static void main200(void) { record(3); }
+__attribute__((constructor)) static void main_default(void) { record(7); }
+
+int main(void) {
+  unsigned fails = 0;
+  int total = 0, count = log_count();
+  if (count != 9)
+    fails |= 1;
+  for (int i = 0; i < count && i < 16; ++i) {
+    if (log_entry(i) != i + 1)
+      fails |= 2;
+    total += log_entry(i);
+  }
+  if (log_bad_reloc())
+    fails |= 4;
+  if (total != 45)
+    fails |= 8;
+  return (int)fails;
+}
+#--- log.c
+// The log lives in its own object, which has no constructor, so no
+// constructor can be evaluated at compile time (GlobalOpt folds a
+// constructor whose effects it can compute into the initializers).
+#include "log.h"
+static int log_[16];
+static int count;
+static int bad_reloc;
+int target = 77;
+int *target_ptr = &target;
+static int *self_ptr = &count;
+
+void record(int id) {
+  if (target_ptr != &target || *target_ptr != 77 || self_ptr != &count)
+    bad_reloc = 1;
+  if (count < 16)
+    log_[count] = id;
+  ++count;
+}
+int log_count(void) { return count; }
+int log_entry(int i) { return log_[i]; }
+int log_bad_reloc(void) { return bad_reloc; }
+#--- a.c
+#include "log.h"
+static int *a_ptr = &target;
+__attribute__((constructor(101))) static void a101(void) {
+  if (*a_ptr == 77)
+    record(1);
+}
+__attribute__((constructor(200))) static void a200(void) { record(4); }
+__attribute__((constructor)) static void a_default(void) { record(8); }
+#--- b.c
+#include "log.h"
+__attribute__((constructor(300))) static void b300(void) { record(5); }
+static void b_slot_fn(void) { record(9); }
+static void (*b_slot)(void) __attribute__((section(".init_array"), used)) = b_slot_fn;

@@ -1,0 +1,160 @@
+## No static C library on msil64-unknown-dotnet before P-3 (ImplementationPlan.md
+## 5.18.6 PL10 and PL8; P-1a's text T-P11; the user's decision of 2026-11-01
+## against a private-state static C library):
+## - a dotnet output other than the C library itself that takes any
+##   definition from a member of an archive whose symbol index defines
+##   __llvm_libc_errno is T-P11,
+##     the C library cannot be linked statically for msil64-unknown-dotnet yet: link the shared C library c.dll (-lc)
+##   whether the member is the errno provider or another stateful member
+##   (strtok's), whether the archive is named by path or found by -l (with
+##   and without -Bstatic), and for a -shared output not named c as for an
+##   executable. libcstand.a stands in for llvm-libc's build-tree libc.a: a
+##   member that defines the hidden __llvm_libc_errno (5.19.5's provider) and
+##   a member that defines strtok over a static of its own;
+## - an archive whose index lacks __llvm_libc_errno links statically as
+##   usual;
+## - the C library's own link, the --shared output named c (c.dll's link of
+##   P-1b: --exclude-libs=ALL and a forced --export-list), passes, exports
+##   the forced names, the hidden provider included, and records the C
+##   runtime identity 'c' in its symbol table; programs then link c.dll by
+##   path or by -lc;
+## - the rule is dotnet's: a host link may take the same members.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir static crt host
+# RUN: llc -filetype=obj errno.ll -o errno.o
+# RUN: llc -filetype=obj strtok.ll -o strtok.o
+# RUN: llc -filetype=obj other.ll -o other.o
+# RUN: llc -filetype=obj prog-errno.ll -o prog-errno.o
+# RUN: llc -filetype=obj prog-strtok.ll -o prog-strtok.o
+# RUN: llc -filetype=obj prog-other.ll -o prog-other.o
+# RUN: llc -filetype=obj lib-strtok.ll -o lib-strtok.o
+# RUN: llvm-ar rcs libcstand.a errno.o strtok.o
+# RUN: llvm-ar rcs libother.a other.o
+# RUN: cp libcstand.a static/libc.a
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## T-P11.
+# RUN: not msil-ld prog-errno.o libcstand.a -o x.exe 2>&1 | %{fc} --check-prefix=STATIC
+# RUN: not msil-ld prog-strtok.o libcstand.a -o x.exe 2>&1 | %{fc} --check-prefix=STATIC
+# RUN: not msil-ld prog-strtok.o -L static -Bstatic -lc -o x.exe 2>&1 | %{fc} --check-prefix=STATIC
+# RUN: not msil-ld prog-errno.o -L static -lc -o x.exe 2>&1 | %{fc} --check-prefix=STATIC
+# RUN: not msil-ld -shared lib-strtok.o libcstand.a -o libu.dll 2>&1 | %{fc} --check-prefix=STATIC
+# STATIC: {{^}}msil-ld: error: the C library cannot be linked statically for msil64-unknown-dotnet yet: link the shared C library c.dll (-lc){{$}}
+
+## Another archive links statically.
+# RUN: msil-ld prog-other.o libother.a -o other.exe 2>&1 | count 0
+# RUN: llvm-cil-dump other.exe | FileCheck %s --check-prefix=OTHER
+# OTHER: {{^}}  .method 'other_state' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+
+## The C library's own link.
+# RUN: msil-ld -shared --target=msil64-unknown-dotnet --exclude-libs=ALL --export-list=c.exports libcstand.a -o crt/c.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt/c.dll | FileCheck %s --check-prefix=IDENTITY
+# IDENTITY: {{^}}SymbolTable v{{[0-9.]+}} triple=msil64-unknown-dotnet abi={{[0-9]+}} runtime='c' datamodel=8,8,4,8{{$}}
+# RUN: llvm-cil-dump crt/c.dll > c.txt
+# RUN: %python %S/Inputs/shared/listing.py members c.txt c | FileCheck %s --check-prefix=C-EXPORTS
+# C-EXPORTS-DAG: {{^}}  .method '__llvm_libc_errno' native int() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# C-EXPORTS-DAG: {{^}}  .method 'strtok' native int(native int, native int) flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+
+## Programs use the shared C library instead.
+# RUN: msil-ld prog-strtok.o crt/c.dll -o by-path.exe 2>&1 | count 0
+# RUN: msil-ld prog-errno.o -L crt -lc -o by-l.exe 2>&1 | count 0
+# RUN: llvm-cil-dump by-l.exe | FileCheck %s --check-prefix=USES-C
+# USES-C: {{^}}assemblyref 'c' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+
+## Host triples are not affected.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil errno.ll -o host/errno.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil strtok.ll -o host/strtok.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil prog-strtok.ll -o host/prog-strtok.o
+# RUN: llvm-ar rcs host/libcstand.a host/errno.o host/strtok.o
+# RUN: msil-ld host/prog-strtok.o host/libcstand.a -o host/prog.exe 2>&1 | count 0
+
+#--- c.exports
+# The C ABI of the stand-in C library.
+__llvm_libc_errno
+strtok
+
+#--- errno.ll
+target triple = "msil64-unknown-dotnet"
+
+@errno_cell = internal global i32 0, align 4
+
+define hidden ptr @__llvm_libc_errno() {
+  ret ptr @errno_cell
+}
+
+#--- strtok.ll
+target triple = "msil64-unknown-dotnet"
+
+@last = internal global ptr null, align 8
+
+define ptr @strtok(ptr %s, ptr %delim) {
+  %null = icmp eq ptr %s, null
+  br i1 %null, label %resume, label %start
+
+start:
+  store ptr %s, ptr @last, align 8
+  ret ptr %s
+
+resume:
+  %p = load ptr, ptr @last, align 8
+  ret ptr %p
+}
+
+#--- other.ll
+target triple = "msil64-unknown-dotnet"
+
+@state = internal global i32 0, align 4
+
+define i32 @other_state() {
+  %v = load i32, ptr @state, align 4
+  %n = add i32 %v, 1
+  store i32 %n, ptr @state, align 4
+  ret i32 %n
+}
+
+#--- prog-errno.ll
+target triple = "msil64-unknown-dotnet"
+
+declare ptr @__llvm_libc_errno()
+
+define i32 @main() {
+  %e = call ptr @__llvm_libc_errno()
+  %v = load i32, ptr %e, align 4
+  ret i32 %v
+}
+
+#--- prog-strtok.ll
+target triple = "msil64-unknown-dotnet"
+
+declare ptr @strtok(ptr, ptr)
+
+define i32 @main() {
+  %t = call ptr @strtok(ptr null, ptr null)
+  %b = icmp eq ptr %t, null
+  %r = zext i1 %b to i32
+  ret i32 %r
+}
+
+#--- prog-other.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @other_state()
+
+define i32 @main() {
+  %r = call i32 @other_state()
+  ret i32 %r
+}
+
+#--- lib-strtok.ll
+target triple = "msil64-unknown-dotnet"
+
+declare ptr @strtok(ptr, ptr)
+
+define ptr @first_token(ptr %s) {
+  %t = call ptr @strtok(ptr %s, ptr null)
+  ret ptr %t
+}

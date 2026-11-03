@@ -28,6 +28,10 @@
 #include <utility>
 #include <vector>
 
+namespace llvm {
+class Triple;
+} // namespace llvm
+
 namespace lld::msil {
 class Symbol;
 
@@ -97,6 +101,17 @@ bool mayBeExported(const Symbol &sym);
 // command-line order (driver defaults included) that is c, msvcrt, ucrt,
 // ucrtbase or crtdll or starts with msvcr, as given; else "none".
 std::string getCRuntimeIdentity();
+
+// True if the output is the C library of a portable triple (plan 5.18.6
+// PL8): the --shared output whose assembly name is c (c.dll), which records
+// the C runtime identity 'c' and may take the C library's archive members
+// (T-P11).
+bool isCLibraryOutput();
+
+// True if \p tt selects exports by the Windows rules (plan 5.9.15): the
+// dllexport definitions when some input has one, and never a COMDAT copy
+// that is not dllexport. False under ELF and Dotnet rules (plan 5.18.6 PL7).
+bool usesCOFFExportRules(const llvm::Triple &tt);
 
 // Splits an export class name, the value of --export-class or the assembly
 // name, at its last '.' into (namespace, name); a name without '.' has an

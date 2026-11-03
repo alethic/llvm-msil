@@ -1,0 +1,87 @@
+# The 32-bit starts of the portable harness (plan 5.18.10 PX3, P-1a.i): an
+# msil64 image is IL-only AnyCPU PE32 (plan 5.18.7), so a 32-bit host loads
+# it, and the width guard at the top of <Module>::.cctor (T-P10) must stop
+# it there. %msil_dotnet_x86 is msil-run.py with the x86 dotnet host (the
+# caller adds --runtime-major 8 or 10, which writes the runtimeconfig);
+# %msil_set_32bitreq copies an image with COR20 flag 0x2 (32BITREQUIRED)
+# set, which makes the .NET Framework direct start of an AnyCPU .exe a
+# 32-bit process. The images are assembled with %{portable_ilasm}
+# (lit.local.cfg: %ilasm without -pe64 -x64), and Inputs/pe-flags.py reads
+# their envelope. Checks:
+# (1) The envelope: optional header magic 0x10b (PE32), machine 0x14c
+# (I386), CorFlags 0x1 (ILONLY alone).
+# (2) Inputs/pointer-size.il exits with sizeof(native int): 4 under the x86
+# host on .NET 8 and .NET 10, 8 under the 64-bit host of %msil_exec.
+# (3) Inputs/guard.il, the guard's shape: under the x86 host on .NET 8 and
+# .NET 10 an unhandled exception whose stderr carries the first T-P10 text
+# (.NET 8 wraps the throw from the module initializer in a
+# TypeInitializationException; .NET 10 reports the
+# PlatformNotSupportedException itself), and its entry point never runs; on
+# the 64-bit host it exits 42. This is the failure path of (2)'s width
+# check.
+# (4) %msil_set_32bitreq: the copy has CorFlags 0x3 and IN is unchanged; the
+# Framework direct start of the original is a 64-bit process (exit 8), of
+# the copy a 32-bit one (exit 4), where the guard stops guard.exe. IN that
+# is no PE image, a missing IN and a missing OUT are errors (exit 2) that
+# write nothing; --runtime-major 0, --runtime-major with --netfx and with
+# --runtimeconfig are usage errors.
+# REQUIRES: msil-dotnet-x86, system-windows
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %{portable_ilasm} -dll -output=%t/ps.dll %S/Inputs/pointer-size.il
+# RUN: %{portable_ilasm} -exe -output=%t/ps.exe %S/Inputs/pointer-size.il
+# RUN: %{portable_ilasm} -dll -output=%t/guard.dll %S/Inputs/guard.il
+# RUN: %{portable_ilasm} -exe -output=%t/guard.exe %S/Inputs/guard.il
+# RUN: %python %S/Inputs/pe-flags.py %t/ps.dll > %t/flags.txt
+# RUN: %python %S/Inputs/pe-flags.py %t/ps.exe >> %t/flags.txt
+# RUN: %python %S/Inputs/pe-flags.py %t/guard.dll >> %t/flags.txt
+# RUN: %{harness_check} equals %t/flags.txt "pe-flags: magic 0x10b machine 0x14c corflags 0x1" "pe-flags: magic 0x10b machine 0x14c corflags 0x1" "pe-flags: magic 0x10b machine 0x14c corflags 0x1"
+
+# (2)
+# RUN: %msil_dotnet_x86 --runtime-major 8 --out %t/ps8.out %t/ps.dll
+# RUN: %{harness_check} equals %t/ps8.out "[exit 4]"
+# RUN: %msil_dotnet_x86 --runtime-major 10 --out %t/ps10.out %t/ps.dll
+# RUN: %{harness_check} equals %t/ps10.out "[exit 4]"
+# RUN: %msil_exec --out %t/ps64.out %t/ps.dll
+# RUN: %{harness_check} equals %t/ps64.out "[exit 8]"
+
+# (3)
+# RUN: %msil_dotnet_x86 --runtime-major 8 --out %t/guard8.out --stderr-out %t/guard8.err %t/guard.dll
+# RUN: %{harness_check} contains %t/guard8.out "\A\[unhandled exception: System\.(TypeInitializationException|PlatformNotSupportedException)\]\n\Z"
+# RUN: %{harness_check} contains %t/guard8.err "System\.PlatformNotSupportedException: guard is built for msil64-unknown-dotnet and needs a 64-bit \.NET process; this process is 32-bit$"
+# RUN: %msil_dotnet_x86 --runtime-major 10 --out %t/guard10.out --stderr-out %t/guard10.err %t/guard.dll
+# RUN: %{harness_check} contains %t/guard10.out "\A\[unhandled exception: System\.(TypeInitializationException|PlatformNotSupportedException)\]\n\Z"
+# RUN: %{harness_check} contains %t/guard10.err "System\.PlatformNotSupportedException: guard is built for msil64-unknown-dotnet and needs a 64-bit \.NET process; this process is 32-bit$"
+# RUN: %{harness_check} lacks %t/guard8.err "little-endian"
+# RUN: %msil_exec --out %t/guard64.out %t/guard.dll
+# RUN: %{harness_check} equals %t/guard64.out "[exit 42]"
+
+# (4)
+# RUN: cp %t/ps.exe %t/ps.orig
+# RUN: %msil_set_32bitreq %t/ps.exe %t/ps32.exe
+# RUN: cmp %t/ps.exe %t/ps.orig
+# RUN: %python %S/Inputs/pe-flags.py %t/ps32.exe > %t/flags32.txt
+# RUN: %{harness_check} equals %t/flags32.txt "pe-flags: magic 0x10b machine 0x14c corflags 0x3"
+# RUN: %msil_set_32bitreq %t/guard.exe %t/guard32.exe
+# RUN: %if msil-netfx %{ %msil_exec --netfx --out %t/nf.out %t/ps.exe %}
+# RUN: %if msil-netfx %{ %{harness_check} equals %t/nf.out "[exit 8]" %}
+# RUN: %if msil-netfx %{ %msil_exec --netfx --out %t/nf32.out %t/ps32.exe %}
+# RUN: %if msil-netfx %{ %{harness_check} equals %t/nf32.out "[exit 4]" %}
+# RUN: %if msil-netfx %{ %msil_exec --netfx --out %t/nf-guard32.out --stderr-out %t/nf-guard32.err %t/guard32.exe %}
+# RUN: %if msil-netfx %{ %{harness_check} contains %t/nf-guard32.out "\A\[unhandled exception: System\.(TypeInitializationException|PlatformNotSupportedException)\]\n\Z" %}
+# RUN: %if msil-netfx %{ %{harness_check} contains %t/nf-guard32.err "System\.PlatformNotSupportedException: guard is built for msil64-unknown-dotnet and needs a 64-bit \.NET process; this process is 32-bit" %}
+# RUN: %{harness_check} exits 2 %msil_set_32bitreq %S/Inputs/guard.il %t/bad.exe > %t/err1.log 2>&1
+# RUN: %{harness_check} contains %t/err1.log "^msil-run: error: --set-32bitreq \S*guard\.il: no MZ header$"
+# RUN: %{harness_check} exits 2 %msil_set_32bitreq %t/no-such.exe %t/bad.exe > %t/err2.log 2>&1
+# RUN: %{harness_check} contains %t/err2.log "^msil-run: error: --set-32bitreq \S*no-such\.exe: "
+# RUN: %{harness_check} exits 2 %msil_set_32bitreq %t/ps.exe > %t/err3.log 2>&1
+# RUN: %{harness_check} contains %t/err3.log "^msil-run: error: --set-32bitreq takes IN and OUT$"
+# RUN: %{harness_check} missing %t/bad.exe
+# RUN: %{harness_check} exits 2 %msil_dotnet_x86 --runtime-major 0 %t/ps.dll > %t/err4.log 2>&1
+# RUN: %{harness_check} contains %t/err4.log "error: --runtime-major must be a positive major version$"
+# RUN: %{harness_check} exits 2 %msil_dotnet_x86 --runtime-major 8 --netfx %t/ps.exe > %t/err5.log 2>&1
+# RUN: %{harness_check} contains %t/err5.log "error: --runtime-major runs a \.dll under 'dotnet exec'$"
+# RUN: %{harness_check} exits 2 %msil_dotnet_x86 --runtime-major 8 --runtimeconfig %t/x.json %t/ps.dll > %t/err6.log 2>&1
+# RUN: %{harness_check} contains %t/err6.log "error: --runtime-major and --runtimeconfig exclude each other$"

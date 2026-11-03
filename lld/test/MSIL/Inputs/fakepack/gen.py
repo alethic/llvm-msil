@@ -14,7 +14,8 @@ and the tests run 'yaml2obj <name>.yaml -o <dir>/<Assembly>.dll'.
 TARGETS lists every output: its source, the '#define' lines prepended to the
 source (ilasm's preprocessor builds the variants of FakeCore.il,
 FakeInterop.il, FakeThreading.il, FakeBarrierBase.il, FakeTypesB.il,
-FakeNativeLibrary.il, MiniCore.il, named-obj.il and field-obj.il), and
+FakeNativeLibrary.il, FakeMscorlib.il, MiniCore.il, named-obj.il and
+field-obj.il), and
 whether it is a library ('-dll', PE32 AnyCPU like the assemblies of the .NET
 reference packs), a CIL object ('-dll -pe64 -x64', the envelope of
 %ilasm-verify and of llc -filetype=obj) or a library built by this toolchain
@@ -98,6 +99,7 @@ TARGETS = [
     ("FakeNativeLibraryPrivExport", "FakeNativeLibrary.il", ["PRIVEXPORT"], "dll"),
     ("FakeFacade", "FakeFacade.il", [], "dll"),
     ("FakeMscorlib", "FakeMscorlib.il", [], "dll"),
+    ("PortableMscorlib", "FakeMscorlib.il", ["PORTABLE"], "dll"),
     ("IlasmCore", "IlasmCore.il", [], "dll"),
     ("CoreA", "MiniCore.il", ["CORE_A"], "dll"),
     ("CoreB", "MiniCore.il", ["CORE_B"], "dll"),

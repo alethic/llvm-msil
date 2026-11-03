@@ -1,0 +1,45 @@
+# The width guard on a 32-bit process: an msil64-unknown-dotnet image (PE32, ILONLY, AnyCPU) runs as a 64-bit process wherever one exists, and under 32-bit .NET 8 and .NET 10, and as a 32BITREQUIRED copy on a .NET Framework direct start, it fails loudly with T-P10's text before any C code runs.
+# Plan 5.18.7 PE4-PE6 (the guard is the first code of <Module>::.cctor: a
+# native int that does not reach 64 bits throws PlatformNotSupportedException
+# with T-P10's text, which names the output's assembly, here 'prog'), brief
+# T-P10, and the recon's wide.c, which a 32-bit process ran to a wrong answer
+# (0, not 48) before the guard existed. The program is wide.c itself: on the
+# leg's 64-bit runtime %{msil_prog} runs it at -O0 and -O2 to '[exit 0]'.
+# The -O2 image then runs under the 32-bit .NET 8 and .NET 10 hosts
+# (%msil_dotnet_x86) and, as a copy with COMIMAGE_FLAGS_32BITREQUIRED set
+# (%msil_set_32bitreq), on a .NET Framework direct start. Each run must fail
+# with an unhandled exception (.NET 8 and the Framework wrap the guard's
+# exception in TypeInitializationException; .NET 10 reports the
+# PlatformNotSupportedException itself), and its stderr must hold the width
+# message, never the byte-order one. The LOUD lines match only T-P10's text.
+# REQUIRES: msil-dotnet-x86
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t %t.req32 && split-file %s %t && mkdir -p %t.req32
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#
+# RUN: %msil_dotnet_x86 --runtime-major 8 --stderr-out %t.net8.err %t.O2.d/prog.exe > %t.net8.out
+# RUN: FileCheck %s --check-prefix=LOUD --input-file %t.net8.err --implicit-check-not=little-endian
+# RUN: FileCheck %s --check-prefix=STATUS --input-file %t.net8.out --implicit-check-not="[exit"
+#
+# RUN: %msil_dotnet_x86 --runtime-major 10 --stderr-out %t.net10.err %t.O2.d/prog.exe > %t.net10.out
+# RUN: FileCheck %s --check-prefix=LOUD --input-file %t.net10.err --implicit-check-not=little-endian
+# RUN: FileCheck %s --check-prefix=STATUS --input-file %t.net10.out --implicit-check-not="[exit"
+#
+# RUN: %msil_set_32bitreq %t.O2.d/prog.exe %t.req32/prog.exe
+# RUN: %msil_exec --netfx --stderr-out %t.fx.err %t.req32/prog.exe > %t.fx.out
+# RUN: FileCheck %s --check-prefix=LOUD --input-file %t.fx.err --implicit-check-not=little-endian
+# RUN: FileCheck %s --check-prefix=STATUS --input-file %t.fx.out --implicit-check-not="[exit"
+#
+# LOUD: prog is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit
+# STATUS: {{^}}[unhandled exception: System.{{(TypeInitialization|PlatformNotSupported)}}Exception]{{$}}
+#--- main.c
+// The recon's wide.c: bits 36..43 of the long long product are 48 (3 << 4)
+// only when the native ints are 64 bits wide.
+static volatile long long a = 1LL << 40;
+static volatile long long b = 3;
+
+int main(void) {
+  long long v = a * b;
+  return ((int)(v >> 36) & 0xff) != 48;
+}

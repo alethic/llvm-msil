@@ -56,8 +56,14 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/BinaryFormat/Magic.h"
+#include "llvm/CLI/BCLMembers.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/MetadataBuilder.h"
+#include "llvm/CLI/MetadataReader.h"
+#include "llvm/CLI/PEImage.h"
+#include "llvm/CLI/PEWriter.h"
 #include "llvm/LTO/LTO.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
@@ -99,6 +105,7 @@ void Ctx::reset() {
   appliedAlternateNames.clear();
   mustMatch.clear();
   excludedSymbols.clear();
+  cLibraryArchives.clear();
   whyExtractRecords.clear();
   sym = MSILSym{};
 }
@@ -136,6 +143,7 @@ private:
   void addLibrary(StringRef name);
   void addLinkerScript(MemoryBufferRef mb, std::optional<sys::fs::UniqueID> id);
   void addInputFile(InputFile *file);
+  void applyPendingArchiveRules();
   void addPendingFiles();
   void addLinkerOptions(InputFile &f);
   void checkInputFile(const InputFile &f);
@@ -170,6 +178,59 @@ private:
   llvm::MSILLink::Header objectModel;
   bool warnedNativeBitcode = false;
   bool warnedDebugInfo = false;
+
+  // An archive input whose native-library rule waits for the codegen triple
+  // (plan 5.18.6 PL2, section 6 P-1a 'Archives on dotnet'): its CIL and
+  // bitcode members are in `files` already, and the rule may add the archive
+  // as a native library at insertAt (host triples) or refuse it (T-P4).
+  struct ArchiveInput {
+    MemoryBufferRef mb;
+    StringRef path;
+    size_t numMembers = 0;
+    // True if a member is a CIL object or LLVM bitcode.
+    bool hasCode = false;
+    // The import members and native objects, which only the native index
+    // reads.
+    SmallVector<StringRef, 0> nativeMembers;
+  };
+  InputFile *applyArchiveRule(const ArchiveInput &a);
+
+  // An input that waits for the codegen triple: an archive whose rule waits
+  // (above), or a -l<namespec> of the command line or of a GNU ld script it
+  // reads, whose search depends on the triple (plan 5.10.9, 5.18.6 PL6), with
+  // the -Bstatic, --whole-archive and --start-lib states where it appears.
+  struct PendingInput {
+    bool isLibrary = false;
+    ArchiveInput archive;
+    StringRef libraryName;
+    bool isStatic = false;
+    bool inWholeArchive = false;
+    bool inLib = false;
+    // The files that the -l added once it was searched for.
+    std::vector<InputFile *> libraryFiles;
+    // Where the input's files go: before the insertAt'th file of the inputs,
+    // or, for an archive that a waiting -l found, of that -l's libraryFiles
+    // (container, an index into pendingInputs).
+    size_t insertAt = 0;
+    std::optional<size_t> container;
+  };
+
+  // The inputs that wait for the codegen triple: without --target, the first
+  // CIL object or bitcode input names it, wherever it comes on the command
+  // line, so the -l of the command line wait until createFiles() has read
+  // every input and the triple is checked (resolvePendingLibraries), and the
+  // rules of the archives read before the triple was fixed until then too
+  // (applyPendingArchiveRules); each input keeps its place among the others,
+  // and the result does not depend on the order of the arguments. Archives
+  // and -l read later are handled at once.
+  void resolvePendingLibraries();
+  std::vector<PendingInput> pendingInputs;
+  bool archiveRulesFixed = false;
+  // True while createFiles() reads the command line, when every -l waits.
+  bool inCreateFiles = false;
+  // The waiting -l (an index into pendingInputs) whose files `files` holds
+  // while resolvePendingLibraries() searches for it.
+  std::optional<size_t> currentLibrary;
 
   // The files read, so that a library that several inputs request (clang's
   // /DEFAULTLIB:oldnames.lib in every windows-msvc input) is read once, as
@@ -455,24 +516,90 @@ static LibraryKind classifyCandidate(StringRef path, unsigned depth = 0) {
   return hasNative ? LibraryKind::NativeShared : LibraryKind::NativeOnly;
 }
 
-// The codegen triple for a triple that --target or the first input names: an
-// MSIL triple as it is, and a native one with -msil appended (plan 5.9.3).
+// The codegen triple for a triple that --target or the first input names: a
+// portable triple normalized (msil64-dotnet is msil64-unknown-dotnet; plan
+// 5.18.6 PL1, PT2) with another vendor reduced to unknown (5.18.1 PT5, so
+// every triple text and key formed from it names msil64-unknown-dotnet),
+// another MSIL triple as it is, and a native one with -msil appended (plan
+// 5.9.3). A native architecture with the OS dotnet (x86_64-unknown-dotnet)
+// stays as it is, so that its 5.18.1 PT5 refusal names the triple as given.
 static Triple getMSILTriple(StringRef triple) {
   Triple tt(triple);
-  if (tt.isOSBinFormatMSIL())
+  if (tt.isMSIL()) {
+    Triple normalized(Triple::normalize(triple));
+    if (normalized.isOSDotNet() && normalized.getVendorName() != "unknown")
+      normalized.setVendor(Triple::UnknownVendor);
+    return normalized;
+  }
+  if (tt.isOSBinFormatMSIL() || tt.isOSDotNet())
     return tt;
   return Triple(triple + "-msil");
 }
 
 // Returns true if \p tt is one of D6's MSIL triples, which msil-ld links: an
 // x86_64 or aarch64 triple for which the clang driver's createMSILToolChain
-// gives an MSILToolChain (plan 5.9.3 --target, section 12 of 2026-10-22).
-// The Darwin, i686 and other native triples of stock bitcode are not.
+// gives an MSILToolChain (plan 5.9.3 --target, section 12 of 2026-10-22), or
+// the portable msil64-unknown-dotnet (plan 5.18.6 PL1; msil32 is T-P1), with
+// no environment component (5.18.1 PT5: msil64-unknown-dotnet-gnu is
+// refused) and the object format MSIL (msil64-unknown-dotnet-elf is
+// refused). The Darwin, i686 and other native triples of stock bitcode are
+// not.
 static bool isSupportedTarget(const Triple &tt) {
+  if (tt.isMSIL())
+    return tt.getArch() == Triple::msil64 && tt.isOSDotNet() &&
+           tt.isOSBinFormatMSIL() &&
+           tt.getEnvironment() == Triple::UnknownEnvironment;
   if (tt.getArch() != Triple::x86_64 && tt.getArch() != Triple::aarch64)
     return false;
   return tt.isOSLinux() || tt.isWindowsMSVCEnvironment() ||
          tt.isWindowsGNUEnvironment();
+}
+
+// Reports the codegen triple if it is known and unsupported, and returns false
+// then.
+static bool checkTarget() {
+  if (ctx.arg.target.str().empty() || isSupportedTarget(ctx.arg.target))
+    return true;
+  // The combinations that 5.18.1 PT5 refuses for good (an msil architecture
+  // without the OS dotnet, the OS dotnet without an msil architecture, an
+  // environment, an object format other than MSIL) have TargetRegistry's
+  // reason, as llc and clang report them; msil32 is T-P1.
+  std::string reason;
+  if (!TargetRegistry::lookupTarget(ctx.arg.target, reason))
+    error(reason);
+  else if (ctx.arg.target.getArch() == Triple::msil32)
+    error("target '" + ctx.arg.target.str() +
+          "' is not supported yet: only msil64-unknown-dotnet is "
+          "implemented");
+  else
+    error("unsupported target triple '" + ctx.arg.target.str() + "' for MSIL");
+  return false;
+}
+
+// True if the codegen triple is known and binds no native code (plan 5.18.5
+// LR2): a portable triple, on which every native library is T-P4.
+static bool isPortableTarget() { return !cli::bindsNatively(ctx.arg.target); }
+
+// The C library's errno provider (plan 5.18.6 PL10, 5.19.5): an archive whose
+// symbol index defines it is llvm-libc's, which the portable triples do not
+// link statically yet (T-P11).
+static constexpr StringLiteral cLibraryErrnoName = "__llvm_libc_errno";
+
+// Records \p path in ctx.cLibraryArchives if the symbol index of the archive
+// \p mb defines the C library's errno provider (T-P11). A malformed archive
+// is getArchiveMembers()'s to report.
+static void recordCLibraryArchive(MemoryBufferRef mb, StringRef path) {
+  Expected<std::unique_ptr<Archive>> fileOrErr = Archive::create(mb);
+  if (!fileOrErr) {
+    consumeError(fileOrErr.takeError());
+    return;
+  }
+  for (const Archive::Symbol &sym : (*fileOrErr)->symbols()) {
+    if (sym.getName() == cLibraryErrnoName) {
+      ctx.cLibraryArchives.insert(path);
+      return;
+    }
+  }
 }
 
 void LinkerDriver::addInputFile(InputFile *file) {
@@ -509,29 +636,46 @@ void LinkerDriver::addFile(StringRef path) {
       return;
     auto &members = *maybeMembers;
 
+    ArchiveInput a;
+    a.mb = mbref;
+    a.path = saver().save(path);
+    a.numMembers = members.size();
+    a.hasCode = any_of(
+        members, [](const auto &p) { return isBitcodeOrCILObject(p.first); });
+
     // An archive without LLVM bitcode or CIL object members (an import
     // library, oldnames.lib, an archive of native objects) is a native
-    // library (plan 5.9.4, 5.10.8).
-    if (none_of(members,
-                [](const auto &p) { return isBitcodeOrCILObject(p.first); })) {
-      addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::Archive));
+    // library (plan 5.9.4, 5.10.8): applyArchiveRule() decides. Otherwise
+    // its CIL and bitcode members are inputs on every triple.
+    if (a.hasCode) {
+      // Recorded on every triple: checkStaticCLibrary() applies the rule on
+      // the portable triples only.
+      recordCLibraryArchive(mbref, path);
+      for (const auto &[m, offset] : members) {
+        // Import members and native objects are the native index's; the
+        // portable triples never link their machine code.
+        if (!isCLIImage(m) && isNativeArchiveMember(m)) {
+          a.nativeMembers.push_back(m.getBufferIdentifier());
+          continue;
+        }
+        // Handle -whole-archive. Any other member is lazy. A member that is
+        // neither a CIL object nor LLVM bitcode is reported and skipped by
+        // createObjectFile(), and so is a .NET assembly.
+        addInputFile(createObjectFile(m, path, offset, !inWholeArchive));
+      }
+    }
+    // Without the codegen triple yet, a later input (or one of the members
+    // just added) may name a portable or a host triple.
+    if (!archiveRulesFixed && ctx.arg.target.str().empty()) {
+      PendingInput p;
+      p.archive = std::move(a);
+      p.insertAt = files.size();
+      p.container = currentLibrary;
+      pendingInputs.push_back(std::move(p));
       return;
     }
-
-    bool hasNativeMembers = false;
-    for (const auto &[m, offset] : members) {
-      // Import members and native objects are the native index's.
-      if (!isCLIImage(m) && isNativeArchiveMember(m)) {
-        hasNativeMembers = true;
-        continue;
-      }
-      // Handle -whole-archive. Any other member is lazy. A member that is
-      // neither a CIL object nor LLVM bitcode is reported and skipped by
-      // createObjectFile(), and so is a .NET assembly.
-      addInputFile(createObjectFile(m, path, offset, !inWholeArchive));
-    }
-    if (hasNativeMembers)
-      addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::Archive));
+    if (InputFile *f = applyArchiveRule(a))
+      addInputFile(f);
     return;
   }
   case file_magic::bitcode:
@@ -539,6 +683,10 @@ void LinkerDriver::addFile(StringRef path) {
     return;
   case file_magic::pecoff_executable:
     if (!isCLIImage(mbref)) {
+      if (isPortableTarget()) {
+        error(getNativeLibraryRefusal(path, ctx.arg.target));
+        return;
+      }
       addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::PEDll));
       return;
     }
@@ -558,6 +706,10 @@ void LinkerDriver::addFile(StringRef path) {
     }
     llvm_unreachable("unknown CLI image kind");
   case file_magic::elf_shared_object:
+    if (isPortableTarget()) {
+      error(getNativeLibraryRefusal(path, ctx.arg.target));
+      return;
+    }
     addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::ELFShared));
     return;
   case file_magic::unknown:
@@ -573,6 +725,87 @@ void LinkerDriver::addFile(StringRef path) {
     // latter (section 12 of 2026-10-26, Rust-found defect 3).
     addInputFile(createObjectFile(mbref, "", 0, inLib));
   }
+}
+
+// The native-library rule of the archive \p a under the codegen triple,
+// which is fixed now (or stays unknown, which binds like a host triple).
+// Returns the archive as a native library for the native index, or null.
+InputFile *LinkerDriver::applyArchiveRule(const ArchiveInput &a) {
+  if (isPortableTarget()) {
+    // On the portable triples (plan 5.18.6 PL2) an archive without members
+    // (the portable sysroot's empty libm.a) contributes nothing, and one
+    // whose members are all native is T-P4.
+    if (a.numMembers == 0)
+      return nullptr;
+    if (!a.hasCode) {
+      error(getNativeLibraryRefusal(a.path, ctx.arg.target));
+      return nullptr;
+    }
+    for (StringRef m : a.nativeMembers)
+      log("skipping native member " + m + " of " + a.path + ": " +
+          ctx.arg.target.str() + " binds no native code");
+    return nullptr;
+  }
+  if (!a.hasCode || !a.nativeMembers.empty())
+    return make<NativeLibraryFile>(a.mb, NativeLibraryFile::Archive);
+  return nullptr;
+}
+
+// Searches for every -l that waited for the codegen triple, in command-line
+// order, under the -Bstatic, --whole-archive and --start-lib states where it
+// appeared; the triple is fixed now unless no input named it, and then the
+// first CIL object or bitcode file that a search finds names it. Each -l's
+// files are kept apart, and applyPendingArchiveRules() puts them at the place
+// the -l had among the inputs.
+void LinkerDriver::resolvePendingLibraries() {
+  bool savedStatic = ctx.arg.isStatic;
+  bool savedWholeArchive = inWholeArchive;
+  bool savedLib = inLib;
+  // Only the waiting inputs of the command line: the archives that a search
+  // reads without the triple are appended.
+  for (size_t i = 0, e = pendingInputs.size(); i != e; ++i) {
+    if (!pendingInputs[i].isLibrary)
+      continue;
+    StringRef name = pendingInputs[i].libraryName;
+    ctx.arg.isStatic = pendingInputs[i].isStatic;
+    inWholeArchive = pendingInputs[i].inWholeArchive;
+    inLib = pendingInputs[i].inLib;
+    std::vector<InputFile *> inputs = std::move(files);
+    files.clear();
+    currentLibrary = i;
+    addLibrary(name);
+    currentLibrary.reset();
+    pendingInputs[i].libraryFiles = std::move(files);
+    files = std::move(inputs);
+  }
+  // The states at the end of the command line, which the embedded library
+  // requests use.
+  ctx.arg.isStatic = savedStatic;
+  inWholeArchive = savedWholeArchive;
+  inLib = savedLib;
+}
+
+// Applies the rule of every archive read before the codegen triple was fixed
+// at the place the archive had among the inputs (or among the files of the
+// -l that found it), puts the files of every -l that waited at the place the
+// -l had, and applies the rule of every archive read from now on as it is
+// read.
+void LinkerDriver::applyPendingArchiveRules() {
+  archiveRulesFixed = true;
+  // Backwards, so that each insertAt still counts the files before it; two
+  // inputs at one place keep their order. The archives that a -l found come
+  // after every input of the command line, so the -l's files are complete
+  // before they are put in place.
+  for (PendingInput &p : llvm::reverse(pendingInputs)) {
+    std::vector<InputFile *> &dest =
+        p.container ? pendingInputs[*p.container].libraryFiles : files;
+    if (p.isLibrary)
+      dest.insert(dest.begin() + p.insertAt, p.libraryFiles.begin(),
+                  p.libraryFiles.end());
+    else if (InputFile *f = applyArchiveRule(p.archive))
+      dest.insert(dest.begin() + p.insertAt, f);
+  }
+  pendingInputs.clear();
 }
 
 // Reports each error of \p e on its own line, as lld reports errors.
@@ -648,12 +881,15 @@ static std::optional<std::string> findFromSearchPaths(StringRef path) {
 }
 
 // The file names that -l<name> looks for in each -L directory, in the order of
-// plan 5.10.9, for the codegen triple. Until a --target or a bitcode input
-// names it, every triple's names are candidates. On a non-Windows triple
+// plan 5.10.9, for the codegen triple. While neither --target nor an input
+// has named it (the -l of the command line wait until every input is read),
+// every triple's names are candidates. On a non-Windows triple
 // <name>.dll and lib<name>.dll are candidates only for the managed kind (a
 // .NET assembly, which gets the --reference warning): a native DLL there is
 // OtherFormat (plan 5.10.8), so a directory with foo.dll and libfoo.so gives
-// libfoo.so, as with ld.lld.
+// libfoo.so, as with ld.lld. The portable triples look for <name>.dll,
+// lib<name>.dll and lib<name>.a only (plan 5.18.6 PL6): never .so, .lib or
+// .dll.a.
 static SmallVector<std::string, 0> getLibraryCandidates(StringRef name) {
   const Triple &tt = ctx.arg.target;
   if (tt.str().empty())
@@ -661,6 +897,9 @@ static SmallVector<std::string, 0> getLibraryCandidates(StringRef name) {
             (name + ".dll.a").str(),       (name + ".lib").str(),
             ("lib" + name + ".dll").str(), (name + ".dll").str(),
             ("lib" + name + ".so").str()};
+  if (!cli::bindsNatively(tt))
+    return {(name + ".dll").str(), ("lib" + name + ".dll").str(),
+            ("lib" + name + ".a").str()};
   if (tt.isWindowsMSVCEnvironment())
     return {("lib" + name + ".a").str(), (name + ".lib").str(),
             (name + ".dll").str()};
@@ -696,15 +935,43 @@ static bool isToolchainLibraryFile(StringRef path) {
 // (with a warning: they are references). -Bstatic accepts static libraries
 // only. The driver reads the library found like a positional input, so a
 // managed library reaches createManagedLibraryFile().
+//
+// On the portable triples (plan 5.18.6 PL6; Design.md 5.2's shared-first
+// rule, brief Q8 (a)) a library built by this toolchain wins over a static
+// library of the same directory unless -Bstatic, and a native candidate (an
+// archive without CIL or bitcode members, a native DLL) comes last and is
+// taken rather than skipped, so that reading it reports T-P4.
 static std::optional<std::string> searchLibraryBaseName(StringRef name) {
   SmallVector<std::string, 0> candidates = getLibraryCandidates(name);
+  bool portable = isPortableTarget();
   for (StringRef dir : ctx.arg.searchPaths) {
-    std::optional<std::string> managed, native;
+    std::optional<std::string> managed, staticLib, native;
     for (const std::string &candidate : candidates) {
       std::optional<std::string> s = findFile(dir, candidate);
       if (!s)
         continue;
-      switch (classifyCandidate(*s)) {
+      LibraryKind kind = classifyCandidate(*s);
+      if (portable) {
+        switch (kind) {
+        case LibraryKind::Static:
+          if (!staticLib)
+            staticLib = std::move(s);
+          continue;
+        case LibraryKind::Managed:
+          break;
+        case LibraryKind::NativeOnly:
+          if (!native)
+            native = std::move(s);
+          continue;
+        case LibraryKind::OtherFormat:
+        case LibraryKind::Import:
+        case LibraryKind::NativeShared:
+          if (!ctx.arg.isStatic && !native)
+            native = std::move(s);
+          continue;
+        }
+      }
+      switch (kind) {
       case LibraryKind::Static:
         return s;
       case LibraryKind::Managed:
@@ -732,6 +999,8 @@ static std::optional<std::string> searchLibraryBaseName(StringRef name) {
     }
     if (managed)
       return managed;
+    if (staticLib)
+      return staticLib;
     if (native)
       return native;
   }
@@ -746,8 +1015,25 @@ static std::optional<std::string> searchLibrary(StringRef name) {
   return searchLibraryBaseName(name);
 }
 
-// Add a given library by searching it from input search paths.
+// Add a given library by searching it from input search paths. A -l of the
+// command line (or of a GNU ld script that it reads) waits at its place for
+// the codegen triple and its check (resolvePendingLibraries), since the
+// candidates and their order depend on the triple (plan 5.10.9, 5.18.6 PL6);
+// it waits also after --target or an earlier input named the triple, so that
+// neither the result nor the first error depends on the order of the
+// arguments.
 void LinkerDriver::addLibrary(StringRef name) {
+  if (inCreateFiles) {
+    PendingInput p;
+    p.isLibrary = true;
+    p.libraryName = saver().save(name);
+    p.isStatic = ctx.arg.isStatic;
+    p.inWholeArchive = inWholeArchive;
+    p.inLib = inLib;
+    p.insertAt = files.size();
+    pendingInputs.push_back(std::move(p));
+    return;
+  }
   std::optional<std::string> path = searchLibrary(name);
   if (!path) {
     error("unable to find library -l" + name, ErrorTag::LibNotFound, {name});
@@ -1019,6 +1305,7 @@ void LinkerDriver::applyAlternateNames() {
 }
 
 void LinkerDriver::createFiles(opt::InputArgList &args) {
+  inCreateFiles = true;
   for (auto *arg : args) {
     switch (arg->getOption().getID()) {
     case OPT_library: {
@@ -1069,8 +1356,10 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
       break;
     }
   }
+  inCreateFiles = false;
   // --print-bcl-binding needs only references (plan 5.11.5).
-  if (files.empty() && errorCount() == 0 && ctx.arg.printBclBinding.empty())
+  if (files.empty() && pendingInputs.empty() && errorCount() == 0 &&
+      ctx.arg.printBclBinding.empty())
     error("no input files");
 }
 
@@ -1136,6 +1425,39 @@ static void readExcludeLibs(opt::InputArgList &args) {
   }
 }
 
+// --export=<sym>, --export-list=<file> and --export-if-defined=<sym> (plan
+// 5.18.6 PL7, wasm-ld's options), in command-line order. An --export-list
+// file names one symbol per line; blank lines and lines whose first
+// non-blank character is '#' are skipped, and so is the blank space around a
+// name.
+static void readExports(opt::InputArgList &args) {
+  for (auto *arg :
+       args.filtered(OPT_export, OPT_export_list, OPT_export_if_defined)) {
+    switch (arg->getOption().getID()) {
+    case OPT_export:
+      ctx.arg.exports.push_back(arg->getValue());
+      break;
+    case OPT_export_if_defined:
+      ctx.arg.exportIfDefined.push_back(arg->getValue());
+      break;
+    case OPT_export_list: {
+      std::optional<MemoryBufferRef> mb = readFile(arg->getValue());
+      if (!mb)
+        break;
+      SmallVector<StringRef, 0> lines;
+      mb->getBuffer().split(lines, '\n');
+      for (StringRef line : lines) {
+        line = line.trim();
+        if (line.empty() || line.starts_with("#"))
+          continue;
+        ctx.arg.exports.push_back(line);
+      }
+      break;
+    }
+    }
+  }
+}
+
 // Initializes Config members by the command line options.
 static void readConfigs(opt::InputArgList &args) {
   // msil-ld writes no relocatable output. Reported while the options are
@@ -1154,6 +1476,7 @@ static void readConfigs(opt::InputArgList &args) {
   ctx.arg.disableVerify = args.hasArg(OPT_disable_verify);
   ctx.arg.entry = getEntry(args);
   readExcludeLibs(args);
+  readExports(args);
   ctx.arg.exportAllSymbols = args.hasArg(OPT_export_all_symbols);
   // The export class is checked here; the default, the assembly name, when
   // the writer computes the export plan.
@@ -1278,6 +1601,84 @@ static void handleLibcall(StringRef name) {
   }
 }
 
+// The forced exports (plan 5.18.6 PL7): wasm-ld's handleUndefined for each
+// name of --export and --export-list, which extracts the archive member that
+// defines it, as -u does, and keeps a bitcode definition visible to regular
+// objects, so that LTO keeps it; a name that no input knows yet adds
+// nothing. --export-if-defined names only what is already defined and
+// extracts nothing.
+static void handleForcedExports() {
+  for (StringRef name : ctx.arg.exports) {
+    Symbol *sym = symtab->find(name);
+    if (!sym)
+      continue;
+    sym->isUsedInRegularObj = true;
+    if (sym->isLazy()) {
+      if (!ctx.arg.whyExtract.empty())
+        ctx.whyExtractRecords.emplace_back("--export", sym->getFile(), *sym);
+      sym->extract();
+    }
+  }
+  for (StringRef name : ctx.arg.exportIfDefined)
+    if (Symbol *sym = symtab->find(name))
+      if (sym->isDefined() || sym->isCommon())
+        sym->isUsedInRegularObj = true;
+}
+
+// wasm-ld's text for a name that --export (or --export-list) forces and no
+// input defines, once per name, after LTO and before late binding: a library
+// that exports the name does not define it here.
+static void reportMissingExports() {
+  DenseSet<StringRef> seen;
+  for (StringRef name : ctx.arg.exports) {
+    if (!seen.insert(name).second)
+      continue;
+    Symbol *sym = symtab->find(name);
+    if (!sym || (!sym->isDefined() && !sym->isCommon()))
+      error("symbol exported via --export not found: " + name);
+  }
+}
+
+// T-P13 (plan 5.18.6 PL8; portable-loader R5): on the portable triples an
+// output whose simple name is a reference assembly's could be loaded in its
+// place, or load in place of it, by the .NET host. The toolchain library
+// assemblies of the link have M22's error (SymbolTable::addFile).
+// Without references the built-in table binds the BCL to its scope assembly
+// mscorlib (plan 5.11.7), which the image references as well.
+static void checkReferenceNames() {
+  std::string output = getOutputAssemblyName();
+  std::string referenced;
+  if (ctx.references->empty()) {
+    if (StringRef(output).equals_insensitive(cli::MscorlibAssembly))
+      referenced = ("<built-in " + cli::MscorlibAssembly + " table>").str();
+  } else if (const ReferenceAssemblyFile *file =
+                 ctx.references->findAssembly(output)) {
+    referenced = file->getPath();
+  }
+  if (!referenced.empty())
+    error("output assembly '" + output +
+          "' has the simple name of the referenced assembly '" + referenced +
+          "': the .NET host can load one in place of the other");
+}
+
+// T-P11 (plan 5.18.6 PL10): on the portable triples an output other than the
+// C library itself (the --shared output whose assembly name is c, PL8) must
+// not take a definition from a member of an archive whose symbol index
+// defines __llvm_libc_errno: a static copy would have its own errno cell and
+// statics. Reported once: the link stops after the first report.
+static void checkStaticCLibrary() {
+  if (ctx.cLibraryArchives.empty() || isCLibraryOutput())
+    return;
+  for (const InputFile *f : ctx.loadedFiles) {
+    if (f->archiveName.empty() ||
+        !ctx.cLibraryArchives.contains(f->archiveName))
+      continue;
+    error("the C library cannot be linked statically for " +
+          ctx.arg.target.str() + " yet: link the shared C library c.dll (-lc)");
+    return;
+  }
+}
+
 // lld/ELF/Driver.cpp's writeWhyExtract.
 static void writeWhyExtract() {
   if (ctx.arg.whyExtract.empty())
@@ -1388,6 +1789,39 @@ static std::string getDataModelString(const MSILLink::Header &h) {
          std::to_string(h.LongDoubleSize);
 }
 
+// The PE format of a CIL object as T-P12 names it.
+static StringRef getPEFormatName(bool isPE32Plus) {
+  return isPE32Plus ? "PE32+" : "PE32";
+}
+
+// T-P12 (plan 5.18.6 PL1, on every triple): a CIL object's PE format and
+// COFF machine must be those of the codegen triple's envelope
+// (cli::PEOptions::get), so that an msil64 object (PE32, I386) never links
+// into a host link, nor a host object into a portable one, even if its
+// record's triple key were forged. Asked after the triple key matched.
+static bool checkObjectEnvelope(const ObjFile &f) {
+  const cli::PEImage *image = f.getReader().getImage();
+  if (!image)
+    return true;
+  Expected<cli::PEOptions> want =
+      cli::PEOptions::get(ctx.arg.target, cli::PEImageKind::Module);
+  if (!want) {
+    // An unsupported triple stopped the link before the inputs were checked.
+    consumeError(want.takeError());
+    return true;
+  }
+  bool wantPE32Plus = want->Format == cli::PEFormat::PE32Plus;
+  uint16_t wantMachine = static_cast<uint16_t>(want->Machine);
+  if (image->isPE32Plus() == wantPE32Plus && image->getMachine() == wantMachine)
+    return true;
+  error("'" + toString(&f) + "' is a " + getPEFormatName(image->isPE32Plus()) +
+        " CIL object for machine 0x" + utohexstr(image->getMachine()) +
+        ", which " + ctx.arg.target.str() + " does not link (it links " +
+        getPEFormatName(wantPE32Plus) + " objects for machine 0x" +
+        utohexstr(wantMachine) + ")");
+  return false;
+}
+
 // Checks one input (plan 5.8.9, 5.9.13), in load order, the objects that LTO
 // writes last: its triple must have the codegen triple's key, and bitcode for
 // the native triple is accepted with one warning per link (Q12). Its data
@@ -1417,6 +1851,8 @@ void LinkerDriver::checkInputFile(const InputFile &f) {
           " is incompatible with " + target.str());
     return;
   }
+  if (obj && !checkObjectEnvelope(*obj))
+    return;
   if (!obj) {
     if (!tt.isOSBinFormatMSIL() && !warnedNativeBitcode) {
       warn(toString(&f) + ": linking bitcode for " + triple + " as " +
@@ -1526,6 +1962,14 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     return;
   }
 
+  // An unsupported --target stops the link before any input is classified, so
+  // that its reason (T-P1, 5.18.1 PT5) is reported rather than a rule that
+  // reading an input under it applies (T-P4, an empty archive's 'no input
+  // files'). Without --target, the first CIL object or bitcode input names the
+  // triple, which is checked once every input is loaded.
+  if (!checkTarget())
+    return;
+
   createFiles(args);
   if (errorCount())
     return;
@@ -1544,10 +1988,31 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
 
   // The codegen triple is fixed now, by --target or by the first CIL object
   // or bitcode input; a link without one is reported once every input is
-  // loaded. An unsupported one stops the link before the per-file triple and
-  // data-model checks and before LTO, which would compile for it.
-  if (!ctx.arg.target.str().empty() && !isSupportedTarget(ctx.arg.target)) {
-    error("unsupported target triple '" + ctx.arg.target.str() + "' for MSIL");
+  // loaded. An unsupported one stops the link before the -l searches that
+  // waited for it, before the per-file triple and data-model checks and
+  // before LTO, which would compile for it.
+  if (!checkTarget())
+    return;
+
+  // The -l that waited for the triple are searched for now; without an input
+  // that named it, a library they find may name it, which is checked too.
+  resolvePendingLibraries();
+  if (errorCount() || !checkTarget())
+    return;
+
+  // The codegen triple is fixed: the archives read before it get their
+  // native-library rule (T-P4, empty archives, native members), and the
+  // waiting -l's files their place.
+  applyPendingArchiveRules();
+  if (errorCount())
+    return;
+
+  // T-P14 (plan 5.18.6 PL8): on the portable triples the assembly name c
+  // belongs to the C library, the --shared output c.dll.
+  if (isPortableTarget() && !ctx.arg.shared &&
+      StringRef(getOutputAssemblyName()).equals_insensitive("c")) {
+    error("the assembly name 'c' is reserved for the C library on " +
+          ctx.arg.target.str() + ": only a --shared link may produce c.dll");
     return;
   }
 
@@ -1596,6 +2061,9 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   // Handle the `--undefined <sym>` options.
   for (StringRef name : ctx.arg.undefined)
     symtab->addUndefined(name, ("-u " + name).str());
+
+  // The forced exports (plan 5.18.6 PL7, wasm-ld's handleUndefined).
+  handleForcedExports();
 
   // The entry point is visible to regular objects, so LTO keeps it, and it
   // extracts the archive member that defines it. bindLateSymbols() reports it
@@ -1651,6 +2119,15 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (errorCount())
     return;
 
+  // The portable triples' rules on the whole input set (plan 5.18.6 PL8,
+  // PL10): T-P13 and T-P11.
+  if (isPortableTarget()) {
+    checkReferenceNames();
+    checkStaticCLibrary();
+    if (errorCount())
+      return;
+  }
+
   // A -shared library exports no definition of an --exclude-libs archive's
   // members; they are known before LTO, which may then internalize them (as
   // lld/ELF handles --exclude-libs).
@@ -1690,6 +2167,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     // libraries bind what they define (step 2); hidden symbols and the entry
     // point are errors here, and the import-annotation pass reports the rest
     // after LTO.
+    reportMissingExports();
     symtab->bindLateSymbols();
     if (errorCount())
       return;
@@ -1722,9 +2200,18 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     if (errorCount())
       return;
     // The archive members that the LTO objects extracted.
+    if (isPortableTarget())
+      checkStaticCLibrary();
+    if (errorCount())
+      return;
     if (ctx.arg.shared)
       excludeLibs();
   }
+
+  // A name that --export or --export-list forces must be defined now.
+  reportMissingExports();
+  if (errorCount())
+    return;
 
   // Late binding over every object (plan 5.9.6), then the losers of
   // resolution and the common symbols (plan 5.9.5, 5.9.9), then

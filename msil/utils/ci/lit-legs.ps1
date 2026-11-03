@@ -10,6 +10,7 @@
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Wsl        # and the WSL legs (dev host)
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Wsl -Exit  # and the -Exit legs
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Full       # and the nightly legs
+#   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Wsl -Exit -Portable  # and the portable legs
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Leg programs,ctest
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-p3 -Run 1
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List
@@ -24,7 +25,12 @@
 # -Wsl, -Quick (runs only when -Leg names it), -Full and, from M24, -Exit (the legs that
 # 'lit-legs.ps1 -Exit' adds: every post-commit run and the Phase 3 exit gate run them, plan
 # 5.17.11; an -Exit leg whose name ends in '-wsl' also needs -Wsl). M26 adds the first, ctest-lto;
-# M28 adds gc-churn and gc-churn-wsl, M30 stress and stress-wsl.
+# M28 adds gc-churn and gc-churn-wsl, M30 stress and stress-wsl. P-1a (plan 5.18.10 PX4) adds the
+# tag -Portable: the legs that 'lit-legs.ps1 -Portable' adds, portable-smoke and
+# portable-smoke-wsl, which the post-commit runs run (run-m1-gate.ps1 -Portable); like an -Exit
+# leg, the one whose name ends in '-wsl' also needs -Wsl. A portable leg is never tagged -Exit, so
+# -Exit alone selects neither, and M35's gate, exit-report.py and check-matrix.py (whose phase tags
+# are '', Wsl and Exit) see no change.
 #
 # Gate steps. The standard milestone gate of Phase 3 (plan 5.17.7) runs '-Leg net-core' (G3),
 # '-Leg p3-full' (G3b), '-Leg harness' (G3c, only when 'python msil/utils/ci/gate-select.py
@@ -206,6 +212,20 @@
 #                  compared with the .NET Framework ilasm's image of the same text, at least 2,600
 #                  methods; once obj is the default, net8's O3 compares every M1 method's encoding
 #                  with ilasm's anyway. Windows only (the Framework ilasm)
+#   portable-smoke -Portable (P-1a; plan 5.18.10 PX4): msil/test/Portable (00-freestanding at P-1a,
+#                  the later P-steps' directories as they appear) on msil64-unknown-dotnet under
+#                  obj on .NET 10, .NET 10 with DOTNET_TieredCompilation=0 (msil_also_run=10+tc0)
+#                  and the .NET Framework 4.8 (msil_run_netfx=1), msil_require_portable=1 (the
+#                  portable toolchain and helper archive) and msil_require_x86=1 (the 32-bit
+#                  dotnet.exe with .NET 8 and 10 x86 and the 32-bit Framework, so guard-x86 is
+#                  never silently UNSUPPORTED); no native oracle. Setup, first: 'build-builtins.py
+#                  --build-dir <build> --triple msil64-unknown-dotnet' (stamped: an up-to-date
+#                  archive is not rebuilt); a failed setup fails the row ('setup failed: ...')
+#                  and runs no lit
+#   portable-smoke-wsl  -Portable, needs -Wsl (P-1a): the same directory on the same triple under
+#                  WSL .NET 10 and, msil_also_run=10+tc0, with DOTNET_TieredCompilation=0 (the
+#                  WSL legs' parameters with msil_triple=msil64-unknown-dotnet in place of the
+#                  Linux triple), msil_require_portable=1; no native oracle, no E7h. The same setup
 # Removed in M23, and -Leg <name> fails naming the leg that covers them: obj (net8), obj-wsl
 # (wsl-net10), net10 (net8's msil_also_run=10), net8-tc0 (net8's 8+tc0), wsl-net10-tc0
 # (wsl-net10's 10+tc0).
@@ -297,7 +317,7 @@
 # -Run without exactly one -Leg, or -Run on a leg without lit runs is a usage error:
 # 'lit-legs.ps1: usage error: ...' on stderr, exit status 2, nothing run. -Describe prints every
 # leg as plan 5.17.6's JSON (version 1: script 'lit-legs.ps1', and for each leg its name, tag (''
-# for the default set), kind (lit, expected, utc, encoder or obj-text) and lit runs, each with its
+# for the default set; Wsl, Quick, Full, Exit or Portable), kind (lit, expected, utc, encoder or obj-text) and lit runs, each with its
 # paths, lit arguments and every parameter it passes, the msil_require_* ones included, and the
 # derived pipeline, prog_pipeline, triple (default x86_64-pc-windows-msvc-msil), runner (default
 # local) and also_run) and runs nothing; a NuGet tool path prints as '@nuget:<rid>/<tool>', the
@@ -316,6 +336,7 @@ param(
   [switch]$Wsl,
   [switch]$Full,
   [switch]$Exit,                  # also the -Exit legs (post-commit run, phase-exit gate)
+  [switch]$Portable,              # also the -Portable legs (post-commit run; P-1a)
   [string[]]$Leg = @(),           # run only these legs (names as in -List; comma-separated works)
   [string[]]$Run = @(),           # with one -Leg: only these runs of it (1-based; comma-separated)
   [switch]$List,
@@ -333,6 +354,7 @@ $script:Describing = $false
 
 # check-msil's paths (msil/test/CMakeLists.txt); lit-legs.sh's check_msil is the same list.
 $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/Preprocessor/init-msil.c',
+               'clang/test/Preprocessor/init-msil-portable.c', 'clang/test/Driver/msil-dotnet.c',
                'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
                'clang/test/Driver/msil-object.c', 'clang/test/Driver/msil-shared.c',
@@ -374,9 +396,9 @@ $det = @('msil/test/M2/06-det', 'msil/test/Programs/det')
 $ctest = @('msil/test/Programs/c-testsuite')
 # net8 runs msil/test without its corpus tests, which the corpus legs run.
 $noCorpus = '--filter-out=MSIL :: Programs/'
-# net-core leaves out the corpus tests, the harness (G3c), msil/test/M3 (G3b) and the scale test
-# (plan 5.17.6); $p3Out joins it.
-$netCoreOut = 'MSIL :: (Programs|harness|M3)/|spill-limits'
+# net-core leaves out the corpus tests, the harness (G3c), msil/test/M3 (G3b), the scale test
+# (plan 5.17.6) and msil/test/Portable (the portable legs', plan 5.18.10 PX4); $p3Out joins it.
+$netCoreOut = 'MSIL :: (Programs|harness|M3|Portable)/|spill-limits'
 $linux = 'msil_triple=x86_64-unknown-linux-gnu-msil'
 # The E7 Linux oracle's sysroot (msil/utils/make-linux-sysroot.py), defaulted as lit.cfg.py and
 # run-m1-gate.ps1's host-setup step default it.
@@ -386,6 +408,10 @@ $linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 
 $glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { 'C:\llvm-msil-scratch\glibc-sysroot' }
 # Every WSL lit leg: the Linux triple on the private runtime of msil-wsl-dotnet.sh (plan 5.12.8).
 $wslRuntime = @('msil_runner=wsl', $linux, 'msil_wsl_dotnet=private', 'msil_dotnet_runtime=10')
+# The portable legs (plan 5.18.10 PX4; P-1a): the portable triple, and the setup that builds its
+# helper archive (stamped) before their lit runs.
+$portableTriple = 'msil_triple=msil64-unknown-dotnet'
+$portableSetup = @('msil/utils/build/build-builtins.py', '--triple', 'msil64-unknown-dotnet')
 # The legs that require the E7 Linux oracle ...
 $e7 = @('msil_native_oracle=required', "msil_linux_sysroot=$($linuxSysroot.Replace('\', '/'))")
 # ... and, where they run hosted tests (msil/test/M3), the glibc sysroot of E7h (plan 5.17.3, 5.17.6).
@@ -427,7 +453,9 @@ function Join-LitFilter([string[]]$Parts) { @($Parts | Where-Object { $_ }) -joi
 # Params, Paths and Lit are script blocks (Lit may also be an array): tool paths, the corpus
 # variables and $p3Tests are resolved when the leg runs, so a missing package fails that leg only.
 # A leg of several lit runs has Runs, a list of @{ Paths; Params; Lit }. Tag: '' (the default set),
-# 'Wsl', 'Quick' (only when -Leg names it), 'Full' or 'Exit' (see the header).
+# 'Wsl', 'Quick' (only when -Leg names it), 'Full', 'Exit' or 'Portable' (see the header). Setup
+# (the portable legs): a script and its arguments, which $MsilPython runs with '--build-dir
+# <build>' before the leg's lit runs; a failure fails the row and runs no lit.
 $legs = @(
   @{ Name = 'net8'; Paths = { $checkMsil }; Lit = @($noCorpus)
      Params = { @('msil_pipeline=obj') + $winRun +
@@ -528,6 +556,13 @@ $legs = @(
   @{ Name = 'lto-m1'; Paths = { $m1 }; Tag = 'Full'; Lit = @('--filter-out=\.ll$')
      Params = { @('msil_pipeline=lto') + $winRun } }
   @{ Name = 'encoder-parity'; Encoder = $true; Tag = 'Full' }
+  # The portable smoke legs (plan 5.18.10 PX4; P-1a): post-commit runs only, never -Exit.
+  @{ Name = 'portable-smoke'; Tag = 'Portable'; Paths = { 'msil/test/Portable' }; Setup = $portableSetup
+     Params = { $portableTriple, 'msil_pipeline=obj', 'msil_dotnet_runtime=10', 'msil_also_run=10+tc0',
+                'msil_run_netfx=1', 'msil_require_portable=1', 'msil_require_x86=1' } }
+  @{ Name = 'portable-smoke-wsl'; Tag = 'Portable'; Paths = { 'msil/test/Portable' }; Setup = $portableSetup
+     Params = { @($wslRuntime | ForEach-Object { if ($_ -eq $linux) { $portableTriple } else { $_ } }) +
+                @('msil_pipeline=obj', 'msil_also_run=10+tc0', 'msil_require_portable=1') } }
 )
 
 # The legs that M23 removed, and the leg that runs their tests and runtimes now (plan 5.12.11).
@@ -711,6 +746,7 @@ $toRun = @($legs | Where-Object {
       'Wsl' { [bool]$Wsl }
       'Full' { [bool]$Full }
       'Exit' { [bool]$Exit -and ([bool]$Wsl -or -not (Test-WslLeg $l)) }
+      'Portable' { [bool]$Portable -and ([bool]$Wsl -or -not (Test-WslLeg $l)) }
       'Quick' { $false }
       default { $true }
     }
@@ -1019,6 +1055,21 @@ function Invoke-ObjTextLeg($l) {
             Detail = "$detail (exit $($codes -join ', '))" }
 }
 
+# A leg's Setup (the portable legs): the script with '--build-dir <build>' and its arguments,
+# logged to <build>/lit-results/<leg>.setup.log. Returns $null when it passed, else the row's
+# detail.
+function Invoke-LegSetup($l) {
+  $log = Join-Path $results "$($l.Name).setup.log"
+  $script = Join-Path $MsilRepo $l.Setup[0]
+  $setupArgs = @('--build-dir', $BuildDir) + @($l.Setup | Select-Object -Skip 1)
+  $what = "$(Split-Path -Leaf $script) $(@($l.Setup | Select-Object -Skip 1) -join ' ')"
+  Write-Host "[msil-ci] leg $($l.Name): setup: $what"
+  & $MsilPython $script @setupArgs 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+  $rc = $LASTEXITCODE
+  if ($rc -ne 0) { return "setup failed: $what (exit $rc; $($log.Replace('\', '/')))" }
+  return $null
+}
+
 foreach ($l in $toRun) {
   $rowName = if ($runIdx.Count -gt 0) { "$($l.Name) (run $($runIdx -join ','))" } else { $l.Name }
   # The ctest legs while MSIL_CORPUS_SKIP names c-testsuite: a SKIP row (ci-common.ps1), in the
@@ -1031,7 +1082,9 @@ foreach ($l in $toRun) {
   }
   $sw = [Diagnostics.Stopwatch]::StartNew()
   try {
-    $r = if ($l.Expected) { Invoke-ExpectedLeg $l } elseif ($l.Utc) { Invoke-UtcLeg $l }
+    $setupFailed = if ($l.Setup) { Invoke-LegSetup $l } else { $null }
+    $r = if ($setupFailed) { @{ Ok = $false; Detail = $setupFailed } }
+         elseif ($l.Expected) { Invoke-ExpectedLeg $l } elseif ($l.Utc) { Invoke-UtcLeg $l }
          elseif ($l.Encoder) { Invoke-EncoderLeg $l } elseif ($l.ObjText) { Invoke-ObjTextLeg $l }
          else { Invoke-LitLeg $l $runIdx }
   } catch {

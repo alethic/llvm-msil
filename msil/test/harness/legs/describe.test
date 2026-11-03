@@ -41,7 +41,19 @@
 # ctest-lto without its tag Exit, $checkMsil without msil-abi.ll,
 # programs-wsl's msil_also_run without 10+tc0, ctest filtering out
 # libc.txt's tests, programs-hosted without msil_opt_levels=O2, and det-wsl
-# without msil_glibc_sysroot.
+# without msil_glibc_sysroot. The P-1a rows (plan 5.18.10 PX4, PX5): the
+# legs tagged Portable are exactly portable-smoke and portable-smoke-wsl,
+# each one lit run of msil/test/Portable with exactly the params of PX4
+# (portable-smoke: obj, .NET 10, 10+tc0, the Framework,
+# msil_require_portable=1 and msil_require_x86=1; portable-smoke-wsl: the WSL
+# runner with the portable triple, the private dotnet, obj, 10+tc0 and
+# msil_require_portable=1), no other leg passes the portable triple or names
+# msil/test/Portable, net-core's --filter-out matches the portable tests,
+# and $checkMsil holds init-msil-portable.c and msil-dotnet.c; each P-1a
+# fault is reported: portable-smoke untagged, or tagged Exit, or without
+# msil_require_portable or msil_require_x86, portable-smoke-wsl with
+# msil_run_netfx=1, $checkMsil without init-msil-portable.c, and net-core's
+# --filter-out without msil/test/Portable.
 # describe-sh.test checks lit-legs.sh --describe.
 # REQUIRES: msil-ci-pwsh
 
@@ -54,6 +66,7 @@
 # RUN: %python %S/Inputs/legs-check.py describe ps1 %t/describe.json > %t/1.log
 # RUN: %{harness_check} contains %t/1.log "^legs-check: lit-legs\.ps1: \d+ legs, \d+ lit runs: OK$" "^legs-check: [$]p3Tests: (\S+ )*msil/test/M1/02-fp/strict-i128\.c( |$)" "^legs-check: hosted programs: msil/test/Programs/zlib-full( |$)"
 # RUN: %{harness_check} contains %t/describe.json '"name": "programs-hosted",\s*"tag": "Quick"' '"name": "programs-hosted-wsl",\s*"tag": "Quick"' '"name": "ctest-lto",\s*"tag": "Exit"' '"clang/test/Sema/msil-long-double-format\.c",\s*"llvm/test/Transforms/ExpandVariadics/msil-abi\.ll"'
+# RUN: %{harness_check} contains %t/describe.json '"name": "portable-smoke",\s*"tag": "Portable"' '"name": "portable-smoke-wsl",\s*"tag": "Portable"' '"clang/test/Preprocessor/init-msil-portable\.c"' '"clang/test/Driver/msil-dotnet\.c"'
 
 
 # (2)
@@ -132,3 +145,17 @@
 # RUN: %{harness_check} contains %t/5j.log "^legs-check: error: programs-hosted: params \{(?![^}]*msil_opt_levels)[^}]*\}, not \{[^}]*'msil_opt_levels': 'O2'"
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant det-glibc > %t/5k.log
 # RUN: %{harness_check} contains %t/5k.log "^legs-check: error: det-wsl: no msil_glibc_sysroot \(the hosted programs' det tests\)$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant portable-untagged > %t/5l.log
+# RUN: %{harness_check} contains %t/5l.log "^legs-check: error: the legs tagged Portable are \['portable-smoke-wsl'\], not \['portable-smoke', 'portable-smoke-wsl'\]$" "^legs-check: error: portable-smoke run 1 \(tag ''\) passes msil_triple=msil64-unknown-dotnet$" "^legs-check: error: portable-smoke run 1 \(tag ''\) names msil/test/Portable$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant portable-exit > %t/5m.log
+# RUN: %{harness_check} contains %t/5m.log "^legs-check: error: the legs tagged Portable are \['portable-smoke-wsl'\], not " "^legs-check: error: portable-smoke run 1 \(tag 'Exit'\) passes msil_triple=msil64-unknown-dotnet$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant portable-no-require > %t/5n.log
+# RUN: %{harness_check} contains %t/5n.log "^legs-check: error: portable-smoke: params \{(?![^}]*msil_require_portable)[^}]*\}, not \{[^}]*'msil_require_portable': '1'"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant portable-no-x86 > %t/5o.log
+# RUN: %{harness_check} contains %t/5o.log "^legs-check: error: portable-smoke: params \{(?![^}]*msil_require_x86)[^}]*\}, not \{[^}]*'msil_require_x86': '1'"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant portable-wsl-netfx > %t/5p.log
+# RUN: %{harness_check} contains %t/5p.log "^legs-check: error: portable-smoke-wsl: params \{[^}]*'msil_run_netfx': '1'[^}]*\}, not \{(?![^}]*msil_run_netfx)"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant check-msil-portable > %t/5q.log
+# RUN: %{harness_check} contains %t/5q.log "^legs-check: error: net8: paths lack clang/test/Preprocessor/init-msil-portable\.c \([$]checkMsil, P-1a\)$" "^legs-check: error: net-core: paths lack clang/test/Preprocessor/init-msil-portable\.c "
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant net-core-portable > %t/5r.log
+# RUN: %{harness_check} contains %t/5r.log "^legs-check: error: net-core: --filter-out no longer matches MSIL :: Portable/00-freestanding/datamodel\.test$"

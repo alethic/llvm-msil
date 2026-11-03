@@ -17,6 +17,8 @@
     msil-run.py --tool [--timeout S] [--mem-limit-mb N] -- TOOL [ARGS...]
     msil-run.py --tool --runner wsl [--wsl-distro D] [LIMITS] -- TOOL [ARGS...]
     msil-run.py --runner wsl --steps FILE      (several steps in one wsl.exe)
+    msil-run.py [OPTIONS] --dotnet D --runtime-major N [--] prog.dll [ARGS...]
+    msil-run.py --set-32bitreq IN OUT          (a copy with 32BITREQUIRED)
 
 The transcript is the program's stdout, followed by one status line, with
 every run of CRs before an LF (the regular expression \\r+\\n) replaced by a
@@ -74,6 +76,29 @@ of this script inside WSL runs it with --native from its own private
 directory (an executable copy), under the timeout and the memory cap, and
 the transcript comes back to Windows, where --expect compares it (lit passes
 --expect-os linux). --dotnet and --runtimeconfig are not used.
+
+--runtime-major N (plan 5.18.10, P-1a; in place of --runtimeconfig, for a
+.dll run, also with --runner wsl) writes the program's runtimeconfig.json
+for Microsoft.NETCore.App N.x (rollForward LatestPatch, as lit.cfg.py writes
+its msil-net<N>.runtimeconfig.json) into the private directory. lit's
+%msil_dotnet_x86 is this script with --dotnet <the 32-bit dotnet.exe> and no
+runtimeconfig, so a test picks the runtime: '%msil_dotnet_x86 --runtime-major
+8 --expect ... prog.exe' runs .NET 8 x86. A portable image (PE32, ILONLY,
+plan 5.18.7) then runs in a 32-bit process, where its width guard throws
+PlatformNotSupportedException from <Module>::.cctor; that failure is reported
+as any unhandled exception is: '[unhandled exception: T]' with the first type
+the runtime names (measured: .NET 8 x86 and the .NET Framework name
+System.TypeInitializationException, which wraps the guard's exception; .NET
+10 x86 names System.PlatformNotSupportedException), so a test accepts both.
+--runtime-major with --runtimeconfig, --native, --netfx or --tool is a usage
+error.
+
+--set-32bitreq IN OUT (plan 5.18.10, P-1a; lit's %msil_set_32bitreq) runs
+nothing: it writes a copy of the PE image IN (PE32 or PE32+) to OUT with
+COMIMAGE_FLAGS_32BITREQUIRED (0x2) set in its CLI header's Flags, so the
+.NET Framework starts it (--netfx) in a 32-bit process. A malformed image
+('no MZ header', 'no PE signature ...', 'no CLI header ...', ...) or a file
+that cannot be read or written is an error (exit status 2) that names IN.
 
 --env VAR=VALUE (repeatable) sets an environment variable for the program in
 every mode (for example DOTNET_TieredCompilation=0, plan D38).
@@ -755,6 +780,104 @@ def copy_deps(deps, dep_dirs, directory, taken):
         raise ConfigError("cannot copy a dependency: %s" % e)
 
 
+def runtimeconfig_text(major):
+    """The runtimeconfig.json of --runtime-major: Microsoft.NETCore.App
+    <major>.x, as lit.cfg.py's write_runtimeconfig writes it."""
+    return (
+        json.dumps(
+            {
+                "runtimeOptions": {
+                    "tfm": "net%d.0" % major,
+                    "rollForward": "LatestPatch",
+                    "framework": {
+                        "name": "Microsoft.NETCore.App",
+                        "version": "%d.0.0" % major,
+                    },
+                }
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+# --set-32bitreq IN OUT (plan 5.18.10, P-1a; lit's %msil_set_32bitreq): a copy
+# of the image IN with COMIMAGE_FLAGS_32BITREQUIRED (0x2) set in the Flags of
+# its CLI header (ECMA-335 II.25.3.3), the header that data directory 14 of
+# the PE optional header names; the PE32 (magic 0x10B) and PE32+ (0x20B)
+# layouts are both read. The .NET Framework then starts a copy of an AnyCPU
+# .exe as a 32-bit process (the guard test's Framework 32-bit start).
+COMIMAGE_FLAGS_32BITREQUIRED = 0x2
+
+
+def set_32bitreq(data):
+    """data (a PE image, bytes) with 32BITREQUIRED set; raises ValueError
+    naming what is malformed."""
+    image = bytearray(data)
+
+    def u16(off):
+        if off + 2 > len(image):
+            raise ValueError("truncated at offset 0x%X" % off)
+        return int.from_bytes(image[off : off + 2], "little")
+
+    def u32(off):
+        if off + 4 > len(image):
+            raise ValueError("truncated at offset 0x%X" % off)
+        return int.from_bytes(image[off : off + 4], "little")
+
+    if image[:2] != b"MZ":
+        raise ValueError("no MZ header")
+    pe = u32(0x3C)
+    if image[pe : pe + 4] != b"PE\0\0":
+        raise ValueError("no PE signature at offset 0x%X" % pe)
+    coff = pe + 4
+    nsections = u16(coff + 2)
+    opt_size = u16(coff + 16)
+    opt = coff + 20
+    magic = u16(opt)
+    if magic == 0x10B:
+        dirs = opt + 96
+    elif magic == 0x20B:
+        dirs = opt + 112
+    else:
+        raise ValueError(
+            "optional header magic 0x%X is neither PE32 nor PE32+" % magic
+        )
+    if u32(dirs - 4) <= 14:
+        raise ValueError("no CLI header data directory (NumberOfRvaAndSizes <= 14)")
+    cli_rva = u32(dirs + 14 * 8)
+    if cli_rva == 0:
+        raise ValueError("no CLI header (data directory 14 is empty)")
+    sections = opt + opt_size
+    for i in range(nsections):
+        sec = sections + 40 * i
+        vsize, vaddr = u32(sec + 8), u32(sec + 12)
+        raw_size, raw_ptr = u32(sec + 16), u32(sec + 20)
+        if vaddr <= cli_rva < vaddr + max(vsize, raw_size):
+            flags = raw_ptr + (cli_rva - vaddr) + 16
+            value = u32(flags) | COMIMAGE_FLAGS_32BITREQUIRED
+            image[flags : flags + 4] = value.to_bytes(4, "little")
+            return bytes(image)
+    raise ValueError("no section holds the CLI header (RVA 0x%X)" % cli_rva)
+
+
+def set_32bitreq_main(argv):
+    """msil-run.py --set-32bitreq IN OUT; returns the exit status."""
+    if len(argv) != 2:
+        sys.stderr.write("msil-run: error: --set-32bitreq takes IN and OUT\n")
+        return 2
+    src, dest = argv
+    try:
+        with open(src, "rb") as f:
+            out = set_32bitreq(f.read())
+        with open(dest, "wb") as f:
+            f.write(out)
+    except (OSError, ValueError) as e:
+        sys.stderr.write("msil-run: error: --set-32bitreq %s: %s\n" % (src, e))
+        return 2
+    return 0
+
+
 def run_local(args):
     """Run the program from a private directory; return (transcript, stderr)."""
     prog = os.path.abspath(args.program)
@@ -763,10 +886,12 @@ def run_local(args):
     dotnet = None
     if not (args.native or args.netfx):
         dotnet = find_dotnet(args.dotnet)
-        if not args.runtimeconfig or not os.path.isfile(args.runtimeconfig):
+        if args.runtime_major is None and (
+            not args.runtimeconfig or not os.path.isfile(args.runtimeconfig)
+        ):
             raise ConfigError(
-                "--runtimeconfig FILE is required to run a .dll (got %r)"
-                % args.runtimeconfig
+                "--runtimeconfig FILE (or --runtime-major N) is required to run a "
+                ".dll (got %r)" % args.runtimeconfig
             )
     check_stdin(args)
     check_deps(args.dep, args.dep_dir)
@@ -789,7 +914,11 @@ def run_local(args):
             config = os.path.join(
                 private, os.path.splitext(name)[0] + ".runtimeconfig.json"
             )
-            shutil.copyfile(args.runtimeconfig, config)
+            if args.runtime_major is not None:
+                with open(config, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(runtimeconfig_text(args.runtime_major))
+            else:
+                shutil.copyfile(args.runtimeconfig, config)
             taken.append(os.path.basename(config))
         copy_deps(args.dep, args.dep_dir, private, taken)
         if dotnet and not IS_WINDOWS and (args.dep or args.dep_dir):
@@ -832,12 +961,14 @@ def wsl_inner_command(args):
     ConfigError. msil-run.py --steps runs the same command."""
     if not IS_WINDOWS:
         raise ConfigError("--runner wsl needs a Windows host")
-    if not args.native and (
-        not args.runtimeconfig or not os.path.isfile(args.runtimeconfig)
+    if (
+        not args.native
+        and args.runtime_major is None
+        and (not args.runtimeconfig or not os.path.isfile(args.runtimeconfig))
     ):
         raise ConfigError(
-            "--runtimeconfig FILE is required with --runner wsl (got %r)"
-            % args.runtimeconfig
+            "--runtimeconfig FILE (or --runtime-major N) is required with --runner "
+            "wsl (got %r)" % args.runtimeconfig
         )
     if not os.path.isfile(args.program):
         raise ConfigError("%s not found" % args.program)
@@ -846,6 +977,13 @@ def wsl_inner_command(args):
     assignments += ["%s=%s" % kv for kv in parse_env_args(args.env)]
     if args.native:
         mode = ["--native"]
+    elif args.runtime_major is not None:
+        mode = [
+            "--dotnet",
+            args.dotnet or "dotnet",
+            "--runtime-major",
+            str(args.runtime_major),
+        ]
     else:
         mode = [
             "--dotnet",
@@ -1066,6 +1204,7 @@ _STEP_REFUSED = (
     ("wsl_distro", "Ubuntu"),
     ("dotnet", None),
     ("runtimeconfig", None),
+    ("runtime_major", None),
     ("env", []),
     ("stdin", None),
     ("dep", []),
@@ -1117,6 +1256,13 @@ def parse_args(argv, quiet=False):
         help="dotnet host (with --runner wsl: inside WSL, " "default 'dotnet')",
     )
     p.add_argument("--runtimeconfig", help="runtimeconfig.json for 'dotnet exec'")
+    p.add_argument(
+        "--runtime-major",
+        type=int,
+        metavar="N",
+        help="instead of --runtimeconfig: run on Microsoft.NETCore.App N.x (a "
+        "runtimeconfig.json written into the private directory)",
+    )
     p.add_argument(
         "--env",
         action="append",
@@ -1234,6 +1380,13 @@ def parse_args(argv, quiet=False):
         p.error("--runner wsl runs .dll programs, --native programs and --tool only")
     if args.stage and not args.tool:
         p.error("--stage needs --tool")
+    if args.runtime_major is not None:
+        if args.native or args.netfx or args.tool:
+            p.error("--runtime-major runs a .dll under 'dotnet exec'")
+        if args.runtimeconfig is not None:
+            p.error("--runtime-major and --runtimeconfig exclude each other")
+        if args.runtime_major < 1:
+            p.error("--runtime-major must be a positive major version")
     if args.expect_os is None:
         args.expect_os = "linux" if args.runner == "wsl" else host_os()
     if args.netfx and not IS_WINDOWS:
@@ -1294,8 +1447,11 @@ def remove_stale(*paths):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["--set-32bitreq"]:
+        return set_32bitreq_main(argv[1:])
     try:
-        args = parse_args(sys.argv[1:] if argv is None else list(argv))
+        args = parse_args(argv)
     except SystemExit as e:
         return exit_status(e)
     if args.steps_inside is not None:

@@ -8,7 +8,8 @@
 # ===----------------------------------------------------------------------===#
 """Check the output of msil/utils/ci/lit-legs.ps1 -Describe and -List and
 lit-legs.sh --describe and --list against plan 5.17.6, for describe.test,
-describe-sh.test, exit-tag.test and exit-tag-sh.test.
+describe-sh.test, exit-tag.test and exit-tag-sh.test, and against plan
+5.18.10 PX4 and PX5 (P-1a) for portable-tag.test and portable-tag-sh.test.
 
     legs-check.py describe ps1|sh DESCRIBE [--plant FAULT]
         DESCRIBE is the -Describe (--describe) output, which must be nothing
@@ -44,6 +45,24 @@ describe-sh.test, exit-tag.test and exit-tag-sh.test.
         from M26 check_msil's two paths in net8, the hosted programs in
         programs and programs-lto with msil_also_run=10,10+tc0, and
         ctest-lto (Exit) as lit-legs.ps1's.
+        The P-1a rows (plan 5.18.10 PX4, PX5): the legs tagged Portable are
+        exactly portable-smoke and portable-smoke-wsl (lit-legs.sh:
+        portable-smoke alone), each one lit run of msil/test/Portable
+        without lit arguments and with exactly these params besides the
+        msil_require_*: portable-smoke msil_triple=msil64-unknown-dotnet,
+        msil_pipeline=obj, msil_dotnet_runtime=10, msil_also_run=10+tc0,
+        msil_run_netfx=1, msil_require_portable=1 and msil_require_x86=1
+        (lit-legs.sh: no msil_run_netfx and no msil_require_x86, plus its
+        msil_glibc_sysroot=/); portable-smoke-wsl $wslRuntime with the
+        portable triple (msil_runner=wsl, msil_triple=msil64-unknown-dotnet,
+        msil_wsl_dotnet=private, msil_dotnet_runtime=10) plus
+        msil_pipeline=obj, msil_also_run=10+tc0 and msil_require_portable=1,
+        so no native oracle, sysroot or Framework run. No other leg passes
+        the portable triple or names msil/test/Portable; net-core's
+        --filter-out also matches the tests of msil/test/Portable; and
+        $checkMsil (net8 and net-core; lit-legs.sh's check_msil, net8) holds
+        clang/test/Preprocessor/init-msil-portable.c and
+        clang/test/Driver/msil-dotnet.c.
         --plant changes the JSON first, so that the check must fail (the
         failure path): drop-p3-path (wsl-p3's run 1 loses its last path),
         keep-p3 (wsl-p3's run 2 loses its --filter-out), no-hosted (harness,
@@ -57,19 +76,31 @@ describe-sh.test, exit-tag.test and exit-tag-sh.test.
         (programs-wsl's msil_also_run is 8), ctest-libc-out (ctest filters
         out libc.txt's tests), hosted-levels (programs-hosted loses
         msil_opt_levels) and det-glibc (det-wsl loses msil_glibc_sysroot).
+        The P-1a faults, for both scripts: portable-untagged (portable-smoke
+        loses its tag Portable), portable-exit (portable-smoke is tagged
+        Exit instead), portable-no-require (portable-smoke loses
+        msil_require_portable), check-msil-portable (net8 and net-core lose
+        init-msil-portable.c); for lit-legs.ps1 also portable-no-x86
+        (portable-smoke loses msil_require_x86), portable-wsl-netfx
+        (portable-smoke-wsl gains msil_run_netfx=1) and net-core-portable
+        (net-core's --filter-out stops matching msil/test/Portable).
     legs-check.py tags ps1|sh LIST DESCRIBE [--plant LEG=TAG]
         LIST (-List, --list) and DESCRIBE name the same legs in the same
         order, and each LIST line is 'name' or 'name (<switch>)' for the
         leg's tag: lit-legs.ps1 '' none, Wsl -Wsl, Quick -Quick, Full -Full,
-        Exit -Exit; lit-legs.sh '' none, Full --full, Exit --exit, and Quick
-        none (it has no switch: its Quick leg runs only when --leg names it).
+        Exit -Exit, Portable -Portable; lit-legs.sh '' none, Full --full,
+        Exit --exit, Portable --portable, and Quick none (it has no switch:
+        its Quick leg runs only when --leg names it). A second line names
+        the Portable legs.
     legs-check.py rows ps1|sh DESCRIBE ROWS [--wsl] [--full] [--exit]
-                  [--plant LEG=TAG]
+                  [--portable] [--plant LEG=TAG]
         ROWS (MSIL_CI_RESULTS of one run: 'lit-legs<TAB>name<TAB>RESULT...')
         holds exactly the legs that run with those switches, in DESCRIBE's
         order: the untagged legs, the Wsl legs with --wsl, the Full legs with
-        --full and the Exit legs with --exit, where for lit-legs.ps1 an Exit
-        leg named *-wsl also needs --wsl; never a Quick leg.
+        --full, the Exit legs with --exit and the Portable legs with
+        --portable, where for lit-legs.ps1 an Exit or Portable leg named
+        *-wsl also needs --wsl; never a Quick leg. A second line names the
+        Portable legs among the rows.
     legs-check.py calls DESCRIBE LEG CALLS [--run K]...
         CALLS is the stand-in lit's log (ci-legs.py: 'arg: ' and 'rsp: '
         lines) of one run of lit-legs.ps1 -Leg LEG (lit-legs.sh --leg LEG):
@@ -110,15 +141,38 @@ KINDS = {
     "sh": {"lit", "expected", "utc", "upstream"},
 }
 SWITCH = {
-    "ps1": {"": "", "Wsl": "-Wsl", "Quick": "-Quick", "Full": "-Full", "Exit": "-Exit"},
-    "sh": {"": "", "Quick": "", "Full": "--full", "Exit": "--exit"},
+    "ps1": {
+        "": "",
+        "Wsl": "-Wsl",
+        "Quick": "-Quick",
+        "Full": "-Full",
+        "Exit": "-Exit",
+        "Portable": "-Portable",
+    },
+    "sh": {
+        "": "",
+        "Quick": "",
+        "Full": "--full",
+        "Exit": "--exit",
+        "Portable": "--portable",
+    },
 }
 M26_FAULTS = ("drop-hosted", "ctest-lto-untagged", "check-msil")
+P1A_FAULTS = (
+    "portable-untagged",
+    "portable-exit",
+    "portable-no-require",
+    "check-msil-portable",
+)
 FAULTS = {
     "ps1": ("drop-p3-path", "keep-p3", "no-hosted", "wrong-prog-pipeline")
     + M26_FAULTS
-    + ("no-tc0", "ctest-libc-out", "hosted-levels", "det-glibc"),
-    "sh": ("no-hosted", "wrong-prog-pipeline", "no-glibc", "wsl-leg") + M26_FAULTS,
+    + ("no-tc0", "ctest-libc-out", "hosted-levels", "det-glibc")
+    + P1A_FAULTS
+    + ("portable-no-x86", "portable-wsl-netfx", "net-core-portable"),
+    "sh": ("no-hosted", "wrong-prog-pipeline", "no-glibc", "wsl-leg")
+    + M26_FAULTS
+    + P1A_FAULTS,
 }
 # The nine exit-corpus programs (5.12.11) and the hosted ones of Phase 3
 # (5.17.15: zlib-full from M26, lua from M27, sqlite from M30), as the legs
@@ -144,6 +198,47 @@ M26_CHECK_MSIL = (
     "llvm/test/Transforms/ExpandVariadics/msil-abi.ll",
 )
 CTEST = "msil/test/Programs/c-testsuite"
+# P-1a (plan 5.18.10 PX4, PX5): the portable triple, the directory that only
+# the legs tagged Portable run, check-msil's two new clang tests and the
+# params of each Portable leg besides the msil_require_* (exactly these).
+PORTABLE_TRIPLE = "msil64-unknown-dotnet"
+PORTABLE_DIR = "msil/test/Portable"
+P1A_CHECK_MSIL = (
+    "clang/test/Preprocessor/init-msil-portable.c",
+    "clang/test/Driver/msil-dotnet.c",
+)
+PORTABLE_LEGS = {
+    "ps1": {
+        "portable-smoke": {
+            "msil_triple": PORTABLE_TRIPLE,
+            "msil_pipeline": "obj",
+            "msil_dotnet_runtime": "10",
+            "msil_also_run": "10+tc0",
+            "msil_run_netfx": "1",
+            "msil_require_portable": "1",
+            "msil_require_x86": "1",
+        },
+        "portable-smoke-wsl": {
+            "msil_runner": "wsl",
+            "msil_triple": PORTABLE_TRIPLE,
+            "msil_wsl_dotnet": "private",
+            "msil_dotnet_runtime": "10",
+            "msil_pipeline": "obj",
+            "msil_also_run": "10+tc0",
+            "msil_require_portable": "1",
+        },
+    },
+    "sh": {
+        "portable-smoke": {
+            "msil_triple": PORTABLE_TRIPLE,
+            "msil_pipeline": "obj",
+            "msil_dotnet_runtime": "10",
+            "msil_also_run": "10+tc0",
+            "msil_require_portable": "1",
+            "msil_glibc_sysroot": "/",
+        },
+    },
+}
 # The corpus parameters (Get-CorpusParams, corpus_params): msil_require_corpus=1
 # always, the other two as the environment sets them.
 CORPUS_PARAMS = ("msil_require_corpus", "msil_corpus_dir", "msil_corpus_skip")
@@ -315,6 +410,7 @@ def check_p3_filter(where, regex, p3, problems, net_core=False):
             "MSIL :: harness/timeout.test",
             "MSIL :: M3/10-hosted/a.c",
             "MSIL :: M2/00-link/spill-limits.test",
+            "MSIL :: Portable/00-freestanding/datamodel.test",
         ):
             if not rx.search(name):
                 problems.append("%s: --filter-out no longer matches %s" % (where, name))
@@ -530,6 +626,60 @@ def check_ps1_rows(data, p3, problems):
         if legs[name]["kind"] != "expected":
             problems.append("%s: kind %r" % (name, legs[name]["kind"]))
     check_ps1_m26_rows(legs, problems)
+    check_portable_rows("ps1", data, problems)
+
+
+def check_portable_rows(script, data, problems):
+    """The P-1a rows of plan 5.18.10 PX4 and PX5 (see 'describe' above)."""
+    legs = legs_by_name(data)
+    want = PORTABLE_LEGS[script]
+    tagged = [l["name"] for l in data["legs"] if l["tag"] == "Portable"]
+    if tagged != list(want):
+        problems.append(
+            "the legs tagged Portable are %s, not %s" % (tagged, list(want))
+        )
+    for name, params in want.items():
+        leg = legs.get(name)
+        if not leg:
+            problems.append("legs missing: %s" % name)
+            continue
+        if leg["kind"] != "lit" or len(leg["runs"]) != 1:
+            problems.append(
+                "%s: kind %r, %d runs; not lit, 1"
+                % (name, leg["kind"], len(leg["runs"]))
+            )
+            continue
+        run = leg["runs"][0]
+        if run["paths"] != [PORTABLE_DIR] or run["lit"]:
+            problems.append(
+                "%s: paths %r, lit %r; not %s alone"
+                % (name, run["paths"], run["lit"], PORTABLE_DIR)
+            )
+        expect_params(name, run, params, problems)
+    for leg in data["legs"]:
+        if leg["tag"] == "Portable":
+            continue
+        for k, run in enumerate(leg["runs"], 1):
+            if run["params"].get("msil_triple") == PORTABLE_TRIPLE:
+                problems.append(
+                    "%s run %d (tag %r) passes msil_triple=%s"
+                    % (leg["name"], k, leg["tag"], PORTABLE_TRIPLE)
+                )
+            if any(
+                p == PORTABLE_DIR or p.startswith(PORTABLE_DIR + "/")
+                for p in run["paths"]
+            ):
+                problems.append(
+                    "%s run %d (tag %r) names %s"
+                    % (leg["name"], k, leg["tag"], PORTABLE_DIR)
+                )
+    for name in ("net8", "net-core") if script == "ps1" else ("net8",):
+        if name not in legs or not legs[name]["runs"]:
+            continue
+        paths = legs[name]["runs"][0]["paths"]
+        for p in P1A_CHECK_MSIL:
+            if p not in paths:
+                problems.append("%s: paths lack %s ($checkMsil, P-1a)" % (name, p))
 
 
 def expect_corpus_params(where, run, want, problems, any_value=()):
@@ -776,6 +926,7 @@ def check_sh_rows(data, problems):
     )
     check_ctest_dirs(legs, ("ctest", "ctest-lto"), problems)
     check_ctest_lto(legs, problems)
+    check_portable_rows("sh", data, problems)
 
 
 def plant_fault(script, data, fault):
@@ -822,6 +973,26 @@ def plant_fault(script, data, fault):
             del legs["programs-hosted"]["runs"][0]["params"]["msil_opt_levels"]
         elif fault == "det-glibc":
             del legs["det-wsl"]["runs"][0]["params"]["msil_glibc_sysroot"]
+        elif fault == "portable-untagged":
+            legs["portable-smoke"]["tag"] = ""
+        elif fault == "portable-exit":
+            legs["portable-smoke"]["tag"] = "Exit"
+        elif fault == "portable-no-require":
+            del legs["portable-smoke"]["runs"][0]["params"]["msil_require_portable"]
+        elif fault == "check-msil-portable":
+            for name in ("net8", "net-core"):
+                if name in legs:
+                    legs[name]["runs"][0]["paths"].remove(P1A_CHECK_MSIL[0])
+        elif fault == "portable-no-x86":
+            del legs["portable-smoke"]["runs"][0]["params"]["msil_require_x86"]
+        elif fault == "portable-wsl-netfx":
+            legs["portable-smoke-wsl"]["runs"][0]["params"]["msil_run_netfx"] = "1"
+        elif fault == "net-core-portable":
+            run = legs["net-core"]["runs"][0]
+            fixed = [a.replace("|Portable)/", ")/") for a in run["lit"]]
+            if fixed == run["lit"]:
+                raise ValueError("'|Portable)/' in net-core's --filter-out")
+            run["lit"] = fixed
     except (KeyError, IndexError, ValueError) as e:
         raise Usage("--plant %s: the JSON has no %s to change" % (fault, e))
 
@@ -896,10 +1067,14 @@ def cmd_tags(script, list_path, describe_path, plant):
                 ", ".join(exit_legs) or "none",
             )
         )
+        print(
+            "legs-check: Portable legs: %s"
+            % (", ".join(n for n, t in legs if t == "Portable") or "none")
+        )
     return problems
 
 
-def cmd_rows(script, describe_path, rows_path, wsl, full, exit_, plant):
+def cmd_rows(script, describe_path, rows_path, wsl, full, exit_, portable, plant):
     data = load_json(describe_path)
     if plant:
         plant_tag(data, plant)
@@ -908,10 +1083,8 @@ def cmd_rows(script, describe_path, rows_path, wsl, full, exit_, plant):
         tag, name = leg["tag"], leg["name"]
         if tag == "" or (tag == "Wsl" and wsl) or (tag == "Full" and full):
             want.append(name)
-        elif (
-            tag == "Exit"
-            and exit_
-            and (script == "sh" or wsl or not name.endswith("-wsl"))
+        elif ((tag == "Exit" and exit_) or (tag == "Portable" and portable)) and (
+            script == "sh" or wsl or not name.endswith("-wsl")
         ):
             want.append(name)
     with open(rows_path, encoding="utf-8-sig") as f:
@@ -922,14 +1095,30 @@ def cmd_rows(script, describe_path, rows_path, wsl, full, exit_, plant):
         problems.append("the run's legs %s, not %s" % (got, want))
     if not problems:
         switches = " ".join(
-            s for s, on in (("wsl", wsl), ("full", full), ("exit", exit_)) if on
+            s
+            for s, on in (
+                ("wsl", wsl),
+                ("full", full),
+                ("exit", exit_),
+                ("portable", portable),
+            )
+            if on
         )
         exit_legs = [
             l["name"] for l in data["legs"] if l["tag"] == "Exit" and l["name"] in got
         ]
+        portable_legs = [
+            l["name"]
+            for l in data["legs"]
+            if l["tag"] == "Portable" and l["name"] in got
+        ]
         print(
             "legs-check: %d rows, the legs of %s; Exit legs among them: %s"
             % (len(got), switches or "the default set", ", ".join(exit_legs) or "none")
+        )
+        print(
+            "legs-check: Portable legs among them: %s"
+            % (", ".join(portable_legs) or "none")
         )
     return problems
 
@@ -1036,7 +1225,12 @@ def main(argv):
             problems = cmd_tags(argv[1], argv[2], argv[3], plant)
         elif len(argv) >= 4 and argv[0] == "rows" and argv[1] in ("ps1", "sh"):
             rest = argv[4:]
-            flags = {"--wsl": False, "--full": False, "--exit": False}
+            flags = {
+                "--wsl": False,
+                "--full": False,
+                "--exit": False,
+                "--portable": False,
+            }
             plant = None
             while rest:
                 if rest[0] in flags:
@@ -1053,6 +1247,7 @@ def main(argv):
                 flags["--wsl"],
                 flags["--full"],
                 flags["--exit"],
+                flags["--portable"],
                 plant,
             )
         elif len(argv) >= 4 and argv[0] == "calls":
@@ -1069,7 +1264,7 @@ def main(argv):
             raise Usage(
                 "usage: describe ps1|sh FILE [--plant FAULT] | tags ps1|sh LIST FILE "
                 "[--plant LEG=TAG] | rows ps1|sh FILE ROWS [--wsl] [--full] [--exit] "
-                "[--plant LEG=TAG] | calls FILE LEG CALLS [--run K]..."
+                "[--portable] [--plant LEG=TAG] | calls FILE LEG CALLS [--run K]..."
             )
     except Usage as e:
         sys.stderr.write("legs-check: %s\n" % e)

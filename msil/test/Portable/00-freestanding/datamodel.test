@@ -1,0 +1,242 @@
+# The msil64-unknown-dotnet data model and predefines: the type sizes, alignments, signedness, spellings and limits of plan 5.18.2 PC2 and the macros of 5.18.3, checked at compile time and again at run time.
+# Plan 5.18.2 PC2 (LP64; wasm-style spellings, brief Q4 (a): size_t is
+# unsigned long and int64_t long long; signed char; int wchar_t and wint_t,
+# brief Q5 (b); long double = binary64 of size and alignment 8; __int128 on
+# msil64; max_align_t 8 with __BIGGEST_ALIGNMENT__ 16, brief Q6 (a); atomics
+# inline up to 8 bytes; va_list char *) and 5.18.3 PD1-PD3 (defined:
+# __MSIL__, __msil64__, __dotnet__, __LP64__, the little-endian macros, an
+# empty __USER_LABEL_PREFIX__, the sync and lock-free macros up to 8 bytes;
+# never __ELF__, a Unix, Linux, Windows, Apple, x86 or AArch64 macro,
+# __WINT_UNSIGNED__, __NO_MATH_ERRNO__, __msil32__ or __msil__).
+# Every compile-time check is a _Static_assert or an #error, so a wrong
+# model fails the build at every level. The run-time half reads the same
+# properties through volatile objects, so the emitted IL computes them in a
+# 64-bit process: struct strides and offsets, pointer differences, the sign
+# of char, wchar_t and wint_t, long double arithmetic, the widths of long,
+# size_t and __int128; each failed group sets one bit of the exit status.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <float.h>
+#include <limits.h>
+#include <stdalign.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/* 5.18.3 PD1: defined. */
+#if !defined(__MSIL__) || !defined(__msil64__) || !defined(__dotnet__)
+#error "__MSIL__, __msil64__ and __dotnet__ must be defined"
+#endif
+#if !defined(__LP64__) || !defined(_LP64) || defined(_ILP32) || defined(__ILP32__)
+#error "msil64 is LP64"
+#endif
+#if !defined(__LITTLE_ENDIAN__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "msil64 is little-endian"
+#endif
+#if __STDC_HOSTED__ != 0
+#error "the tests are freestanding"
+#endif
+#if !defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1) ||                            \
+    !defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2) ||                            \
+    !defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4) ||                            \
+    !defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8)
+#error "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1/2/4/8 must be defined"
+#endif
+#if defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16)
+#error "no 16-byte compare-and-swap on msil64"
+#endif
+#if __GCC_ATOMIC_CHAR_LOCK_FREE != 2 || __GCC_ATOMIC_SHORT_LOCK_FREE != 2 ||    \
+    __GCC_ATOMIC_INT_LOCK_FREE != 2 || __GCC_ATOMIC_LONG_LOCK_FREE != 2 ||      \
+    __GCC_ATOMIC_LLONG_LOCK_FREE != 2 || __GCC_ATOMIC_POINTER_LOCK_FREE != 2
+#error "atomics up to 8 bytes are lock-free"
+#endif
+#if __BIGGEST_ALIGNMENT__ != 16
+#error "__BIGGEST_ALIGNMENT__ is 16 on msil64"
+#endif
+#if __SIZEOF_POINTER__ != 8 || __SIZEOF_LONG__ != 8 ||                          \
+    __SIZEOF_LONG_LONG__ != 8 || __SIZEOF_INT__ != 4 || __SIZEOF_SHORT__ != 2 || \
+    __SIZEOF_SIZE_T__ != 8 || __SIZEOF_PTRDIFF_T__ != 8 ||                      \
+    __SIZEOF_WCHAR_T__ != 4 || __SIZEOF_WINT_T__ != 4 ||                        \
+    __SIZEOF_FLOAT__ != 4 || __SIZEOF_DOUBLE__ != 8 ||                          \
+    __SIZEOF_LONG_DOUBLE__ != 8 || __SIZEOF_INT128__ != 16
+#error "__SIZEOF_*__ do not match plan 5.18.2 PC2"
+#endif
+#if __WCHAR_WIDTH__ != 32 || __WINT_WIDTH__ != 32
+#error "wchar_t and wint_t are 32 bits wide"
+#endif
+#if defined(__CHAR_UNSIGNED__) || CHAR_MIN != -128 || CHAR_MAX != 127
+#error "char is signed"
+#endif
+
+/* 5.18.3 PD2 and PD3: never defined. */
+#if defined(__ELF__)
+#error "__ELF__ is never defined on the portable triples"
+#endif
+#if defined(__unix__) || defined(__unix) || defined(__linux__) ||              \
+    defined(__linux) || defined(__gnu_linux__)
+#error "no Unix or Linux macro on the portable triples"
+#endif
+#if defined(_WIN32) || defined(_WIN64) || defined(_MSC_VER) || defined(__MINGW32__)
+#error "no Windows macro on the portable triples"
+#endif
+#if defined(__APPLE__)
+#error "no Apple macro on the portable triples"
+#endif
+#if defined(__x86_64__) || defined(__x86_64) || defined(__amd64__) ||          \
+    defined(__amd64) || defined(__k8) || defined(__k8__) || defined(_M_X64) || \
+    defined(__i386__) || defined(__aarch64__)
+#error "no architecture macro on the portable triples"
+#endif
+#if defined(__SSE__) || defined(__SSE2__) || defined(__MMX__) ||               \
+    defined(__SEG_FS) || defined(__SEG_GS) || defined(__FLOAT128__) ||          \
+    defined(__code_model_small__)
+#error "no x86 feature or code-model macro on the portable triples"
+#endif
+#if defined(__WINT_UNSIGNED__)
+#error "wint_t is int (brief Q5 (b))"
+#endif
+#if defined(__NO_MATH_ERRNO__)
+#error "math errno is on by default (plan 5.18.2 PC3)"
+#endif
+#if defined(__msil32__) || defined(__msil__)
+#error "msil64 defines neither __msil32__ nor __msil__"
+#endif
+
+#define STR(x) #x
+#define XSTR(x) STR(x)
+_Static_assert(sizeof(XSTR(__USER_LABEL_PREFIX__)) == 1,
+               "__USER_LABEL_PREFIX__ is empty");
+
+/* 5.18.2 PC2: sizes and alignments. */
+_Static_assert(sizeof(char) == 1 && sizeof(short) == 2 && sizeof(int) == 4, "");
+_Static_assert(sizeof(long) == 8 && sizeof(long long) == 8, "LP64");
+_Static_assert(sizeof(void *) == 8 && sizeof(void (*)(void)) == 8, "LP64");
+_Static_assert(_Alignof(long) == 8 && _Alignof(long long) == 8, "");
+_Static_assert(_Alignof(void *) == 8 && _Alignof(double) == 8, "");
+_Static_assert(sizeof(float) == 4 && sizeof(double) == 8, "");
+_Static_assert(sizeof(long double) == 8 && _Alignof(long double) == 8,
+               "long double is binary64");
+_Static_assert(LDBL_MANT_DIG == 53 && DBL_MANT_DIG == 53 && FLT_MANT_DIG == 24,
+               "long double is binary64");
+_Static_assert(LDBL_MAX_EXP == DBL_MAX_EXP && LDBL_MIN_EXP == DBL_MIN_EXP, "");
+_Static_assert(sizeof(__int128) == 16 && _Alignof(__int128) == 16,
+               "__int128 on msil64");
+_Static_assert(_Alignof(max_align_t) == 8, "max_align_t (brief Q6 (a))");
+_Static_assert(sizeof(wchar_t) == 4 && sizeof(__WINT_TYPE__) == 4, "");
+_Static_assert(sizeof(va_list) == 8, "va_list is char *");
+
+/* 5.18.2 PC2: spellings (brief Q4 (a), Q5 (b)). */
+#define IS(T, x) _Generic((x), T: 1, default: 0)
+_Static_assert(IS(unsigned long, (size_t)0), "size_t is unsigned long");
+_Static_assert(IS(long, (ptrdiff_t)0), "ptrdiff_t is long");
+_Static_assert(IS(long, (intptr_t)0), "intptr_t is long");
+_Static_assert(IS(unsigned long, (uintptr_t)0), "uintptr_t is unsigned long");
+_Static_assert(IS(long long, (int64_t)0), "int64_t is long long");
+_Static_assert(IS(unsigned long long, (uint64_t)0), "uint64_t is unsigned long long");
+_Static_assert(IS(long long, (intmax_t)0), "intmax_t is long long");
+_Static_assert(IS(unsigned long long, (uintmax_t)0), "uintmax_t is unsigned long long");
+_Static_assert(IS(int, (int32_t)0) && IS(signed char, (int8_t)0), "");
+_Static_assert(IS(int, (wchar_t)0), "wchar_t is int");
+_Static_assert(_Generic((__WINT_TYPE__)0, int: 1), "wint_t is int");
+_Static_assert(IS(unsigned short, (__CHAR16_TYPE__)0), "char16_t");
+_Static_assert(IS(unsigned int, (__CHAR32_TYPE__)0), "char32_t");
+_Static_assert(IS(char *, (__builtin_va_list)0), "va_list is char *");
+_Static_assert(IS(int, L'a') && IS(int, 'a'), "");
+
+/* 5.18.2 PC2: limits and signedness. */
+_Static_assert((char)-1 < 0, "char is signed");
+_Static_assert((wchar_t)-1 < 0 && (__WINT_TYPE__)-1 < 0,
+               "wchar_t and wint_t are signed");
+_Static_assert(LONG_MAX == 0x7fffffffffffffffL && LONG_MIN == -LONG_MAX - 1, "");
+_Static_assert(ULONG_MAX == 0xffffffffffffffffUL && SIZE_MAX == ULONG_MAX, "");
+_Static_assert(PTRDIFF_MAX == LONG_MAX && INTPTR_MAX == LONG_MAX, "");
+_Static_assert(UINTPTR_MAX == ULONG_MAX && INT64_MAX == LLONG_MAX, "");
+_Static_assert(WCHAR_MIN == INT_MIN && WCHAR_MAX == INT_MAX, "");
+_Static_assert(WINT_MIN == INT_MIN && WINT_MAX == INT_MAX, "");
+_Static_assert(__INTMAX_WIDTH__ == 64 && __INTPTR_WIDTH__ == 64, "");
+_Static_assert(__atomic_always_lock_free(8, 0) && !__atomic_always_lock_free(16, 0),
+               "atomics are inline up to 8 bytes");
+
+/* The run-time half. */
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+struct mixed {
+  char c;
+  long l;
+  int i;
+  long double ld;
+  short s;
+  void *p;
+};
+_Static_assert(sizeof(struct mixed) == 48, "LP64 struct layout");
+_Static_assert(offsetof(struct mixed, l) == 8 && offsetof(struct mixed, ld) == 24, "");
+_Static_assert(offsetof(struct mixed, p) == 40, "");
+
+struct wide {
+  char c;
+  __int128 x;
+};
+_Static_assert(sizeof(struct wide) == 32 && offsetof(struct wide, x) == 16, "");
+
+static volatile int v_minus1 = -1;
+static volatile int v_two = 2;
+static volatile long double v_third = 1.0L / 3.0L;
+static volatile double v_third_d = 1.0 / 3.0;
+static struct mixed g_mixed[2];
+static struct wide g_wide[2];
+
+int main(void) {
+  /* 0: sizes as the IL sees them (element strides, member offsets). */
+  char *a = (char *)&g_mixed[0], *b = (char *)&g_mixed[1];
+  char *w0 = (char *)&g_wide[0], *w1 = (char *)&g_wide[1];
+  CHECK(0, b - a == 48 && w1 - w0 == 32);
+  CHECK(0, (char *)&g_mixed[v_two - 1].p - a == 48 + 40);
+  CHECK(0, ((uintptr_t)&g_wide[v_two - 1].x & 15) == 0);
+  CHECK(0, ((uintptr_t)&g_mixed[v_two - 1].ld & 7) == 0);
+
+  /* 1: char is signed; wchar_t and wint_t are int. */
+  char c = (char)v_minus1;
+  CHECK(1, c < 0 && (int)c == -1);
+  signed char sc = (signed char)(v_minus1 * 128);
+  CHECK(1, sc == -128 && (int)(char)(v_two * 64) == -128);
+  wchar_t wc = (wchar_t)v_minus1;
+  __WINT_TYPE__ wi = (__WINT_TYPE__)v_minus1;
+  CHECK(1, wc < 0 && wi < 0 && wi == -1);
+
+  /* 2: long, size_t and pointers are 64 bits wide. */
+  long l = (long)v_two << 40;
+  CHECK(2, (l >> 40) == 2 && (unsigned long)l == 0x20000000000UL);
+  size_t sz = (size_t)v_minus1;
+  CHECK(2, sz == SIZE_MAX && (sz >> 63) == 1);
+  uintptr_t up = (uintptr_t)a;
+  CHECK(2, (char *)up == a);
+  ptrdiff_t neg = a - b;
+  CHECK(2, neg == -48L);
+
+  /* 3: long double is binary64. */
+  long double ld = v_third;
+  CHECK(3, (double)ld == v_third_d);
+  CHECK(3, ld * 3.0L == (long double)(v_third_d * 3.0));
+
+  /* 4: the other integer widths at run time. */
+  unsigned int ui = (unsigned int)v_minus1;
+  unsigned long long ull = (unsigned long long)v_minus1;
+  CHECK(4, ui == 0xffffffffu && ull == 0xffffffffffffffffull);
+  unsigned short us = (unsigned short)v_minus1;
+  CHECK(4, us == 0xffff);
+
+  /* 5: __int128 is 128 bits wide. */
+  unsigned __int128 big = (unsigned __int128)v_two << 100;
+  CHECK(5, (unsigned long long)(big >> 64) == (2ull << 36));
+  CHECK(5, (unsigned long long)big == 0);
+
+  return (int)fails;
+}

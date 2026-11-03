@@ -1,0 +1,118 @@
+## -l on msil64-unknown-dotnet (ImplementationPlan.md 5.18.6 PL6;
+## portable-linkrules D9 and its verifier's V2; brief Q8 (a); Design.md 5.2's
+## shared-first rule, scoped to the portable triples):
+## - the candidates are <name>.dll, lib<name>.dll and lib<name>.a, never
+##   lib<name>.so, <name>.lib or lib<name>.dll.a (a directory with only those
+##   is 'unable to find library -l<name>');
+## - inside one search directory a toolchain library assembly wins over an
+##   archive: with c.dll beside libc.a, -lc takes c.dll (the program
+##   references the assembly 'c' and defines no 'cfn' of its own), and so
+##   does lib<name>.dll beside lib<name>.a; also with -lc before the first
+##   object and no --target, where the search waits for the codegen triple
+##   that the object fixes;
+## - -Bstatic takes the archive (the program defines 'cfn' and references no
+##   'c'), and a later -Bdynamic restores the assembly;
+## - the search directories keep their order: a directory with only libc.a
+##   before one with only c.dll gives the archive, and the other order the
+##   assembly;
+## - -l:<file> takes that file;
+## - host triples keep static-first: x86_64-unknown-linux-gnu-msil with c.dll
+##   beside libc.a takes the archive (shared-lsearch.test pins the rest).
+## Neither stand-in defines __llvm_libc_errno, so the static links are not
+## portable-libc-static.test's T-P11.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir both sonly donly libdll nat hboth dyn dyn-first st redyn first-a first-d colon lib-dll host
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj cfn-shared.ll -o cfn-shared.o
+# RUN: llc -filetype=obj cfn-static.ll -o cfn-static.o
+# RUN: llc -filetype=obj zfn.ll -o zfn.o
+# RUN: msil-ld -shared cfn-shared.o -o both/c.dll 2>&1 | count 0
+# RUN: llvm-ar rc both/libc.a cfn-static.o
+# RUN: cp both/c.dll donly/c.dll
+# RUN: cp both/libc.a sonly/libc.a
+# RUN: msil-ld -shared cfn-shared.o -o libdll/libc.dll 2>&1 | count 0
+# RUN: llvm-ar rc libdll/libc.a cfn-static.o
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o nat/libz.so
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:nat/z.lib
+# RUN: llvm-dlltool -m i386:x86-64 -d %S/Inputs/native/coff-import.def -l nat/libz.dll.a
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{dll} = FileCheck %s --check-prefix=DLL --implicit-check-not=".method 'cfn'"
+# DEFINE: %{archive} = FileCheck %s --check-prefix=ARCHIVE --implicit-check-not="assemblyref 'c'"
+
+## Shared first inside one directory.
+# RUN: msil-ld prog.o -L both -lc -o dyn/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dyn/prog.exe | %{dll}
+# DLL: {{^}}assemblyref 'c' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# RUN: msil-ld -L both -lc prog.o -o dyn-first/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dyn-first/prog.exe | %{dll}
+# RUN: msil-ld prog.o -L libdll -lc -o lib-dll/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lib-dll/prog.exe | FileCheck %s --check-prefix=LIBDLL --implicit-check-not=".method 'cfn'"
+# LIBDLL: {{^}}assemblyref 'libc' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+
+## -Bstatic, then -Bdynamic.
+# RUN: msil-ld prog.o -L both -Bstatic -lc -o st/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump st/prog.exe | %{archive}
+# ARCHIVE: {{^}}  .method 'cfn' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# RUN: msil-ld prog.o -L both -Bstatic -Bdynamic -lc -o redyn/prog.exe 2>&1 | count 0
+# RUN: cmp dyn/prog.exe redyn/prog.exe
+
+## Directory order.
+# RUN: msil-ld prog.o -L sonly -L donly -lc -o first-a/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump first-a/prog.exe | %{archive}
+# RUN: msil-ld prog.o -L donly -L sonly -lc -o first-d/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump first-d/prog.exe | %{dll}
+
+## -l:<file>.
+# RUN: msil-ld prog.o -L both -l:libc.a -o colon/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump colon/prog.exe | %{archive}
+
+## Native candidates do not exist on dotnet.
+# RUN: not msil-ld zfn.o -L nat -lz -o x.exe 2>&1 | %{fc} --check-prefix=NOLIB --implicit-check-not="native library"
+# NOLIB: {{^}}msil-ld: error: unable to find library -lz{{$}}
+
+## A host triple keeps static-first.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil prog.ll -o host/prog.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil cfn-shared.ll -o host/cfn-shared.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil cfn-static.ll -o host/cfn-static.o
+# RUN: msil-ld -shared host/cfn-shared.o -o hboth/c.dll 2>&1 | count 0
+# RUN: llvm-ar rc hboth/libc.a host/cfn-static.o
+# RUN: msil-ld host/prog.o -L hboth -lc -o host/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump host/prog.exe | %{archive}
+
+#--- prog.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @cfn()
+
+define i32 @main() {
+  %r = call i32 @cfn()
+  ret i32 %r
+}
+
+#--- cfn-shared.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @cfn() {
+  ret i32 1
+}
+
+#--- cfn-static.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @cfn() {
+  ret i32 2
+}
+
+#--- zfn.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @fn1()
+
+define i32 @main() {
+  %r = call i32 @fn1()
+  ret i32 %r
+}

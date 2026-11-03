@@ -27,7 +27,12 @@ other build scripts, msil/utils/build/README.md). --list, --check-list and
 x86_64-unknown-linux-gnu-msil by default, or those given with --triple
 (repeatable); --all adds x86_64-w64-windows-gnu-msil,
 x86_64-unknown-linux-musl-msil, aarch64-unknown-linux-gnu-msil and
-aarch64-pc-windows-msvc-msil (compiled and archived, never run). Each archive
+aarch64-pc-windows-msvc-msil (compiled and archived, never run). An MSIL
+triple has the object format suffix -msil or an msil arch (msil32, msil64).
+The portable triple msil64-unknown-dotnet (plan 5.18.8) is built only when
+--triple names it: it is in neither the default set nor --all, and --check
+and --list cover it only when named (msil32-unknown-dotnet is accepted here,
+but its compiles fail until P-4, as clang's backend refuses it). Each archive
 is plan 5.14.3 A1's per-target file: <resource dir>/lib/<T>/
 clang_rt.builtins.lib on *-windows-msvc* triples and <resource dir>/lib/<T>/
 libclang_rt.builtins.a otherwise, with the resource directory from
@@ -77,16 +82,16 @@ that form) is compiled once per guarded name instead, into
 added before -o, so that each such member defines one function and references
 only what that function calls (msil_longdouble.c's forwarders). The members
 follow sources.txt's order (a split source's members follow its guards'
-order), and two sources that give one member name for any triple of --all or
-of the command line are an error. 'llvm-ar rcsD' writes the archive (from the
-object directory, with bare member names), so equal objects give a
-byte-identical archive. The archive is replaced only when every member
-compiled, and the replace is retried for a few hundred milliseconds while
-another process holds the old archive open (Windows). A failure removes that
-triple's archive and stamp, so a link fails loudly instead of using a stale
-archive; an archive that another process still holds open stays without its
-stamp, so --check reports it, and the message names it and says to remove it
-once it is no longer in use. The temporary object directory goes in every
+order), and two sources that give one member name for any triple of --all,
+any portable triple or any triple of the command line are an error. 'llvm-ar
+rcsD' writes the archive (from the object directory, with bare member names),
+so equal objects give a byte-identical archive. The archive is replaced only
+when every member compiled, and the replace is retried for a few hundred
+milliseconds while another process holds the old archive open (Windows). A
+failure removes that triple's archive and stamp, so a link fails loudly
+instead of using a stale archive; an archive that another process still holds
+open stays without its stamp, so --check reports it, and the message names it
+and says to remove it once it is no longer in use. The temporary object directory goes in every
 case, the later triples are still built, and the script exits 1.
 
 <archive>.stamp records the SHA-256 of this script, of the clang and llvm-ar
@@ -135,7 +140,8 @@ Modes (at most one; without one the script builds):
                   beside it skips an up-to-date rebuild.
   --self-test     checks this script offline, in a temporary directory
                   outside the repository, with stand-ins for clang and
-                  llvm-ar: parsing, globs, exclusions, --check-list on a
+                  llvm-ar: parsing, globs, exclusions, the portable
+                  triple (only when named), --check-list on a
                   synthetic CMakeLists.txt, stale stamps, the member split,
                   duplicate members, failed compiles, the native oracle's
                   source list, A1's per-target files beside the old layout's
@@ -180,6 +186,13 @@ ALL_TRIPLES = DEFAULT_TRIPLES + (
     "aarch64-unknown-linux-gnu-msil",
     "aarch64-pc-windows-msvc-msil",
 )
+# The portable triples (plan 5.18.8 PH1): built, checked and listed only when
+# --triple names one, never by default or with --all; the duplicate-member
+# check of sources.txt covers them always.
+PORTABLE_TRIPLES = ("msil64-unknown-dotnet",)
+# The arches of the portable triples, which need no -msil suffix.
+MSIL_ARCHES = ("msil32", "msil64")
+TRIPLE_FORM_RE = re.compile(r"^[A-Za-z0-9_.]+(-[A-Za-z0-9_.]+){2,4}$")
 
 # The compile command of plan 5.14.3 A2, after clang and --target=<T>.
 CFLAGS = (
@@ -469,9 +482,11 @@ def resolve(srclist, triple, cache):
 
 
 def resolve_all(srclist, triples, cache):
-    """Resolves the given triples, checking every triple of --all too."""
+    """Resolves the given triples, checking every triple of --all and the
+    portable triples too."""
     result = {}
-    for t in list(ALL_TRIPLES) + [t for t in triples if t not in ALL_TRIPLES]:
+    checked = list(ALL_TRIPLES) + [t for t in PORTABLE_TRIPLES if t not in ALL_TRIPLES]
+    for t in checked + [t for t in triples if t not in checked]:
         members = resolve(srclist, t, cache)
         if t in triples:
             result[t] = members
@@ -1140,7 +1155,8 @@ def parse_args(argv):
         metavar="T",
         action="append",
         default=[],
-        help="an MSIL triple, repeatable (default: %s)" % " and ".join(DEFAULT_TRIPLES),
+        help="an MSIL triple, repeatable (default: %s; the portable %s only when named)"
+        % (" and ".join(DEFAULT_TRIPLES), " and ".join(PORTABLE_TRIPLES)),
     )
     ap.add_argument(
         "--all", action="store_true", help="add the other MSIL triples (compiled, never run)"
@@ -1200,9 +1216,20 @@ def parse_args(argv):
     if mode == "--self-test" and (args.build_dir or args.jobs):
         raise UsageError("--self-test takes no other option")
     for t in args.triple:
-        if not re.match(r"^[A-Za-z0-9_.]+(-[A-Za-z0-9_.]+){2,4}$", t) or not t.endswith("-msil"):
-            raise UsageError("--triple %s is not an MSIL triple (<arch>-...-msil)" % t)
+        if not is_msil_triple(t):
+            raise UsageError(
+                "--triple %s is not an MSIL triple (<arch>-...-msil, or an msil32 or msil64 "
+                "triple such as %s)" % (t, PORTABLE_TRIPLES[0])
+            )
     return args, mode
+
+
+def is_msil_triple(triple):
+    """An MSIL triple: the object format suffix -msil (the host MSIL triples)
+    or an msil arch (the portable triples, plan 5.18.8 PH1)."""
+    if not TRIPLE_FORM_RE.match(triple):
+        return False
+    return triple.endswith("-msil") or triple.split("-")[0] in MSIL_ARCHES
 
 
 def selected_triples(args):
@@ -1421,7 +1448,7 @@ compiler-rt/lib/builtins/adddf3.c
 # excluded compiler-rt/lib/builtins/emutls.c: hosted: needs <stdlib.h>
 compiler-rt/lib/builtins/floatdidf.c   # trailing comment
 compiler-rt/lib/builtins/fp_mode.c
-compiler-rt/lib/builtins/int_util.c *-linux-*
+compiler-rt/lib/builtins/int_util.c *-linux-*,*-unknown-dotnet
 compiler-rt/lib/builtins/muldc3.c
 # excluded compiler-rt/lib/builtins/atomic.c: atomic: user decisions R4/R5
 # excluded compiler-rt/lib/builtins/clear_cache.c: hosted: needs <assert.h>
@@ -1509,6 +1536,35 @@ def _self_test(t):
             % (triple, "listed" if linux else "not listed", "listed" if wide else "not listed"),
             have("absvsi2.c") == linux and have("split.c") == wide and have("adddf3.c"),
         )
+    t.check(
+        "--all leaves out the portable triple",
+        not any(l.startswith(PORTABLE_TRIPLES[0] + " ") for l in lines),
+        text,
+    )
+    portable = PORTABLE_TRIPLES[0]
+    text_p = t.expect(
+        "--list --triple %s needs no -msil suffix" % portable, ["--list", "--triple", portable], 0
+    )
+    t.check(
+        "the portable triple takes the unglobbed and *-unknown-dotnet lines only (int_util.c, "
+        "not absvsi2.c or split.c)",
+        text_p.splitlines()
+        == [
+            portable + " adddf3.c.o " + b + "adddf3.c",
+            portable + " floatdidf.c.o " + b + "floatdidf.c",
+            portable + " fp_mode.c.o " + b + "fp_mode.c",
+            portable + " int_util.c.o " + b + "int_util.c",
+            portable + " muldc3.c.o " + b + "muldc3.c",
+            portable + " truncsfbf2.c.o " + b + "truncsfbf2.c",
+        ],
+        text_p,
+    )
+    t.expect(
+        "--list --triple msil32-unknown-dotnet is accepted (an msil arch)",
+        ["--list", "--triple", "msil32-unknown-dotnet"],
+        0,
+        "msil32-unknown-dotnet int_util.c.o",
+    )
     t.check(
         "a guarded source splits into one member per MSIL_MEMBER name, in order",
         [
@@ -1635,6 +1691,65 @@ def _self_test(t):
         )
     )
     t.check("two output directories give byte-identical archives", same)
+    t.check(
+        "a default build writes no portable archive",
+        not os.path.exists(os.path.join(out_a, portable)),
+    )
+
+    # The portable triple, only when named (plan 5.18.8).
+    out_p = os.path.join(t.root, "out-p")
+    out_q = os.path.join(t.root, "out-q")
+    port = os.path.join(out_p, portable, "libclang_rt.builtins.a")
+    t.reset_calls()
+    t.expect(
+        "--triple %s --out builds the portable archive alone" % portable,
+        ["--triple", portable, "--out", out_p],
+        0,
+        portable + ": 6 members",
+        absent=("x86_64-",),
+    )
+    t.check(
+        "the portable archive and stamp at <out>/%s/libclang_rt.builtins.a" % portable,
+        os.path.isfile(port)
+        and os.path.isfile(port + ".stamp")
+        and sorted(os.listdir(out_p)) == [portable],
+    )
+    calls = t.clang_calls()
+    t.check(
+        "portable compiles: --target=%s, plan 5.14.3 A2's command, no MSVC version" % portable,
+        len(calls) == 6
+        and all(
+            c.startswith("--target=%s -c -O2 -std=c11 -ffreestanding " % portable) for c in calls
+        )
+        and not any(MSVC_VERSION_FLAG in c for c in calls),
+        "\n".join(calls),
+    )
+    t.expect(
+        "the portable archive into a second directory", ["--triple", portable, "--out", out_q], 0
+    )
+    t.check(
+        "two output directories give byte-identical portable archives",
+        open(port, "rb").read()
+        == open(os.path.join(out_q, portable, "libclang_rt.builtins.a"), "rb").read(),
+    )
+    t.expect(
+        "--check --triple %s passes on a fresh portable archive" % portable,
+        ["--check", "--triple", portable, "--out", out_p],
+        0,
+        portable + ": up to date",
+    )
+    t.expect(
+        "--check without --triple does not cover the portable archive",
+        ["--check", "--out", out_a],
+        0,
+        absent=(portable,),
+    )
+    t.expect(
+        "--check --triple %s on a directory without it exits 1" % portable,
+        ["--check", "--triple", portable, "--out", out_a],
+        1,
+        portable + ": missing",
+    )
     t.reset_calls()
     t.expect("an up-to-date archive is not rebuilt", ["--out", out_a], 0, "up to date")
     t.check("no compile for up-to-date archives", not t.clang_calls())
@@ -1793,6 +1908,8 @@ def _self_test(t):
         (["--check-list", "--out", out_a], "--out goes with"),
         (["--jobs", "0"], "--jobs must be at least 1"),
         (["--triple", "x86_64-unknown-linux-gnu"], "not an MSIL triple"),
+        (["--triple", "x86_64-unknown-dotnet"], "not an MSIL triple"),
+        (["--triple", "msil64"], "not an MSIL triple"),
         (["--no-such-option"], "unrecognized arguments"),
     ):
         t.expect("usage error: " + " ".join(argv), argv, 2, needle)
@@ -1818,11 +1935,30 @@ def _self_test(t):
     # The repository's own list.
     real = parse_sources(REPO)
     cache = FileCache(REPO)
-    resolved = resolve_all(real, list(ALL_TRIPLES), cache)
+    resolved = resolve_all(real, list(ALL_TRIPLES) + list(PORTABLE_TRIPLES), cache)
     t.check(
         "the repository's sources.txt resolves for every --all triple without duplicates",
         all(resolved[x] for x in ALL_TRIPLES),
     )
+    for x in PORTABLE_TRIPLES:
+        names = [m.path for m in resolved[x]]
+        t.check(
+            "the repository's sources.txt for %s: int_util.c and the -ftrapv helpers, no "
+            "msil/lib/builtins/ host family, no atomic or *ti* source (plan 5.18.8 PH3)" % x,
+            BUILTINS + "/int_util.c" in names
+            and all(
+                any(
+                    n == "%s/%s%s2.c" % (BUILTINS, f, w) or n == "%s/%s%s3.c" % (BUILTINS, f, w)
+                    for n in names
+                )
+                for f in ("absv", "addv", "mulv", "negv", "subv")
+                for w in ("si", "di")
+            )
+            and not any(n.startswith("msil/lib/builtins/") for n in names)
+            and not any(posixpath.basename(n) == "atomic.c" for n in names)
+            and not any(re.search(r"ti(\d|[a-z]f)?\.c$", posixpath.basename(n)) for n in names),
+            "\n".join(names),
+        )
 
 
 def _self_test_lock(t, out_dir):

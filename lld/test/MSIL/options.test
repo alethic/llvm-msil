@@ -112,6 +112,12 @@
 # HELP-DAG:     --exclude-libs
 # HELP-DAG:     --export-all-symbols
 # HELP-DAG:     --interface-only
+## P-1a's forced exports (5.18.6 PL7); --export-if-defined=<value> is longer
+## than the 23-column option field, so its help text is on the next line.
+# HELP-DAG:     {{^}}  --export=<value>{{ +}}Export this symbol from a -shared library, even when it is hidden; it is an error if no input defines it{{$}}
+# HELP-DAG:     {{^}}  --export-if-defined=<value>{{$}}
+# HELP-DAG:     {{^ +}}Export this symbol from a -shared library if an input defines it, even when it is hidden{{$}}
+# HELP-DAG:     {{^}}  --export-list=<value>{{ +}}Export the symbols named in this file (one per line, '#' starts a comment line) as --export does{{$}}
 
 # RUN: not msil-ld 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
 # RUN: not msil-ld --lto-emit-asm -o x.il 2>&1 | %{fc} %{one} --check-prefix=NOINPUT

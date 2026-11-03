@@ -115,9 +115,18 @@ void addCygMingDefines(const LangOptions &Opts, MacroBuilder &Builder) {
 /// x86_64 and aarch64 on Linux with glibc or musl, and on Windows with MSVC or
 /// MinGW. Every other MSIL triple, Darwin and i686 included, gets nullptr and
 /// is reported as unknown. Keep the classes in sync with the native dispatch
-/// below.
+/// below. The portable architectures msil64 and msil32 have a TargetInfo of
+/// their own, MSILPortableTargetInfo, and exist only with the OS dotnet and
+/// no environment component (msil64-unknown-dotnet-gnu is refused).
 static std::unique_ptr<TargetInfo>
 AllocateMSILTarget(const llvm::Triple &Triple, const TargetOptions &Opts) {
+  if (Triple.isMSIL()) {
+    if (!Triple.isOSDotNet() ||
+        Triple.getEnvironment() != llvm::Triple::UnknownEnvironment)
+      return nullptr;
+    return std::make_unique<MSILPortableTargetInfo>(Triple, Opts);
+  }
+
   // arm64e, arm64ec and LFI each have an ABI of their own.
   if (Triple.isArm64e() || Triple.isArm64e_x1() || Triple.isWindowsArm64EC() ||
       Triple.isLFI())
@@ -171,6 +180,12 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
                                            const TargetOptions &Opts) {
   if (Triple.isOSBinFormatMSIL())
     return AllocateMSILTarget(Triple, Opts);
+  // The portable MSIL architectures and the OS dotnet exist only together and
+  // only with the MSIL object format: x86_64-unknown-dotnet would otherwise
+  // be a native x86-64 ELF target, and msil64-unknown-dotnet-elf an MSIL
+  // architecture with a native object format.
+  if (Triple.isMSIL() || Triple.isOSDotNet())
+    return nullptr;
 
   llvm::Triple::OSType os = Triple.getOS();
 

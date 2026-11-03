@@ -4,8 +4,9 @@
 ## yaml2obj copies of ilasm (.NET Framework 4.8) images: lib.il assembled
 ## with -dll -pe64 -x64 (an Assembly row and no entry point), exit42.il with
 ## -dll -pe64 -x64 (a DLL with an entry point, the shape of D31's lit
-## pipeline) and exit42.il with -dll (PE32). Every copy is canonically equal
-## to its input, except for the 'pe' line of the DLL with an entry point.
+## pipeline) and exit42.il with -dll (PE32, AnyCPU). Every copy is
+## canonically equal to its input, except for the 'pe' line of a DLL with an
+## entry point.
 
 # RUN: rm -rf %t && split-file %s %t
 # RUN: yaml2obj %t/lib.yaml -o %t/lib.dll
@@ -81,13 +82,59 @@
 # RUN:   --match-full-lines --strict-whitespace
 # ARM64-CANON:pe PE32+ machine=0xAA64 dll subsystem=3
 
-## A PE32 input is refused, because only PE32+ images are written until
-## phase 5 (5.7.7).
-# RUN: not llvm-cil-copy %t/exit42-pe32.dll -o %t/exit42-pe32.copy.dll 2>&1 \
-# RUN:   | FileCheck %s --check-prefix=PE32 -DFILE=%t/exit42-pe32.dll \
-# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
-# RUN:       --implicit-check-not="Stack dump"
-# PE32:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': cannot write PE image: machine 0x014C is not supported until phase 5
+## A PE32 input with machine I386 and CorFlags ILONLY only (ilasm's AnyCPU
+## image) is copied with msil64-unknown-dotnet's stubless PE32 envelope
+## (5.18.7): the input's 32BIT_MACHINE characteristic, import, IAT, mscoree
+## stub and .reloc are gone (AddressOfEntryPoint 0, one section), the image
+## base is a PE32 EXE's, the heap commit is 0x1000, and, as above, the DLL
+## with an entry point becomes an Executable.
+# RUN: llvm-cil-copy %t/exit42-pe32.dll -o %t/exit42-pe32.copy.dll
+# RUN: llvm-cil-dump --headers %t/exit42-pe32.copy.dll \
+# RUN:   | FileCheck %s --check-prefix=PE32-HEADERS --match-full-lines --strict-whitespace
+# PE32-HEADERS:Format: PE32 machine=0x014C exe
+# PE32-HEADERS-NEXT:COFF: sections=1 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x0022 symbols=0
+# PE32-HEADERS-NEXT:Optional: imagebase=0x0000000000400000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x1000
+# PE32-HEADERS-NEXT:Section: .text rva=0x00002000 vsize=0x{{[0-9A-F]+}} raw=0x200 rawsize=0x{{[0-9A-F]+}} flags=0x60000020
+# PE32-HEADERS-NEXT:CLI: flags=0x00000001 entrypoint=0x06000001 metadata=0x{{([0-9A-F]{8})}},0x{{[0-9A-F]+}} runtime=2.5
+# RUN: llvm-readobj --file-headers %t/exit42-pe32.copy.dll \
+# RUN:   | FileCheck %s --check-prefix=PE32-DIRS
+# PE32-DIRS:      AddressOfEntryPoint: 0x0
+# PE32-DIRS:      ImportTableRVA: 0x0
+# PE32-DIRS-NEXT: ImportTableSize: 0x0
+# PE32-DIRS:      BaseRelocationTableRVA: 0x0
+# PE32-DIRS-NEXT: BaseRelocationTableSize: 0x0
+# PE32-DIRS:      IATRVA: 0x0
+# PE32-DIRS-NEXT: IATSize: 0x0
+# RUN: llvm-cil-dump --canonical %t/exit42-pe32.dll > %t/exit42-pe32.txt
+# RUN: llvm-cil-dump --canonical %t/exit42-pe32.copy.dll > %t/exit42-pe32.copy.txt
+# RUN: FileCheck %s --input-file=%t/exit42-pe32.copy.txt --check-prefix=PE32-CANON \
+# RUN:   --match-full-lines --strict-whitespace
+# PE32-CANON:pe PE32 machine=0x014C exe subsystem=3
+# PE32-CANON-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# PE32-CANON-NEXT:entrypoint int32() '<Module>'::'main'
+# RUN: sed -e "1s/ dll / exe /" %t/exit42-pe32.txt > %t/exit42-pe32.expected.txt
+# RUN: diff %t/exit42-pe32.expected.txt %t/exit42-pe32.copy.txt
+
+## Machine I386 is copied only as an AnyCPU image (5.18.7): a PE32 input
+## whose CorFlags add 32BITREQUIRED (0x3) or also 32BITPREFERRED (0x20003)
+## to ILONLY is refused. The inputs are pe32.yaml with the COR20 Flags
+## patched (the bytes after the metadata directory, RVA 0x2054 size 0x140).
+# RUN: sed -e "s/5420000040010000010000000100000600/5420000040010000030000000100000600/" \
+# RUN:   %t/pe32.yaml > %t/pe32-req.yaml
+# RUN: sed -e "s/5420000040010000010000000100000600/5420000040010000030002000100000600/" \
+# RUN:   %t/pe32.yaml > %t/pe32-pref.yaml
+# RUN: yaml2obj %t/pe32-req.yaml -o %t/pe32-req.dll
+# RUN: yaml2obj %t/pe32-pref.yaml -o %t/pe32-pref.dll
+# RUN: llvm-cil-dump --headers %t/pe32-req.dll | FileCheck %s --check-prefix=REQ-INPUT
+# REQ-INPUT: CLI: flags=0x00000003 entrypoint=0x06000001
+# RUN: llvm-cil-dump --headers %t/pe32-pref.dll | FileCheck %s --check-prefix=PREF-INPUT
+# PREF-INPUT: CLI: flags=0x00020003 entrypoint=0x06000001
+# RUN: not llvm-cil-copy %t/pe32-req.dll -o %t/pe32-req.copy.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=REQ-ERR
+# REQ-ERR: cannot write PE image: machine 0x014C is written only as an AnyCPU image (CorFlags ILONLY without 32BITREQUIRED and 32BITPREFERRED), not with CorFlags 0x00000003
+# RUN: not llvm-cil-copy %t/pe32-pref.dll -o %t/pe32-pref.copy.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=PREF-ERR
+# PREF-ERR: cannot write PE image: machine 0x014C is written only as an AnyCPU image (CorFlags ILONLY without 32BITREQUIRED and 32BITPREFERRED), not with CorFlags 0x00020003
 
 #--- lib.il
 // A library: an Assembly row and no entry point.

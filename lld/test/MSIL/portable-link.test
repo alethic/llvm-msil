@@ -1,0 +1,442 @@
+## msil-ld on msil64-unknown-dotnet: the target gate, inputs that bind
+## native code, and undefined C library names (ImplementationPlan.md 5.18.6
+## PL1-PL3, 5.14.2's N6 and N2 rows; P-1a's texts T-P1 and T-P4):
+## - an msil64 object links with no --target, with
+##   --target=msil64-unknown-dotnet and with the short spelling
+##   --target=msil64-dotnet (getMSILTriple normalizes it), to the same
+##   image;
+## - msil32-unknown-dotnet is T-P1:
+##     target 'msil32-unknown-dotnet' is not supported yet: only msil64-unknown-dotnet is implemented
+##   while the combinations that 5.18.1 PT5 refuses for good have
+##   TargetRegistry's reason, as llc reports it, naming the triple as given:
+##   an msil architecture without the OS dotnet (msil64-unknown-linux), and
+##   the OS dotnet without an msil architecture (x86_64-unknown-dotnet, not
+##   x86_64-unknown-dotnet-msil); portable-guard.test has the environment
+##   reason;
+## - host and portable objects never mix: an object whose record triple key
+##   differs is refused as today (obj-triple.test's text), in either order
+##   and against --target;
+## - every native library is T-P4,
+##     '<file>' is a native library, which msil64-unknown-dotnet cannot link: the portable target binds no native code
+##   a shared object, a native DLL, a COFF import library, a static library
+##   of COFF objects, a MinGW import library ('.dll.a') and an archive whose
+##   only member is an ELF object, given by path, and that archive found by
+##   -l too, also with -l before the first object and no --target (the -l
+##   search waits for the codegen triple, so it takes the native candidate
+##   that reading reports), and an archive of native members named before
+##   the first object with no --target, where the object fixes the target
+##   only after the archive is read: the rule waits for the codegen triple,
+##   so the order of the arguments does not matter (section 6 P-1a
+##   'Archives on dotnet'),
+##   also when the program references the archive's native function;
+## - a refused --target is reported before any input is judged: with a
+##   native archive given by path, before or after the object, msil32 is
+##   T-P1 and x86_64-unknown-dotnet and msil64-unknown-dotnet-gnu have
+##   PT5's reason, never T-P4; with only an empty archive,
+##   msil64-unknown-dotnet-gnu has PT5's reason, not 'no input files';
+## - an archive that mixes CIL and native members links its CIL members and
+##   skips the native ones ('--verbose' logs each skipped member), named
+##   after the object or before it, to the same image;
+## - an archive with no members (the portable sysroot's libm.a, PL2; brief
+##   Q14 (a)) is not a native library: it contributes nothing, by path and
+##   by -l, whether it is the bare '!<arch>' header or llvm-ar's archive
+##   with an empty symbol table, and named before the first object too;
+## - an undefined C library name gets the class line N6 after the first line
+##   and before '>>> referenced by': '>>> a C library function; link the
+##   managed C library c.dll (-lc)' without an input named c.dll, and
+##   '>>> a C library function that the C library c.dll
+##   (msil64-unknown-dotnet) does not provide' when one takes part (by path
+##   or through -lc). malloc is a TargetLibraryInfo name and pthread_create a
+##   name of lld/MSIL/CLibraryNames.def (llvm-libc's public names that TLI
+##   lacks); a name in neither source keeps the plain report;
+## - N2's portable line for an '__atomic_*' name, '>>> an atomic operation
+##   (libatomic's interface), which msil64-unknown-dotnet does not provide
+##   yet', and N1's and N3's lines unchanged, none with N6's line;
+## - a weak undefined function keeps today's non-Windows rule (null, no
+##   error);
+## - an undefined data reference (glibc's stdout and environ) is a plain
+##   undefined-symbol error with no class line and no native binding (PL2:
+##   no data import on dotnet), and libc.so.6 is T-P4 for it; with a CIL
+##   object that defines both, the image has no moduleref, no pinvokeimpl
+##   and no '<msil>dataimport' helper. The same object built for
+##   x86_64-unknown-linux-gnu-msil binds both from libc.so.6 through the
+##   data-import helpers, which shows what the checks would catch;
+## - linker options in an msil64 object are GNU-tokenized, as on ELF
+##   triples (portable-linkrules D10): one string is one option, so
+##   '-lmy lib' names the library 'my lib' (Windows tokenization would split
+##   it into 'my' and 'lib'), and a pragma's '-lm' resolves to the
+##   sysroot-style empty libm.a (brief Q14).
+## Objects only: the portable triples have no LTO coverage before P-3
+## (brief Q13 (a)).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir plain short long crt e1 e2 e3 e4 e5 mix-after mix-before
+# RUN: llc -filetype=obj p.ll -o p.o
+# RUN: llc -filetype=obj host.ll -o host.o
+# RUN: llc -filetype=obj cstub.ll -o cstub.o
+# RUN: llc -filetype=obj malloc.ll -o malloc.o
+# RUN: llc -filetype=obj pthread.ll -o pthread.o
+# RUN: llc -filetype=obj zork.ll -o zork.o
+# RUN: llc -filetype=obj helpers.ll -o helpers.o
+# RUN: llc -filetype=obj weak.ll -o weak.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{one} = --implicit-check-not=error: --implicit-check-not=warning:
+
+## The target gate.
+# RUN: msil-ld p.o -o plain/p.exe 2>&1 | count 0
+# RUN: msil-ld --target=msil64-unknown-dotnet p.o -o long/p.exe 2>&1 | count 0
+# RUN: msil-ld --target=msil64-dotnet p.o -o short/p.exe 2>&1 | count 0
+# RUN: cmp plain/p.exe long/p.exe
+# RUN: cmp plain/p.exe short/p.exe
+
+# RUN: not msil-ld --target=msil32-unknown-dotnet p.o -o x.exe 2>&1 | %{fc} --check-prefix=MSIL32
+# MSIL32: {{^}}msil-ld: error: target 'msil32-unknown-dotnet' is not supported yet: only msil64-unknown-dotnet is implemented{{$}}
+
+## 5.18.1 PT5: the combinations refused for good.
+# RUN: not msil-ld --target=msil64-unknown-linux p.o -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=PT5-OS --implicit-check-not="not supported yet"
+# PT5-OS: {{^}}msil-ld: error: unable to get target for 'msil64-unknown-linux': the architecture 'msil64' needs the OS 'dotnet' (msil64-unknown-dotnet){{$}}
+# RUN: not msil-ld --target=x86_64-unknown-dotnet p.o -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=PT5-ARCH --implicit-check-not="not supported yet" \
+# RUN:     --implicit-check-not=x86_64-unknown-dotnet-msil
+# PT5-ARCH: {{^}}msil-ld: error: unable to get target for 'x86_64-unknown-dotnet': the OS 'dotnet' needs the architecture msil64 or msil32 (msil64-unknown-dotnet){{$}}
+
+## Host and portable objects never link together.
+# RUN: not msil-ld p.o host.o -o x.exe 2>&1 | %{fc} --check-prefix=HOST-IN-PORTABLE
+# RUN: not msil-ld --target=msil64-unknown-dotnet host.o -o x.exe 2>&1 | %{fc} --check-prefix=HOST-IN-PORTABLE
+# HOST-IN-PORTABLE: {{^}}msil-ld: error: host.o: target triple x86_64-unknown-linux-gnu-msil is incompatible with msil64-unknown-dotnet{{$}}
+# RUN: not msil-ld host.o p.o -o x.exe 2>&1 | %{fc} --check-prefix=PORTABLE-IN-HOST
+# PORTABLE-IN-HOST: {{^}}msil-ld: error: p.o: target triple msil64-unknown-dotnet is incompatible with x86_64-unknown-linux-gnu-msil{{$}}
+
+## T-P4: native libraries of every kind.
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: %python %S/Inputs/make-pe.py --dll native.dll
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:foo.lib
+# RUN: yaml2obj %S/Inputs/native/coff-code.yaml -o code.obj
+# RUN: llvm-lib /out:code.lib code.obj
+# RUN: llvm-dlltool -m i386:x86-64 -d %S/Inputs/native/coff-import.def -l libfoo.dll.a
+# RUN: yaml2obj nat.yaml -o nat.o
+# RUN: llvm-ar rcs libnat.a nat.o
+# RUN: not msil-ld p.o libfoo.so.1 -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE -DFILE=libfoo.so.1
+# RUN: not msil-ld p.o native.dll -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE -DFILE=native.dll
+# RUN: not msil-ld p.o foo.lib -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE -DFILE=foo.lib
+# RUN: not msil-ld p.o code.lib -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE -DFILE=code.lib
+# RUN: not msil-ld p.o libfoo.dll.a -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE -DFILE=libfoo.dll.a
+# RUN: not msil-ld p.o libnat.a -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE -DFILE=libnat.a
+# NATIVE: {{^}}msil-ld: error: '[[FILE]]' is a native library, which msil64-unknown-dotnet cannot link: the portable target binds no native code{{$}}
+# RUN: not msil-ld p.o -L. -lnat -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE-L
+# RUN: not msil-ld -L. -lnat p.o -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE-L
+# NATIVE-L: {{^}}msil-ld: error: '{{.*}}libnat.a' is a native library, which msil64-unknown-dotnet cannot link: the portable target binds no native code{{$}}
+
+## The archive before the first object, with no --target: the same T-P4, and
+## T-P4 alone when the program references the archive's native function.
+# RUN: llc -filetype=obj use-nat.ll -o use-nat.o
+# RUN: not msil-ld libnat.a p.o -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE -DFILE=libnat.a
+# RUN: not msil-ld libnat.a use-nat.o -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NATIVE -DFILE=libnat.a --implicit-check-not="undefined symbol"
+
+## An archive of CIL and native members: the CIL members link, the native
+## ones are skipped, whichever comes first.
+# RUN: llc -filetype=obj mix-fn.ll -o mix-fn.o
+# RUN: llc -filetype=obj use-mix.ll -o use-mix.o
+# RUN: llvm-ar rcs libmix.a nat.o mix-fn.o
+# RUN: msil-ld --verbose use-mix.o libmix.a -o mix-after/m.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=MIX %{one}
+# RUN: msil-ld --verbose libmix.a use-mix.o -o mix-before/m.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=MIX %{one}
+# MIX-NOT: {{^}}msil-ld: Processing: libmix.a{{$}}
+# MIX:     {{^}}msil-ld: skipping native member nat.o of libmix.a: msil64-unknown-dotnet binds no native code{{$}}
+# MIX-NOT: {{^}}msil-ld: Processing: libmix.a{{$}}
+# MIX:     {{^}}msil-ld: Processing: libmix.a(mix-fn.o){{$}}
+# MIX-NOT: {{^}}msil-ld: Processing: libmix.a{{$}}
+# RUN: cmp mix-after/m.exe mix-before/m.exe
+
+## Archives with no members.
+# RUN: %python %S/Inputs/portable/pe.py empty-archive libm.a
+# RUN: llvm-ar rc libempty.a
+# RUN: msil-ld p.o libm.a -o e1/p.exe 2>&1 | count 0
+# RUN: msil-ld p.o -L. -lm -o e2/p.exe 2>&1 | count 0
+# RUN: msil-ld p.o libempty.a -o e3/p.exe 2>&1 | count 0
+# RUN: msil-ld p.o -L. -lempty -o e4/p.exe 2>&1 | count 0
+# RUN: msil-ld libm.a p.o -o e5/p.exe 2>&1 | count 0
+# RUN: cmp plain/p.exe e1/p.exe
+# RUN: cmp plain/p.exe e2/p.exe
+# RUN: cmp plain/p.exe e3/p.exe
+# RUN: cmp plain/p.exe e4/p.exe
+# RUN: cmp plain/p.exe e5/p.exe
+
+## A refused --target outranks every input: a native archive given by path,
+## before or after the object, still gets the target's diagnostic (T-P1 or
+## PT5's reason, the texts the cases above pin), never T-P4, and an empty
+## archive alone gets PT5's reason, not 'no input files'.
+# DEFINE: %{refused} = %{fc} %{one} --implicit-check-not="is a native library" \
+# DEFINE:   --implicit-check-not="binds no native code"
+# RUN: not msil-ld --target=msil32-unknown-dotnet libnat.a p.o -o x.exe 2>&1 | %{refused} --check-prefix=MSIL32
+# RUN: not msil-ld --target=msil32-unknown-dotnet p.o libnat.a -o x.exe 2>&1 | %{refused} --check-prefix=MSIL32
+# RUN: not msil-ld --target=x86_64-unknown-dotnet libnat.a p.o -o x.exe 2>&1 | %{refused} --check-prefix=PT5-ARCH
+# RUN: not msil-ld --target=x86_64-unknown-dotnet p.o libnat.a -o x.exe 2>&1 | %{refused} --check-prefix=PT5-ARCH
+# RUN: not msil-ld --target=msil64-unknown-dotnet-gnu libnat.a p.o -o x.exe 2>&1 | %{refused} --check-prefix=PT5-ENV
+# RUN: not msil-ld --target=msil64-unknown-dotnet-gnu p.o libnat.a -o x.exe 2>&1 | %{refused} --check-prefix=PT5-ENV
+# RUN: not msil-ld --target=msil64-unknown-dotnet-gnu libempty.a -o x.exe 2>&1 \
+# RUN:   | %{refused} --check-prefix=PT5-ENV --implicit-check-not="no input files"
+# PT5-ENV: {{^}}msil-ld: error: unable to get target for 'msil64-unknown-dotnet-gnu': the architecture 'msil64' with the OS 'dotnet' takes no environment, not 'gnu' (msil64-unknown-dotnet){{$}}
+
+## N6. crt/c.dll stands in for the C library: a --shared output named c
+## that defines strlen and neither malloc nor pthread_create.
+# RUN: msil-ld -shared cstub.o -o crt/c.dll 2>&1 | count 0
+# RUN: not msil-ld malloc.o -o x.exe 2>&1 | %{fc} %{one} --check-prefixes=UNDEF,LINK-C -DSYM=malloc -DREF=malloc.o
+# RUN: not msil-ld pthread.o -o x.exe 2>&1 | %{fc} %{one} --check-prefixes=UNDEF,LINK-C -DSYM=pthread_create -DREF=pthread.o
+# RUN: not msil-ld malloc.o crt/c.dll -o x.exe 2>&1 | %{fc} %{one} --check-prefixes=UNDEF,NOT-IN-C -DSYM=malloc -DREF=malloc.o
+# RUN: not msil-ld pthread.o crt/c.dll -o x.exe 2>&1 | %{fc} %{one} --check-prefixes=UNDEF,NOT-IN-C -DSYM=pthread_create -DREF=pthread.o
+# RUN: not msil-ld malloc.o -L crt -lc -o x.exe 2>&1 | %{fc} %{one} --check-prefixes=UNDEF,NOT-IN-C -DSYM=malloc -DREF=malloc.o
+# RUN: not msil-ld pthread.o -L crt -lc -o x.exe 2>&1 | %{fc} %{one} --check-prefixes=UNDEF,NOT-IN-C -DSYM=pthread_create -DREF=pthread.o
+# UNDEF:         {{^}}msil-ld: error: undefined symbol: [[SYM]]{{$}}
+# LINK-C-NEXT:   {{^}}>>> a C library function; link the managed C library c.dll (-lc){{$}}
+# NOT-IN-C-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# UNDEF-NEXT:    {{^}}>>> referenced by [[REF]]:(main){{$}}
+
+## A name that is no C library name: no class line, with or without c.dll.
+# RUN: not msil-ld zork.o -o x.exe 2>&1 | %{fc} %{one} --check-prefix=PLAIN
+# RUN: not msil-ld zork.o crt/c.dll -o x.exe 2>&1 | %{fc} %{one} --check-prefix=PLAIN
+# PLAIN:      {{^}}msil-ld: error: undefined symbol: zork_frobnicate{{$}}
+# PLAIN-NEXT: {{^}}>>> referenced by zork.o:(main){{$}}
+
+## N1, N2 and N3 on dotnet.
+# RUN: not msil-ld helpers.o -o x.exe 2>&1 | %{fc} --check-prefix=CLASSES --implicit-check-not=">>> a C library function"
+# CLASSES-DAG: {{^}}msil-ld: error: undefined symbol: __extendhfsf2{{$}}
+# CLASSES-DAG: {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CLASSES-DAG: {{^}}msil-ld: error: undefined symbol: __atomic_load_4{{$}}
+# CLASSES-DAG: {{^}}>>> an atomic operation (libatomic's interface), which msil64-unknown-dotnet does not provide yet{{$}}
+# CLASSES-DAG: {{^}}msil-ld: error: undefined symbol: __msil_example{{$}}
+# CLASSES-DAG: {{^}}>>> a toolchain helper: link the toolchain's helper archive clang_rt.builtins; if it is linked, the object needs a newer toolchain{{$}}
+
+## A weak undefined function: null, no diagnostic.
+# RUN: msil-ld weak.o -o weak.exe 2>&1 | count 0
+
+## Undefined data: an undefined-symbol error, never a data import.
+# RUN: llc -filetype=obj data.ll -o data.o
+# RUN: llc -filetype=obj data-def.ll -o data-def.o
+# RUN: not msil-ld data.o -o x.exe 2>&1 | %{fc} %{one} --check-prefix=DATA-UNDEF \
+# RUN:   --implicit-check-not=">>> a C library" --implicit-check-not=dataimport --implicit-check-not="cannot be imported"
+# DATA-UNDEF:      {{^}}msil-ld: error: undefined symbol: stdout{{$}}
+# DATA-UNDEF-NEXT: {{^}}>>> referenced by data.o:(main){{$}}
+# DATA-UNDEF:      {{^}}msil-ld: error: undefined symbol: environ{{$}}
+# DATA-UNDEF-NEXT: {{^}}>>> referenced by data.o:(main){{$}}
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o glibc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map glibc.o -o libc.so.6
+# RUN: not msil-ld data.o libc.so.6 -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NATIVE-DATA \
+# RUN:   --implicit-check-not=dataimport --implicit-check-not="cannot be imported"
+# NATIVE-DATA: {{^}}msil-ld: error: 'libc.so.6' is a native library, which msil64-unknown-dotnet cannot link: the portable target binds no native code{{$}}
+# RUN: msil-ld data.o data-def.o -o data-def.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump data-def.exe | FileCheck %s --check-prefix=NO-BINDING \
+# RUN:   --implicit-check-not=moduleref --implicit-check-not=pinvokeimpl --implicit-check-not=dataimport \
+# RUN:   --implicit-check-not=libc.so %}
+# NO-BINDING: {{^}}.class '<Module>' flags=0x{{[0-9A-F]+}}{{.*}}
+
+## The contrast: the same module for x86_64-unknown-linux-gnu-msil binds
+## stdout and environ from libc.so.6 as data imports.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil data.ll -o host-data.o
+# RUN: msil-ld host-data.o libc.so.6 -o host-data.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump host-data.exe | FileCheck %s --check-prefix=HOST-BINDING %}
+# HOST-BINDING-DAG: {{^}}moduleref 'libc.so.6'{{$}}
+# HOST-BINDING-DAG: {{^}}  .method '<msil>dataimport' {{.*$}}
+# HOST-BINDING-DAG: {{^}}  .method '<msil>init_dataimports' {{.*$}}
+# HOST-BINDING-DAG: {{^}}    L{{[0-9]+}}: ldstr "data import 'stdout' not found in libc.so.6"{{$}}
+# HOST-BINDING-DAG: {{^}}    L{{[0-9]+}}: ldstr "data import 'environ' not found in libc.so.6"{{$}}
+
+## Linker options in an msil64 object (D10): '-lm' and '-lmy lib', each one
+## string. opts/ holds the empty libm.a and 'libmy lib.a', whose CIL member
+## defines my_fn; no-m/ lacks libm.a, no-my/ lacks 'libmy lib.a'.
+# RUN: mkdir opts no-m no-my
+# RUN: llc -filetype=obj opts.ll -o opts.o
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info opts.o | FileCheck %s --check-prefix=OPTS-RECORD %}
+# OPTS-RECORD:      {{^}}LinkerOption LINKER_OPTION '-lm'{{$}}
+# OPTS-RECORD-NEXT: {{^}}LinkerOption LINKER_OPTION '-lmy lib'{{$}}
+# RUN: llc -filetype=obj my-fn.ll -o my-fn.o
+# RUN: %python %S/Inputs/portable/pe.py empty-archive opts/libm.a
+# RUN: llvm-ar rcs "opts/libmy lib.a" my-fn.o
+# RUN: %python %S/Inputs/portable/pe.py empty-archive no-my/libm.a
+# RUN: llvm-ar rcs "no-m/libmy lib.a" my-fn.o
+# RUN: msil-ld opts.o -L opts -o opts/p.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump opts/p.exe | FileCheck %s --check-prefix=OPTS-LINKED %}
+# OPTS-LINKED: {{^}}  .method 'my_fn' int32() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# RUN: not msil-ld opts.o -L no-my -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NO-LIB "-DLIB=my lib"
+# RUN: not msil-ld opts.o -L no-m -o x.exe 2>&1 | %{fc} %{one} --check-prefix=NO-LIB -DLIB=m
+# NO-LIB:      {{^}}msil-ld: error: unable to find library from dependent library specifier: [[LIB]]{{$}}
+# NO-LIB-NEXT: {{^}}>>> requested by opts.o{{$}}
+
+#--- p.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- host.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @hostfn() {
+  ret i32 7
+}
+
+#--- cstub.ll
+target triple = "msil64-unknown-dotnet"
+
+define i64 @strlen(ptr %s) {
+  ret i64 0
+}
+
+#--- malloc.ll
+target triple = "msil64-unknown-dotnet"
+
+declare ptr @malloc(i64)
+
+define i32 @main() {
+  %p = call ptr @malloc(i64 16)
+  %b = icmp eq ptr %p, null
+  %r = zext i1 %b to i32
+  ret i32 %r
+}
+
+#--- pthread.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @pthread_create(ptr, ptr, ptr, ptr)
+
+define i32 @main() {
+  %r = call i32 @pthread_create(ptr null, ptr null, ptr null, ptr null)
+  ret i32 %r
+}
+
+#--- zork.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @zork_frobnicate(i32)
+
+define i32 @main() {
+  %r = call i32 @zork_frobnicate(i32 1)
+  ret i32 %r
+}
+
+#--- helpers.ll
+target triple = "msil64-unknown-dotnet"
+
+declare float @__extendhfsf2(i16)
+declare i32 @__atomic_load_4(ptr, i32)
+declare i32 @__msil_example()
+
+@cell = global i32 0
+
+define i32 @main() {
+  %f = call float @__extendhfsf2(i16 15360)
+  %i = fptosi float %f to i32
+  %a = call i32 @__atomic_load_4(ptr @cell, i32 5)
+  %m = call i32 @__msil_example()
+  %s1 = add i32 %i, %a
+  %s2 = add i32 %s1, %m
+  ret i32 %s2
+}
+
+#--- weak.ll
+target triple = "msil64-unknown-dotnet"
+
+declare extern_weak void @maybe()
+
+define i32 @main() {
+  %b = icmp eq ptr @maybe, null
+  br i1 %b, label %none, label %call
+
+call:
+  call void @maybe()
+  ret i32 1
+
+none:
+  ret i32 0
+}
+
+#--- nat.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: nat_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- data.ll
+target triple = "msil64-unknown-dotnet"
+
+@stdout = external global ptr, align 8
+@environ = external global ptr, align 8
+
+define i32 @main() {
+  %f = load ptr, ptr @stdout, align 8
+  %e = load ptr, ptr @environ, align 8
+  %a = icmp eq ptr %f, null
+  %b = icmp eq ptr %e, null
+  %c = and i1 %a, %b
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+#--- data-def.ll
+target triple = "msil64-unknown-dotnet"
+
+@stdout = global ptr null, align 8
+@environ = global ptr null, align 8
+
+#--- use-nat.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @nat_fn()
+
+define i32 @main() {
+  %r = call i32 @nat_fn()
+  ret i32 %r
+}
+
+#--- mix-fn.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @mix_fn() {
+  ret i32 6
+}
+
+#--- use-mix.ll
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @mix_fn()
+
+define i32 @main() {
+  %r = call i32 @mix_fn()
+  ret i32 %r
+}
+
+#--- opts.ll
+target triple = "msil64-unknown-dotnet"
+
+!llvm.linker.options = !{!0, !1}
+!0 = !{!"-lm"}
+!1 = !{!"-lmy lib"}
+
+declare i32 @my_fn()
+
+define i32 @main() {
+  %r = call i32 @my_fn()
+  ret i32 %r
+}
+
+#--- my-fn.ll
+target triple = "msil64-unknown-dotnet"
+
+define i32 @my_fn() {
+  ret i32 7
+}

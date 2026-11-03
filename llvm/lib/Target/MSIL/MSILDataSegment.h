@@ -228,9 +228,9 @@ struct MSILDataSegment {
   /// relocation (in site order) and symbol difference to its final offset;
   /// sets InitSize, TotalSize and MaxAlign; and writes the value of every
   /// symbol difference into the image. A layout above 2 GiB is kept: the
-  /// AsmPrinter reports it.
-  void finalize(cli::SectionRules Rules = cli::SectionRules::ELF,
-                unsigned RelocLoopThreshold = 32);
+  /// AsmPrinter reports it. \p Rules has no default: it is always
+  /// cli::getSectionRules of the target (plan 5.18.5 LR1).
+  void finalize(cli::SectionRules Rules, unsigned RelocLoopThreshold = 32);
 
   /// The initialized part [0, InitSize) after finalize().
   ArrayRef<uint8_t> getImage() const {

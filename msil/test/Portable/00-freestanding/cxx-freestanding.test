@@ -1,0 +1,167 @@
+# Freestanding C++ on msil64-unknown-dotnet: a global object with a non-trivial constructor and a trivial destructor is initialized dynamically before main, a class template and a function template instantiate for several types, and a virtual function called through a base pointer dispatches across two translation units; main is extern "C".
+# P-1a's exit criterion "msil64-unknown-dotnet compiles C (and freestanding
+# C++) to IL and links". The sources are C++ (clang picks the language from
+# the .cpp suffix), so the test replaces %{msil_cflags}, whose -std=gnu17
+# clang refuses for C++, with C++17 and no exceptions or RTTI; the link keeps
+# the directory's %{msil_ldflags} (-nolibc -ffreestanding first): no C
+# library and no C++ runtime, so the program uses nothing that needs one (no
+# function-local static, no pure virtual, no virtual destructor, no new or
+# delete, no destructor to register).
+# - main.cpp's 'counter' has a constructor that reads a volatile (so no level
+#   can evaluate it at compile time and the initializer stays dynamic, in
+#   llvm.global_ctors) and a trivial destructor (static_assert); it counts its
+#   runs and checks that a pointer set by the data segment's relocations
+#   already holds its value, so the initializer runs in the module
+#   initializer after the guard and the image relocations.
+# - Fixed<T, N> (a class template with a member template) and largest<T>
+#   instantiate for int, long long and unsigned char over volatile inputs.
+# - Shape (shapes.cpp holds its key function, so its vtable and Square's
+#   live there) and Square: main.cpp calls area() and sides() through a
+#   Shape pointer that make_shape picks from a volatile index, and through a
+#   table of base pointers.
+# Bit 0 of the exit status: the constructor ran other than once; bit 1: a
+# wrong value in 'counter' or an unrelocated pointer seen by its constructor;
+# bit 2: a wrong template result; bit 3: a wrong virtual call through one
+# base pointer; bit 4: a wrong sum over the table of base pointers.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# REDEFINE: %{msil_cflags} = -std=c++17 -ffreestanding -fno-exceptions -fno-rtti -Werror=return-type
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.cpp %t/shapes.cpp
+# RUN: %{msil_prog}
+#--- shapes.h
+struct Shape {
+  explicit Shape(int k) : scale(k) {}
+  virtual int area() const; // the key function: defined in shapes.cpp
+  virtual int sides() const { return 0; }
+  int scale;
+};
+
+struct Square : Shape {
+  Square(int s, int k) : Shape(k), side(s) {}
+  int area() const override;
+  int sides() const override { return 4; }
+  int side;
+};
+
+struct Triangle : Shape {
+  Triangle(int b, int h) : Shape(1), base(b), height(h) {}
+  int area() const override { return base * height / 2; }
+  int sides() const override { return 3; }
+  int base, height;
+};
+
+Shape *make_shape(int which);
+int sum_areas(Shape *const *shapes, int n);
+#--- shapes.cpp
+#include "shapes.h"
+
+int Shape::area() const { return scale; }
+int Square::area() const { return scale * side * side; }
+
+static Shape plain(5);
+static Square square(3, 2);
+static Triangle triangle(6, 4);
+
+Shape *make_shape(int which) {
+  switch (which) {
+  case 0:
+    return &plain;
+  case 1:
+    return &square;
+  default:
+    return &triangle;
+  }
+}
+
+int sum_areas(Shape *const *shapes, int n) {
+  int total = 0;
+  for (int i = 0; i < n; ++i)
+    total += shapes[i]->area() * 10 + shapes[i]->sides();
+  return total;
+}
+#--- main.cpp
+#include "shapes.h"
+
+static volatile int seed = 7;
+int target = 77;
+int *target_ptr = &target;
+static int ctor_runs;
+
+struct Counter {
+  explicit Counter(int v) : value(v + seed), saw_reloc(0) {
+    ++ctor_runs;
+    if (target_ptr == &target && *target_ptr == 77)
+      saw_reloc = 1;
+  }
+  int value;
+  int saw_reloc;
+};
+static_assert(__is_trivially_destructible(Counter),
+              "Counter's destructor must be trivial");
+static_assert(!__is_trivially_constructible(Counter, int),
+              "Counter's constructor must be non-trivial");
+
+Counter counter(35);
+
+template <typename T, int N> struct Fixed {
+  T data[N];
+  constexpr int size() const { return N; }
+  T sum() const {
+    T total = 0;
+    for (int i = 0; i < N; ++i)
+      total += data[i];
+    return total;
+  }
+  template <typename U> U sum_as() const { return static_cast<U>(sum()); }
+};
+
+template <typename T> T largest(T a, T b, T c) {
+  T m = a < b ? b : a;
+  return m < c ? c : m;
+}
+
+static volatile int vi[3] = {4, -9, 12};
+static volatile long long vl[2] = {0x100000000LL, -3};
+static volatile unsigned char vc[4] = {200, 50, 7, 1};
+static volatile int which = 1;
+
+static unsigned check_templates() {
+  unsigned bad = 0;
+  Fixed<int, 3> fi = {{vi[0], vi[1], vi[2]}};
+  Fixed<long long, 2> fl = {{vl[0], vl[1]}};
+  Fixed<unsigned char, 4> fc = {{vc[0], vc[1], vc[2], vc[3]}};
+  if (fi.size() != 3 || fi.sum() != 7)
+    bad = 1;
+  if (fl.size() != 2 || fl.sum() != 0xFFFFFFFDLL)
+    bad = 1;
+  // 258 wraps to 2 in unsigned char; sum_as<int> converts the wrapped sum.
+  if (fc.size() != 4 || fc.sum() != 2 || fc.sum_as<int>() != 2)
+    bad = 1;
+  if (fl.sum_as<int>() != -3)
+    bad = 1;
+  if (largest(vi[0], vi[1], vi[2]) != 12)
+    bad = 1;
+  if (largest(vl[0], vl[1], (long long)vi[1]) != 0x100000000LL)
+    bad = 1;
+  if (largest<unsigned char>(vc[1], vc[2], vc[3]) != 50)
+    bad = 1;
+  return bad;
+}
+
+extern "C" int main(void) {
+  unsigned fails = 0;
+  if (ctor_runs != 1)
+    fails |= 1;
+  if (counter.value != 42 || counter.saw_reloc != 1)
+    fails |= 2;
+  if (check_templates())
+    fails |= 4;
+  Shape *s = make_shape(which);
+  if (s->area() != 18 || s->sides() != 4 || s->scale != 2)
+    fails |= 8;
+  Shape *table[3] = {make_shape(0), make_shape(which), make_shape(which + 1)};
+  // plain: 5*10+0, square: 18*10+4, triangle: 12*10+3.
+  if (sum_areas(table, 3) != 357)
+    fails |= 16;
+  return (int)fails;
+}

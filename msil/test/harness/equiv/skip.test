@@ -112,7 +112,7 @@
 
 # (7)
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-triple.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7a.log 2>&1
-# RUN: %{harness_check} contains %t/7a.log "^msil-equiv: error: \S*bad-triple\.txt:1: the triple x86_64-pc-windows-msvc of the skip line is not an MSIL triple \(it does not end in -msil\)$"
+# RUN: %{harness_check} contains %t/7a.log "^msil-equiv: error: \S*bad-triple\.txt:1: the triple x86_64-pc-windows-msvc of the skip line is not an MSIL triple \(it does not end in -msil and is not a portable triple such as msil64-unknown-dotnet\)$"
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-level.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7b.log 2>&1
 # RUN: %{harness_check} contains %t/7b.log "^msil-equiv: error: \S*bad-level\.txt:1: the level O4 of the skip line is not one of O0, O1, O2, O3, Os, Oz$"
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-oracle.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7c.log 2>&1

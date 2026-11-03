@@ -132,6 +132,18 @@ as'. A malformed rule fails the test (FAIL (test file)). A
 %{msil_prog_loud_<L>} test (the loud-failure composite) has no native
 oracle: without a rule that names --os's OS it fails (FAIL (test file)).
 
+A portable --target (plan 5.18.10 PX2; P-1a): msil32 or msil64 with the OS
+dotnet, such as msil64-unknown-dotnet, is the MSIL triple itself (no -msil is
+appended; a --target that ends in -msil is a usage error). It has no native
+oracle before P-2, so nothing is built: every test needs a
+%{msil_expected_rule} that names --os's OS (5.17.4's portable allowance,
+'portable: no stdout before P-2; the program checks itself'), which gives
+'rule: <file> (<reason>)' or 'MISSING: ...' as above, and a test without one
+fails ('FAIL (test file)', after 'the portable triple <target> has no native
+oracle; ...'). The features are msil-triple=<target>, msil-triple-portable
+and msil-triple-msil64 (msil32 likewise); --os linux on a Windows host is
+then no E7 run, and --rtlib and --linux-rtlib are not used.
+
 'REDEFINE: %{msil_limits} = --timeout S --mem-limit-mb N' (plan 5.17.9; either
 option alone, also written --timeout=S) replaces --timeout and --mem-limit-mb
 for the test: its native run gets S seconds, every step of its native build
@@ -356,6 +368,12 @@ def default_target():
     return {"Windows": arch + "-pc-windows-msvc", "Darwin": arch + "-apple-darwin"}.get(
         platform.system(), arch + "-unknown-linux-gnu"
     )
+
+
+def msil_triple_of(target):
+    """The MSIL triple of the oracle's --target: <target>-msil, or a portable
+    triple itself (plan 5.18.10 PX2), which takes no -msil suffix."""
+    return target if msil_prog.is_portable(target) else target + "-msil"
 
 
 def is_windows_triple(triple):
@@ -914,6 +932,8 @@ class Oracle:
         # none, which leaves it out).
         self.linux_rtlib = None
         self.linux_rtlib_why = ""
+        # A portable --target (plan 5.18.10): no native oracle (run sets it).
+        self.portable = False
         self.start_o = None
         self.env = dict(os.environ)
         # The linkers of a preparation (prepare).
@@ -1112,7 +1132,7 @@ class Oracle:
         srcs, stock, archives, shlibs, native_libs = parts
         exe = os.path.join(work, "prog." + ("elf" if self.e7 else "exe"))
         cmd = [sys.executable, os.path.join(HERE, "msil-prog.py"), "--mode", "native"]
-        cmd += ["--triple", args.target + "-msil", "--level", level[1:]]
+        cmd += ["--triple", msil_triple_of(args.target), "--level", level[1:]]
         cmd += ["--clang=" + args.clang, "--cflags=" + msil_prog.join_words(cflags)]
         if args.ar:
             cmd.append("--ar=" + args.ar)
@@ -1311,7 +1331,7 @@ class Oracle:
             (r"%ld_lld(?!\w)", q(self.prep_ld_lld or "ld.lld-not-found")),
             (r"%lld_link(?!\w)", q(self.prep_lld_link or "lld-link-not-found")),
             (r"%msil_ar(?!\w)", ar),
-            (r"%msil_triple(?!\w)", target + "-msil"),
+            (r"%msil_triple(?!\w)", msil_triple_of(target)),
             (r"%python(?!\w)", q(sys.executable)),
             ("%s", p(os.path.abspath(src))),
             ("%S", p(test_dir)),
@@ -1429,6 +1449,15 @@ class Oracle:
                 return log, 1
             log.out("rule: %s (%s)\n" % (path, mode.rule[1]))
             return log, 0
+        if self.portable:
+            log.err(
+                "update-expected: %s: the portable triple %s has no native oracle; "
+                "its %s expected file is hand-written under a %%{msil_expected_rule} "
+                "that names %s (plan 5.17.4's portable allowance, 5.18.10)\n"
+                % (src, args.target, osname, osname)
+            )
+            log.out("FAIL (test file): %s\n" % src)
+            return log, 1
         if kind == "loud":
             log.err(
                 "update-expected: %s: a %%{msil_prog_loud_<L>} test has no native "
@@ -1745,13 +1774,24 @@ def run(argv):
     e7 = osname == "linux" and host == "windows"
     if args.target is None:
         args.target = E7_TARGET if e7 else default_target()
+    if args.target.endswith("-msil"):
+        ap.error(
+            "--target %s: the native triple, without -msil (a portable triple, "
+            "such as msil64-unknown-dotnet, has none)" % args.target
+        )
+    # A portable target (plan 5.18.10 PX2) has no native oracle: every test
+    # needs a %{msil_expected_rule} that names --os's OS (a hand-written
+    # expected file, plan 5.17.4's portable allowance), and nothing is built.
+    portable = msil_prog.is_portable(args.target)
+    if portable:
+        e7 = False
     if e7 and args.target != E7_TARGET:
         ap.error(
             "the E7 Linux oracle builds %s only, not %s" % (E7_TARGET, args.target)
         )
 
     native_ldflags = []
-    if not e7:
+    if not e7 and not portable:
         if not is_windows_triple(args.target):
             native_ldflags = ["-lm"]
         elif is_msvc_triple(args.target) and host == "windows":
@@ -1796,9 +1836,13 @@ def run(argv):
             )
 
     # The features whose truth the oracle knows (KNOWN_FEATURE_PREFIXES), as
-    # lit.cfg.py sets them for a run of the triple <target>-msil.
+    # lit.cfg.py sets them for a run of the triple <target>-msil (or of the
+    # portable triple itself).
     parts = args.target.split("-")
-    features = {"msil-triple=%s-msil" % args.target, "system-" + host}
+    features = {"msil-triple=" + msil_triple_of(args.target), "system-" + host}
+    if portable:
+        features.add("msil-triple-portable")
+        features.add("msil-triple-" + parts[0])
     if "windows" in parts:
         features.add("msil-triple-windows")
     if "linux" in parts:
@@ -1806,7 +1850,8 @@ def run(argv):
     if e7:
         features.add("msil-wsl")
     oracle = Oracle(args, osname, e7, native_ldflags, ld_lld, libs, features)
-    if osname == "linux":
+    oracle.portable = portable
+    if osname == "linux" and not portable:
         # The hosted Linux oracle's native compiler-rt builtins (plan 5.17.2,
         # 5.17.3; M25), as lit's msil_linux_rtlib finds them.
         value = args.linux_rtlib

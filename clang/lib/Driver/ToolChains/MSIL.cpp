@@ -106,9 +106,19 @@ static void addMSVCLibraryPaths(const MSVCToolChain &TC, const ArgList &Args,
 /// -pthread adds -lpthread on the Linux and MinGW triples, -nolibc or not (on
 /// MinGW after the C runtime), as natively; windows-msvc leaves it unread, as
 /// the native MSVC link job does.
+/// On the portable triples the C library is the managed c.dll, which also
+/// holds the math functions and, from P-3, the threads: there is no -lm and
+/// -pthread adds nothing (plan 5.18.4 PV3); -nolibc leaves out -lc.
 static void addDefaultLibs(const ToolChain &TC, const ArgList &Args,
                            ArgStringList &CmdArgs) {
   const llvm::Triple &T = TC.getTriple();
+  if (T.isOSDotNet()) {
+    Args.ClaimAllArgs(options::OPT_pthread);
+    Args.ClaimAllArgs(options::OPT_pthreads);
+    if (!Args.hasArg(options::OPT_nolibc))
+      CmdArgs.push_back("-lc");
+    return;
+  }
   if (T.isOSLinux()) {
     if (Args.hasArg(options::OPT_pthread) || Args.hasArg(options::OPT_pthreads))
       CmdArgs.push_back("-lpthread");
@@ -212,10 +222,15 @@ void msil::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_shared, options::OPT__SLASH_LD,
                   options::OPT__SLASH_LDd))
     CmdArgs.push_back("--shared");
-  // No MSIL triple has a static C library.
-  if (const Arg *A = Args.getLastArg(options::OPT_static))
-    D.Diag(diag::err_drv_unsupported_opt_for_target)
-        << A->getAsString(Args) << Triple.str();
+  // No host MSIL triple has a static C library. The portable triples get one
+  // with P-3; until then their C library links only as c.dll (T-P9).
+  if (const Arg *A = Args.getLastArg(options::OPT_static)) {
+    if (Triple.isOSDotNet())
+      D.Diag(diag::err_drv_msil_portable_static);
+    else
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << A->getAsString(Args) << Triple.str();
+  }
   // An assembly has no PIC, no PIE and no dynamic symbol table.
   Args.ClaimAllArgs(options::OPT_pie);
   Args.ClaimAllArgs(options::OPT_no_pie);
@@ -229,7 +244,9 @@ void msil::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     Args.ClaimAllArgs(options::OPT_shared_libgcc);
   // The native MinGW link job reads -nolibc whatever -nostdlib and
   // -nodefaultlibs say; addDefaultLibs reads it on the Linux triples.
-  if (Triple.isWindowsGNUEnvironment())
+  // The portable triples read it too, so that the freestanding flag set
+  // (-nolibc -ffreestanding) stays quiet when -nostdlib drops everything.
+  if (Triple.isWindowsGNUEnvironment() || Triple.isOSDotNet())
     Args.ClaimAllArgs(options::OPT_nolibc);
   if (Args.hasArg(options::OPT_s))
     CmdArgs.push_back("--strip-all");
@@ -268,17 +285,28 @@ MSILToolChain<NativeTC>::MSILToolChain(const Driver &D,
                                        const ArgList &Args)
     : NativeTC(D, Triple, Args) {}
 
-template <class NativeTC>
-SanitizerMask MSILToolChain<NativeTC>::getSupportedSanitizers(
-    BoundArch BA, Action::OffloadKind DeviceOffloadKind) const {
-  // Only checks that need neither a native runtime library nor native code
-  // layout (CFI jump tables, shadow stacks, KCFI type ids); UBSan runs in trap
-  // mode.
+/// The sanitizers of every MSIL triple: only checks that need neither a
+/// native runtime library nor native code layout (CFI jump tables, shadow
+/// stacks, KCFI type ids); UBSan runs in trap mode.
+static SanitizerMask getMSILSanitizers() {
   return (SanitizerKind::Undefined & ~SanitizerKind::Vptr) |
          SanitizerKind::FloatDivideByZero |
          SanitizerKind::UnsignedIntegerOverflow |
          SanitizerKind::UnsignedShiftBase | SanitizerKind::ImplicitConversion |
          SanitizerKind::Nullability | SanitizerKind::LocalBounds;
+}
+
+/// Only reached with -fno-integrated-as: there is no external CIL assembler
+/// (ilasm reads its own syntax and writes assemblies, not objects).
+static Tool *reportNoExternalAssembler(const Driver &D) {
+  D.Diag(clang::diag::err_no_external_assembler);
+  return nullptr;
+}
+
+template <class NativeTC>
+SanitizerMask MSILToolChain<NativeTC>::getSupportedSanitizers(
+    BoundArch BA, Action::OffloadKind DeviceOffloadKind) const {
+  return getMSILSanitizers();
 }
 
 template <class NativeTC> Tool *MSILToolChain<NativeTC>::buildLinker() const {
@@ -287,10 +315,7 @@ template <class NativeTC> Tool *MSILToolChain<NativeTC>::buildLinker() const {
 
 template <class NativeTC>
 Tool *MSILToolChain<NativeTC>::buildAssembler() const {
-  // Only reached with -fno-integrated-as: there is no external CIL assembler
-  // (ilasm reads its own syntax and writes assemblies, not objects).
-  this->getDriver().Diag(clang::diag::err_no_external_assembler);
-  return nullptr;
+  return reportNoExternalAssembler(this->getDriver());
 }
 
 template <class NativeTC>
@@ -309,12 +334,112 @@ template class MSILToolChain<MinGW>;
 } // namespace driver
 } // namespace clang
 
+DotNetToolChain::DotNetToolChain(const Driver &D, const llvm::Triple &Triple,
+                                 const ArgList &Args)
+    : ToolChain(D, Triple, Args) {
+  // The sysroot's library directory of the triple is the only library path
+  // (plan 5.18.4 PV2): c.dll, and from P-1b the empty libm.a. It need not
+  // exist. The per-target directories that ToolChain adds (the resource
+  // directory's, which holds only the helper archive, and
+  // <InstalledDir>/../lib/<triple>) are not searched for -l; the helper
+  // archive is passed by its path.
+  getFilePaths().clear();
+  SmallString<128> LibDir(computeSysRoot());
+  llvm::sys::path::append(LibDir, "lib", getTriple().str());
+  getFilePaths().push_back(std::string(LibDir));
+}
+
+SanitizerMask
+DotNetToolChain::getSupportedSanitizers(BoundArch BA,
+                                        Action::OffloadKind) const {
+  return getMSILSanitizers();
+}
+
+std::string DotNetToolChain::computeSysRoot() const {
+  // BareMetal's convention, which suits a toolchain release that carries its
+  // own runtimes: --sysroot, or else the normalized triple's directory under
+  // <InstalledDir>/../lib/clang-runtimes.
+  const Driver &D = getDriver();
+  if (!D.SysRoot.empty())
+    return D.SysRoot;
+  SmallString<128> SysRoot(D.Dir);
+  llvm::sys::path::append(SysRoot, "..", "lib", "clang-runtimes",
+                          getTriple().str());
+  return std::string(SysRoot);
+}
+
+void DotNetToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
+                                                ArgStringList &CC1Args) const {
+  // WebAssembly's order: the resource directory's headers, then the
+  // sysroot's per-triple and common C headers.
+  if (DriverArgs.hasArg(options::OPT_nostdinc))
+    return;
+  const Driver &D = getDriver();
+  if (!DriverArgs.hasArg(options::OPT_nobuiltininc)) {
+    SmallString<128> P(D.ResourceDir);
+    llvm::sys::path::append(P, "include");
+    addSystemInclude(DriverArgs, CC1Args, P);
+  }
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc))
+    return;
+  const std::string SysRoot = computeSysRoot();
+  SmallString<128> P(SysRoot);
+  llvm::sys::path::append(P, "include", getTriple().str());
+  addSystemInclude(DriverArgs, CC1Args, P);
+  P = SysRoot;
+  llvm::sys::path::append(P, "include");
+  addSystemInclude(DriverArgs, CC1Args, P);
+}
+
+void DotNetToolChain::addClangTargetOptions(const ArgList &DriverArgs,
+                                            ArgStringList &CC1Args,
+                                            BoundArch BA,
+                                            Action::OffloadKind) const {
+  // The header search is the driver's alone: the frontend's default paths
+  // (/usr/local/include, /usr/include) would bring in the host's C headers.
+  CC1Args.push_back("-nostdsysteminc");
+
+  // The portable data model has no variants and no CPU to choose (plan
+  // 5.18.2 PC1 and PC2, 5.18.4 PV5): a 16-bit wchar_t, a CPU other than
+  // generic and -march= are errors naming the triple. -mlong-double-* gets
+  // the same error from the generic code.
+  const Driver &D = getDriver();
+  auto Refuse = [&](const Arg *A) {
+    D.Diag(diag::err_drv_unsupported_opt_for_target)
+        << A->getAsString(DriverArgs) << getTripleString();
+  };
+  if (const Arg *A = DriverArgs.getLastArg(options::OPT_fshort_wchar,
+                                           options::OPT_fno_short_wchar))
+    if (A->getOption().matches(options::OPT_fshort_wchar))
+      Refuse(A);
+  if (const Arg *A = DriverArgs.getLastArg(options::OPT_mcpu_EQ))
+    if (StringRef(A->getValue()) != "generic")
+      Refuse(A);
+  if (const Arg *A = DriverArgs.getLastArg(options::OPT_march_EQ))
+    Refuse(A);
+}
+
+Tool *DotNetToolChain::buildLinker() const {
+  return new tools::msil::Linker(*this);
+}
+
+Tool *DotNetToolChain::buildAssembler() const {
+  return reportNoExternalAssembler(getDriver());
+}
+
+Tool *DotNetToolChain::buildStaticLibTool() const {
+  return new tools::gnutools::StaticLibTool(*this);
+}
+
 namespace {
 /// The toolchain of an MSIL triple that decision D6 rejects (Darwin, FreeBSD,
-/// Cygwin, windows-itanium, ...). Compiles reach the frontend, which rejects
-/// the triple; the link, assemble and static-library tools report it, so that
-/// no native tool of the triple is ever planned, link-only invocations
-/// included.
+/// Cygwin, windows-itanium, ...), and of a triple with an msil architecture or
+/// OS dotnet that is not a portable target: the wrong OS, architecture or
+/// object format, or an environment component (msil64-unknown-linux,
+/// x86_64-unknown-dotnet, msil64-unknown-dotnet-elf,
+/// msil64-unknown-dotnet-gnu). Compiles reach the frontend, which rejects the
+/// triple; the link, assemble and static-library tools report it, so that no
+/// native tool of the triple is ever planned, link-only invocations included.
 class UnsupportedMSILToolChain final : public ToolChain {
 public:
   UnsupportedMSILToolChain(const Driver &D, const llvm::Triple &Triple,
@@ -341,6 +466,24 @@ private:
 std::unique_ptr<ToolChain>
 toolchains::createMSILToolChain(const Driver &D, const llvm::Triple &Triple,
                                 const ArgList &Args) {
+  // The portable triples come first: an msil architecture is a target only
+  // with OS dotnet, the MSIL object format and no environment component, and
+  // OS dotnet only with an msil architecture (plan 5.18.1 PT5). Every other
+  // mix with an msil architecture or OS dotnet is no target: the driver hands
+  // it here whatever its object format (x86_64-unknown-dotnet,
+  // msil64-unknown-dotnet-elf, msil64-unknown-dotnet-gnu), and it gets
+  // UnsupportedMSILToolChain, link-only invocations included.
+  if (Triple.isMSIL() || Triple.isOSDotNet()) {
+    if (!Triple.isMSIL() || !Triple.isOSDotNet() ||
+        !Triple.isOSBinFormatMSIL() ||
+        Triple.getEnvironment() != llvm::Triple::UnknownEnvironment)
+      return std::make_unique<UnsupportedMSILToolChain>(D, Triple, Args);
+    // Another vendor is accepted and treated as unknown, so the jobs, the
+    // sysroot and the helper archive all name <arch>-unknown-dotnet.
+    llvm::Triple Portable(Triple);
+    Portable.setVendor(llvm::Triple::UnknownVendor);
+    return std::make_unique<DotNetToolChain>(D, Portable, Args);
+  }
   if (Triple.isOSLinux())
     return std::make_unique<MSILToolChain<Linux>>(D, Triple, Args);
   if (Triple.isWindowsMSVCEnvironment())

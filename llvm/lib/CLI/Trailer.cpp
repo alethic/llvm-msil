@@ -715,7 +715,14 @@ static void emitTrailerDefs(const TrailerInput &In, TrailerSink &Sink) {
 }
 
 bool cli::skipsNullConstructorSlots(SectionRules Rules) {
-  return Rules == SectionRules::COFF;
+  switch (Rules) {
+  case SectionRules::COFF:
+    return true;
+  case SectionRules::ELF:
+  case SectionRules::Dotnet:
+    return false;
+  }
+  llvm_unreachable("unknown section rules");
 }
 
 unsigned cli::countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
@@ -745,6 +752,22 @@ void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
   bool HasPhase1 = In.Image || !In.FnAddrFields.empty() || InitImports;
   bool HasPhase2 = !In.LibraryTypes.empty() || !In.CrossRelocs.empty() ||
                    needsUCRTStdioOptions(In) || !In.Ctors.empty();
+  // The portable guard (TrailerGuard.cpp): <Module>::.cctor always exists
+  // and starts with it, and its failure blocks follow the final 'ret'.
+  // At most one module initializer is built, so one set of labels.
+  PortableGuardLabels GuardLabels;
+  auto BeginModuleInitializer = [&] {
+    TrailerMethod M = makeTypeInitializer(TrailerOwner::Module);
+    if (In.Guard)
+      GuardLabels = emitPortableGuard(Sink, *In.Guard, M);
+    return M;
+  };
+  auto EndModuleInitializer = [&](TrailerMethod &M) {
+    M.Body.emitRet();
+    if (In.Guard)
+      emitPortableGuardFailures(Sink, *In.Guard, M, GuardLabels);
+    finish(M, Sink);
+  };
   SharedArgs Shared;
   if (In.TwoPhase) {
     if (HasPhase1) {
@@ -753,22 +776,20 @@ void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
       M.Body.emitRet();
       finish(M, Sink);
     }
-    if (HasPhase2) {
-      TrailerMethod M = makeTypeInitializer(TrailerOwner::Module);
+    if (HasPhase2 || In.Guard) {
+      TrailerMethod M = BeginModuleInitializer();
       emitPhase2(In, M, Sink, /*Shared=*/nullptr);
-      M.Body.emitRet();
-      finish(M, Sink);
+      EndModuleInitializer(M);
     }
-  } else if (HasPhase1 || HasPhase2) {
+  } else if (HasPhase1 || HasPhase2 || In.Guard) {
     // A main that takes argc and argv gets those of the constructors that
     // take them, if any do (CtorArgs).
     bool MainTakesArgs =
         In.Entry && In.Entry->HasArgs && In.Entry->PointerSize == PointerSize;
-    TrailerMethod M = makeTypeInitializer(TrailerOwner::Module);
+    TrailerMethod M = BeginModuleInitializer();
     emitPhase1(In, InitImports, M, Sink);
     emitPhase2(In, M, Sink, MainTakesArgs ? &Shared : nullptr);
-    M.Body.emitRet();
-    finish(M, Sink);
+    EndModuleInitializer(M);
   }
   if (In.Entry)
     buildEntryPoint(*In.Entry, Shared, Sink);

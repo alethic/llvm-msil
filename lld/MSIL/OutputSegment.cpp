@@ -24,6 +24,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/BinaryFormat/MSILLink.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 #define DEBUG_TYPE "lld"
@@ -50,6 +51,9 @@ bool OutputImage::runLayout(unsigned numSlots) {
 
 void OutputImage::layout() {
   input.Rules = out.rules;
+  // The section rules without destructor sections (Dotnet, plan 5.18.5 LR7)
+  // name every refused table section with T-P8.
+  bool finiSections = allowsFiniSections(out.rules);
 
   for (ObjFile *f : ctx.objectFiles) {
     // The FINI entries (P3-A).
@@ -68,14 +72,26 @@ void OutputImage::layout() {
         continue;
       // The sections that Phase 2 links refuse by name, never silently
       // (5.9.9, judge-c-fidelity J6).
-      switch (classifySection(seg->sectionName, out.rules)) {
+      SectionClass sectionClass = classifySection(seg->sectionName, out.rules);
+      switch (sectionClass) {
       case SectionClass::DestructorTable:
-        error("global destructors are not supported yet: " + seg->name +
-              " in " + toString(f));
-        continue;
       case SectionClass::Unsupported:
-        error("section '" + seg->sectionName + "' in " + toString(f) +
-              " is not supported");
+        if (!finiSections) {
+          // T-P8's reason (plan 5.18.5 LR7) for a section that the portable
+          // triples refuse by name.
+          std::optional<StringRef> reason =
+              getUnsupportedSectionReason(seg->sectionName, out.rules);
+          if (!reason)
+            llvm_unreachable("a section that the Dotnet rules refuse has no "
+                             "T-P8 reason");
+          error("section '" + seg->sectionName + "' is not supported for " +
+                ctx.arg.target.str() + ": " + *reason);
+        } else if (sectionClass == SectionClass::DestructorTable)
+          error("global destructors are not supported yet: " + seg->name +
+                " in " + toString(f));
+        else
+          error("section '" + seg->sectionName + "' in " + toString(f) +
+                " is not supported");
         continue;
       case SectionClass::TLS:
         error("thread-local storage is not supported yet: " + seg->name +
@@ -135,10 +151,10 @@ void OutputImage::layout() {
     return;
 
   // __start_X and __stop_X of every output section with a C-identifier
-  // name, on non-Windows triples, when something refers to them (plan 5.9.9,
-  // lld/ELF/Writer.cpp:2289-2301, lld/wasm/Writer.cpp:544-556). link.exe
-  // and lld-link define neither.
-  if (ctx.arg.target.isOSWindows())
+  // name, under ELF and Dotnet rules, when something refers to them (plan
+  // 5.9.9, 5.18.5 LR9, lld/ELF/Writer.cpp:2289-2301,
+  // lld/wasm/Writer.cpp:544-556). link.exe and lld-link define neither.
+  if (!definesStartStop(out.rules))
     return;
   for (const ImageSection &s : result.Sections) {
     if (!isCIdentifier(s.Name))
@@ -351,14 +367,15 @@ static bool isNullSlot(const InputSegment &seg, uint64_t off) {
 
 // The number of glibc's .init_array arguments (int argc, char **argv, char
 // **envp) that a constructor with the IL signature \p sig takes, or
-// std::nullopt if it takes other arguments: off Windows, its parameters are
-// a prefix of (int32, native int, native int) (pointers are native ints,
-// decision D2); on Windows triples it takes none.
+// std::nullopt if it takes other arguments: under ELF rules, its parameters
+// are a prefix of (int32, native int, native int) (pointers are native ints,
+// decision D2); under COFF and Dotnet rules it takes none
+// (constructorsTakeArgs; plan 5.18.5 LR5).
 static std::optional<uint8_t> getConstructorArgs(const MethodSig &sig,
                                                  SectionRules rules) {
   if (sig.Params.empty())
     return 0;
-  if (rules == SectionRules::COFF || sig.Header != SIG_DEFAULT ||
+  if (!constructorsTakeArgs(rules) || sig.Header != SIG_DEFAULT ||
       sig.Params.size() > 3 || sig.RequiredParamCount < sig.Params.size())
     return std::nullopt;
   for (auto [i, param] : llvm::enumerate(sig.Params))
@@ -386,11 +403,16 @@ OutputImage::getConstructors(SymbolBinder &symbols) {
     }
     if (!method)
       return false;
-    // A constructor is called with no argument, or off Windows with argc,
-    // argv and envp as far as it takes them; a result is popped.
+    // A constructor is called with no argument, or under ELF rules with
+    // argc, argv and envp as far as it takes them; a result is popped. The
+    // portable triples never pass arguments (T-P6).
     if (!getConstructorArgs(out.methods[*method].sig, out.rules)) {
-      error("global constructor '" + toString(*sym) +
-            "' takes arguments, which MSIL does not pass");
+      if (!bindsNatively(ctx.arg.target))
+        error("constructor '" + toString(*sym) + "' takes arguments, which " +
+              ctx.arg.target.str() + " does not pass");
+      else
+        error("global constructor '" + toString(*sym) +
+              "' takes arguments, which MSIL does not pass");
       return true;
     }
     e.Id = *method;
@@ -416,13 +438,24 @@ OutputImage::getConstructors(SymbolBinder &symbols) {
           for (const MSILLink::Reloc &x : seg->relocs)
             if (x.Offset == off && x.Type == MSILLink::RelocType::FnAddr64)
               r = &x;
+        // T-P7 (plan 5.18.5 LR5): the portable triples call every slot, so
+        // a slot that is null, or that holds a weak undefined function
+        // (which resolves to null), is refused.
+        Symbol *target = r ? f->getSymbol(r->Symbol) : nullptr;
+        if (rejectsNullConstructorSlots(out.rules) &&
+            (isNullSlot(*seg, off) || (target && target->isUndefWeak()))) {
+          error("null constructor slot in '" + seg->sectionName + "' of '" +
+                toString(f) + "': " + ctx.arg.target.str() +
+                " calls every slot");
+          continue;
+        }
         ConstructorEntry e;
         e.Key = key;
         e.Input = input;
         e.IsSlot = true;
         e.Segment = seg->index;
         e.Offset = off;
-        if (!r || !add(f->getSymbol(r->Symbol), e))
+        if (!r || !add(target, e))
           error("constructor table entry at " + seg->sectionName + "+" +
                 Twine(off) + " in " + toString(f) +
                 " is not a function address");

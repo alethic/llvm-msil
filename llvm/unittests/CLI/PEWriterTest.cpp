@@ -7,14 +7,16 @@
 //===----------------------------------------------------------------------===//
 //
 // Checks llvm/CLI/PEWriter.h against the MSIL implementation plan: the PE
-// envelope (5.7.7), the netmodule shape of objects (5.8.2) and the COFF
-// symbol view (5.8.6). Every image is parsed with the test's own PE/COFF and
-// metadata-root parser (the PE/COFF specification and ECMA-335 II.24-II.25),
-// never with the library's reader. Expected values come from the plan, from
-// recon/p2/metadata-writer.md (3.3, 3.10, 4.9, 4.10), from mdump --contentid
-// (System.Reflection.Metadata's BlobContentId.FromHash) and from a Roslyn
-// netmodule built in scratch (csc 4.11, -deterministic -target:module
-// -platform:x64), never from the implementation under test.
+// envelope (5.7.7), the netmodule shape of objects (5.8.2), the COFF
+// symbol view (5.8.6) and the stubless PE32 envelope of msil64-unknown-dotnet
+// (5.18.7 PE1-PE3, P-1a; recon/p3/portable-loader.md section 6). Every image
+// is parsed with the test's own PE/COFF and metadata-root parser (the PE/COFF
+// specification and ECMA-335 II.24-II.25), never with the library's reader.
+// Expected values come from the plan, from recon/p2/metadata-writer.md (3.3,
+// 3.10, 4.9, 4.10), from mdump --contentid (System.Reflection.Metadata's
+// BlobContentId.FromHash) and from a Roslyn netmodule built in scratch (csc
+// 4.11, -deterministic -target:module -platform:x64), never from the
+// implementation under test.
 //
 //===----------------------------------------------------------------------===//
 
@@ -55,6 +57,8 @@ using ByteVec = std::vector<uint8_t>;
 
 constexpr char PEPrefix[] = "cannot write PE image: ";
 constexpr char WinTriple[] = "x86_64-pc-windows-msvc-msil";
+constexpr char PortableTriple[] = "msil64-unknown-dotnet";
+using PEFormat = decltype(PEOptions::Format);
 
 //===----------------------------------------------------------------------===//
 // Little-endian reads with bounds checks
@@ -84,7 +88,7 @@ ArrayRef<uint8_t> slice(ArrayRef<uint8_t> B, uint64_t Off, uint64_t N) {
 }
 
 //===----------------------------------------------------------------------===//
-// A PE32+ parser (PE/COFF specification)
+// A PE32+ and PE32 parser (PE/COFF specification)
 //===----------------------------------------------------------------------===//
 
 struct SectionHeader {
@@ -102,10 +106,13 @@ struct PEView {
   uint16_t Machine = 0, NumberOfSections = 0, SizeOfOptionalHeader = 0,
            Characteristics = 0;
   uint32_t TimeDateStamp = 0, PointerToSymbolTable = 0, NumberOfSymbols = 0;
-  // PE32+ optional header.
+  // PE32+ optional header (or PE32's, magic 0x10B, whose BaseOfData, 32-bit
+  // ImageBase and 32-bit stack and heap fields are read into the same
+  // members).
   uint16_t Magic = 0;
   uint8_t MajorLinkerVersion = 0, MinorLinkerVersion = 0;
   uint32_t AddressOfEntryPoint = 0;
+  uint32_t BaseOfData = 0; // PE32 only
   uint64_t ImageBase = 0;
   uint32_t SectionAlignment = 0, FileAlignment = 0;
   uint16_t MajorOSVersion = 0, MinorOSVersion = 0, MajorSubsystemVersion = 0,
@@ -163,7 +170,13 @@ PEView parsePE(ArrayRef<uint8_t> F) {
   V.MajorLinkerVersion = rd8(F, O + 2);
   V.MinorLinkerVersion = rd8(F, O + 3);
   V.AddressOfEntryPoint = rd32(F, O + 16);
-  V.ImageBase = rd64(F, O + 24);
+  bool PE32 = V.Magic == 0x10B;
+  if (PE32) {
+    V.BaseOfData = rd32(F, O + 24);
+    V.ImageBase = rd32(F, O + 28);
+  } else {
+    V.ImageBase = rd64(F, O + 24);
+  }
   V.SectionAlignment = rd32(F, O + 32);
   V.FileAlignment = rd32(F, O + 36);
   V.MajorOSVersion = rd16(F, O + 40);
@@ -176,15 +189,26 @@ PEView parsePE(ArrayRef<uint8_t> F) {
   V.CheckSum = rd32(F, O + 64);
   V.Subsystem = rd16(F, O + 68);
   V.DllCharacteristics = rd16(F, O + 70);
-  V.StackReserve = rd64(F, O + 72);
-  V.StackCommit = rd64(F, O + 80);
-  V.HeapReserve = rd64(F, O + 88);
-  V.HeapCommit = rd64(F, O + 96);
-  V.LoaderFlags = rd32(F, O + 104);
-  V.NumberOfRvaAndSizes = rd32(F, O + 108);
+  uint64_t Dirs;
+  if (PE32) {
+    V.StackReserve = rd32(F, O + 72);
+    V.StackCommit = rd32(F, O + 76);
+    V.HeapReserve = rd32(F, O + 80);
+    V.HeapCommit = rd32(F, O + 84);
+    V.LoaderFlags = rd32(F, O + 88);
+    V.NumberOfRvaAndSizes = rd32(F, O + 92);
+    Dirs = O + 96;
+  } else {
+    V.StackReserve = rd64(F, O + 72);
+    V.StackCommit = rd64(F, O + 80);
+    V.HeapReserve = rd64(F, O + 88);
+    V.HeapCommit = rd64(F, O + 96);
+    V.LoaderFlags = rd32(F, O + 104);
+    V.NumberOfRvaAndSizes = rd32(F, O + 108);
+    Dirs = O + 112;
+  }
   for (uint32_t I = 0; I < V.NumberOfRvaAndSizes && I < 16; ++I)
-    V.Directories.push_back(
-        {rd32(F, O + 112 + 8 * I), rd32(F, O + 116 + 8 * I)});
+    V.Directories.push_back({rd32(F, Dirs + 8 * I), rd32(F, Dirs + 4 + 8 * I)});
   uint64_t S = C + 20 + V.SizeOfOptionalHeader;
   for (unsigned I = 0; I < V.NumberOfSections; ++I, S += 40) {
     SectionHeader H;
@@ -580,7 +604,10 @@ TEST(CLIPEWriterTest, UnsupportedArchitecture) {
   EXPECT_THAT_EXPECTED(
       R, FailedWithMessage("cannot write PE image: architecture 'riscv64' "
                            "is not supported until phase 5"));
-  // i686 needs PE32, the mscoree stub and .reloc (phase 5).
+  // The i686 host triples stay refused for their own reasons (32BITREQUIRED
+  // and the address-width work of phase 5), not for want of an mscoree stub
+  // or .reloc: msil64's stubless PE32 images load without either
+  // (portable-loader section 6, P-1a). The text is unchanged.
   for (const char *TT :
        {"i686-pc-windows-msvc", "armv7-unknown-linux-gnueabihf",
         "wasm32-unknown-unknown"}) {
@@ -742,6 +769,197 @@ TEST(CLIPEWriterTest, ARM64Machine) {
   checkCommonHeaders(V);
   EXPECT_EQ(V.Machine, uint16_t(COFF::IMAGE_FILE_MACHINE_ARM64));
   EXPECT_EQ(V.Characteristics, 0x2022);
+}
+
+//===----------------------------------------------------------------------===//
+// The portable envelope (5.18.7 PE1-PE3, P-1a; portable-loader section 6)
+//===----------------------------------------------------------------------===//
+
+// msil64-unknown-dotnet writes a stubless AnyCPU image: machine I386, the PE32
+// optional header (magic 0x10B, 224 bytes: 96 plus 16 directories, so the
+// section table starts at 0x80 + 24 + 0xE0 = 0x178), image base 0x400000 for
+// an executable and 0x10000000 for a library or module, CorFlags ILONLY only
+// (never 32BITREQUIRED or 32BITPREFERRED), stack 0x400000/0x4000, heap
+// 0x100000/0x1000, DllCharacteristics 0x8540, COFF characteristics 0x0022
+// (executable) or 0x2022 (library, module; never 32BIT_MACHINE or
+// RELOCS_STRIPPED), entry point RVA 0, and no import, IAT, stub or .reloc:
+// the CLR directory is the only one. Objects (netmodules) use the same
+// envelope (PE3). The host triples keep PE32+.
+TEST(CLIPEWriterTest, PortablePE32Header) {
+  EXPECT_TRUE(PEOptions().Format == PEFormat::PE32Plus);
+  EXPECT_TRUE(getOptions(PEImageKind::Executable).Format == PEFormat::PE32Plus);
+  EXPECT_TRUE(getOptions(PEImageKind::Library, "aarch64-unknown-linux-gnu-msil")
+                  .Format == PEFormat::PE32Plus);
+
+  struct Case {
+    PEImageKind Kind;
+    const char *Name;
+    uint16_t Characteristics;
+    uint64_t ImageBase;
+  } Cases[] = {
+      {PEImageKind::Executable, "hello.exe", 0x0022, 0x400000},
+      {PEImageKind::Library, "hello.dll", 0x2022, 0x10000000},
+      {PEImageKind::Module, "hello.netmodule", 0x2022, 0x10000000},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    Expected<PEOptions> O = PEOptions::get(Triple(PortableTriple), C.Kind);
+    ASSERT_THAT_EXPECTED(O, Succeeded());
+    EXPECT_EQ(static_cast<uint16_t>(O->Machine),
+              uint16_t(COFF::IMAGE_FILE_MACHINE_I386));
+    EXPECT_TRUE(O->Format == PEFormat::PE32);
+    EXPECT_EQ(O->Kind, C.Kind);
+    EXPECT_EQ(O->CorFlags, uint32_t(COMIMAGE_FLAGS_ILONLY));
+    EXPECT_EQ(O->ImageBase, C.ImageBase);
+    EXPECT_EQ(O->StackReserve, 0x400000u);
+    EXPECT_EQ(O->StackCommit, 0x4000u);
+    EXPECT_EQ(O->HeapReserve, 0x100000u);
+    EXPECT_EQ(O->HeapCommit, 0x1000u);
+    EXPECT_EQ(O->DllCharacteristics, 0x8540);
+
+    ModuleSpec S;
+    S.Kind = C.Kind;
+    S.Name = C.Name;
+    Written W = writeModule(S, PortableTriple);
+    PEView V = parsePE(W.File);
+    EXPECT_EQ(ArrayRef<uint8_t>(V.File).take_front(128),
+              ArrayRef<uint8_t>(ClassicDOSHeader));
+    EXPECT_EQ(V.Lfanew, 0x80u);
+    EXPECT_EQ(V.Signature, 0x00004550u); // "PE\0\0"
+    EXPECT_EQ(V.Machine, uint16_t(COFF::IMAGE_FILE_MACHINE_I386));
+    EXPECT_EQ(V.Machine, 0x14C);
+    EXPECT_EQ(V.Characteristics, C.Characteristics);
+    EXPECT_EQ(V.Characteristics & COFF::IMAGE_FILE_32BIT_MACHINE, 0u);
+    EXPECT_EQ(V.Characteristics & COFF::IMAGE_FILE_RELOCS_STRIPPED, 0u);
+    EXPECT_EQ(V.SizeOfOptionalHeader, 0xE0);
+    EXPECT_EQ(V.Magic, 0x10B);
+    EXPECT_EQ(V.Lfanew + 24 + V.SizeOfOptionalHeader, 0x178u);
+    EXPECT_EQ(V.ImageBase, C.ImageBase);
+    EXPECT_EQ(V.AddressOfEntryPoint, 0u);
+    EXPECT_EQ(V.SectionAlignment, 0x2000u);
+    EXPECT_EQ(V.FileAlignment, 0x200u);
+    EXPECT_EQ(V.DllCharacteristics, 0x8540);
+    EXPECT_EQ(V.StackReserve, 0x400000u);
+    EXPECT_EQ(V.StackCommit, 0x4000u);
+    EXPECT_EQ(V.HeapReserve, 0x100000u);
+    EXPECT_EQ(V.HeapCommit, 0x1000u);
+    EXPECT_EQ(V.LoaderFlags, 0u);
+    EXPECT_EQ(V.NumberOfRvaAndSizes, 16u);
+    EXPECT_EQ(V.NumberOfSections, 1);
+    EXPECT_EQ(V.SizeOfHeaders, 0x200u);
+    EXPECT_LE(V.sectionTableEnd(), V.SizeOfHeaders);
+    EXPECT_NE(V.TimeDateStamp & 0x80000000u, 0u);
+
+    // The section table at 0x178: .text, first, right after the headers.
+    ASSERT_EQ(V.Sections.size(), 1u);
+    EXPECT_EQ(V.Sections[0].Name, ".text");
+    EXPECT_EQ(
+        StringRef(reinterpret_cast<const char *>(W.File.data()) + 0x178, 5),
+        ".text");
+    EXPECT_EQ(V.Sections[0].Characteristics, 0x60000020u);
+    EXPECT_EQ(V.Sections[0].VirtualAddress, 0x2000u);
+    EXPECT_EQ(V.Sections[0].PointerToRawData, V.SizeOfHeaders);
+    EXPECT_EQ(V.Sections[0].NumberOfRelocations, 0);
+
+    // Only the CLR directory: no import table, IAT, entry stub or .reloc.
+    ASSERT_EQ(V.Directories.size(), 16u);
+    for (unsigned I = 0; I < 16; ++I) {
+      SCOPED_TRACE("data directory " + std::to_string(I));
+      if (I == COFF::CLR_RUNTIME_HEADER) {
+        EXPECT_EQ(V.Directories[I].first, 0x2000u);
+        EXPECT_EQ(V.Directories[I].second, 72u);
+      } else {
+        EXPECT_EQ(V.Directories[I].first, 0u);
+        EXPECT_EQ(V.Directories[I].second, 0u);
+      }
+    }
+    CLIHeaderView H = parseCLIHeader(V);
+    EXPECT_EQ(H.Cb, 72u);
+    EXPECT_EQ(H.Major, 2);
+    EXPECT_EQ(H.Minor, 5);
+    EXPECT_EQ(H.Flags, uint32_t(COMIMAGE_FLAGS_ILONLY));
+    EXPECT_EQ(H.MetadataSize, W.M->MB.getSerializedSize());
+    EXPECT_EQ(H.EntryPointToken, C.Kind == PEImageKind::Executable
+                                     ? W.M->mainToken()
+                                     : uint32_t(0));
+  }
+
+  // The same module written for the host triple differs in the envelope
+  // only: PE32+ there.
+  ModuleSpec S;
+  S.Kind = PEImageKind::Library;
+  S.Name = "hello.dll";
+  PEView Host = parsePE(writeModule(S).File);
+  EXPECT_EQ(Host.Magic, 0x20B);
+  EXPECT_EQ(Host.SizeOfOptionalHeader, 0xF0);
+}
+
+// msil32-unknown-dotnet is T-P1 (5.18.11) in PEOptions::get, for every kind.
+TEST(CLIPEWriterTest, Msil32Refused) {
+  for (PEImageKind Kind :
+       {PEImageKind::Executable, PEImageKind::Library, PEImageKind::Module}) {
+    SCOPED_TRACE(static_cast<int>(Kind));
+    Expected<PEOptions> O =
+        PEOptions::get(Triple("msil32-unknown-dotnet"), Kind);
+    ASSERT_FALSE(bool(O));
+    EXPECT_THAT(toString(O.takeError()),
+                testing::HasSubstr(
+                    "target 'msil32-unknown-dotnet' is not supported yet: "
+                    "only msil64-unknown-dotnet is implemented"));
+  }
+}
+
+// writePEImage accepts machine I386 only in the PE32 format with ILONLY and
+// neither 32BITREQUIRED nor 32BITPREFERRED (until P-4 defines msil32's
+// flags), and refuses a PE32+ image for I386.
+TEST(CLIPEWriterTest, I386RequiresILOnlyWithoutBitness) {
+  ModuleSpec S;
+  S.Name = "hello.exe";
+  std::unique_ptr<TestModule> M = buildModule(S);
+  PEContent Content = M->content(M->mainToken());
+  PEOptions Base = getOptions(PEImageKind::Executable, PortableTriple);
+  ASSERT_EQ(static_cast<uint16_t>(Base.Machine),
+            uint16_t(COFF::IMAGE_FILE_MACHINE_I386));
+
+  // The portable options as PEOptions::get gives them.
+  {
+    SmallVector<uint8_t, 0> Out;
+    EXPECT_THAT_ERROR(writePEImage(Base, Content, Out), Succeeded());
+  }
+  struct Case {
+    const char *What;
+    uint32_t CorFlags;
+  } Refused[] = {
+      {"ILONLY | 32BITREQUIRED",
+       COMIMAGE_FLAGS_ILONLY | COMIMAGE_FLAGS_32BITREQUIRED},
+      {"ILONLY | 32BITPREFERRED",
+       COMIMAGE_FLAGS_ILONLY | COMIMAGE_FLAGS_32BITPREFERRED},
+      {"ILONLY | 32BITREQUIRED | 32BITPREFERRED",
+       COMIMAGE_FLAGS_ILONLY | COMIMAGE_FLAGS_32BITREQUIRED |
+           COMIMAGE_FLAGS_32BITPREFERRED},
+      {"32BITREQUIRED without ILONLY", COMIMAGE_FLAGS_32BITREQUIRED},
+      {"no ILONLY", 0},
+  };
+  for (const Case &C : Refused) {
+    SCOPED_TRACE(C.What);
+    PEOptions O = Base;
+    O.CorFlags = C.CorFlags;
+    EXPECT_THAT(writeError(O, Content), StartsWith(PEPrefix));
+  }
+  // I386 in the PE32+ format.
+  PEOptions Plus = Base;
+  Plus.Format = PEFormat::PE32Plus;
+  EXPECT_THAT(writeError(Plus, Content), StartsWith(PEPrefix));
+  // The library and module options are accepted too.
+  ModuleSpec L;
+  L.Kind = PEImageKind::Library;
+  L.Name = "hello.dll";
+  std::unique_ptr<TestModule> LM = buildModule(L);
+  SmallVector<uint8_t, 0> Out;
+  EXPECT_THAT_ERROR(
+      writePEImage(getOptions(PEImageKind::Library, PortableTriple),
+                   LM->content(0), Out),
+      Succeeded());
 }
 
 //===----------------------------------------------------------------------===//

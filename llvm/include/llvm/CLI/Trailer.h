@@ -29,6 +29,12 @@
 // output uses (5.14.4, llvm/CLI/TrailerDefs.h), such as
 // __msil_compiler_barrier.
 //
+// Outputs of the portable triples (msil64-unknown-dotnet, plan 5.18.7) are
+// AnyCPU images, so their <Module>::.cctor always exists and starts with the
+// width and byte-order guard (TrailerInput::Guard), which throws
+// PlatformNotSupportedException in a 32-bit or big-endian process before any
+// other code of the output runs.
+//
 // The builder is pure computation: it asks its sink for the entities it
 // names (fields, BCL members, helpers, strings, RVA data) and hands it each
 // method with its body laid out (cli::ILBuilder, token operands
@@ -204,6 +210,23 @@ struct TrailerDefRequest {
   EntityRef Method = 0;
 };
 
+/// The width and byte-order guard of a portable output (P-1a, plan 5.18.7
+/// PE5-PE7; brief Q1, Q2): the first code of <Module>::.cctor checks that the
+/// process has PointerSize-byte pointers (ldc.i4.m1; conv.i; conv.u8; ldc.i8
+/// -1; bne.un) and is little-endian (BitConverter::GetBytes(1)[0] != 0), and
+/// otherwise throws PlatformNotSupportedException with T-P10's link-time
+/// constant message: '<Assembly> is built for <Triple> and needs a 64-bit
+/// .NET process; this process is 32-bit', or '<Assembly> is built for
+/// <Triple> and needs a little-endian .NET process'.
+struct PortableGuard {
+  /// The pointer size of the triple in bytes (8 for msil64).
+  uint8_t PointerSize = 8;
+  /// The output's assembly name, as the messages name it.
+  std::string Assembly;
+  /// The triple, as the messages name it ("msil64-unknown-dotnet").
+  std::string Triple;
+};
+
 /// What the trailer is built from. The canonical orders (5.9.10): address
 /// fields in image-offset order; '<msil>fn_' fields in the order of their
 /// methods' first FUNCTION symbol over the inputs in link order and SYMTAB
@@ -270,6 +293,13 @@ struct TrailerInput {
   /// __local_stdio_scanf_options. Without it the trailer is M25's, byte for
   /// byte.
   std::optional<StdioOptions> UCRTStdio;
+  /// P-1a: the width and byte-order guard (PortableGuard), set on the outputs
+  /// of the portable triples only (cli::getSectionRules is
+  /// SectionRules::Dotnet): msil-ld's links and the target's whole-program
+  /// text. With it <Module>::.cctor always exists, and the guard is its first
+  /// code, before phase 1 in a one-phase output and before phase 2 in a
+  /// TwoPhase one. Without it the trailer is unchanged.
+  std::optional<PortableGuard> Guard;
 };
 
 /// The entities the trailer names, and the methods it makes: the MSIL
@@ -313,8 +343,10 @@ public:
 /// The MSVC CRT's _initterm skips NULL entries of .CRT$XC*, so on COFF such a
 /// slot is no constructor; glibc calls every .init_array entry, so on ELF it
 /// stays the error 'constructor table entry at <section>+<offset> in <file>
-/// is not a function address'. msil-ld and the whole-program trailer's
-/// constructor walk both ask this.
+/// is not a function address', and under Dotnet rules it is T-P7
+/// (cli::rejectsNullConstructorSlots in llvm/CLI/ImageLayout.h). True for
+/// COFF only. msil-ld and the whole-program trailer's constructor walk both
+/// ask this.
 LLVM_ABI bool skipsNullConstructorSlots(SectionRules Rules);
 
 /// The number of 8-byte address slots that the relocation loop needs
@@ -328,10 +360,11 @@ LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 /// - '<msil>dataimport' and '<msil>init_dataimports' when there are data
 ///   imports;
 /// - <Module>::.cctor when there is an image, a function address, a data
-///   import, a library type, a constructor or a UCRT stdio options function
-///   (In.UCRTStdio): allocate (AllocHGlobal(TotalSize + MaxAlign - 1)),
-///   align, store '<msil>data', cpblk the image, initblk the zero part, store
-///   the address fields, ldftn and store the '<msil>fn_' fields, call
+///   import, a library type, a constructor, a UCRT stdio options function
+///   (In.UCRTStdio) or a portable guard (In.Guard): the guard first, if any,
+///   then allocate (AllocHGlobal(TotalSize + MaxAlign - 1)), align, store
+///   '<msil>data', cpblk the image, initblk the zero part, store the address
+///   fields, ldftn and store the '<msil>fn_' fields, call
 ///   '<msil>init_dataimports', fill the address slots and run the loop (loop
 ///   mode only), apply the relocations, 'ldtoken' and 'pop' each library
 ///   type, apply the relocations against library exports (straight-line:
@@ -342,10 +375,11 @@ LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 ///   argc and argv are built and, for a main that takes them, stored in
 ///   '<msil>argc' and '<msil>argv'; a result is popped), ret. With at most
 ///   RelocLoopThreshold relocations each is stored straight-line, and without
-///   libraries, constructor arguments and UCRT stdio options the method is
-///   Phase 1's, instruction for instruction;
+///   libraries, constructor arguments, UCRT stdio options and a guard the
+///   method is Phase 1's, instruction for instruction;
 /// - with TwoPhase, '<msil>Data'::.cctor instead runs everything up to the
-///   relocations, and <Module>::.cctor, when it is not empty, the rest;
+///   relocations, and <Module>::.cctor, when it is not empty, the rest; with
+///   a guard <Module>::.cctor always exists and runs the guard first;
 /// - '<msil>Main' when In.Entry is set (decision D27), which passes main
 ///   the argc and argv of '<msil>argc' and '<msil>argv' when <Module>::.cctor
 ///   stored them, else builds them itself;

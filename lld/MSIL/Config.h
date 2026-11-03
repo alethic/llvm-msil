@@ -22,6 +22,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/BinaryFormat/CLI.h"
 #include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
@@ -157,6 +158,15 @@ struct Config {
   // "ALL" names every archive.
   llvm::DenseSet<llvm::StringRef> excludeLibs;
 
+  // The forced exports of a -shared library (plan 5.18.6 PL7, wasm-ld's
+  // semantics), in command-line order: exports holds the names of --export
+  // and of the --export-list files (one name per line, '#' comment lines),
+  // which the driver resolves like -u and reports when no input defines
+  // them; exportIfDefined holds the names of --export-if-defined, which
+  // extract nothing and may stay undefined. Both are exported even when
+  // hidden or covered by --exclude-libs (selectExports).
+  llvm::SmallVector<llvm::StringRef, 0> exports;
+  llvm::SmallVector<llvm::StringRef, 0> exportIfDefined;
   // --print-bcl-binding=<request> (hidden, plan 5.11.5), in command-line
   // order: print how the references bind each request and exit.
   llvm::SmallVector<llvm::StringRef, 0> printBclBinding;
@@ -229,6 +239,12 @@ struct Ctx {
   // LTO may internalize them and the LTO objects that define them again stay
   // excluded.
   llvm::DenseSet<const Symbol *> excludedSymbols;
+
+  // The archives (their paths, as InputFile::archiveName gives them) whose
+  // symbol index defines __llvm_libc_errno, the C library's errno provider
+  // (plan 5.18.6 PL10): on the portable triples an output other than the C
+  // library itself that loads any of their members is T-P11.
+  llvm::StringSet<> cLibraryArchives;
 
   // linker-generated symbols
   struct MSILSym {

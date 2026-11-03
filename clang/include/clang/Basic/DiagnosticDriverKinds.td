@@ -165,6 +165,9 @@ def err_drv_msil_no_object_output : Error<
 def err_drv_msil_ilasm_input : Error<
   "assembling ILAsm text is not supported for MSIL target '%0'; compile C or "
   "LLVM IR sources instead, or use -S to write ILAsm text">;
+def err_drv_msil_portable_static : Error<
+  "'-static' is not supported for 'msil64-unknown-dotnet' yet: the managed C "
+  "library links only as the shared assembly c.dll">;
 def warn_drv_invalid_argument_for_flang : Warning<
   "'%0' is not valid for Fortran">,
   InGroup<OptionIgnored>;

@@ -168,6 +168,20 @@ defm export_class: EEq<"export-class",
   "Namespace-qualified name of the public class that holds a -shared "
   "library's exports (default: the assembly name)">;
 
+// The forced exports of a -shared library (plan 5.18.6 PL7; wasm-ld's
+// options): exported even when hidden or covered by --exclude-libs.
+defm export: EEq<"export",
+  "Export this symbol from a -shared library, even when it is hidden; it is "
+  "an error if no input defines it">;
+
+defm export_if_defined: EEq<"export-if-defined",
+  "Export this symbol from a -shared library if an input defines it, even "
+  "when it is hidden">;
+
+defm export_list: EEq<"export-list",
+  "Export the symbols named in this file (one per line, '#' starts a comment "
+  "line) as --export does">;
+
 def interface_only: FF<"interface-only">,
   HelpText<"With -shared: write an interface library, whose methods are "
   "stubs, without binding undefined symbols">;

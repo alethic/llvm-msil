@@ -35,7 +35,17 @@
 // - the UCRT stdio options (5.15.2, M26): with TrailerInput::UCRTStdio set,
 //   per defined option function 'call <f>; dup; ldind.i8; ldc.i8 <bits>; or;
 //   stind.i8' after the relocations and before the constructors; unset (the
-//   default), every output stays as it was.
+//   default), every output stays as it was;
+// - the portable guard (5.18.7 PE5-PE7, P-1a): with TrailerInput::Guard set,
+//   '<Module>::.cctor' always exists and its first code is the width check
+//   'ldc.i4.m1; conv.i; conv.u8; ldc.i8 -1; bne.un' and the byte-order check
+//   'ldc.i4.1; call BitConverter::GetBytes(int32); ldc.i4.0; ldelem.u1;
+//   brfalse', each failing with 'ldstr' of T-P10's text, 'newobj
+//   PlatformNotSupportedException::.ctor(string)' and 'throw', in one-phase
+//   output before phase 1 and in two-phase output before phase 2, with no
+//   copy in '<msil>Data'::.cctor and every other instruction unchanged; the
+//   interpreter runs it as a 64-bit little-endian, a 32-bit and a big-endian
+//   process.
 // A small CIL interpreter runs the recorded methods on a simulated heap: it
 // checks every store against the alignment it is allowed to assume (the
 // natural one, or that of an 'unaligned.' prefix), that the data block is
@@ -66,6 +76,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -455,11 +466,12 @@ private:
 };
 
 struct Value {
-  enum class T { None, I4, I8, NI, Str, StrArr, Exc };
+  enum class T { None, I4, I8, NI, Str, StrArr, ByteArr, Exc };
   T Ty = T::None;
   int64_t I = 0; // I4 values are kept sign-extended
   std::string S;
   std::vector<std::string> Arr;
+  ByteVec Bytes; // a uint8[]
 
   static Value i4(int64_t V) {
     Value X;
@@ -536,6 +548,11 @@ public:
   };
   std::vector<Store> Stores;
   unsigned AllocHGlobalCalls = 0;
+  // The simulated process (the portable guard, 5.18.7): the width of a
+  // native int, 64 or 32, and the byte order of BitConverter.GetBytes. A
+  // 32-bit native int is kept zero-extended.
+  unsigned PointerBits = 64;
+  bool BigEndian = false;
 
 private:
   unsigned Depth = 0;
@@ -821,6 +838,23 @@ Interp::Outcome Interp::run(const RecordingSink::Method &M,
       uint64_t X = uint64_t(A.I);
       // An int32 is zero-extended by the unsigned conversions.
       uint64_t U = A.Ty == Value::T::I4 ? uint64_t(uint32_t(X)) : X;
+      if (PointerBits == 32) {
+        // A 32-bit process: conv.i and conv.u truncate to 32 bits, and a
+        // native int widens to int64 from its 32 bits (conv.i8 signed,
+        // conv.u8 unsigned).
+        if (A.Ty == Value::T::NI) {
+          U = uint32_t(X);
+          X = uint64_t(int64_t(int32_t(uint32_t(X))));
+        }
+        if (I.Op == Opcode::Conv_i) {
+          Stack.push_back(Value::ni(uint32_t(X)));
+          break;
+        }
+        if (I.Op == Opcode::Conv_u) {
+          Stack.push_back(Value::ni(uint32_t(U)));
+          break;
+        }
+      }
       switch (I.Op) {
       case Opcode::Conv_i1:
         Stack.push_back(Value::i4(int8_t(X)));
@@ -1131,17 +1165,28 @@ Interp::Outcome Interp::run(const RecordingSink::Method &M,
       }
       Stack.push_back(Value::str(A.Arr[B.I]));
       break;
+    case Opcode::Ldelem_u1:
+      if (!Pop(B) || !Pop(A))
+        break;
+      if (A.Ty != Value::T::ByteArr || !B.isInt() || B.I < 0 ||
+          size_t(B.I) >= A.Bytes.size()) {
+        fail(Where + "bad ldelem.u1");
+        break;
+      }
+      Stack.push_back(Value::i4(A.Bytes[B.I]));
+      break;
     case Opcode::Newobj: {
       const RecordingSink::Entity *E = Sink.entity(I.Token);
       if (!E || E->K != Kind::BCL ||
-          E->Bcl != BCLMemberId::EntryPointNotFoundException_ctor) {
+          (E->Bcl != BCLMemberId::EntryPointNotFoundException_ctor &&
+           E->Bcl != BCLMemberId::PlatformNotSupportedException_ctor)) {
         fail(Where + "newobj of something unexpected");
         break;
       }
       if (!Pop(A))
         break;
       if (A.Ty != Value::T::Str) {
-        fail(Where + "EntryPointNotFoundException(string) without a string");
+        fail(Where + E->Name + "(string) without a string");
         break;
       }
       Value X;
@@ -1218,6 +1263,23 @@ Interp::Outcome Interp::run(const RecordingSink::Method &M,
           Value X;
           X.Ty = Value::T::StrArr;
           X.Arr = CommandLine;
+          Stack.push_back(X);
+          break;
+        }
+        case BCLMemberId::BitConverter_GetBytes: {
+          // uint8[] GetBytes(int32), in the process's byte order.
+          if (!Pop(A))
+            break;
+          if (A.Ty != Value::T::I4) {
+            fail(Where + "GetBytes(int32) of another type");
+            break;
+          }
+          Value X;
+          X.Ty = Value::T::ByteArr;
+          for (unsigned K = 0; K != 4; ++K)
+            X.Bytes.push_back(uint8_t(uint32_t(A.I) >> (8 * K)));
+          if (BigEndian)
+            std::reverse(X.Bytes.begin(), X.Bytes.end());
           Stack.push_back(X);
           break;
         }
@@ -2587,6 +2649,266 @@ TEST(CLITrailerTest, StdioOptionsPerDefinedFunction) {
     EXPECT_EQ(PWord, 0x0u);
     EXPECT_EQ(SWord, 0x2u);
   }
+}
+
+//===----------------------------------------------------------------------===//
+// The portable guard (5.18.7 PE5-PE7, P-1a)
+//===----------------------------------------------------------------------===//
+
+PortableGuard portableGuard() {
+  PortableGuard G;
+  G.PointerSize = 8;
+  G.Assembly = "prog";
+  G.Triple = "msil64-unknown-dotnet";
+  return G;
+}
+
+// T-P10, for the assembly 'prog'.
+const char WidthMessage[] = "prog is built for msil64-unknown-dotnet and "
+                            "needs a 64-bit .NET process; this process is "
+                            "32-bit";
+const char OrderMessage[] =
+    "prog is built for msil64-unknown-dotnet and needs a little-endian .NET "
+    "process";
+
+// The guard's ten instructions (PE6). Its two branch targets are shown as
+// 'L?': their numbers depend on where the failure blocks are, which
+// splitGuard checks apart.
+const char GuardHead[] = R"(
+ldc.i4 -1; conv.i; conv.u8; ldc.i8 -1; bne.un L?; ldc.i4 1;
+call BitConverter_GetBytes; ldc.i4 0; ldelem.u1; brfalse L?
+)";
+
+// A guarded '<Module>::.cctor' taken apart: the guard (Head), the two failure
+// blocks 'Lk: ldstr <message>; newobj PlatformNotSupportedException_ctor;
+// throw' wherever they are (WidthText is the message of the block that
+// 'bne.un' branches to, OrderText that of the block 'brfalse' branches to),
+// and everything else (Rest), which must be the initializer without the
+// guard.
+struct GuardSplit {
+  Lines Head;
+  Lines Rest;
+  std::string WidthText;
+  std::string OrderText;
+};
+
+GuardSplit splitGuard(const RecordingSink &S, const RecordingSink::Method &M) {
+  GuardSplit R;
+  Lines All = S.render(M);
+  if (All.size() < 10) {
+    ADD_FAILURE() << "'" << M.Name << "' is shorter than the guard";
+    return R;
+  }
+  std::string WidthLabel, OrderLabel;
+  for (size_t K = 0; K != 10; ++K) {
+    StringRef L = All[K];
+    if (L.consume_front("bne.un ")) {
+      WidthLabel = L.str();
+      R.Head.push_back("bne.un L?");
+    } else if (L.consume_front("brfalse ")) {
+      OrderLabel = L.str();
+      R.Head.push_back("brfalse L?");
+    } else {
+      R.Head.push_back(All[K]);
+    }
+  }
+  for (size_t K = 10; K < All.size(); ++K) {
+    StringRef L = All[K];
+    bool IsWidth = !WidthLabel.empty() && L == WidthLabel + ":";
+    bool IsOrder = !OrderLabel.empty() && L == OrderLabel + ":";
+    if (!IsWidth && !IsOrder) {
+      R.Rest.push_back(All[K]);
+      continue;
+    }
+    if (K + 3 >= All.size()) {
+      ADD_FAILURE() << "a failure block at the end of '" << M.Name
+                    << "' is cut short";
+      break;
+    }
+    StringRef Ld = All[K + 1];
+    EXPECT_TRUE(Ld.consume_front("ldstr \"") && Ld.consume_back("\""))
+        << All[K + 1];
+    EXPECT_EQ(All[K + 2], "newobj PlatformNotSupportedException_ctor");
+    EXPECT_EQ(All[K + 3], "throw");
+    (IsWidth ? R.WidthText : R.OrderText) = Ld.str();
+    K += 3;
+  }
+  return R;
+}
+
+const RecordingSink::Method *findOwned(const RecordingSink &S, StringRef Name,
+                                       TrailerOwner Owner) {
+  const RecordingSink::Method *Found = nullptr;
+  for (const RecordingSink::Method &M : S.Methods)
+    if (M.Name == Name && M.Owner == Owner) {
+      EXPECT_EQ(Found, nullptr) << "two methods named " << Name.str();
+      Found = &M;
+    }
+  return Found;
+}
+
+unsigned countBCLCalls(const RecordingSink &S, BCLMemberId Id) {
+  unsigned N = 0;
+  for (const RecordingSink::Method &M : S.Methods)
+    for (const RecordingSink::Instr &I : M.Code) {
+      const RecordingSink::Entity *E = S.entity(I.Token);
+      if ((I.Op == Opcode::Call || I.Op == Opcode::Newobj) && E &&
+          E->K == Kind::BCL && E->Bcl == Id)
+        ++N;
+    }
+  return N;
+}
+
+// Runs a guarded initializer in a process the guard refuses: it throws
+// Message before it allocates, stores, sets a field or calls anything else.
+void expectGuardThrows(const RecordingSink &S, const RecordingSink::Method &M,
+                       unsigned PointerBits, bool BigEndian,
+                       StringRef Message) {
+  Interp VM(S);
+  VM.PointerBits = PointerBits;
+  VM.BigEndian = BigEndian;
+  unsigned Calls = 0;
+  VM.OnCall = [&](const RecordingSink::Entity &, std::vector<Value> &) {
+    ++Calls;
+    return Value::i4(0);
+  };
+  Interp::Outcome O = VM.run(M, {});
+  EXPECT_EQ(VM.Failure, "");
+  EXPECT_TRUE(O.Threw);
+  EXPECT_EQ(O.Message, Message.str());
+  EXPECT_EQ(VM.AllocHGlobalCalls, 0u);
+  EXPECT_TRUE(VM.Stores.empty());
+  EXPECT_TRUE(VM.Fields.empty());
+  EXPECT_EQ(Calls, 0u);
+}
+
+// One-phase output (an executable): with TrailerInput::Guard set, the guard
+// is the first code of '<Module>::.cctor', before phase 1's allocation, and
+// the rest of the output is what it is without the guard. Run in a 64-bit
+// little-endian process it falls through to the unchanged initializer; in a
+// 32-bit process the width check throws T-P10's first text (conv.i
+// truncates, so conv.u8 no longer gives -1), and in a big-endian one the
+// byte-order check throws the second. A guard alone still makes the
+// initializer (PE5: on portable outputs it always exists).
+TEST(CLITrailerTest, PortableGuardFirstInOnePhaseOutput) {
+  Program Plain;
+  makeModuleInitializer(Plain);
+  Plain.build();
+
+  Program P;
+  makeModuleInitializer(P);
+  P.In.Guard = portableGuard();
+  P.build();
+  EXPECT_EQ(P.Sink.methodNames(),
+            (std::vector<std::string>{".cctor", "<msil>Main"}));
+  const RecordingSink::Method *C = P.Sink.findMethod(".cctor");
+  ASSERT_NE(C, nullptr);
+  GuardSplit G = splitGuard(P.Sink, *C);
+  EXPECT_EQ(G.Head, lines(GuardHead));
+  EXPECT_EQ(G.Rest, lines(ModuleInitializerCctor));
+  EXPECT_EQ(G.WidthText, WidthMessage);
+  EXPECT_EQ(G.OrderText, OrderMessage);
+  EXPECT_EQ(C->Flags, CctorFlags);
+  EXPECT_EQ(C->Owner, TrailerOwner::Module);
+  EXPECT_TRUE(C->Locals.empty());
+  EXPECT_EQ(C->MaxStack, 3u);
+  EXPECT_EQ(P.Sink.render("<msil>Main"), Plain.Sink.render("<msil>Main"));
+  EXPECT_EQ(countBCLCalls(P.Sink, BCLMemberId::BitConverter_GetBytes), 1u);
+  EXPECT_EQ(countBCLCalls(Plain.Sink, BCLMemberId::BitConverter_GetBytes), 0u);
+
+  {
+    Interp VM(P.Sink);
+    runAndCheckData(P, VM);
+  }
+  expectGuardThrows(P.Sink, *C, 32, false, WidthMessage);
+  expectGuardThrows(P.Sink, *C, 64, true, OrderMessage);
+  // Both wrong: the width is checked first.
+  expectGuardThrows(P.Sink, *C, 32, true, WidthMessage);
+
+  // The guard alone.
+  Program Alone;
+  Alone.In.Guard = portableGuard();
+  Alone.build();
+  EXPECT_EQ(Alone.Sink.methodNames(), (std::vector<std::string>{".cctor"}));
+  const RecordingSink::Method *A = Alone.Sink.findMethod(".cctor");
+  ASSERT_NE(A, nullptr);
+  GuardSplit GA = splitGuard(Alone.Sink, *A);
+  EXPECT_EQ(GA.Head, lines(GuardHead));
+  EXPECT_EQ(GA.Rest, lines("ret"));
+  EXPECT_EQ(GA.WidthText, WidthMessage);
+  EXPECT_EQ(GA.OrderText, OrderMessage);
+  EXPECT_EQ(A->Flags, CctorFlags);
+  {
+    Interp VM(Alone.Sink);
+    Interp::Outcome O = VM.run(*A, {});
+    EXPECT_EQ(VM.Failure, "");
+    EXPECT_FALSE(O.Threw) << O.Message;
+  }
+  expectGuardThrows(Alone.Sink, *A, 32, false, WidthMessage);
+  expectGuardThrows(Alone.Sink, *A, 64, true, OrderMessage);
+}
+
+// Two-phase output (a -shared library, M22's shape): the guard is the first
+// code of the <Module>-owned '.cctor', before phase 2 and before anything
+// touches '<msil>Data'; '<msil>Data'::.cctor (phase 1) has no copy, and every
+// method is what it is without the guard. In a refused process the guard
+// throws before the library type, the cross-assembly accessor or the
+// constructor is reached.
+TEST(CLITrailerTest, PortableGuardFirstInTwoPhaseOutput) {
+  auto MakeLibrary = [](Program &P) {
+    makeModuleInitializer(P);
+    P.In.Entry.reset();
+    P.In.TwoPhase = true;
+    P.In.LibraryTypes = {P.Sink.field("lib.Exports")};
+    CrossReloc X{};
+    X.Site = 16; // table[4], in the image
+    X.Width = 4;
+    X.Accessor = P.Sink.method("lib_data", sig(tNI(), {}));
+    X.Addend = 8;
+    P.In.CrossRelocs = {X};
+    P.In.Ctors = {{P.Sink.method("ctor", sig(TypeSig(), {})), false}};
+  };
+  Program Plain;
+  MakeLibrary(Plain);
+  Plain.build();
+  Program P;
+  MakeLibrary(P);
+  P.In.Guard = portableGuard();
+  P.build();
+
+  ASSERT_EQ(P.Sink.Methods.size(), Plain.Sink.Methods.size());
+  for (size_t K = 0; K != P.Sink.Methods.size(); ++K) {
+    EXPECT_EQ(P.Sink.Methods[K].Name, Plain.Sink.Methods[K].Name);
+    EXPECT_EQ(P.Sink.Methods[K].Owner, Plain.Sink.Methods[K].Owner);
+  }
+  const RecordingSink::Method *C =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Module);
+  const RecordingSink::Method *PlainC =
+      findOwned(Plain.Sink, ".cctor", TrailerOwner::Module);
+  ASSERT_NE(C, nullptr);
+  ASSERT_NE(PlainC, nullptr);
+  GuardSplit G = splitGuard(P.Sink, *C);
+  EXPECT_EQ(G.Head, lines(GuardHead));
+  EXPECT_EQ(G.Rest, Plain.Sink.render(*PlainC));
+  EXPECT_EQ(G.WidthText, WidthMessage);
+  EXPECT_EQ(G.OrderText, OrderMessage);
+  EXPECT_EQ(C->Flags, CctorFlags);
+
+  const RecordingSink::Method *D =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Data);
+  const RecordingSink::Method *PlainD =
+      findOwned(Plain.Sink, ".cctor", TrailerOwner::Data);
+  ASSERT_NE(D, nullptr);
+  ASSERT_NE(PlainD, nullptr);
+  for (size_t K = 0; K != P.Sink.Methods.size(); ++K)
+    if (&P.Sink.Methods[K] != C)
+      EXPECT_EQ(P.Sink.render(P.Sink.Methods[K]),
+                Plain.Sink.render(Plain.Sink.Methods[K]))
+          << P.Sink.Methods[K].Name;
+  EXPECT_EQ(countBCLCalls(P.Sink, BCLMemberId::BitConverter_GetBytes), 1u);
+
+  expectGuardThrows(P.Sink, *C, 32, false, WidthMessage);
+  expectGuardThrows(P.Sink, *C, 64, true, OrderMessage);
 }
 
 } // namespace

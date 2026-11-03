@@ -31,6 +31,7 @@ add_llvm_target(MSILCodeGen
   MSILNullifyDebugValueLists.cpp
   MSILOptimizeLiveIntervals.cpp
   MSILOptimizeReturned.cpp
+  MSILPortable.cpp
   MSILPreExpand.cpp
   MSILPrepareIR.cpp
   MSILRegColoring.cpp

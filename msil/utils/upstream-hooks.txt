@@ -127,22 +127,33 @@
 # section 12 row '5.15.2's SysV `slotInfo` amended (review r1, slot alignment)'):
 # clang/test/CodeGen/X86/x86_64-vaarg.c, x86_64-arguments-darwin.c and
 # x86_64-arguments-win32.c, which passed there with the build before the fix
-# (x86_64-arguments.c was already an input, for CGCall.cpp): 323 = 320 + 3.
-min-pass 323
+# (x86_64-arguments.c was already an input, for CGCall.cpp): 323 = 320 + 3. P-1a (plan 5.18.13)
+# adds the 36 inputs of llvm/test/Transforms/Util/DeclareRuntimeLibcalls for RuntimeLibcalls.td,
+# none of them an input before; 14 pass on the development host (aix, amdlibm, basic, bsd,
+# emscripten, libmvec, long-double-module-flag, merge_attributes, ps, sincos_stret, svml, windows,
+# wrong_declaration and xcore) and 22 are UNSUPPORTED (their targets are not built):
+# 337 = 323 + 14, for 380 inputs in all (--list-lit; 344 before P-1a).
+min-pass 337
 
 fork-only .github/workflows/msil-ci.yml
 fork-only clang/lib/Basic/Targets/MSIL.h
+# The portable target's ABI (plan 5.18.2 PC4; P-1a): MSILPortableABIInfo and its TargetCodeGenInfo.
+fork-only clang/lib/CodeGen/Targets/MSIL.cpp
 # The clang MSIL toolchain (plan 5.10.1, M14) and its driver tests (5.6.4); msil-object.c
 # (M19) pins that -c writes CIL objects, msil-shared.c (M22) that -shared, clang-cl /LD and
 # /LDd link library assemblies.
 fork-only clang/lib/Driver/ToolChains/MSIL.cpp
 fork-only clang/lib/Driver/ToolChains/MSIL.h
+fork-only clang/test/Driver/msil-dotnet.c
 fork-only clang/test/Driver/msil-header-search.c
 fork-only clang/test/Driver/msil-link.c
 fork-only clang/test/Driver/msil-lto.c
 fork-only clang/test/Driver/msil-object.c
 fork-only clang/test/Driver/msil-shared.c
 fork-only clang/test/Driver/msil-toolchain.c
+# msil-dotnet.c (P-1a, plan 5.18.10) pins the portable driver (DotNetToolChain, T-P9, -nolibc
+# keeping clang_rt.builtins), and init-msil-portable.c the portable predefines (5.18.3).
+fork-only clang/test/Preprocessor/init-msil-portable.c
 fork-only clang/test/Preprocessor/init-msil.c
 # The %L format diagnostics of MSIL triples (plan 5.13.5, R15; M26).
 fork-only clang/test/Sema/msil-long-double-format.c
@@ -193,8 +204,9 @@ hook clang/include/clang/Basic/DiagnosticCommonKinds.td
   fork clang/test/CodeGen/MSIL/ms-inline-asm.c
 
 hook clang/include/clang/Basic/DiagnosticDriverKinds.td
-  none adds the errors err_drv_msil_no_object_output (reworded in M13; defined but unused from M19, its removal deferred to a later edit of this file: plan 5.10.5, M19.c) and err_drv_msil_ilasm_input (first reported in M14) only, in no group (as DiagnosticCommonKinds.td)
+  none adds the errors err_drv_msil_no_object_output (reworded in M13; defined but unused from M19, its removal deferred to a later edit of this file: plan 5.10.5, M19.c), err_drv_msil_ilasm_input (first reported in M14) and err_drv_msil_portable_static (P-1a: -static on a portable triple, T-P9, plan 5.18.4 PV4) only, in no group (as DiagnosticCommonKinds.td)
   fork clang/test/Driver/msil-object.c
+  fork clang/test/Driver/msil-dotnet.c
 
 hook clang/include/clang/Basic/DiagnosticSemaKinds.td
   # M26 (plan 5.13.5, R15): warn_msil_printf_long_double and warn_msil_scanf_long_double, which
@@ -210,6 +222,28 @@ hook clang/lib/Basic/Targets.cpp
   lit clang/test/Preprocessor/predefined-win-macros.c
   fork clang/test/CodeGen/MSIL/triples.c
   fork clang/test/Preprocessor/init-msil.c
+  # P-1a (plan 5.18.3, 5.18.13): AllocateTarget's selection of MSILPortableTargetInfo for
+  # msil32/msil64-unknown-dotnet, and its refusal (nullptr: unknown target triple) of the
+  # other PT5 combinations: x86_64-unknown-dotnet, msil64-unknown-linux,
+  # msil64-unknown-dotnet-elf and an environment component (msil64-unknown-dotnet-gnu).
+  fork clang/test/Preprocessor/init-msil-portable.c
+  fork clang/test/Driver/msil-dotnet.c
+
+hook clang/lib/CodeGen/CMakeLists.txt
+  # P-1a (plan 5.18.2 PC4, 5.18.13): the fork's Targets/MSIL.cpp in clangCodeGen, after
+  # Targets/M68k.cpp. Plan 5.18.13 names a 'compile' line here, but the compile leg
+  # accepts it only on its translation units and the files they include (COMPILE_FILES of
+  # check-upstream-hooks.py), so the block has a 'none' line instead.
+  none CMake list: the fork's Targets/MSIL.cpp (MSILPortableABIInfo) in clangCodeGen; every build of clang compiles it
+  fork clang/test/CodeGen/MSIL/portable-abi.c
+
+hook clang/lib/CodeGen/TargetInfo.h
+  # P-1a (plan 5.18.2 PC4, 5.18.13): the declaration of createMSILPortableTargetCodeGenInfo next
+  # to the other targets' factory declarations. Plan 5.18.13 names a 'compile' line, which the
+  # compile leg refuses for a header that neither of its translation units includes (as for
+  # CMakeLists.txt above); every clang build compiles the header's users.
+  none declaration only: createMSILPortableTargetCodeGenInfo, defined in the fork's Targets/MSIL.cpp and called by CodeGenModule.cpp's createTargetCodeGenInfo, whose block runs the upstream CodeGen tests
+  fork clang/test/CodeGen/MSIL/portable-abi.c
 
 hook clang/lib/CodeGen/BackendUtil.cpp
   # The MSIL case of asanUseGlobalsGC's object-format switch, and RunCodegenPipeline consuming
@@ -279,6 +313,8 @@ hook clang/lib/CodeGen/CodeGenModule.cpp
   # AddDependentLib's MSIL path (!llvm.linker.options) that #pragma comment(lib) reaches.
   fork clang/test/CodeGen/MSIL/import-attributes.c
   fork clang/test/CodeGen/MSIL/pragma-comment-lib.c
+  # P-1a (plan 5.18.2 PC4): createTargetCodeGenInfo's case for the portable architectures.
+  fork clang/test/CodeGen/MSIL/portable-abi.c
 
 hook clang/lib/CodeGen/TargetBuiltins/X86.cpp
   lit clang/test/CodeGen/ms-intrinsics-cpuid.c
@@ -308,7 +344,13 @@ hook clang/lib/Driver/Driver.cpp
   # getToolChain, no err_drv_lto_without_lld for MSIL triples, and a.exe as the MSIL default
   # image name. cl-options.c reaches err_drv_lto_without_lld, linux-ld-args.c the default
   # image name, and msvc-link.c and mingw.cpp the toolchain selection of native triples
-  # (linux-ld.c and gcc_forward.c are slower siblings).
+  # (linux-ld.c and gcc_forward.c are slower siblings). P-1a widens getToolChain's MSIL
+  # condition to isOSBinFormatMSIL() || isMSIL() || isOSDotNet(), so that link-only
+  # invocations of the refused triples whose object format is not MSIL (x86_64-unknown-dotnet,
+  # msil64-unknown-dotnet-elf) also reach createMSILToolChain, which refuses them as
+  # 'unknown target triple' (plan 5.18.1 PT5) instead of planning a host gcc link (an msil arch
+  # defaults to the MSIL format, so msil64-unknown-dotnet already passed the old condition);
+  # msil-dotnet.c pins that hunk.
   lit clang/test/Driver/cl-options.c
   lit clang/test/Driver/linux-ld-args.c
   lit clang/test/Driver/msvc-link.c
@@ -316,6 +358,7 @@ hook clang/lib/Driver/Driver.cpp
   fork clang/test/Driver/msil-toolchain.c
   fork clang/test/Driver/msil-link.c
   fork clang/test/Driver/msil-lto.c
+  fork clang/test/Driver/msil-dotnet.c
 
 hook clang/lib/Driver/ToolChain.cpp
   # Only the KCFI line differs from upstream since M14 (plan 5.10.2): MSIL triples do not
@@ -376,6 +419,12 @@ hook clang/lib/Sema/SemaDeclAttr.cpp
   fork clang/test/CodeGen/MSIL/triples.c
   fork clang/test/CodeGen/MSIL/datalayout.c
 
+hook compiler-rt/lib/builtins/int_lib.h
+  # P-1a (plan 5.18.8 PH2, 5.18.13): '|| defined(__dotnet__)' on the first COMPILER_RT_ALIAS
+  # branch, so the portable triples (which do not define __ELF__) alias as ELF does.
+  none compiler-rt's builtins tests are not built by the fork
+  fork msil/test/Portable/00-freestanding/helpers.test
+
 # The lld flavor msil (msil-ld, plan 5.9.1). lld is built from M13; the hooks build tree of the
 # compile leg is configured without lld, so no lld file has a 'compile' line.
 hook lld/CMakeLists.txt
@@ -432,6 +481,13 @@ hook llvm/CMakeLists.txt
 hook llvm/include/llvm/Config/Targets.h.cmake
   none LLVM_HAS_MSIL_TARGET is generated by every configure and has no consumer
 
+hook llvm/include/llvm/IR/RuntimeLibcalls.td
+  # P-1a (plan 5.18.1 PT7, 5.18.13): MSILSystemLibrary for the portable triples (TT.isMSIL()),
+  # whose libcalls the helper archive and the C library provide. The upstream tests show the
+  # other targets' system libraries unchanged; portable-libcalls.ll pins a portable libcall.
+  lit llvm/test/Transforms/Util/DeclareRuntimeLibcalls/*.ll
+  fork llvm/test/CodeGen/MSIL/portable-libcalls.ll
+
 hook llvm/include/llvm/MC/MCContext.h
   gtest unittests/MC/MCTests.exe
   compile
@@ -446,6 +502,11 @@ hook llvm/include/llvm/MC/MCObjectFileInfo.h
 hook llvm/include/llvm/TargetParser/Triple.h
   gtest unittests/TargetParser/TargetParserTests.exe
   compile
+
+hook llvm/include/llvm/TargetParser/TripleName.def
+  # P-1a (plan 5.18.1 PT1): the OS name 'dotnet' of the portable triples; TripleTest's portable
+  # cases (parse, normalize, the default format) cover it.
+  gtest unittests/TargetParser/TargetParserTests.exe
 
 hook llvm/include/module.modulemap
   none module map: textual headers for the fork's X-macro files llvm/BinaryFormat/CLITables.def and CILOpcodes.def (not a build input)
@@ -568,6 +629,12 @@ hook llvm/lib/Transforms/IPO/ExpandVariadics.cpp
   # externally visible replacement the original's DLL storage class and the internal copy
   # the default one, on every target (no other target that the pass lowers sets one). The
   # upstream tests show that the existing targets' lowering is unchanged.
+  # P-1a (plan 5.18.2 PC5, 5.18.13): the MSILPortable class (char* va_list) for msil32/msil64,
+  # returned first by createMSILABIInfo when Triple::isMSIL(), and one more upstream addition:
+  # the base class gains a virtual indirectCopyAlign(const CallBase &, unsigned ArgNo) that
+  # returns std::nullopt, with which expandCall raises the caller's copy of an indirect
+  # argument (its IndirectAlloca) to the call site's byval alignment; only MSILPortable
+  # overrides it, so the other targets and the host MSIL classes are unchanged.
   lit llvm/test/Transforms/ExpandVariadics/*.ll
   lit llvm/test/CodeGen/WebAssembly/expand-variadic-call.ll
   fork llvm/test/Transforms/ExpandVariadics/msil-abi.ll

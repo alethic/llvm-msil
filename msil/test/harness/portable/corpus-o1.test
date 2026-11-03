@@ -1,0 +1,54 @@
+# cli-corpus-check.py's O1 for the portable architectures (plan 5.8.2 O1 as
+# P-1a amends it, 5.17.5, 5.18.7 PE1/PE2; P-1a.i (7)): a CIL object of
+# msil64 or msil32 is Roslyn's AnyCPU envelope, a PE32 dll with machine
+# 0x014C (I386), characteristics 0x2022 and CorFlags ILONLY (0x1) alone,
+# where a host triple's object is a PE32+ dll with its architecture's
+# machine. Inputs/corpus-envelope.py loads the script and runs its envelope
+# check (check_envelope, as --mode object runs it) on the 'llvm-cil-dump
+# --headers --tables --link-info' output and the default canonical listing of
+# one object. Checks:
+# (1) An llc-written msil64 object passes the whole envelope check under
+#     arch msil64 and under msil32 ('envelope: ok').
+# (2) The failure paths: a %msil_set_32bitreq copy of it (CorFlags 0x3,
+#     32BITREQUIRED) fails under msil64 and msil32 with exactly 'O1: CorFlags
+#     0x00000003, not 0x00000001 (ILONLY alone) for <arch>'; the original
+#     checked as an x86_64 object fails O1's format and machine (the portable
+#     envelope is keyed on the architecture), and the host triple's object
+#     checked as msil64 fails them the other way.
+# REQUIRES: msil-portable, msil-cil-dump
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %llc_portable -filetype=obj %t/o1.ll -o %t/o1.o
+# RUN: %msil_set_32bitreq %t/o1.o %t/o1-32.o
+# RUN: %llc_msil -filetype=obj %t/o1.ll -o %t/host.o
+# RUN: %msil_cil_dump --headers --tables --link-info %t/o1.o > %t/o1.dump
+# RUN: %msil_cil_dump --canonical %t/o1.o > %t/o1.canon
+# RUN: %msil_cil_dump --headers --tables --link-info %t/o1-32.o > %t/o1-32.dump
+# RUN: %msil_cil_dump --canonical %t/o1-32.o > %t/o1-32.canon
+# RUN: %msil_cil_dump --headers --tables --link-info %t/host.o > %t/host.dump
+# RUN: %msil_cil_dump --canonical %t/host.o > %t/host.canon
+# RUN: %{harness_check} contains %t/o1.dump "^Format: PE32 machine=0x014C dll$" "^CLI: flags=0x00000001 "
+# RUN: %{harness_check} contains %t/o1-32.dump "^Format: PE32 machine=0x014C dll$" "^CLI: flags=0x00000003 "
+
+# (1)
+# RUN: %python %S/Inputs/corpus-envelope.py %S/../../../utils/mdtools/cli-corpus-check.py %t/o1.dump %t/o1.canon msil64 o1.c > %t/1a.log
+# RUN: %{harness_check} equals %t/1a.log "envelope: ok"
+# RUN: %python %S/Inputs/corpus-envelope.py %S/../../../utils/mdtools/cli-corpus-check.py %t/o1.dump %t/o1.canon msil32 o1.c > %t/1b.log
+# RUN: %{harness_check} equals %t/1b.log "envelope: ok"
+
+# (2)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/corpus-envelope.py %S/../../../utils/mdtools/cli-corpus-check.py %t/o1-32.dump %t/o1-32.canon msil64 o1.c > %t/2a.log
+# RUN: %{harness_check} equals %t/2a.log "envelope: O1: CorFlags 0x00000003, not 0x00000001 (ILONLY alone) for msil64"
+# RUN: %{harness_check} exits 1 %python %S/Inputs/corpus-envelope.py %S/../../../utils/mdtools/cli-corpus-check.py %t/o1-32.dump %t/o1-32.canon msil32 o1.c > %t/2b.log
+# RUN: %{harness_check} equals %t/2b.log "envelope: O1: CorFlags 0x00000003, not 0x00000001 (ILONLY alone) for msil32"
+# RUN: %{harness_check} exits 1 %python %S/Inputs/corpus-envelope.py %S/../../../utils/mdtools/cli-corpus-check.py %t/o1.dump %t/o1.canon x86_64 o1.c > %t/2c.log
+# RUN: %{harness_check} equals %t/2c.log "envelope: O1: PE32 dll, not a PE32+ dll" "envelope: O1: machine 0x014C, not 0x8664 for x86_64"
+# RUN: %{harness_check} exits 1 %python %S/Inputs/corpus-envelope.py %S/../../../utils/mdtools/cli-corpus-check.py %t/host.dump %t/host.canon msil64 o1.c > %t/2d.log
+# RUN: %{harness_check} contains %t/2d.log "\Aenvelope: O1: PE32\+ dll, not a PE32 dll\nenvelope: O1: machine 0x[0-9A-F]{4}, not 0x014C for msil64\n\Z"
+
+#--- o1.ll
+source_filename = "o1.c"
+
+define i32 @main() {
+  ret i32 0
+}

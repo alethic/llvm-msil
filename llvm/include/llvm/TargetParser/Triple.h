@@ -115,7 +115,9 @@ public:
     renderscript32, // 32-bit RenderScript
     renderscript64, // 64-bit RenderScript
     ve,             // NEC SX-Aurora Vector Engine
-    LastArchType = ve
+    msil32,         // MSIL (.NET CIL) with 32-bit pointers, no native platform
+    msil64,         // MSIL (.NET CIL) with 64-bit pointers, no native platform
+    LastArchType = msil64
   };
   enum SubArchType {
     NoSubArch,
@@ -351,7 +353,8 @@ public:
     Firmware,
     QURT,
     H2,
-    LastOSType = H2
+    DotNet, // .NET runtime, no native operating system
+    LastOSType = DotNet
   };
   enum EnvironmentType {
     UnknownEnvironment,
@@ -546,7 +549,8 @@ public:
   /// If this triple's object format is MSIL, return the native platform triple
   /// it is derived from: the same string with the "msil" format suffix removed,
   /// so the object format is the platform default (ELF, COFF or MachO).
-  /// Otherwise return *this unchanged.
+  /// Otherwise return *this unchanged. A portable MSIL triple (architecture
+  /// msil32 or msil64) has no native platform and is returned unchanged.
   LLVM_ABI Triple getNativeFormatTriple() const;
 
   /// Parse the version number from the OS name component of the triple, if
@@ -873,6 +877,10 @@ public:
 
   /// Tests whether the OS is H2.
   bool isOSH2() const { return getOS() == Triple::H2; }
+
+  /// Tests whether the OS is the .NET runtime of the portable MSIL triples
+  /// (msil32-unknown-dotnet, msil64-unknown-dotnet).
+  bool isOSDotNet() const { return getOS() == Triple::DotNet; }
 
   /// Tests whether the OS uses the ELF binary format.
   bool isOSBinFormatELF() const { return getObjectFormat() == Triple::ELF; }
@@ -1226,6 +1234,14 @@ public:
   /// Tests whether the target is wasm (32- and 64-bit).
   bool isWasm() const {
     return getArch() == Triple::wasm32 || getArch() == Triple::wasm64;
+  }
+
+  /// Tests whether the target is a portable MSIL architecture (msil32 or
+  /// msil64), which names no native platform. The host MSIL triples
+  /// (x86_64-unknown-linux-gnu-msil, ...) are not: they are selected by
+  /// isOSBinFormatMSIL() alone.
+  bool isMSIL() const {
+    return getArch() == Triple::msil32 || getArch() == Triple::msil64;
   }
 
   // Tests whether the target is CSKY
