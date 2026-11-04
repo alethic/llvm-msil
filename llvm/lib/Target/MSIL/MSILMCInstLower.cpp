@@ -643,6 +643,24 @@ void MSILMCInstLower::lowerImpl(const MachineInstr &MI,
     break;
   }
 
+  if (LeaveTarget && MI.isReturn()) {
+    // Return-as-leave mode: the value goes to the local R and 'leave' exits
+    // the protected block to the tail, which returns it. The target is not a
+    // block label, so relaxBranches keeps 'leave' long.
+    unsigned NumValues =
+        count_if(MI.explicit_uses(),
+                 [](const MachineOperand &MO) { return MO.isReg(); });
+    if (NumValues > 1 || (NumValues != 0) != LeaveResultLocal.has_value())
+      reportBadInstr(MI, "a return whose values do not match the result "
+                         "local of the whole-body clause");
+    if (NumValues)
+      Out.push_back(MSIL::buildVarInst(cli::Opcode::Stloc, *LeaveResultLocal));
+    Out.push_back(makeInst(
+        cli::Opcode::Leave,
+        MCOperand::createExpr(MCSymbolRefExpr::create(LeaveTarget, Ctx))));
+    return;
+  }
+
   // Every other record is one CIL instruction whose operands are values on
   // the evaluation stack (registers), at most one basic-block target, and
   // the memflags immediate of a memory access.

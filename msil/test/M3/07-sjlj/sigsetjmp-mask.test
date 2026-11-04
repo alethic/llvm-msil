@@ -1,0 +1,120 @@
+# sigsetjmp's signal mask on Linux triples: siglongjmp or longjmp to a sigsetjmp(b, 1) site restores the mask saved there (a SIGUSR1 blocked after the site is unblocked again, one unblocked after it is blocked again); with mask 0, a variable mask of 0, setjmp, or _setjmp/_longjmp it stays as it was.
+# glibc keeps the flag 'mask saved' at offset 64 of a jmp_buf and the saved
+# mask from offset 72 on; MSILLowerSjLj writes them at a sigsetjmp or
+# __sigsetjmp site on a Linux triple (plan 5.15.4, sj S9): offset 64 always,
+# and when the mask argument is not 0 the mask itself, through
+# sigprocmask(SIG_BLOCK, NULL, buf + 72) (a constant 1 and a variable that
+# is 1 here, a variable that is 0 too); the site's restore block calls
+# sigprocmask(SIG_SETMASK, buf + 72, NULL) when offset 64 is set, after a
+# siglongjmp or a longjmp alike, as glibc's longjmp and siglongjmp both do.
+# A mask is the thread's: each case reads it back with
+# sigprocmask(SIG_BLOCK, NULL, &set) on the same thread, and no handler is
+# installed and no signal is sent (passing a C function to signal() is
+# M28's). The mask the runtime starts the program with is never printed:
+# every case sets SIGUSR1's state itself. Linux triples only: the UCRT has
+# no sigsetjmp, siglongjmp, sigprocmask or SIGUSR1. Plan 5.15.4, 5.17.13
+# (M27, M3/07-sjlj).
+# REQUIRES: msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/mask.c
+# RUN: %{msil_prog}
+#--- mask.c
+#include <setjmp.h>
+#include <signal.h>
+#include <stdio.h>
+
+static sigjmp_buf sb;
+static jmp_buf jb;
+/* Masks that are not constants at the site, at any optimization level. */
+static volatile int mask_one = 1, mask_zero = 0;
+
+static void change_usr1(int how) {
+  sigset_t s;
+  sigemptyset(&s);
+  sigaddset(&s, SIGUSR1);
+  sigprocmask(how, &s, NULL);
+}
+
+static int usr1_blocked(void) {
+  sigset_t s;
+  sigemptyset(&s);
+  sigprocmask(SIG_BLOCK, NULL, &s);
+  return sigismember(&s, SIGUSR1);
+}
+
+__attribute__((noinline)) static void sjump(sigjmp_buf b, int v) {
+  siglongjmp(b, v);
+}
+__attribute__((noinline)) static void ljump(jmp_buf b, int v) { longjmp(b, v); }
+
+/* SIGUSR1 is unblocked at the site and blocked before the jump. */
+static void block_after(const char *what, int savemask, int use_longjmp) {
+  change_usr1(SIG_UNBLOCK);
+  int r = sigsetjmp(sb, savemask);
+  if (r == 0) {
+    change_usr1(SIG_BLOCK);
+    if (use_longjmp)
+      ljump(sb, 1);
+    sjump(sb, 1);
+  }
+  printf("%s: r=%d, SIGUSR1 blocked after the jump: %d\n", what, r,
+         usr1_blocked());
+}
+
+/* The same through a mask that is not a constant. */
+__attribute__((noinline)) static void block_after_var(int savemask) {
+  change_usr1(SIG_UNBLOCK);
+  int r = sigsetjmp(sb, savemask);
+  if (r == 0) {
+    change_usr1(SIG_BLOCK);
+    sjump(sb, 2);
+  }
+  printf("sigsetjmp(b, savemask = %d): r=%d, SIGUSR1 blocked after the jump: "
+         "%d\n",
+         savemask, r, usr1_blocked());
+}
+
+/* SIGUSR1 is blocked at the site and unblocked before the jump. */
+static void unblock_after(void) {
+  change_usr1(SIG_BLOCK);
+  int r = sigsetjmp(sb, 1);
+  if (r == 0) {
+    change_usr1(SIG_UNBLOCK);
+    sjump(sb, 3);
+  }
+  printf("sigsetjmp(b, 1), unblocked after the site: r=%d, SIGUSR1 blocked "
+         "after the jump: %d\n",
+         r, usr1_blocked());
+}
+
+static void plain(void) {
+  change_usr1(SIG_UNBLOCK);
+  int r = setjmp(jb);
+  if (r == 0) {
+    change_usr1(SIG_BLOCK);
+    ljump(jb, 4);
+  }
+  printf("setjmp/longjmp: r=%d, SIGUSR1 blocked after the jump: %d\n", r,
+         usr1_blocked());
+  change_usr1(SIG_UNBLOCK);
+  r = _setjmp(jb);
+  if (r == 0) {
+    change_usr1(SIG_BLOCK);
+    _longjmp(jb, 5);
+  }
+  printf("_setjmp/_longjmp: r=%d, SIGUSR1 blocked after the jump: %d\n", r,
+         usr1_blocked());
+}
+
+int main(void) {
+  block_after("sigsetjmp(b, 1) and siglongjmp", 1, 0);
+  block_after("sigsetjmp(b, 1) and longjmp", 1, 1);
+  block_after("sigsetjmp(b, 0) and siglongjmp", 0, 0);
+  block_after_var(mask_one);
+  block_after_var(mask_zero);
+  unblock_after();
+  plain();
+  change_usr1(SIG_UNBLOCK);
+  printf("SIGUSR1 blocked at the end: %d\n", usr1_blocked());
+  return 0;
+}

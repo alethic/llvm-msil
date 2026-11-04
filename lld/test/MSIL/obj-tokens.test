@@ -24,8 +24,9 @@
 ##   a BCL TypeRef: no C code has them, so c.il is object-form text (5.8.4)
 ##   written by hand from llc -msil-object-form output (the record is the
 ##   one llc wrote for 'strings'), assembled by ilasm under '%if ilasm'.
-##   The clause's class, System.Exception, is not in the built-in table, so
-##   that link needs references (5.11.7's error names --reference): it binds
+##   The clause's class, System.Exception, is in the built-in table since
+##   M27 (5.15.4's sjlj clauses catch it), so without references it binds to
+##   [mscorlib] with the other BCL members; with --reference=pack it binds
 ##   against Inputs/fakepack (FakeCore, FakeInterop, FakeThreading), and
 ##   every BCL member of the EXE with it.
 ## Bodies are copied byte for byte and only token operands change, so a
@@ -142,9 +143,13 @@
 # RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
-# RUN: %if ilasm %{ not msil-ld --no-gc-sections a.o b.o c.o foo.lib -o x.exe 2>&1 \
-# RUN:   | FileCheck %s --check-prefix=EH-TABLE --implicit-check-not=error: %}
-# EH-TABLE: {{^}}msil-ld: error: {{.*}}.NET member '{{.*}}System.Exception{{.*}}' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+# RUN: %if ilasm %{ msil-ld --no-gc-sections a.o b.o c.o foo.lib -o eh-builtin.exe 2>&1 | count 0 %}
+# RUN: %if ilasm %{ llvm-cil-dump eh-builtin.exe | FileCheck %s --check-prefix=EH-BUILTIN \
+# RUN:   --implicit-check-not=FakeCore --implicit-check-not=FakeThreading %}
+# EH-BUILTIN: {{^}}    L{{[0-9]+}}: call void(void*, void*, int64, int64) [mscorlib]System.Buffer::'MemoryCopy'{{$}}
+# EH-BUILTIN-NEXT: {{^}}    L{{[0-9]+}}: call void() [mscorlib]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+# EH-BUILTIN:      {{^}}  .method 'strings' int32() flags=0x0016 impl=0x0000{{$}}
+# EH-BUILTIN:      {{^}}    .try L0 to L3 catch [mscorlib]System.Exception handler L3 to L5{{$}}
 # RUN: %if ilasm %{ msil-ld --no-gc-sections a.o b.o c.o foo.lib --reference=pack -o eh.exe 2>&1 | count 0 %}
 # RUN: %if ilasm %{ llvm-cil-dump eh.exe | %{fc} --check-prefix=EH %}
 # EH:      {{^}}  .method 'strings' int32() flags=0x0016 impl=0x0000{{$}}

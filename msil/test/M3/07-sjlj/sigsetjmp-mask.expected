@@ -1,0 +1,10 @@
+sigsetjmp(b, 1) and siglongjmp: r=1, SIGUSR1 blocked after the jump: 0
+sigsetjmp(b, 1) and longjmp: r=1, SIGUSR1 blocked after the jump: 0
+sigsetjmp(b, 0) and siglongjmp: r=1, SIGUSR1 blocked after the jump: 1
+sigsetjmp(b, savemask = 1): r=2, SIGUSR1 blocked after the jump: 0
+sigsetjmp(b, savemask = 0): r=2, SIGUSR1 blocked after the jump: 1
+sigsetjmp(b, 1), unblocked after the site: r=3, SIGUSR1 blocked after the jump: 1
+setjmp/longjmp: r=4, SIGUSR1 blocked after the jump: 1
+_setjmp/_longjmp: r=5, SIGUSR1 blocked after the jump: 1
+SIGUSR1 blocked at the end: 0
+[exit 0]

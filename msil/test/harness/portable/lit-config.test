@@ -29,6 +29,13 @@
 # (4) A host-triple run of msil/test/Portable (the outer run's triple when it
 # is not the portable one) reports every test UNSUPPORTED (P-1a.l's
 # lit.local.cfg) and runs none.
+# (5) An explicit --param msil_portable_sysroot (P-1b, plan 5.19.3; M27.i):
+# an empty directory is fatal (exit 2) naming the three files it lacks; a
+# directory that holds them (empty stand-ins: the feature checks presence
+# only) gives the feature msil-portable-sysroot, and
+# %{msil_portable_libc_cflags} is --sysroot="<that directory>" with forward
+# slashes. Without the parameter, (1) shows the default sysroot,
+# lib/clang-runtimes/msil64-unknown-dotnet beside clang's bin/ directory.
 # The patterns write cl[a]ng and l[l]c, which lit's tool substitutions
 # leave alone. Each check pins its failure path: (2) and the fatal branches of (3) are
 # the failures of (1) and of the loading branches.
@@ -39,6 +46,7 @@
 # RUN: %{harness_lit} -a --param msil_triple=msil64-unknown-dotnet --param msil_probe_cache= %S/Inputs/nested-portable > %t/1.log 2>&1
 # RUN: %{harness_check} contains %t/1.log "^PASS: MSIL :: harness/portable/Inputs/nested-portable/flags\.test " "^# \| portable triple: \[msil64-unknown-dotnet\]$" "^# \| cl[a]ng portable: \[\S*cl[a]ng(\.exe)? --target=msil64-unknown-dotnet\]$" "^# \| l[l]c portable: \[\S*l[l]c(\.exe)? -mtriple=msil64-unknown-dotnet\]$" "^# \| portable cflags: \[-nolibc -ffreestanding\]$" "^# \| cl[a]ng native: \[\S*cl[a]ng(\.exe)? --target=no-native-triple-of-msil64-unknown-dotnet\]$" "^# \| set 32bitreq: \[.*msil-run\.py --set-32bitreq\]$" "^# \| dotnet x86: \[.*msil-run\.py --expect-os windows --timeout \d+ --mem-limit-mb \d+ --dotnet .+\]$"
 # RUN: %{harness_check} contains %t/1.log "^# \| feature msil-triple=msil64-unknown-dotnet$" "^# \| feature msil-triple-portable$" "^# \| feature msil-triple-msil64$"
+# RUN: %{harness_check} contains %t/1.log '^# \| portable libc cflags: \[--sysroot="[^"\\]*/lib/clang-runtimes/msil64-unknown-dotnet"\]$'
 # RUN: %{harness_check} lacks %t/1.log "^# \| feature msil-triple-windows$" "^# \| feature msil-triple-linux$" "^# \| feature msil-native-oracle$" "^# \| feature msil-hosted$"
 # RUN: %if msil-portable %{ %{harness_check} contains %t/1.log "^# \| feature msil-portable$" %}
 # RUN: %if !msil-portable %{ %{harness_check} lacks %t/1.log "^# \| feature msil-portable$" %}
@@ -84,3 +92,16 @@
 # RUN: %if !msil-triple-portable %{ %{harness_lit} %S/../../Portable > %t/4.log 2>&1 %}
 # RUN: %if !msil-triple-portable %{ %{harness_check} contains %t/4.log "^UNSUPPORTED: MSIL :: Portable/" "^\s*Unsupported\s*: \d+" %}
 # RUN: %if !msil-triple-portable %{ %{harness_check} lacks %t/4.log "^(PASS|FAIL|XFAIL|XPASS|UNRESOLVED|TIMEOUT): " "^\s*(Passed|Failed)\s*: " %}
+
+# (5)
+# RUN: mkdir -p %t/empty-sysroot
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_portable_sysroot=%t/empty-sysroot --param msil_probe_cache= %S/Inputs/nested-portable > %t/5a.log 2>&1
+# RUN: %{harness_check} contains %t/5a.log "fatal: msil: msil_portable_sysroot=\S*empty-sysroot lacks include/stdio\.h, lib/msil64-unknown-dotnet/c\.dll, lib/msil64-unknown-dotnet/libm\.a \(build it with 'python msil/utils/build/build-libc\.py', plan 5\.19\.3\)$"
+# RUN: %{harness_check} lacks %t/5a.log "^  MSIL :: "
+# RUN: mkdir -p %t/sysroot/include %t/sysroot/lib/msil64-unknown-dotnet
+# RUN: %{harness_check} write %t/sysroot/include/stdio.h
+# RUN: %{harness_check} write %t/sysroot/lib/msil64-unknown-dotnet/c.dll
+# RUN: %{harness_check} write %t/sysroot/lib/msil64-unknown-dotnet/libm.a
+# RUN: %{harness_lit} -a --param msil_triple=msil64-unknown-dotnet --param msil_portable_sysroot=%t/sysroot --param msil_probe_cache= %S/Inputs/nested-portable > %t/5b.log 2>&1
+# RUN: %{harness_check} contains %t/5b.log "^PASS: MSIL :: harness/portable/Inputs/nested-portable/flags\.test " "^# \| feature msil-portable-sysroot$"
+# RUN: %{harness_check} contains %t/5b.log '^# \| portable libc cflags: \[--sysroot="[^"\\]*/lit-config\.test\.tmp/sysroot"\]$'

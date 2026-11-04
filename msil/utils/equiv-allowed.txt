@@ -99,6 +99,8 @@ skip O4 msil/test/M2/08-semantics/p2c-bsymbolic.test -shared libraries and links
 skip O4 msil/test/M2/08-semantics/p2c-cycle.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M2/08-semantics/p2c-weak-def.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M3/05-variadics/shared-variadic.test -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M3/07-sjlj/sjlj-xasm.test -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M3/07-sjlj/sjlj-xasm-callback.test -shared libraries and links against them have no --lto-emit-asm text
 #
 # Helper-archive programs (plan 5.14.3 A9, M25): a program that calls a K1
 # helper (a function of the helper archive clang_rt.builtins, plan 5.14.1)

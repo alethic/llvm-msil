@@ -1,0 +1,139 @@
+# A -shared library calls a program callback through a pointer the program passed, and the callback longjmps to a program buffer and, separately, to a buffer of the library's own setjmp frame (libpng's png_longjmp shape).
+# The library cblib (%{msil_shlibs}, linked with -shared) calls the
+# program's functions only through the pointers it is given. The cases:
+# - the callback longjmps to the program's buffer from below the library's
+#   frame (cb_call), and from below a library frame with a setjmp site of
+#   its own, whose wrapper filter declines (cb_protect with a callback that
+#   ignores the library's buffer);
+# - the callback longjmps to the library's buffer, which the library passed
+#   it (cb_protect): the program's __msil_longjmp arms the library frame's
+#   status block and throws, and the library's wrapper catches, with no
+#   type shared between the assemblies (plan 5.15.4, sj 6.1);
+# - the callback longjmps through the library to the program with the
+#   value 0, and its site returns 1.
+# This passes because a cross-assembly function pointer is still Phase 2's
+# managed calli of the program's method, so no native frame lies between
+# the throw and either filter. From M28 the library calls the program's
+# pointer through its native-callable thunk (an unmanaged calli, plan
+# 5.15.3): on Windows triples a longjmp through it still works, and on
+# Linux triples M28's miss path makes it fail fast with the thunk filter's
+# message (R8: the Linux runtimes cannot unwind through such a frame), so
+# M28 turns the Linux runs of this test into that loud failure. Every run
+# gets the library beside the program through %{msil_prog}'s --dep-dir.
+# Like the other %{msil_shlibs} tests it does not run with
+# msil_link_output=il (msil-prog.py refuses --shlibs there). Plan 5.15.4,
+# 5.17.13 (M27, M3/07-sjlj).
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = cblib=%t/cblib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- cblib.h
+#include <setjmp.h>
+#ifdef _WIN32
+#ifdef CBLIB_BUILD
+#define API __declspec(dllexport)
+#else
+#define API __declspec(dllimport)
+#endif
+#else
+#define API __attribute__((visibility("default")))
+#endif
+
+typedef void (*cb_plain)(void *arg);
+typedef void (*cb_jumper)(jmp_buf lib_buffer, int v);
+
+/* Calls f(arg); returns -1 if f returns. */
+API int cb_call(cb_plain f, void *arg);
+/* Sets up its own setjmp site and calls f with its buffer and v; returns
+   10 * (setjmp's result) + 1 when its site is taken, -1 if f returns. */
+API int cb_protect(cb_jumper f, int v);
+/* How often cb_protect's own site was taken. */
+API int cb_protect_taken(void);
+#--- cblib.c
+#define CBLIB_BUILD
+#include "cblib.h"
+
+static int protect_taken;
+
+API int cb_call(cb_plain f, void *arg) {
+  f(arg);
+  return -1;
+}
+
+API int cb_protect(cb_jumper f, int v) {
+  jmp_buf lb;
+  volatile int entered = 0;
+  int r = setjmp(lb);
+  if (r == 0) {
+    entered = 1;
+    f(lb, v);
+    return -1;
+  }
+  ++protect_taken;
+  return 10 * r + entered;
+}
+
+API int cb_protect_taken(void) { return protect_taken; }
+#--- main.c
+#include <setjmp.h>
+#include <stdio.h>
+
+#include "cblib.h"
+
+static jmp_buf pb;
+static int pb_value;
+
+/* Callbacks the library calls through its pointers. */
+static void jump_program(void *arg) { longjmp(pb, *(int *)arg); }
+static void jump_library(jmp_buf lib_buffer, int v) { longjmp(lib_buffer, v); }
+static void jump_program_past(jmp_buf lib_buffer, int v) {
+  (void)lib_buffer;
+  longjmp(pb, v);
+}
+
+static void to_program(void) {
+  int v = 21;
+  int r = setjmp(pb);
+  if (r == 0) {
+    cb_call(jump_program, &v);
+    puts("to_program: not reached");
+  }
+  printf("callback longjmp to the program's buffer: r=%d\n", r);
+}
+
+static void to_library(void) {
+  int got = cb_protect(jump_library, 4);
+  printf("callback longjmp to the library's buffer: %d, taken %d\n", got,
+         cb_protect_taken());
+  got = cb_protect(jump_library, 0);
+  printf("callback longjmp(b, 0) to the library's buffer: %d, taken %d\n", got,
+         cb_protect_taken());
+}
+
+static void past_library_site(void) {
+  volatile int got = 0;
+  int r = setjmp(pb);
+  if (r == 0)
+    got = cb_protect(jump_program_past, 22);
+  printf("callback longjmp to the program past a library setjmp frame: r=%d "
+         "got=%d taken %d\n",
+         r, got, cb_protect_taken());
+}
+
+static void zero_value(void) {
+  int r = setjmp(pb);
+  if (r == 0) {
+    pb_value = 0;
+    cb_call(jump_program, &pb_value);
+  }
+  printf("callback longjmp(b, 0) to the program's buffer: r=%d\n", r);
+}
+
+int main(void) {
+  to_program();
+  to_library();
+  past_library_site();
+  zero_value();
+  return 0;
+}

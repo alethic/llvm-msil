@@ -41,6 +41,17 @@
 /// Prototype-less declarations ("no-prototype") are left alone: their calls
 /// are MSILFixFunctionBitcasts'.
 ///
+/// MSILLowerSjLj (P8) reads the jmp_buf and the value of a setjmp or longjmp
+/// call from its arguments, which ExpandVariadics would already have moved
+/// into a va_list. So a variadic declaration of a setjmp name without a fixed
+/// buffer parameter (of __sigsetjmp or sigsetjmp without fixed buffer and
+/// savemask parameters), or of a longjmp name without fixed buffer and value
+/// parameters, is an error here ('a variadic declaration of '<name>' is not
+/// supported for MSIL; declare it with its C library prototype'), reported at
+/// each use: each call of it is erased (its value becomes poison) and every
+/// other use becomes null. One whose buffer (and value) are fixed parameters,
+/// such as clang's _setjmp3(ptr, i32, ...) for MSVC x86, is left alone.
+///
 /// ExpandVariadics expands only calls of the C calling convention, and in
 /// Lowering mode stops with a fatal error at any other variadic call that it
 /// reaches (an indirect one, one through an alias, or one of a function that
@@ -54,6 +65,7 @@
 #include "MSILUtilities.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -64,6 +76,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -75,6 +88,7 @@
 #include "llvm/Transforms/IPO/ExpandVariadics.h"
 #include <algorithm>
 #include <cassert>
+#include <string>
 
 using namespace llvm;
 
@@ -205,6 +219,81 @@ static bool isOnList(ArrayRef<StringLiteral> List, StringRef Name) {
 //===----------------------------------------------------------------------===//
 // The pass
 //===----------------------------------------------------------------------===//
+
+/// Whether \p F is a variadic declaration of a setjmp name without a fixed
+/// buffer parameter (and savemask parameter, for sigsetjmp), or of a longjmp
+/// name without fixed buffer and value
+/// parameters (see the file comment). Only declarations count, as for
+/// MSILLowerSjLj, and prototype-less ones keep their arguments.
+static bool isUnsupportedSjLjDeclaration(const Function &F) {
+  if (!F.isVarArg() || !F.isDeclaration() || F.isIntrinsic() ||
+      F.hasFnAttribute("no-prototype"))
+    return false;
+  unsigned NumFixed = F.getFunctionType()->getNumParams();
+  // sigsetjmp also needs its savemask fixed: MSILLowerSjLj reads it from the
+  // second argument.
+  if (F.getName() == "__sigsetjmp" || F.getName() == "sigsetjmp")
+    return NumFixed < 2;
+  if (MSIL::isSetjmpName(F.getName()))
+    return NumFixed < 1;
+  if (MSIL::isLongjmpName(F.getName()))
+    return NumFixed < 2;
+  return false;
+}
+
+/// Collects the instructions and the global values that use \p V, looking
+/// through constant expressions and aggregates.
+static void collectUsers(Value &V, SmallSetVector<Instruction *, 8> &Insts,
+                         SmallSetVector<GlobalValue *, 4> &Globals) {
+  for (User *U : V.users()) {
+    if (auto *I = dyn_cast<Instruction>(U))
+      Insts.insert(I);
+    else if (auto *GV = dyn_cast<GlobalValue>(U))
+      Globals.insert(GV);
+    else if (auto *C = dyn_cast<Constant>(U))
+      collectUsers(*C, Insts, Globals);
+  }
+}
+
+/// Reports each use of a variadic setjmp or longjmp declaration that
+/// MSILLowerSjLj cannot read (isUnsupportedSjLjDeclaration), once per
+/// instruction and once per global value whose initializer or target holds
+/// one. Each call of the declaration is erased, its value poison; every other
+/// use becomes null.
+static bool diagnoseVariadicSjLjDeclarations(Module &M) {
+  bool Changed = false;
+  for (Function &F : M) {
+    if (F.use_empty() || !isUnsupportedSjLjDeclaration(F))
+      continue;
+    std::string Text = ("a variadic declaration of '" + F.getName() +
+                        "' is not supported for MSIL; declare it with its C "
+                        "library prototype")
+                           .str();
+    LLVMContext &Ctx = F.getContext();
+    SmallSetVector<Instruction *, 8> Insts;
+    SmallSetVector<GlobalValue *, 4> Globals;
+    collectUsers(F, Insts, Globals);
+    for (Instruction *I : Insts) {
+      Ctx.diagnose(
+          DiagnosticInfoUnsupported(*I->getFunction(), Text, I->getDebugLoc()));
+      auto *CI = dyn_cast<CallInst>(I);
+      if (!CI || CI->getCalledOperand() != &F)
+        continue;
+      if (!CI->getType()->isVoidTy())
+        CI->replaceAllUsesWith(PoisonValue::get(CI->getType()));
+      CI->eraseFromParent();
+    }
+    for (GlobalValue *GV : Globals)
+      Ctx.diagnose(DiagnosticInfoGeneric(
+          (Twine(isa<GlobalVariable>(GV) ? "global variable "
+                                         : "global value ") +
+           MSIL::getIRName(*GV) + ": " + Text)
+              .str()));
+    F.replaceAllUsesWith(ConstantPointerNull::get(F.getType()));
+    Changed = true;
+  }
+  return Changed;
+}
 
 /// Whether ExpandVariadics expands the variadic function \p F
 /// (ExpandVariadics::expansionApplicableToFunction in Lowering mode, with the
@@ -343,7 +432,7 @@ bool MSILPrepareVariadicsLegacy::runOnModule(Module &M) {
   if (auto *TPC = getAnalysisIfAvailable<TargetPassConfig>())
     TT = TPC->getTM<TargetMachine>().getTargetTriple();
 
-  bool Changed = false;
+  bool Changed = diagnoseVariadicSjLjDeclarations(M);
   for (Function &F : M) {
     if (isFixedArity(F, TT)) {
       if (!F.hasFnAttribute("msil-fixed-arity"))

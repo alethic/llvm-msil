@@ -1,0 +1,16 @@
+# Run in a nested lit by ../../run-inputs.test only: a test with explicit RUN
+# lines (plan 5.12.3) that gives its own run and %{msil_also_run_check} the
+# options and arguments of %{msil_run_opts} and %{msil_run_args}. The
+# program (args-stdin.il) exits with 10 times its argument count plus the
+# digit on its stdin: three arguments and the 4 of input.txt give 34 in the
+# main run and in every run of msil_also_run.
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{ci_image} = %t/args-stdin.dll
+# REDEFINE: %{msil_also_run_image} = %{ci_image}
+# REDEFINE: %{msil_run_opts} = --stdin %t/input.txt
+# REDEFINE: %{msil_run_args} = first --runner wsl
+# RUN: %ilasm -dll -output=%{ci_image} %S/args-stdin.il
+# RUN: %msil_exec --out %{ci_image}.out %{msil_run_opts} %{ci_image} %{msil_run_args} && FileCheck --input-file=%{ci_image}.out --match-full-lines %s %{msil_also_run_check}
+# CHECK: [exit 34]
+#--- input.txt
+4

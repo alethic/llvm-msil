@@ -93,6 +93,23 @@ directory:
     br.s, brtrue.s, ...    br, brtrue, ... (the rewritten code is longer)
     unaligned., volatile.  nop, before a rewritten instruction
 
+Exception clauses (plan 5.17.16, D21's EH-clause part; the filter half
+since M27, for the whole-body '.try' with its fixed filter that wraps every
+call which may longjmp, M27's setjmp wrappers): neither pass accepts any new
+ILVerify code or PEVerify message for them; the verifiers check the clauses,
+the filter and the handler like any other code. In the copy every clause
+stays exactly as ildasm prints it: the scoped lines '.try', '{', '}  // end
+.try', 'filter', '}  // end filter', '{  // handler' and '}  // end
+handler' (or the raw '.try IL_... to IL_... filter IL_... handler IL_... to
+IL_...' form) are copied unchanged, 'endfilter' stays, and 'leave.s'
+becomes 'leave' like every other short branch. A replaced instruction keeps
+its line, so it never moves across a '.try', 'filter' or brace line, a
+prefix that waits for its instruction is written out before such a line,
+and the continuation lines of an ldftn operand never extend past one; -v
+counts the try blocks as '.try block kept'. A native int/int64 mix inside
+the protected block, the filter or the handler therefore still fails in
+pass 2. The part adds no entry to ilverify-allowed.txt.
+
 The copy also replaces each ldc.r4/ldc.r8 operand that ildasm prints in a
 form ilasm cannot parse ('inf', '-inf', 'nan', '-nan(ind)', 'nan(snan)', ...;
 other NaNs come out as bytes, which reassemble) with a float32(0x...) or
@@ -570,6 +587,16 @@ END_METHOD_RE = re.compile(
     r"^\s*\}\s*// end of (?P<glob>global )?method (?P<name>.*?)\s*$"
 )
 PREFIXES = {"unaligned.", "volatile.", "tail.", "readonly.", "constrained.", "no."}
+# The structure lines of an exception clause as ildasm prints it (plan
+# 5.17.16): the scoped form '.try' / '{' / '}  // end .try' / 'filter' /
+# '}  // end filter' / '{  // handler' / '}  // end handler' (also 'fault',
+# 'finally' and 'catch <type>'), and the raw form '.try IL_... to IL_...
+# <kind> ...' that ildasm prints when the clauses do not nest. The copy keeps
+# them unchanged, and no rewrite moves code or a prefix across one.
+EH_BOUNDARY_RE = re.compile(
+    r"^\s*(?:\.try\b|filter\b|fault\b|finally\b|catch\b|\{|\})"
+)
+EH_TRY_RE = re.compile(r"^\s*\.try\b")
 SHORT_BRANCHES = {
     "br.s",
     "brfalse.s",
@@ -715,10 +742,15 @@ def neutralize(text):
         i += 1
         m = INSTR_RE.match(line)
         if not m:
+            # A prefix never waits across a line that is not an instruction,
+            # an exception clause's '.try', 'filter' and brace lines included
+            # (plan 5.17.16): it is written out in its place.
             out.extend(l for _, l in pending_prefixes)
             pending_prefixes = []
             if IMAGE_LAYOUT_RE.match(line):
                 continue
+            if EH_TRY_RE.match(line):
+                count(".try block kept")
             lm = LOCALS_RE.match(line)
             if lm:
                 line = lm.group("lead") + " init (" + line[lm.end() :]
@@ -744,9 +776,15 @@ def neutralize(text):
             new = [stub(op, "void", "native int, int32, int32")]
         elif op == "ldftn":
             # A function address used as a native int (D2). ildasm wraps a
-            # long parameter list over several lines; drop them too.
+            # long parameter list over several lines; drop them too, but
+            # never an instruction or an exception clause's structure line.
             depth = paren_depth(rest)
-            while depth > 0 and i < len(lines):
+            while (
+                depth > 0
+                and i < len(lines)
+                and not INSTR_RE.match(lines[i])
+                and not EH_BOUNDARY_RE.match(lines[i])
+            ):
                 depth += paren_depth(lines[i])
                 i += 1
             new = ["ldc.i4.0", "conv.i"]

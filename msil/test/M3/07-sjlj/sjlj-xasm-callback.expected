@@ -1,0 +1,6 @@
+callback longjmp to the program's buffer: r=21
+callback longjmp to the library's buffer: 41, taken 1
+callback longjmp(b, 0) to the library's buffer: 11, taken 2
+callback longjmp to the program past a library setjmp frame: r=22 got=0 taken 2
+callback longjmp(b, 0) to the program's buffer: r=1
+[exit 0]

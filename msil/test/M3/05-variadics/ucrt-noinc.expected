@@ -16,8 +16,8 @@ vfprintf wrote 26
 vprintf: 4000000000 big
 vprintf wrote 24
 vsscanf 2: -3 255
-scanf on empty stdin -1, x 5
-vscanf on empty stdin -1, x 5
+scanf from stdin 2: 31 alpha
+vscanf from stdin 2: -7 beta
 fprintf to the file wrote 21
 fclose 0
 fscanf 2: 11 22
@@ -52,7 +52,9 @@ vfwprintf wrote 17
 swscanf 3 [wword]
 swscanf values 21 42
 vswscanf 2: -8 63
-wscanf on empty stdin -1, x 5
-vwscanf on empty stdin -1, x 5
+wscanf from stdin 2 [gamma_]
+wscanf value 1024
+vwscanf from stdin 2 [delta_]
+vwscanf value 88
 done
 [exit 0]

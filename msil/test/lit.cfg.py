@@ -111,6 +111,23 @@
 # under msil_require_portable), and %{msil_portable_libc_cflags} is
 # --sysroot=<it>.
 #
+# From M27 (plan 5.17.2): a test gives its program inputs through two
+# placeholders, both empty by default, which every run of the program
+# takes: the native oracle's run, the main run, each msil_also_run run, the
+# round trip's run and the .NET Framework run of %{msil_c}, %{msil_ll},
+# %{msil_prog} and %{msil_prog_loud_<L>}, and the runs of
+# %{msil_also_run_check} (see program() under "substitutions").
+# %{msil_run_opts} holds msil-run.py options (for example --stdin FILE,
+# --dep-dir DIR or --dep FILE) and stands before the run's dependency
+# options and the image, so in %{msil_prog} and %{msil_prog_loud_<L>} the
+# '--' that ends those options follows it; a run without a dependency list
+# (%{msil_c}, %{msil_ll}, %{msil_also_run_check}) has no '--', so there a
+# --dep in it must be followed by another option. %{msil_run_args} holds
+# the program's arguments and follows the image; none may start with
+# --step= (msil-steps.py starts a step there). update-expected.py runs the
+# native program with the same REDEFINE: values; jitall and msil-verify.py
+# take neither.
+#
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
 # compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
@@ -656,6 +673,10 @@ for o in opt_levels:
         fatal("--param msil_opt_levels: unknown level %r (use O0,O1,O2,O3,Os,Oz)" % o)
 if not opt_levels:
     fatal("--param msil_opt_levels is empty")
+# The checked list for subdirectory lit.local.cfg files (Programs/lua/'s
+# lua-level=<L> features), so they use this validated value and default
+# instead of re-parsing --param msil_opt_levels.
+config.msil_opt_levels = list(opt_levels)
 
 # msil_require_exec=1: msil/test/M1/lit.local.cfg makes a missing msil-exec a
 # configuration error instead of UNSUPPORTED (the gate legs pass it).
@@ -3439,10 +3460,14 @@ for _major, _tc0 in also_run:
 config.msil_also_run_cmds = also_run_cmds
 
 # %{msil_also_run_check} (see "more runtimes"; plan 5.12.3): the runs of
-# msil_also_run for a test with explicit RUN lines.
+# msil_also_run for a test with explicit RUN lines. Each run takes the
+# program inputs %{msil_run_opts} before the image and %{msil_run_args}
+# after it (plan 5.17.2, M27; see program() under "substitutions"), as the
+# composites' runs do.
 also_run_check = "".join(
     f" %if msil-jitall %{{ && {jit} %{{msil_also_run_image}} %}}"
-    f" && {run} --out %{{msil_also_run_image}}.{tag}.out %{{msil_also_run_image}}"
+    f" && {run} --out %{{msil_also_run_image}}.{tag}.out %{{msil_run_opts}}"
+    " %{msil_also_run_image} %{msil_run_args}"
     f" && FileCheck --input-file=%{{msil_also_run_image}}.{tag}.out"
     " --match-full-lines %s"
     for tag, jit, run in also_run_cmds
@@ -3609,6 +3634,16 @@ def when(feature, text):
     return f" %if {feature} %{{{text} %}}"
 
 
+def program(image, dep=""):
+    """The end of every run of a composite's program (plan 5.17.2, M27): the
+    placeholder %{msil_run_opts} (msil-run.py options such as --stdin FILE
+    or --dep-dir DIR), the dependency options dep (dep_args, which end with
+    '--'), the image, then the placeholder %{msil_run_args} (the program's
+    arguments). Both are empty by default, so a run that a test does not
+    give them keeps its words."""
+    return f" %{{msil_run_opts}}{dep} {image} %{{msil_run_args}}"
+
+
 def native_run_step(t, exe, dep=""):
     """The native oracle's run of <exe> against the expected file. dep: the
     dependency options of the run (dep_args)."""
@@ -3617,7 +3652,7 @@ def native_run_step(t, exe, dep=""):
         step(
             "native-run",
             "%msil_exec --native --expected-rule '%{msil_expected_rule}'"
-            f" --expect %{{msil_expect}} --out {t}.native.out{dep} {exe}",
+            f" --expect %{{msil_expect}} --out {t}.native.out" + program(exe, dep),
         ),
     )
 
@@ -3660,7 +3695,8 @@ def roundtrip_steps(t, image=None, dep=""):
             "msil-roundtrip",
             step(
                 "roundtrip-run",
-                f"%msil_exec --expect %{{msil_expect}} --out {t}.rt.out{dep} {rt}",
+                f"%msil_exec --expect %{{msil_expect}} --out {t}.rt.out"
+                + program(rt, dep),
             ),
         ),
     )
@@ -3673,13 +3709,15 @@ def run_steps(t, image, dep=""):
     options of the runs (dep_args)."""
     text = when("msil-jitall", step("jitall", f"%msil_jitall{dep} {image}"))
     text += step(
-        "run", f"%msil_exec --expect %{{msil_expect}} --out {t}.out{dep} {image}"
+        "run",
+        f"%msil_exec --expect %{{msil_expect}} --out {t}.out" + program(image, dep),
     )
     for tag, jit, run in also_run_cmds:
         text += when("msil-jitall", step(f"{tag}-jitall", f"{jit}{dep} {image}"))
         text += step(
             f"{tag}-run",
-            f"{run} --expect %{{msil_expect}} --out {t}.{tag}.out{dep} {image}",
+            f"{run} --expect %{{msil_expect}} --out {t}.{tag}.out"
+            + program(image, dep),
         )
     return text
 
@@ -3690,7 +3728,7 @@ def netfx_run_step(t, image, dep=""):
     return step(
         "netfx-run",
         "%msil_exec --netfx %{msil_netfx_skip} --expect %{msil_expect}"
-        f" --out {t}.netfx.out{dep} {image}",
+        f" --out {t}.netfx.out" + program(image, dep),
     )
 
 
@@ -4059,7 +4097,7 @@ def loud_pipeline(level):
     steps += step(
         "run",
         f"%msil_exec --stderr-out {t}.err --expect %{{msil_expect}}"
-        f" --out {t}.out{dep} {exe}",
+        f" --out {t}.out" + program(exe, dep),
     )
     steps += check("run-check", f"{t}.err")
     for tag, jit, run in also_run_cmds:
@@ -4067,7 +4105,7 @@ def loud_pipeline(level):
         steps += step(
             f"{tag}-run",
             f"{run} --stderr-out {t}.{tag}.err --expect %{{msil_expect}}"
-            f" --out {t}.{tag}.out{dep} {exe}",
+            f" --out {t}.{tag}.out" + program(exe, dep),
         )
         steps += check(f"{tag}-check", f"{t}.{tag}.err")
     steps += when(
@@ -4076,7 +4114,7 @@ def loud_pipeline(level):
             "netfx-run",
             "%msil_exec --netfx %{msil_netfx_skip}"
             f" --stderr-out {t}.netfx.err --expect %{{msil_expect}}"
-            f" --out {t}.netfx.out{dep} {exe}",
+            f" --out {t}.netfx.out" + program(exe, dep),
         )
         + check("netfx-check", f"{t}.netfx.err"),
     )
@@ -4167,6 +4205,13 @@ substitutions = [
     # (recursiveExpansionLimit).
     ("%{msil_also_run_check}", also_run_check),
     ("%{msil_also_run_image}", "msil-also-run-image-not-set"),
+    # The program inputs (plan 5.17.2, M27; see program()): every run
+    # of a composite's program and of %{msil_also_run_check} takes
+    # %{msil_run_opts} before its dependency options and the image and
+    # %{msil_run_args} after the image. After the composites and the check,
+    # so a test's REDEFINE values expand in the same pass.
+    ("%{msil_run_opts}", ""),
+    ("%{msil_run_args}", ""),
     # The exit corpus' cache (see "exit corpus"; plan 5.12.3, M23).
     ("%{msil_corpus}", slashes(corpus_dir) if corpus_dir else "msil-corpus-not-found"),
     # The MSIL link's harness flags (plan 5.12.3, M15; see msil_ldflags):

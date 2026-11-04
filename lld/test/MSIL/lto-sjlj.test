@@ -1,0 +1,431 @@
+## setjmp and longjmp through LTO (ImplementationPlan.md 5.15.4, M27.c and
+## M27.f; the section 12 row 'M27 5.9.6 and 5.10.13 amended (setjmp family
+## under --lto-emit-asm)'; 5.14.2 N4, 5.10.13, 5.10.14). Bitcode that calls
+## the setjmp family links with no N4 error, as a PE and under
+## --lto-emit-asm:
+## - LTO writing objects needs nothing new: code generation lowers the
+##   family (MSILLowerSjLj), so the LTO object references none of it and
+##   late binding after LTO sees no family name;
+## - under --lto-emit-asm msil-ld binds the merged module before code
+##   generation, and then neither binds nor reports an N4 name (the libc.so.6
+##   stand-in and the import library export the family, and --print-imports
+##   lists none of it); code generation lowers every call;
+## - a Linux sigsetjmp site whose mask is not the constant 0 saves and
+##   restores the signal mask through sigprocmask (5.15.4 steps 2 and 4), a
+##   function that code generation calls: under --lto-emit-asm, because the
+##   merged module declares __sigsetjmp, msil-ld binds sigprocmask quietly
+##   as a codegen-called function, so the text holds its P/Invoke and
+##   --print-imports lists it; an LTO PE binds it through the LTO object.
+## The text holds the wrapper's whole-body .try with 5.15.4's filter
+## (M27.a's labels '@EH<f>_<k>', [mscorlib] scopes in whole-program text),
+## '__msil_longjmp' and '__msil_sjlj_throw', and assembles with ilasm; the
+## images hold a filter clause and the helpers. windows-msvc spells setjmp
+## _setjmp(buf, frame address) and needs no mask.
+## A -shared LTO link of two bitcode modules with setjmp callers and
+## longjmps (obj-sjlj.test's a.ll and b.ll) exports their functions and no
+## '__msil_*' name (5.15.4: the helpers are hidden and the wrappers
+## internal), so the helpers and wrappers stay in <Module>, as in an object
+## link, with one copy of each helper.
+## An undefined function called after a setjmp site is reported against the
+## C function that calls it (the section 12 row '5.9.14 and 5.10.14 as built
+## (setjmp wrappers in the reference report)'): the LTO pipeline sees the
+## call before code generation wraps it, and obj-sjlj.test pins the object
+## link.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj libc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 libc.o -o libc.so.6
+# RUN: llvm-lib /machine:x64 /def:ucrt.def /out:ucrt.lib
+# RUN: llvm-as lnx.ll -o lnx.bc
+# RUN: llvm-as win.ll -o win.bc
+# RUN: llvm-as a.ll -o a.bc
+# RUN: llvm-as b.ll -o b.bc
+# RUN: llvm-as undef.ll -o undef.bc
+# RUN: llvm-as undef-win.ll -o undef-win.bc
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## Linux, an image: no diagnostic; puts and sigprocmask are the only
+## imports.
+# RUN: msil-ld --print-imports lnx.bc libc.so.6 -o lnx.exe > lnx-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-LNX --input-file=lnx-imports.txt
+# IMP-LNX:      {{^}}puts -> libc.so.6!puts [function, -]{{$}}
+# IMP-LNX-NEXT: {{^}}sigprocmask -> libc.so.6!sigprocmask [function, -]{{$}}
+# IMP-LNX-NEXT: {{^}}libc.so.6: version floor -{{$}}
+# IMP-LNX-NOT:  {{.}}
+# RUN: llvm-cil-dump lnx.exe > lnx.txt
+# RUN: FileCheck %s %{crash} --check-prefixes=IMAGE,IMAGE-LNX --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefix=ONE-LJ --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefix=ONE-THROW --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefix=IMAGE-NONE --input-file=lnx.txt
+# IMAGE-DAG:     {{^}}  .method '__msil_longjmp' void(native int, int32) flags={{.+}}{{$}}
+# IMAGE-DAG:     {{^}}  .method '__msil_sjlj_throw' void(native int) flags={{.+}}{{$}}
+# IMAGE-DAG:     {{^}}    .try L0 to L[[F:[0-9]+]] filter L[[F]] handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# IMAGE-LNX-DAG: {{^}}  .method 'sigprocmask' int32(int32, native int, native int) flags={{.+}}{{$}}
+## The implicit patterns of a -DAG-only prefix check only the text before
+## its first match, so the absent names have a prefix of their own.
+# IMAGE-NONE-NOT: {{'(_setjmp|setjmp|__sigsetjmp|sigsetjmp|_setjmpex|longjmp|_longjmp|siglongjmp|__longjmp_chk)'}}
+
+## Linux, --lto-emit-asm: no diagnostic, the same imports.
+# RUN: msil-ld --lto-emit-asm --print-imports lnx.bc libc.so.6 -o lnx.il > lnx-text-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-LNX --input-file=lnx-text-imports.txt
+# RUN: FileCheck %s %{crash} --check-prefix=TEXT --input-file=lnx.il
+# RUN: FileCheck %s --check-prefix=LJ-TEXT --input-file=lnx.il
+# RUN: FileCheck %s --check-prefix=THROW-TEXT --input-file=lnx.il
+# RUN: FileCheck %s --check-prefix=TEXT-LNX --input-file=lnx.il
+# RUN: FileCheck %s --check-prefix=TEXT-NONE --input-file=lnx.il
+# RUN: %if ilasm %{ %ilasm-verify -output=lnx-text.dll lnx.il %}
+
+## The wrapper's whole-body .try and filter.
+# TEXT:      {{^}}.method {{.+}} '__msil_sjlj_invoke.{{[0-9]+}}'({{.*}}) cil managed{{$}}
+# TEXT:      {{^}}  .try {{[{]}}{{$}}
+# TEXT-NEXT: {{^}}@EH[[F:[0-9]+]]_0:{{$}}
+# TEXT:      {{^}}  } filter {{[{]}}{{$}}
+# TEXT-NEXT: {{^}}@EH[[F]]_1:{{$}}
+# TEXT-NEXT: {{^}}  isinst [mscorlib]System.Runtime.InteropServices.ExternalException{{$}}
+# TEXT:      {{^}}  callvirt instance int32 [mscorlib]System.Exception::get_HResult(){{$}}
+# TEXT:      {{^}}  endfilter{{$}}
+# TEXT-NEXT: {{^}}  } {{[{]}}{{$}}
+# TEXT-NEXT: {{^}}@EH[[F]]_5:{{$}}
+# TEXT-NEXT: {{^}}  pop{{$}}
+# TEXT-NEXT: {{^}}  leave.s @EH[[F]]_6{{$}}
+# TEXT-NEXT: {{^}}  }{{$}}
+# TEXT-NEXT: {{^}}@EH[[F]]_6:{{$}}
+## The helpers, one definition each; the throw helper's body is 5.15.4's.
+# LJ-TEXT:         {{^}}.method {{.+}} void '__msil_longjmp'(native int, int32) cil managed{{$}}
+# LJ-TEXT-NOT:     {{^}}.method {{.+}} '__msil_longjmp
+# THROW-TEXT:      {{^}}.method {{.+}} void '__msil_sjlj_throw'(native int) cil managed{{$}}
+# THROW-TEXT:      {{^}}  .maxstack 3{{$}}
+# THROW-TEXT:      {{^}}  ldnull{{$}}
+# THROW-TEXT-NEXT: {{^}}  ldarg.0{{$}}
+# THROW-TEXT-NEXT: {{^}}  conv.i4{{$}}
+# THROW-TEXT-NEXT: {{^}}  newobj instance void [mscorlib]System.Runtime.InteropServices.ExternalException::.ctor(string, int32){{$}}
+# THROW-TEXT-NEXT: {{^}}  throw{{$}}
+# THROW-TEXT-NOT:  {{^}}  {{[a-z]}}
+# THROW-TEXT:      {{^}}} // end of method '__msil_sjlj_throw'{{$}}
+# THROW-TEXT-NOT:  {{^}}.method {{.+}} '__msil_sjlj_throw
+## sigprocmask, called by the lowered site and its restore block and bound
+## quietly.
+# TEXT-LNX: {{^}}  call int32 'sigprocmask'(int32, native int, native int){{$}}
+# TEXT-LNX: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'sigprocmask'(int32, native int, native int) cil managed preservesig {}{{$}}
+## No family name is imported or called.
+# TEXT-NONE-NOT: {{pinvokeimpl.*'(_setjmp|setjmp|__sigsetjmp|sigsetjmp|_setjmpex|longjmp|_longjmp|siglongjmp|__longjmp_chk)'}}
+# TEXT-NONE-NOT: {{call .*'(_setjmp|setjmp|__sigsetjmp|sigsetjmp|_setjmpex|longjmp|_longjmp|siglongjmp|__longjmp_chk)'\(}}
+
+## windows-msvc, an image and --lto-emit-asm: no diagnostic; puts is the
+## only import.
+# RUN: msil-ld --print-imports win.bc ucrt.lib -o win.exe > win-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-WIN --input-file=win-imports.txt
+# IMP-WIN:      {{^}}puts -> ucrtbase.dll!puts [function, -]{{$}}
+# IMP-WIN-NOT:  {{.}}
+# RUN: llvm-cil-dump win.exe > win.txt
+# RUN: FileCheck %s %{crash} --check-prefix=IMAGE --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=ONE-LJ --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=ONE-THROW --input-file=win.txt
+# RUN: FileCheck %s --check-prefixes=IMAGE-NONE,NOMASK --input-file=win.txt
+# RUN: msil-ld --lto-emit-asm --print-imports win.bc ucrt.lib -o win.il > win-text-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-WIN --input-file=win-text-imports.txt
+# RUN: FileCheck %s %{crash} --check-prefix=TEXT --input-file=win.il
+# RUN: FileCheck %s --check-prefix=LJ-TEXT --input-file=win.il
+# RUN: FileCheck %s --check-prefix=THROW-TEXT --input-file=win.il
+# RUN: FileCheck %s --check-prefixes=TEXT-NONE,NOMASK --input-file=win.il
+# RUN: %if ilasm %{ %ilasm-verify -output=win-text.dll win.il %}
+# NOMASK-NOT: sigprocmask
+
+## -shared through LTO: the functions are exported, no '__msil_*' name is;
+## the helpers and the wrappers stay in <Module>.
+# RUN: msil-ld -shared a.bc b.bc libc.so.6 -o sjl.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info sjl.dll | FileCheck %s --check-prefix=SYMTAB -DCLS=sjl --implicit-check-not=__msil_
+# RUN: llvm-cil-dump sjl.dll > sjl.txt
+# RUN: %{listing} members sjl.txt sjl > sjl-members.txt
+# RUN: FileCheck %s --check-prefix=EXPORTS -DCLS=sjl --input-file=sjl-members.txt
+# RUN: FileCheck %s --check-prefix=NOHELPER --input-file=sjl-members.txt
+# RUN: %{listing} class sjl.txt '<Module>' > sjl-module.txt
+# RUN: FileCheck %s --check-prefix=MODULE --input-file=sjl-module.txt
+# RUN: FileCheck %s --check-prefix=ONE-LJ --input-file=sjl-module.txt
+# RUN: FileCheck %s --check-prefix=ONE-THROW --input-file=sjl-module.txt
+# SYMTAB:      {{^}}SymbolTable v1.0 {{.+}}{{$}}
+# SYMTAB-NEXT: {{^}}ExportClass '[[CLS]]'{{$}}
+# EXPORTS:     {{^}}.class '[[CLS]]' flags={{.+}}{{$}}
+# EXPORTS-DAG: {{^}}  .method 'jump_a' void(native int) flags=0x0016 impl=0x0000{{$}}
+# EXPORTS-DAG: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# EXPORTS-DAG: {{^}}  .method 'run_b' int32() flags=0x0016 impl=0x0000{{$}}
+# EXPORTS-DAG: {{^}}  .method 'step_b' int32(native int) flags=0x0016 impl=0x0000{{$}}
+## A -DAG-only prefix's implicit patterns check only the text before its
+## first match, so the absent names have a prefix of their own.
+# NOHELPER-NOT: __msil_
+# MODULE-DAG:  {{^}}  .method '__msil_longjmp' void(native int, int32) flags={{.+}}{{$}}
+# MODULE-DAG:  {{^}}  .method '__msil_sjlj_throw' void(native int) flags={{.+}}{{$}}
+# MODULE-DAG:  {{^}}  .method '__msil_sjlj_invoke.{{[^']+}}' {{.+}}{{$}}
+## One copy of each helper: a -NOT of the helper's name after its first
+## match fails on a second copy (renamed or not) wherever it sorts. These
+## are prefixes of their own because a -NOT between -DAG lines would fix
+## the order of the -DAG matches.
+# ONE-LJ:        {{^}}  .method '__msil_longjmp' void(native int, int32) flags={{.+}}{{$}}
+# ONE-LJ-NOT:    {{^}}  .method '__msil_longjmp
+# ONE-THROW:     {{^}}  .method '__msil_sjlj_throw' void(native int) flags={{.+}}{{$}}
+# ONE-THROW-NOT: {{^}}  .method '__msil_sjlj_throw
+
+## An undefined function called after a setjmp site in main: the reference
+## line names main, never a wrapper.
+# RUN: not msil-ld undef.bc libc.so.6 -o undef.exe 2>&1 \
+# RUN:   | FileCheck %s %{crash} --check-prefix=UNDEF -DOBJ=undef.bc --implicit-check-not=__msil_sjlj_invoke
+# RUN: not msil-ld undef-win.bc ucrt.lib -o undef-win.exe 2>&1 \
+# RUN:   | FileCheck %s %{crash} --check-prefix=UNDEF -DOBJ=undef-win.bc --implicit-check-not=__msil_sjlj_invoke
+# UNDEF:      {{^}}msil-ld: error: undefined symbol: undefined_fn{{$}}
+# UNDEF-NEXT: {{^}}>>> referenced by [[OBJ]]:(main){{$}}
+
+#--- libc.yaml
+## A libc.so.6 stand-in: puts, sigprocmask and every Linux name of the
+## family.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x50
+Symbols:
+  - { Name: puts,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0,  Size: 8 }
+  - { Name: sigprocmask,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8,  Size: 8 }
+  - { Name: _setjmp,       Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: setjmp,        Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: __sigsetjmp,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: longjmp,       Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: _longjmp,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: siglongjmp,    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+  - { Name: __longjmp_chk, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x40, Size: 8 }
+
+#--- ucrt.def
+LIBRARY ucrtbase.dll
+EXPORTS
+  puts
+  _setjmp
+  _setjmpex
+  longjmp
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; static jmp_buf buf; static sigjmp_buf sbuf;
+;; __attribute__((noinline)) void jump(jmp_buf b, int v) { longjmp(b, v); }
+;; __attribute__((noinline)) void sigjump(sigjmp_buf b) { siglongjmp(b, 5); }
+;; __attribute__((noinline)) int masked(int mask) {
+;;   int r = sigsetjmp(sbuf, mask);   /* glibc: __sigsetjmp */
+;;   if (r == 0) sigjump(sbuf);
+;;   return r;
+;; }
+;; int main(int argc, char **argv) {
+;;   int r = setjmp(buf);             /* glibc: _setjmp */
+;;   if (r == 0) jump(buf, 1);
+;;   int m = masked(argc);            /* a mask known only at run time */
+;;   puts("ok");
+;;   return r + m;
+;; }
+@buf = internal global [200 x i8] zeroinitializer, align 16
+@sbuf = internal global [200 x i8] zeroinitializer, align 16
+@msg = private constant [3 x i8] c"ok\00"
+
+declare i32 @_setjmp(ptr) returns_twice
+declare i32 @__sigsetjmp(ptr, i32) returns_twice
+declare void @longjmp(ptr, i32) noreturn
+declare void @siglongjmp(ptr, i32) noreturn
+declare i32 @puts(ptr)
+
+define void @jump(ptr %b, i32 %v) noinline {
+  call void @longjmp(ptr %b, i32 %v)
+  unreachable
+}
+
+define void @sigjump(ptr %b) noinline {
+  call void @siglongjmp(ptr %b, i32 5)
+  unreachable
+}
+
+define i32 @masked(i32 %mask) noinline {
+entry:
+  %r = call i32 @__sigsetjmp(ptr @sbuf, i32 %mask)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @sigjump(ptr @sbuf)
+  unreachable
+done:
+  ret i32 %r
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+entry:
+  %r = call i32 @_setjmp(ptr @buf)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %again
+first:
+  call void @jump(ptr @buf, i32 1)
+  unreachable
+again:
+  %m = call i32 @masked(i32 %argc)
+  %p = call i32 @puts(ptr @msg)
+  %s = add i32 %r, %m
+  ret i32 %s
+}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; lnx.ll's main for the UCRT: setjmp is _setjmp(buf, frame address).
+@buf = internal global [256 x i8] zeroinitializer, align 16
+@msg = private constant [3 x i8] c"ok\00"
+
+declare i32 @_setjmp(ptr, ptr) returns_twice
+declare ptr @llvm.frameaddress.p0(i32)
+declare void @longjmp(ptr, i32) noreturn
+declare i32 @puts(ptr)
+
+define void @jump(ptr %b, i32 %v) noinline {
+  call void @longjmp(ptr %b, i32 %v)
+  unreachable
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+entry:
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %r = call i32 @_setjmp(ptr @buf, ptr %fp)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %again
+first:
+  call void @jump(ptr @buf, i32 1)
+  unreachable
+again:
+  %p = call i32 @puts(ptr @msg)
+  ret i32 %r
+}
+
+#--- a.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; static jmp_buf bufa;
+;; void jump_a(jmp_buf b) { longjmp(b, 2); }
+;; int main(void) {
+;;   int r = setjmp(bufa);   /* glibc: _setjmp */
+;;   if (r == 0) return step_b(bufa);
+;;   return r + run_b();
+;; }
+@bufa = internal global [200 x i8] zeroinitializer, align 16
+
+declare i32 @_setjmp(ptr) returns_twice
+declare void @longjmp(ptr, i32) noreturn
+declare i32 @step_b(ptr)
+declare i32 @run_b()
+
+define void @jump_a(ptr %b) {
+  call void @longjmp(ptr %b, i32 2)
+  unreachable
+}
+
+define i32 @main() {
+entry:
+  %r = call i32 @_setjmp(ptr @bufa)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %again
+first:
+  %x = call i32 @step_b(ptr @bufa)
+  ret i32 %x
+again:
+  %y = call i32 @run_b()
+  %s = add i32 %r, %y
+  ret i32 %s
+}
+
+#--- b.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; static jmp_buf bufb;
+;; int step_b(jmp_buf b) { puts("b"); longjmp(b, 1); }
+;; int run_b(void) {
+;;   int r = setjmp(bufb);
+;;   if (r == 0) jump_a(bufb);
+;;   return r;
+;; }
+@bufb = internal global [200 x i8] zeroinitializer, align 16
+@msg = private constant [2 x i8] c"b\00"
+
+declare i32 @_setjmp(ptr) returns_twice
+declare void @longjmp(ptr, i32) noreturn
+declare i32 @puts(ptr)
+declare void @jump_a(ptr)
+
+define i32 @step_b(ptr %b) {
+  %p = call i32 @puts(ptr @msg)
+  call void @longjmp(ptr %b, i32 1)
+  unreachable
+}
+
+define i32 @run_b() {
+entry:
+  %r = call i32 @_setjmp(ptr @bufb)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @jump_a(ptr @bufb)
+  unreachable
+done:
+  ret i32 %r
+}
+
+#--- undef.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; static jmp_buf bufu; void undefined_fn(int);
+;; int main(void) { if (setjmp(bufu) == 0) undefined_fn(1); return 0; }
+@bufu = internal global [200 x i8] zeroinitializer, align 16
+
+declare i32 @_setjmp(ptr) returns_twice
+declare void @undefined_fn(i32)
+
+define i32 @main() {
+entry:
+  %r = call i32 @_setjmp(ptr @bufu)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @undefined_fn(i32 1)
+  br label %done
+done:
+  ret i32 0
+}
+
+#--- undef-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; undef.ll for the UCRT.
+@bufu = internal global [256 x i8] zeroinitializer, align 16
+
+declare i32 @_setjmp(ptr, ptr) returns_twice
+declare ptr @llvm.frameaddress.p0(i32)
+declare void @undefined_fn(i32)
+
+define i32 @main() {
+entry:
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %r = call i32 @_setjmp(ptr @bufu, ptr %fp)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @undefined_fn(i32 1)
+  br label %done
+done:
+  ret i32 0
+}

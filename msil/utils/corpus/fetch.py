@@ -1793,9 +1793,11 @@ def self_test():
                     "kissfft",
                     "jsmn",
                     "c-testsuite",
+                    "lua",
+                    "lua-tests",
                 ]
             ),
-            "manifest.json is valid and has the ten exit-corpus entries",
+            "manifest.json is valid and has the twelve exit-corpus entries",
             repr(got),
         )
     finally:

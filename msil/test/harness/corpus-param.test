@@ -41,7 +41,7 @@
 # (3)
 # RUN: %python %S/Inputs/make-fake-corpus.py %S/../../utils/corpus/manifest.json %t.ok
 # RUN: %{harness_lit} -a --param msil_linux_sysroot= --param msil_corpus_dir=%t.ok --param msil_require_corpus=1 %S/Inputs/nested-corpus > %t.3.log 2>&1
-# RUN: %{harness_check} contains %t.3.log "note: msil: exit corpus: \S*ok \(zlib, tinf, monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn, c-testsuite\)$" "^PASS: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test " "^# \| feature msil-corpus$" "^# \| feature msil-corpus-zlib$" "^# \| feature msil-corpus-coremark$" "^# \| feature msil-corpus-c-testsuite$" "^# \| corpus \S*ok$"
+# RUN: %{harness_check} contains %t.3.log "note: msil: exit corpus: \S*ok \(zlib, tinf, monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn, c-testsuite, lua, lua-tests\)$" "^PASS: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test " "^# \| feature msil-corpus$" "^# \| feature msil-corpus-zlib$" "^# \| feature msil-corpus-coremark$" "^# \| feature msil-corpus-c-testsuite$" "^# \| corpus \S*ok$"
 
 # (4)
 # RUN: %python %S/Inputs/make-fake-corpus.py %S/../../utils/corpus/manifest.json %t.nocm --omit coremark
@@ -53,6 +53,6 @@
 
 # (5)
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.ok --param msil_corpus_skip=coremark,nosuch %S/Inputs/nested-corpus > %t.5.log 2>&1
-# RUN: %{harness_check} contains %t.5.log "fatal: msil: --param msil_corpus_skip: nosuch is not in \S+manifest\.json \(entries: zlib, tinf, monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn, c-testsuite\)$"
+# RUN: %{harness_check} contains %t.5.log "fatal: msil: --param msil_corpus_skip: nosuch is not in \S+manifest\.json \(entries: zlib, tinf, monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn, c-testsuite, lua, lua-tests\)$"
 # RUN: %{harness_lit} -a --param msil_linux_sysroot= --param msil_corpus_dir= %S/Inputs/nested-corpus > %t.5e.log 2>&1
 # RUN: %{harness_check} contains %t.5e.log "note: msil: exit corpus not available \(msil/test/Programs is UNSUPPORTED\): disabled by an empty --param msil_corpus_dir=$" "^UNSUPPORTED: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test "

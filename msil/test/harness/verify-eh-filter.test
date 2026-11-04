@@ -1,0 +1,31 @@
+# D21's EH-filter part (plan 5.17.16, M27): a setjmp wrapper whose whole body
+# is one .try with M27.a's fixed filter, which reads the armed status block
+# through 'ldind.i4' on a native int, must pass both passes of msil-verify.py
+# with no new allowance (Inputs/eh-filter.il). The neutralized copy of pass 2
+# (kept with --keep-copy) must keep the clause as ildasm prints it, the
+# scoped '.try { } filter { } { }' blocks with 'endfilter' as the filter's
+# last instruction and the filter's load inside the filter block, and turn
+# both 'leave.s' (one ends the protected block, one the handler) into
+# 'leave' like every short branch; -v counts the kept .try block. The module
+# runs on the default runtime: the filter catches the throw of an armed
+# block, so the status is 73 (Inputs/eh-filter.il).
+# REQUIRES: msil-ilverify, msil-peverify, msil-ildasm
+
+# RUN: rm -rf %t.d %t.copy && mkdir -p %t.d
+# RUN: %ilasm -dll -output=%t.d/eh-filter.dll %S/Inputs/eh-filter.il
+# RUN: %msil_verify -v --keep-copy %t.copy %t.d/eh-filter.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "\b1 x \.try block kept\b" "^msil-verify: OK$"
+# RUN: %{harness_check} lacks %t.log "disallowed"
+
+# The copy: the three blocks in order, each closed where ildasm closes it.
+# RUN: %{harness_check} contains %t.copy/eh-filter.il "^\s*\.try\n\s*\{\n(?:(?!^\s*\}).*\n|\s*\n)*?\s*\}\s*// end \.try\n\s*filter\n\s*\{\n(?:(?!^\s*\}).*\n|\s*\n)*?\s*IL_\w+:\s+endfilter\n\s*\}\s*// end filter\n\s*\{\s*// handler\n(?:(?!^\s*\}).*\n|\s*\n)*?\s*\}\s*// end handler\n\s*IL_\w+:\s+ldloc\.0\n\s*IL_\w+:\s+ret$"
+# The filter's load of the status block stays inside the filter block.
+# RUN: %{harness_check} contains %t.copy/eh-filter.il "^\s*filter\n\s*\{\n(?:(?!^\s*\}).*\n|\s*\n)*?.*ldind\.i4.*\n(?:(?!^\s*\}).*\n|\s*\n)*?\s*IL_\w+:\s+endfilter\n"
+# Both returns of the protected block and the handler's exit leave to the
+# tail with 'leave'; no 'leave.s' is left.
+# RUN: %{harness_check} contains %t.copy/eh-filter.il "^\s*IL_\w+:\s+leave\s+(IL_\w+)\n(?:\s*\n)*(?:(?!^\s*\}).*\n|\s*\n)*?\s*IL_\w+:\s+leave\s+\1\n(?:\s*\n)*\s*\}\s*// end \.try$" "^\s*IL_\w+:\s+pop\n\s*IL_\w+:\s+leave\s+IL_\w+\n(?:\s*\n)*\s*\}\s*// end handler$"
+# RUN: %{harness_check} lacks %t.copy/eh-filter.il "\bleave\.s\b"
+
+# RUN: %if msil-jitall %{ %msil_jitall %t.d/eh-filter.dll %}
+# RUN: %msil_exec --out %t.out %t.d/eh-filter.dll
+# RUN: %{harness_check} equals %t.out "[exit 73]"

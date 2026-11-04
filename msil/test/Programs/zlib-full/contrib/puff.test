@@ -1,0 +1,24 @@
+# zlib 1.3.2's contrib/puff, hosted: puff() decodes the 'cov' target's deflate streams, zeros.raw and built streams, and longjmps out of every truncated one.
+# puff.c (unmodified, from the corpus cache) in libpuff.a with the driver
+# puff_main.c, which runs puff() as contrib/puff/pufftest.c does (size the
+# output, then decode into a buffer of that size, or of half of it for the
+# Makefile's -f lines) on the 19 streams of contrib/puff/Makefile's 'cov'
+# target, on zeros.raw, and on streams it builds itself (a stored block and
+# a fixed-Huffman block with literals and matches, stored blocks only, a
+# match before the start of the output), with every proper prefix of the
+# built streams. Running out of input is puff()'s longjmp from bits() or
+# decode() to its setjmp (return code 2); the 'cov' streams also reach its
+# other return codes, among them the Makefile's expected exit statuses 254,
+# 246, 249, 245, 253, 252, 251, 248, 250 and 247. zeros.raw comes from the
+# corpus cache: %{msil_run_opts} copies it next to the program for every run
+# (native oracle, main, .NET Framework, each msil_also_run entry), and
+# %{msil_run_args} names it. Built at every level of the leg and compared
+# with the hosted native build of the same sources; the transcript ends
+# [exit 0]. Plan 5.17.15 (M27).
+# REQUIRES: msil-corpus-zlib
+# REDEFINE: %{msil_srcs} = %S/puff_main.c
+# REDEFINE: %{msil_archives} = puff=%{msil_corpus}/zlib-1.3.2/contrib/puff/puff.c
+# REDEFINE: %{msil_copts} = -I%{msil_corpus}/zlib-1.3.2/contrib/puff
+# REDEFINE: %{msil_run_opts} = --dep %{msil_corpus}/zlib-1.3.2/contrib/puff/zeros.raw
+# REDEFINE: %{msil_run_args} = zeros.raw
+# RUN: %{msil_prog}

@@ -1,0 +1,45 @@
+# A longjmp to a buffer that no setjmp site filled is a loud failure: __msil_longjmp refuses it and the process ends on the unhandled System.Runtime.InteropServices.ExternalException instead of returning to any site.
+# MSILLowerSjLj's __msil_longjmp (plan 5.15.4) arms a target only when the
+# buffer starts with the 'MSJ1' magic that a setjmp site writes; any other
+# buffer (here one that memset cleared) throws __msil_sjlj_throw(null),
+# ExternalException(null, 0), and an HResult of 0 is no armed status
+# block's, so every wrapper filter declines it: the wrapper around the call
+# that longjmps, inside main's own setjmp site whose block is not armed,
+# declines too, and the program must not come back from that site. The
+# transcript is hand-written (plan 5.17.4: a loud failure has no native
+# oracle; natively the jump is undefined behaviour): the line printed before
+# the jump, then the unhandled exception. The LOUD line matches the
+# program's own stderr line, written before the jump; the refusal throws
+# with no message of its own, and the runtime's report of the exception is
+# never matched. LOUD-NOT pins that the site never returned. Plan 5.15.4,
+# 5.17.4, 5.17.13 (M27, M3/07-sjlj).
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/nobuf.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: nobuf: longjmp to a buffer setjmp never filled
+# LOUD-NOT: nobuf: returned to the site
+#--- nobuf.c
+#include <setjmp.h>
+#include <stdio.h>
+#include <string.h>
+
+static jmp_buf outer, bogus;
+
+__attribute__((noinline)) static void jump(jmp_buf b, int v) { longjmp(b, v); }
+
+int main(void) {
+  memset(bogus, 0, sizeof bogus);
+  int r = setjmp(outer);
+  if (r == 0) {
+    puts("jumping to a buffer setjmp never filled");
+    fflush(stdout);
+    fputs("nobuf: longjmp to a buffer setjmp never filled\n", stderr);
+    fflush(stderr);
+    jump(bogus, 5);
+  }
+  printf("returned to the site: r=%d\n", r);
+  fprintf(stderr, "nobuf: returned to the site: r=%d\n", r);
+  return 0;
+}

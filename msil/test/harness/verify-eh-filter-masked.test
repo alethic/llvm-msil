@@ -1,0 +1,17 @@
+# D21's EH-filter part (plan 5.17.16, M27): the filter clause must not hide
+# native int + int64 inside the protected block. Inputs/eh-filter-masked.il
+# has eh-filter.il's whole-body .try and fixed filter around a body whose
+# first PEVerify error is an allowed load through a native int, followed by
+# the mix. Without ildasm msil-verify.py runs no neutralized pass and accepts
+# the module (pass 1 cannot see the mix behind the allowed error); with it,
+# PEVerify reports the mix in the wrapper from the neutralized copy, whose
+# clause is kept, so msil-verify.py fails. Only PEVerify reports the mix
+# (verify-ptr-int64-mix.test), so this needs it.
+# REQUIRES: msil-ilverify, msil-peverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/eh-filter-masked.il
+# RUN: %msil_verify --ildasm= %t.dll > %t.pass1.log 2>&1
+# RUN: %{harness_check} contains %t.pass1.log "the neutralized pass did not run"
+# RUN: %{harness_check} lacks %t.pass1.log "disallowed"
+# RUN: not %msil_verify %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^peverify \(neutralized copy\): .*::__msil_sjlj_invoke\.0\b.*\[found Native Int\]\[expected Long\] Unexpected type on the stack"

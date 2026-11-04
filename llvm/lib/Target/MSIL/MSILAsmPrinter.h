@@ -41,6 +41,7 @@
 
 #include "MCTargetDesc/MSILMCTypeUtilities.h"
 #include "MSILDataSegment.h"
+#include "MSILEHClauses.h"
 #include "MSILMCInstLower.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -59,6 +60,7 @@
 #include "llvm/Support/Compiler.h"
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -151,6 +153,11 @@ private:
   /// Lowers MachineInstrs to CIL_ MCInsts, with the branch forms of the
   /// function being printed.
   std::unique_ptr<MSILMCInstLower> MCInstLowering;
+  /// The whole-body clause of the function being printed (plan 5.15.4,
+  /// MSILEHClauses.h), and whether its body is the throw helper's, which the
+  /// printer writes instead of its machine instructions.
+  std::optional<MSILWholeBodyTry> WholeBody;
+  bool WritesBody = false;
 
   /// Owns every signature handed out by the services below. They outlive the
   /// MCInsts and MSILMemberRefExprs that point to them.
@@ -371,11 +378,17 @@ public:
   void emitGlobalVariable(const GlobalVariable *GV) override;
   void emitFunctionEntryLabel() override;
   /// Emits .maxstack and .locals, and chooses the branch forms of the
-  /// function (MSILMCInstLower::computeBranchForms).
+  /// function (MSILMCInstLower::computeBranchForms). A whole-body clause
+  /// (MSILEHClauses.h) adds its result local R and its clause event, and
+  /// puts the lowering in return-as-leave mode; the throw helper's body is
+  /// written here.
   void emitFunctionBodyStart() override;
   /// Emits the CIL_ MCInsts of \p MI (MSILMCInstLower::lower), which exist
-  /// for exactly the instructions that computeBranchForms laid out.
+  /// for exactly the instructions that computeBranchForms laid out; nothing
+  /// for the throw helper, whose body emitFunctionBodyStart wrote.
   void emitInstruction(const MachineInstr *MI) override;
+  /// Emits the filter, the handler and the tail of a whole-body clause.
+  void emitFunctionBodyEnd() override;
 
 protected:
   void emitGlobalAlias(const Module &M, const GlobalAlias &GA) override;
@@ -484,8 +497,13 @@ private:
 
   /// Object mode: numbers the MemberRefs that the CIL instructions \p Insts
   /// of \p MI name (rule R6), and records the import stubs and the callees
-  /// that \p MI calls.
-  void noteObjectTokens(const MachineInstr &MI, ArrayRef<MCInst> Insts);
+  /// that \p MI calls. \p MI is null for the instructions that the printer
+  /// writes itself (MSILEHClauses.h).
+  void noteObjectTokens(const MachineInstr *MI, ArrayRef<MCInst> Insts);
+
+  /// Emits \p Inst, which the printer wrote itself (MSILEHClauses.h), on the
+  /// path of lowered instructions (rule R6 in object mode).
+  void emitWrittenInstruction(const MCInst &Inst);
 
   /// Object mode: builds the link-info record (plan 5.8.8) and emits the
   /// address fields, the import stubs and the record (emitLinkInfo).

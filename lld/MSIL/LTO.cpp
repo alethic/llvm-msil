@@ -77,6 +77,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/IPO/ExpandVariadics.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -882,7 +883,7 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
   // the triple's C runtime, which the backend applies without the C runtime
   // identity of the link (getCRuntime with none), nor fixed-arity by its
   // attribute; with the conditions of ExpandVariadics' lowering (not naked,
-  // the C calling convention).
+  // a calling convention that it expands).
   CRuntime tripleRuntime = getCRuntime(ctx.arg.target, StringRef());
   auto isVariadic = [](const Function &f) {
     return f.isVarArg() && !f.isIntrinsic() &&
@@ -891,8 +892,7 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
   auto isExpanded = [&](const Function &f, StringRef name) {
     return isVariadic(f) && !f.hasFnAttribute(Attribute::Naked) &&
            !f.hasFnAttribute("msil-fixed-arity") &&
-           (f.getCallingConv() == CallingConv::C ||
-            f.getCallingConv() == CallingConv::SPIR_FUNC) &&
+           isExpandedVariadicCallingConv(f.getCallingConv()) &&
            !isFixedArityFunction(name, tripleRuntime);
   };
   auto getRow = [](StringRef symbol, StringRef module, StringRef entry,
@@ -937,10 +937,12 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
 
   // Reports the reference \p name that no native library binds: undefined,
   // with plan 5.14.2's line for a name of classes N1-N3 (getNameClassLine),
-  // a setjmp-family name (N4) as an error of each input that refers to it,
-  // or the first definition that the lookup passed over: one that a P/Invoke
-  // cannot bind, or data of a COFF import library or DLL, which a function
-  // reference skips (plan 5.10.10).
+  // a setjmp-family name (N4) as an error of each input that refers to it
+  // (only a variable can have one here: the function loop below leaves the
+  // family's functions to code generation), or the first definition that
+  // the lookup passed over: one that a P/Invoke cannot bind, or data of a
+  // COFF import library or DLL, which a function reference skips (plan
+  // 5.10.10).
   auto reportUnbound = [&](StringRef name,
                            ArrayRef<const NativeExport *> rejected) {
     if (rejected.empty() && isSetjmpFamilyName(name))
@@ -985,6 +987,11 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
       continue;
     std::string name = getSymbolName(f);
     if (isSectionBoundary(m, name))
+      continue;
+    // A setjmp-family function (plan 5.14.2 N4) is neither bound nor
+    // reported: MSILLowerSjLj lowers every call and use of it during code
+    // generation (plan 5.15.4), as M24's guard expects of objects.
+    if (isSetjmpFamilyName(name))
       continue;
     // A trailer definition that the output is offered: the AsmPrinter
     // defines it in the module (plan 5.14.4 T6).
@@ -1232,13 +1239,44 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
     }
   }
 
+  StringSet<> seen;
+
+  // MSILLowerSjLj saves and restores the signal mask of a Linux sigsetjmp
+  // site with sigprocmask (plan 5.15.4), which the module need not declare
+  // before code generation: when the module declares __sigsetjmp or
+  // sigsetjmp, sigprocmask is bound quietly as a function that the code
+  // generator may call. A declaration of sigprocmask in the module is bound
+  // by the loop over functions above; otherwise its import is a kind-0
+  // operand of !msil.imports, because an annotation needs a declaration.
+  // Linux triples only: the dotnet triples bind nothing natively, and their
+  // --lto-emit-asm links import nothing from c.dll.
+  auto declares = [&](StringRef name) {
+    const Function *f = m.getFunction(name);
+    return f && f->isDeclarationForLinker();
+  };
+  if (ctx.arg.target.isOSLinux() &&
+      (declares("__sigsetjmp") || declares("sigsetjmp"))) {
+    StringRef name = "sigprocmask";
+    seen.insert(name);
+    SmallVector<const NativeExport *, 2> rejected;
+    const NativeExport *e =
+        m.getNamedValue(name) || !mayBindNatively(name, ctx)
+            ? nullptr
+            : ctx.nativeIndex.lookup(name, rejected,
+                                     /*isFunctionReference=*/true);
+    if (e &&
+        (e->Kind == NativeKind::Function || e->Kind == NativeKind::NoType)) {
+      out.libcalls.push_back({name.str(), e->Module.str(), e->Entry.str()});
+      recordCodegen(name, e->Module, e->Entry, e);
+    }
+  }
+
   // The library functions that the code generator may call (plan 5.10.13):
   // each name of RuntimeLibcalls without a '__' prefix (those are the
   // compiler-runtime and atomic names of plan 5.14.2, and the C library's
   // few) that the module neither defines nor declares, that may bind
   // natively (mayBindNatively) and that a native library binds as a
   // function, unless a P/Invoke cannot pass its `long double`.
-  StringSet<> seen;
   for (const char *libcall :
        lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target)) {
     StringRef name(libcall);

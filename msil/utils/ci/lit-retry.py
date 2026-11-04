@@ -30,7 +30,12 @@ stopped) contains a timeout marker:
     expected file;
   - msil-prog.py's '<step> failed (timeout after <T> s)'.
 
-lit's own output prefix '# | ' is ignored. A failure text without a
+lit's own output prefix '# | ' is ignored, at every level: a harness test
+that runs lit inside lit and checks the nested run's log shows the nested
+failure's lines as '# | # | ...', so a nested run's '# | # | +[timeout]'
+(or '... did not finish within <T> s') makes the test timeout-only, and a
+nested failure without a marker does not (plan section 12, 'M27.d extended
+(P-1b leftover: timeouts inside nested lit runs)'). A failure text without a
 '# executed command:' line (lit did not run a command: an unresolved test, a
 substitution error) is never timeout-only. The full name is lit's
 '<suite> :: <path in suite>', rebuilt from the testcase's classname
@@ -66,8 +71,10 @@ import xml.etree.ElementTree as ET
 DEFAULT_MAX = 3
 
 EXECUTED_RE = re.compile(r"^# executed command:.*$", re.M)
-# lit's prefix of a command's output lines (TestRunner.formatOutput).
-OUTPUT_PREFIX_RE = re.compile(r"^# \| ?")
+# lit's prefix of a command's output lines (TestRunner.formatOutput), at
+# every level: the output of a lit run inside a test's lit run carries it
+# once per level ('# | # | +[timeout]').
+OUTPUT_PREFIX_RE = re.compile(r"^(?:# \| ?)+")
 NUMBER = r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
 FINISH_RE = re.compile(r"did not finish within " + NUMBER + r" s\b")
 PROG_STEP_RE = re.compile(r"failed \(timeout after " + NUMBER + r" s\)")
@@ -108,7 +115,7 @@ def is_timeout_only(text):
     if part is None:
         return False
     for line in part.splitlines():
-        line = OUTPUT_PREFIX_RE.sub("", line, count=1)
+        line = OUTPUT_PREFIX_RE.sub("", line, count=1)  # every level at once
         if FINISH_RE.search(line) or PROG_STEP_RE.search(line) or STATUS_RE.match(line):
             return True
     return False
@@ -266,6 +273,46 @@ TIMEOUT_EARLIER = failure_output(
 # The marker text appears only in the failed command line itself.
 MARKER_IN_COMMAND = failure_output(("echo did not finish within 60 s && false", "", ""))
 NO_COMMAND = "Exit Code: 1\n\nmsil-run: dotnet did not finish within 60 s\n"
+# A harness test that runs lit inside lit (msil/test/harness/also-run.test)
+# and fails at the check of the nested run's log, which prints the nested
+# test's failure with a second '# | ' prefix: once with msil-run.py's
+# '+[timeout]' in the nested diff, once with a nested failure that is no
+# timeout.
+NESTED_LOG = "nested.log"
+
+
+def nested_failure(nested):
+    """The outer failure text of a harness test whose nested lit run failed
+    with the failure text nested, printed by the check of the nested log."""
+    return failure_output(
+        ("python lit.py -a nested/also-run-obj.c > %s 2>&1" % NESTED_LOG, "", ""),
+        (
+            "python harness-check.py contains %s '^PASS: '" % NESTED_LOG,
+            "",
+            "harness-check: %s: no line matches '^PASS: '\n%s"
+            % (NESTED_LOG, nested.rstrip("\n")),
+        ),
+    )
+
+
+def nested_run_failure(step, status):
+    """The nested lit run's failure text: msil-steps.py's step ended with
+    msil-run.py's diff, whose added status line is status."""
+    return "FAIL: MSIL :: harness/prog/Inputs/nested/m23/also-run-obj.c\n" + (
+        failure_output(
+            (
+                "python msil-steps.py --step=%s msil-run.py prog.exe" % step,
+                "",
+                "msil-run: output of prog.exe does not match also-run-obj.expected\n"
+                "--- also-run-obj.expected\n+++ actual\n@@ -1 +1 @@\n-[exit 0]\n+%s"
+                % status,
+            )
+        )
+    )
+
+
+NESTED_TIMEOUT = nested_failure(nested_run_failure("also-net8-tc0-run", "[timeout]"))
+NESTED_NOT_TIMEOUT = nested_failure(nested_run_failure("run", "[exit 1]"))
 
 
 def self_test():
@@ -370,6 +417,19 @@ def self_test():
         [("MSIL.M1/05-memory", "memcpy.c", NO_COMMAND)],
         4,
         [],
+    )
+    case(
+        "a nested lit run's +[timeout] ('# | # | ')",
+        [("MSIL.harness", "also-run.test", NESTED_TIMEOUT)],
+        0,
+        ["MSIL :: harness/also-run.test"],
+    )
+    case(
+        "a nested lit run's failure that is no timeout",
+        [("MSIL.harness", "also-run.test", NESTED_NOT_TIMEOUT)],
+        4,
+        [],
+        err_has="MSIL :: harness/also-run.test",
     )
     four = [("MSIL.M1/09-structs", "s%d.c" % i, TIMEOUT_VERIFY) for i in range(4)]
     names4 = ["MSIL :: M1/09-structs/s%d.c" % i for i in range(4)]

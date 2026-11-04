@@ -1,0 +1,473 @@
+## setjmp and longjmp in CIL objects (ImplementationPlan.md 5.15.4, M27.f;
+## 5.14.2 N3 and N4, 5.14.6 K4, 5.9.15). From M27 code generation lowers
+## the setjmp family (MSILLowerSjLj): every call reachable from a setjmp
+## site that may longjmp goes through an internal wrapper
+## '__msil_sjlj_invoke.<n>' whose whole body is an IL .try with a fixed
+## filter, and longjmp becomes the module helper '__msil_longjmp', which
+## throws through the helper '__msil_sjlj_throw' (ldnull, ldarg.0, conv.i4,
+## newobj ExternalException::.ctor(string, int32), throw). Both helpers are
+## linkonce_odr hidden definitions in every object that needs them (K4).
+## Here two llc objects, each with a setjmp caller and a longjmp, link on
+## both host triples:
+## - into one '__msil_longjmp' and one '__msil_sjlj_throw' method (one
+##   helper copy per assembly), whose throw body is 5.15.4's;
+## - the clause tables survive the link: each of the three wrappers (a.o's
+##   main calls step_b and run_b after its site, b.o's run_b calls jump_a)
+##   keeps its filter clause, '.try L0 to L<f> filter L<f> handler L<h> to
+##   L<d>' (the filter starts where the protected block ends, the handler is
+##   'pop; leave.s' to the done label, which ends it), and the filter reads
+##   [mscorlib] ExternalException and Exception::get_HResult() through the
+##   built-in table;
+## - no name of the family is left to bind: --print-imports lists only
+##   puts, although the native library (a libc.so.6 stand-in on Linux, an
+##   import library on windows-msvc) exports the family, and the image
+##   neither calls nor imports a family name;
+## - a -shared link of the same objects exports their functions and no
+##   '__msil_*' name: the helpers are hidden and the wrappers internal, so
+##   both stay in <Module>, still one copy of each helper;
+## - an llc object linked with bitcode (a.o with b.bc's LTO object), as a
+##   program and with -shared, behaves the same: the LTO object brings its
+##   own helper copies and a wrapper whose name collides with a.o's first
+##   wrapper and is renamed like a colliding local member, as b.o's is
+##   ('__msil_sjlj_invoke.0<msil>1', 5.9.12); the helpers still merge into
+##   one method each and the renamed wrapper keeps its filter clause;
+## - an undefined callee after a setjmp site is reported against the C
+##   function that calls it, never the wrapper around the call (the section
+##   12 row '5.9.14 and 5.10.14 as built (setjmp wrappers in the reference
+##   report)'; lto-sjlj.test pins the LTO link).
+## The program would exit with 3 (step_b longjmps to main's buffer with 1,
+## jump_a to run_b's with 2); M3/07-sjlj runs such programs.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj libc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 libc.o -o libc.so.6
+# RUN: llvm-lib /machine:x64 /def:ucrt.def /out:ucrt.lib
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: llc -filetype=obj a-win.ll -o a-win.o
+# RUN: llc -filetype=obj b-win.ll -o b-win.o
+# RUN: llvm-as b.ll -o b.bc
+# RUN: llvm-as b-win.ll -o b-win.bc
+# RUN: llc -filetype=obj undef.ll -o undef.o
+# RUN: llc -filetype=obj undef-win.ll -o undef-win.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## Linux: the link binds puts and nothing of the family.
+# RUN: msil-ld --print-imports a.o b.o libc.so.6 -o prog.exe > imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-LNX --input-file=imports.txt
+# IMP-LNX:      {{^}}puts -> libc.so.6!puts [function, -]{{$}}
+# IMP-LNX-NEXT: {{^}}libc.so.6: version floor -{{$}}
+# IMP-LNX-NOT:  {{.}}
+# RUN: llvm-cil-dump prog.exe > prog.txt
+# RUN: FileCheck %s --check-prefix=NONE --input-file=prog.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=prog.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=prog.txt
+# RUN: FileCheck %s --check-prefix=WRAP --input-file=prog.txt
+# RUN: FileCheck %s --check-prefix=TRY3 --input-file=prog.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=prog.txt
+# RUN: FileCheck %s --check-prefix=CALLER --input-file=prog.txt
+
+## No name of the family is called or imported.
+# NONE-NOT: {{'(_setjmp|setjmp|__sigsetjmp|sigsetjmp|_setjmpex|_setjmp3|longjmp|_longjmp|siglongjmp|__longjmp_chk)'}}
+
+## One copy of each helper; 5.15.4's throw body.
+# LJ:         {{^}}  .method '__msil_longjmp' void(native int, int32) flags={{.+}}{{$}}
+# LJ-NOT:     {{^}}  .method '__msil_longjmp
+# THROW:      {{^}}  .method '__msil_sjlj_throw' void(native int) flags={{.+}}{{$}}
+# THROW-NEXT: {{^}}    .maxstack 3{{$}}
+# THROW-NEXT: {{^}}    L0: ldnull{{$}}
+# THROW-NEXT: {{^}}    L1: ldarg.0{{$}}
+# THROW-NEXT: {{^}}    L2: conv.i4{{$}}
+# THROW-NEXT: {{^}}    L3: newobj instance void(string, int32) {{(class )?}}[mscorlib]System.Runtime.InteropServices.ExternalException::'.ctor'{{$}}
+# THROW-NEXT: {{^}}    L4: throw{{$}}
+# THROW-NOT:  {{^}}  .method '__msil_sjlj_throw
+
+## A wrapper's filter, handler and done label, and its clause.
+# WRAP:      {{^}}  .method '__msil_sjlj_invoke.{{[^']+}}' {{.+}}{{$}}
+# WRAP:      {{^}}    L[[F:[0-9]+]]: isinst {{(class )?}}[mscorlib]System.Runtime.InteropServices.ExternalException{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: dup{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: brtrue.s L{{[0-9]+}}{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: pop{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.0{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: br.s L[[E:[0-9]+]]{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: callvirt instance int32() {{(class )?}}[mscorlib]System.Exception::'get_HResult'{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: ldarg{{.+}}{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: conv.i4{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: bne.un.s L{{[0-9]+}}{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: ldarg{{.+}}{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: ldind.i4{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.0{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: cgt.un{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: br.s L[[E]]{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.0{{$}}
+# WRAP-NEXT: {{^}}    L[[E]]: endfilter{{$}}
+# WRAP-NEXT: {{^}}    L[[H:[0-9]+]]: pop{{$}}
+# WRAP-NEXT: {{^}}    L{{[0-9]+}}: leave{{(\.s)?}} L[[D:[0-9]+]]{{$}}
+# WRAP-NEXT: {{^}}    L[[D]]: {{ret|ldloc.*}}{{$}}
+# WRAP:      {{^}}    .try L0 to L[[F]] filter L[[F]] handler L[[H]] to L[[D]]{{$}}
+
+## Three wrappers, three filter clauses.
+# TRY3-COUNT-3: {{^}}    .try L0 to L{{[0-9]+}} filter L{{[0-9]+}} handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# TRY3-NOT:     .try
+
+## Each of the three wrappers holds its own clause (a method's '.try' lines
+## follow its body), and there is no fourth wrapper.
+# WRAP3:     {{^}}  .method '__msil_sjlj_invoke.{{[^']+}}' {{.+}}{{$}}
+# WRAP3-NOT: {{^}}  .method
+# WRAP3:     {{^}}    .try L0 to L[[F1:[0-9]+]] filter L[[F1]] handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# WRAP3:     {{^}}  .method '__msil_sjlj_invoke.{{[^']+}}' {{.+}}{{$}}
+# WRAP3-NOT: {{^}}  .method
+# WRAP3:     {{^}}    .try L0 to L[[F2:[0-9]+]] filter L[[F2]] handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# WRAP3:     {{^}}  .method '__msil_sjlj_invoke.{{[^']+}}' {{.+}}{{$}}
+# WRAP3-NOT: {{^}}  .method
+# WRAP3:     {{^}}    .try L0 to L[[F3:[0-9]+]] filter L[[F3]] handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# WRAP3-NOT: {{^}}  .method '__msil_sjlj_invoke.
+
+## main calls step_b and run_b through wrappers that take the status block
+## last.
+# CALLER:     {{^}}  .method 'main' int32() flags={{.+}}{{$}}
+# CALLER-DAG: {{^}}    L{{[0-9]+}}: call int32(native int, native int) '<Module>'::'__msil_sjlj_invoke.{{[^']+}}'{{$}}
+# CALLER-DAG: {{^}}    L{{[0-9]+}}: call int32(native int) '<Module>'::'__msil_sjlj_invoke.{{[^']+}}'{{$}}
+# CALLER:     {{^}}  .method
+
+## windows-msvc: _setjmp with the frame address, longjmp; puts from the
+## import library, which exports the family too.
+# RUN: msil-ld --print-imports a-win.o b-win.o ucrt.lib -o prog-win.exe > imports-win.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-WIN --input-file=imports-win.txt
+# IMP-WIN:      {{^}}puts -> ucrtbase.dll!puts [function, -]{{$}}
+# IMP-WIN-NOT:  {{.}}
+# RUN: llvm-cil-dump prog-win.exe > prog-win.txt
+# RUN: FileCheck %s --check-prefix=NONE --input-file=prog-win.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=prog-win.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=prog-win.txt
+# RUN: FileCheck %s --check-prefix=WRAP --input-file=prog-win.txt
+# RUN: FileCheck %s --check-prefix=TRY3 --input-file=prog-win.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=prog-win.txt
+# RUN: FileCheck %s --check-prefix=CALLER --input-file=prog-win.txt
+
+## -shared: the functions are exported, no '__msil_*' name is, on either
+## triple; the helpers and wrappers stay in <Module>.
+# RUN: msil-ld -shared a.o b.o libc.so.6 -o sjl.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info sjl.dll | FileCheck %s --check-prefix=SYMTAB -DCLS=sjl --implicit-check-not=__msil_
+# RUN: llvm-cil-dump sjl.dll > sjl.txt
+# RUN: %{listing} members sjl.txt sjl > sjl-members.txt
+# RUN: FileCheck %s --check-prefix=EXPORTS -DCLS=sjl --input-file=sjl-members.txt
+# RUN: FileCheck %s --check-prefix=NOHELPER --input-file=sjl-members.txt
+# RUN: %{listing} class sjl.txt '<Module>' > sjl-module.txt
+# RUN: FileCheck %s --check-prefix=MODULE --input-file=sjl-module.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=sjl-module.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=sjl-module.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=sjl-module.txt
+# RUN: msil-ld -shared a-win.o b-win.o ucrt.lib -o sjw.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info sjw.dll | FileCheck %s --check-prefix=SYMTAB -DCLS=sjw --implicit-check-not=__msil_
+# RUN: llvm-cil-dump sjw.dll > sjw.txt
+# RUN: %{listing} members sjw.txt sjw > sjw-members.txt
+# RUN: FileCheck %s --check-prefix=EXPORTS -DCLS=sjw --input-file=sjw-members.txt
+# RUN: FileCheck %s --check-prefix=NOHELPER --input-file=sjw-members.txt
+# RUN: %{listing} class sjw.txt '<Module>' > sjw-module.txt
+# RUN: FileCheck %s --check-prefix=MODULE --input-file=sjw-module.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=sjw-module.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=sjw-module.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=sjw-module.txt
+# SYMTAB:      {{^}}SymbolTable v1.0 {{.+}}{{$}}
+# SYMTAB-NEXT: {{^}}ExportClass '[[CLS]]'{{$}}
+# EXPORTS:     {{^}}.class '[[CLS]]' flags={{.+}}{{$}}
+# EXPORTS-DAG: {{^}}  .method 'jump_a' void(native int) flags=0x0016 impl=0x0000{{$}}
+# EXPORTS-DAG: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# EXPORTS-DAG: {{^}}  .method 'run_b' int32() flags=0x0016 impl=0x0000{{$}}
+# EXPORTS-DAG: {{^}}  .method 'step_b' int32(native int) flags=0x0016 impl=0x0000{{$}}
+## A -DAG-only prefix's implicit patterns check only the text before its
+## first match, so the absent names have a prefix of their own.
+# NOHELPER-NOT: __msil_
+# MODULE-DAG:  {{^}}  .method '__msil_longjmp' void(native int, int32) flags={{.+}}{{$}}
+# MODULE-DAG:  {{^}}  .method '__msil_sjlj_throw' void(native int) flags={{.+}}{{$}}
+# MODULE-DAG:  {{^}}  .method '__msil_sjlj_invoke.{{[^']+}}' {{.+}}{{$}}
+## One copy of each helper in <Module>: LJ and THROW end in a -NOT of the
+## helper's name after its first match, so a second copy (renamed or not)
+## fails wherever it sorts. They are prefixes of their own because a -NOT
+## between -DAG lines would fix the order of the -DAG matches.
+
+## An llc object with bitcode, as a program and with -shared, on both
+## triples: one helper of each name, three wrappers each with its clause,
+## one of them the renamed wrapper of the LTO object, and only puts bound.
+# RUN: msil-ld --print-imports a.o b.bc libc.so.6 -o mix.exe > mix-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-LNX --input-file=mix-imports.txt
+# RUN: llvm-cil-dump mix.exe > mix.txt
+# RUN: FileCheck %s --check-prefix=NONE --input-file=mix.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=mix.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=mix.txt
+# RUN: FileCheck %s --check-prefix=TRY3 --input-file=mix.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=mix.txt
+# RUN: FileCheck %s --check-prefix=RENAMED --input-file=mix.txt
+# RUN: FileCheck %s --check-prefix=CALLER --input-file=mix.txt
+# RUN: msil-ld --print-imports a-win.o b-win.bc ucrt.lib -o mix-win.exe > mix-win-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-WIN --input-file=mix-win-imports.txt
+# RUN: llvm-cil-dump mix-win.exe > mix-win.txt
+# RUN: FileCheck %s --check-prefix=NONE --input-file=mix-win.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=mix-win.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=mix-win.txt
+# RUN: FileCheck %s --check-prefix=TRY3 --input-file=mix-win.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=mix-win.txt
+# RUN: FileCheck %s --check-prefix=RENAMED --input-file=mix-win.txt
+# RUN: FileCheck %s --check-prefix=CALLER --input-file=mix-win.txt
+# RUN: msil-ld -shared --print-imports a.o b.bc libc.so.6 -o mixs.dll > mixs-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-LNX --input-file=mixs-imports.txt
+# RUN: llvm-cil-dump --link-info mixs.dll | FileCheck %s --check-prefix=SYMTAB -DCLS=mixs --implicit-check-not=__msil_
+# RUN: llvm-cil-dump mixs.dll > mixs.txt
+# RUN: %{listing} members mixs.txt mixs > mixs-members.txt
+# RUN: FileCheck %s --check-prefix=EXPORTS -DCLS=mixs --input-file=mixs-members.txt
+# RUN: FileCheck %s --check-prefix=NOHELPER --input-file=mixs-members.txt
+# RUN: %{listing} class mixs.txt '<Module>' > mixs-module.txt
+# RUN: FileCheck %s --check-prefix=MODULE --input-file=mixs-module.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=mixs-module.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=mixs-module.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=mixs-module.txt
+# RUN: FileCheck %s --check-prefix=RENAMED --input-file=mixs-module.txt
+# RUN: msil-ld -shared --print-imports a-win.o b-win.bc ucrt.lib -o mixsw.dll > mixsw-imports.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=IMP-WIN --input-file=mixsw-imports.txt
+# RUN: llvm-cil-dump --link-info mixsw.dll | FileCheck %s --check-prefix=SYMTAB -DCLS=mixsw --implicit-check-not=__msil_
+# RUN: llvm-cil-dump mixsw.dll > mixsw.txt
+# RUN: %{listing} members mixsw.txt mixsw > mixsw-members.txt
+# RUN: FileCheck %s --check-prefix=EXPORTS -DCLS=mixsw --input-file=mixsw-members.txt
+# RUN: FileCheck %s --check-prefix=NOHELPER --input-file=mixsw-members.txt
+# RUN: %{listing} class mixsw.txt '<Module>' > mixsw-module.txt
+# RUN: FileCheck %s --check-prefix=MODULE --input-file=mixsw-module.txt
+# RUN: FileCheck %s --check-prefix=LJ --input-file=mixsw-module.txt
+# RUN: FileCheck %s --check-prefix=THROW --input-file=mixsw-module.txt
+# RUN: FileCheck %s --check-prefix=WRAP3 --input-file=mixsw-module.txt
+# RUN: FileCheck %s --check-prefix=RENAMED --input-file=mixsw-module.txt
+## The wrapper of b.bc's LTO object, renamed, and its clause.
+# RENAMED:     {{^}}  .method '__msil_sjlj_invoke.{{[0-9]+}}<msil>{{[0-9]+}}' {{.+}}{{$}}
+# RENAMED-NOT: {{^}}  .method
+# RENAMED:     {{^}}    .try L0 to L[[F:[0-9]+]] filter L[[F]] handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+
+## An undefined function called after a setjmp site in main: the reference
+## line names main, never the wrapper the call goes through.
+# RUN: not msil-ld undef.o libc.so.6 -o undef.exe 2>&1 \
+# RUN:   | FileCheck %s %{crash} --check-prefix=UNDEF -DOBJ=undef.o --implicit-check-not=__msil_sjlj_invoke
+# RUN: not msil-ld undef-win.o ucrt.lib -o undef-win.exe 2>&1 \
+# RUN:   | FileCheck %s %{crash} --check-prefix=UNDEF -DOBJ=undef-win.o --implicit-check-not=__msil_sjlj_invoke
+# UNDEF:      {{^}}msil-ld: error: undefined symbol: undefined_fn{{$}}
+# UNDEF-NEXT: {{^}}>>> referenced by [[OBJ]]:(main){{$}}
+
+#--- libc.yaml
+## A libc.so.6 stand-in: puts and every Linux name of the family.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x50
+Symbols:
+  - { Name: puts,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0,  Size: 8 }
+  - { Name: _setjmp,       Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8,  Size: 8 }
+  - { Name: setjmp,        Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: __sigsetjmp,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: longjmp,       Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: _longjmp,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: siglongjmp,    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: __longjmp_chk, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+
+#--- ucrt.def
+LIBRARY ucrtbase.dll
+EXPORTS
+  puts
+  _setjmp
+  _setjmpex
+  longjmp
+
+#--- a.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; static jmp_buf bufa;
+;; void jump_a(jmp_buf b) { longjmp(b, 2); }
+;; int main(void) {
+;;   int r = setjmp(bufa);   /* glibc: _setjmp */
+;;   if (r == 0) return step_b(bufa);
+;;   return r + run_b();
+;; }
+@bufa = internal global [200 x i8] zeroinitializer, align 16
+
+declare i32 @_setjmp(ptr) returns_twice
+declare void @longjmp(ptr, i32) noreturn
+declare i32 @step_b(ptr)
+declare i32 @run_b()
+
+define void @jump_a(ptr %b) {
+  call void @longjmp(ptr %b, i32 2)
+  unreachable
+}
+
+define i32 @main() {
+entry:
+  %r = call i32 @_setjmp(ptr @bufa)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %again
+first:
+  %x = call i32 @step_b(ptr @bufa)
+  ret i32 %x
+again:
+  %y = call i32 @run_b()
+  %s = add i32 %r, %y
+  ret i32 %s
+}
+
+#--- b.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; static jmp_buf bufb;
+;; int step_b(jmp_buf b) { puts("b"); longjmp(b, 1); }
+;; int run_b(void) {
+;;   int r = setjmp(bufb);
+;;   if (r == 0) jump_a(bufb);
+;;   return r;
+;; }
+@bufb = internal global [200 x i8] zeroinitializer, align 16
+@msg = private constant [2 x i8] c"b\00"
+
+declare i32 @_setjmp(ptr) returns_twice
+declare void @longjmp(ptr, i32) noreturn
+declare i32 @puts(ptr)
+declare void @jump_a(ptr)
+
+define i32 @step_b(ptr %b) {
+  %p = call i32 @puts(ptr @msg)
+  call void @longjmp(ptr %b, i32 1)
+  unreachable
+}
+
+define i32 @run_b() {
+entry:
+  %r = call i32 @_setjmp(ptr @bufb)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @jump_a(ptr @bufb)
+  unreachable
+done:
+  ret i32 %r
+}
+
+#--- a-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; a.ll for the UCRT: setjmp is _setjmp(buf, frame address).
+@bufa = internal global [256 x i8] zeroinitializer, align 16
+
+declare i32 @_setjmp(ptr, ptr) returns_twice
+declare ptr @llvm.frameaddress.p0(i32)
+declare void @longjmp(ptr, i32) noreturn
+declare i32 @step_b(ptr)
+declare i32 @run_b()
+
+define void @jump_a(ptr %b) {
+  call void @longjmp(ptr %b, i32 2)
+  unreachable
+}
+
+define i32 @main() {
+entry:
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %r = call i32 @_setjmp(ptr @bufa, ptr %fp)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %again
+first:
+  %x = call i32 @step_b(ptr @bufa)
+  ret i32 %x
+again:
+  %y = call i32 @run_b()
+  %s = add i32 %r, %y
+  ret i32 %s
+}
+
+#--- b-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; b.ll for the UCRT.
+@bufb = internal global [256 x i8] zeroinitializer, align 16
+@msg = private constant [2 x i8] c"b\00"
+
+declare i32 @_setjmp(ptr, ptr) returns_twice
+declare ptr @llvm.frameaddress.p0(i32)
+declare void @longjmp(ptr, i32) noreturn
+declare i32 @puts(ptr)
+declare void @jump_a(ptr)
+
+define i32 @step_b(ptr %b) {
+  %p = call i32 @puts(ptr @msg)
+  call void @longjmp(ptr %b, i32 1)
+  unreachable
+}
+
+define i32 @run_b() {
+entry:
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %r = call i32 @_setjmp(ptr @bufb, ptr %fp)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @jump_a(ptr @bufb)
+  unreachable
+done:
+  ret i32 %r
+}
+
+#--- undef.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; static jmp_buf bufu; void undefined_fn(int);
+;; int main(void) { if (setjmp(bufu) == 0) undefined_fn(1); return 0; }
+@bufu = internal global [200 x i8] zeroinitializer, align 16
+
+declare i32 @_setjmp(ptr) returns_twice
+declare void @undefined_fn(i32)
+
+define i32 @main() {
+entry:
+  %r = call i32 @_setjmp(ptr @bufu)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @undefined_fn(i32 1)
+  br label %done
+done:
+  ret i32 0
+}
+
+#--- undef-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; undef.ll for the UCRT.
+@bufu = internal global [256 x i8] zeroinitializer, align 16
+
+declare i32 @_setjmp(ptr, ptr) returns_twice
+declare ptr @llvm.frameaddress.p0(i32)
+declare void @undefined_fn(i32)
+
+define i32 @main() {
+entry:
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %r = call i32 @_setjmp(ptr @bufu, ptr %fp)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @undefined_fn(i32 1)
+  br label %done
+done:
+  ret i32 0
+}

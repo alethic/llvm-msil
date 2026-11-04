@@ -21,14 +21,19 @@
 
 #include "MCTargetDesc/MSILMCTypeUtilities.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/CLI.h"
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/CLI/Signature.h"
 #include "llvm/MC/MCStreamer.h"
 #include <cstdint>
 
 namespace llvm {
+
+class MCSymbol;
 
 /// What a method definition is: the method of a C function, or one of the
 /// methods the AsmPrinter synthesizes (decisions D12, D27).
@@ -67,7 +72,8 @@ struct MSILMethodDecl {
 /// object event order, plan 5.3 as amended for M19):
 /// - emitObjectHeader;
 /// - one method per function definition, in IR order (emitMethodBegin,
-///   emitMaxStack, emitLocals, the instructions and labels, emitMethodEnd);
+///   emitMaxStack, emitLocals, emitExceptionClause for each of its clauses,
+///   the instructions and labels, emitMethodEnd);
 /// - emitAddressField for each defined global variable (commons included),
 ///   in the order of the link-info record's SYMTAB;
 /// - emitPInvoke for each import stub of plan 5.8.3: the stubs on a module and
@@ -102,6 +108,25 @@ public:
   /// types print as canonical listing v1 text (int32, native int, string[],
   /// ...); type references are not used.
   virtual void emitLocals(ArrayRef<cli::TypeSig> Locals) = 0;
+  /// An exception handling clause of the current method (plan 5.15.4),
+  /// emitted after emitLocals and before the method's first instruction,
+  /// innermost clause first, with the labels that the method's code defines
+  /// later through MCStreamer::emitLabel: the protected block runs from
+  /// \p TryBegin to \p TryEnd, the handler from \p HandlerBegin to
+  /// \p HandlerEnd, and a Filter clause's filter block from \p FilterBegin
+  /// (null for every other kind) to \p HandlerBegin. The blocks are
+  /// contiguous: a Filter clause's \p TryEnd is its \p FilterBegin, and
+  /// every other clause's \p TryEnd is its \p HandlerBegin. Catch clauses
+  /// (which need a class token) and blocks that are not contiguous are
+  /// internal errors. In text the scoped forms '.try { } filter { } { }' and
+  /// '.try { } fault { }' print around the labels; an object records the
+  /// clause in the method body's EH section with the labels' offsets.
+  virtual void emitExceptionClause(cli::ExceptionClauseKind Kind,
+                                   const MCSymbol *TryBegin,
+                                   const MCSymbol *TryEnd,
+                                   const MCSymbol *HandlerBegin,
+                                   const MCSymbol *HandlerEnd,
+                                   const MCSymbol *FilterBegin) = 0;
   /// } // end of method '<Name>'
   virtual void emitMethodEnd(StringRef Name) = 0;
   /// A P/Invoke declaration of \p M into library \p Lib; \p Entry is the
@@ -179,6 +204,14 @@ public:
   /// 'initonly' (ECMA-335 II.16.1.2: only the type's .cctor may store an
   /// initonly static field; plan 5.10.12).
   virtual void emitDataImportField(StringRef Name);
+
+protected:
+  /// Checks the operands of emitExceptionClause: the labels that \p Kind
+  /// needs, and contiguous blocks. Anything else is an internal error.
+  static void
+  checkExceptionClause(cli::ExceptionClauseKind Kind, const MCSymbol *TryBegin,
+                       const MCSymbol *TryEnd, const MCSymbol *HandlerBegin,
+                       const MCSymbol *HandlerEnd, const MCSymbol *FilterBegin);
 };
 
 /// The ILAsm text implementation. Every directive is written as whole lines
@@ -187,6 +220,24 @@ public:
 class MSILTargetAsmStreamer final : public MSILTargetStreamer {
   /// Set by emitObjectHeader: the text is object-form text.
   bool ObjectForm = false;
+
+  /// The scope lines of the current method's clauses that print before a
+  /// label (emitLabel): each clause boundary at that label, in clause order
+  /// (innermost first).
+  enum class ScopeMark : uint8_t { Open, Middle, Close };
+  struct ScopeLine {
+    /// The index of the clause in the method (innermost first).
+    unsigned Clause;
+    /// The position of the boundary among its clause's, from 0.
+    unsigned Ordinal;
+    ScopeMark Mark;
+    /// The line, such as '  } filter {'.
+    StringRef Text;
+  };
+  DenseMap<const MCSymbol *, SmallVector<ScopeLine, 2>> ScopeLines;
+  /// For each clause of the current method, the number of its boundaries
+  /// printed so far, and the number it has.
+  SmallVector<std::pair<unsigned, unsigned>, 2> ClauseProgress;
 
   void emitLine(const Twine &Line);
 
@@ -201,6 +252,16 @@ public:
   void emitEntryPoint() override;
   void emitMaxStack(unsigned N) override;
   void emitLocals(ArrayRef<cli::TypeSig> Locals) override;
+  void emitExceptionClause(cli::ExceptionClauseKind Kind,
+                           const MCSymbol *TryBegin, const MCSymbol *TryEnd,
+                           const MCSymbol *HandlerBegin,
+                           const MCSymbol *HandlerEnd,
+                           const MCSymbol *FilterBegin) override;
+  /// Prints the scope lines of the clauses that begin, change block or end
+  /// at \p Symbol (MCStreamer::emitLabel calls this before it prints the
+  /// label): the ends first, innermost first, then the block changes, then
+  /// the beginnings, outermost first.
+  void emitLabel(MCSymbol *Symbol) override;
   void emitMethodEnd(StringRef Name) override;
   void emitPInvoke(const MSILMethodDecl &M, StringRef Lib,
                    StringRef Entry) override;
@@ -233,6 +294,9 @@ public:
   void emitEntryPoint() override {}
   void emitMaxStack(unsigned) override {}
   void emitLocals(ArrayRef<cli::TypeSig>) override {}
+  void emitExceptionClause(cli::ExceptionClauseKind, const MCSymbol *,
+                           const MCSymbol *, const MCSymbol *, const MCSymbol *,
+                           const MCSymbol *) override {}
   void emitMethodEnd(StringRef) override {}
   void emitPInvoke(const MSILMethodDecl &, StringRef, StringRef) override {}
   void emitDataImage(StringRef, StringRef, StringRef,

@@ -3,13 +3,16 @@
 ## 5.8.9, 5.9.5, 5.9.6 step 2, 5.9.7, 5.9.9 rule 5, 5.10.7):
 ## - BCL references (5.11, M21): the class of the catch clause in the
 ##   objects below is System.Exception, which msil-ld's built-in [mscorlib]
-##   table (5.11.7) does not hold, so a link without references is
-##   '.NET member '<signature>' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>'
-##   and the links of this test that must succeed name a reference set
-##   (Inputs/fakepack's FakeCore, which defines it). A TypeRef scoped to an
-##   AssemblyRef other than the placeholders ([Foo]System.Exception) binds
-##   by name like a [msil.bcl] one (M21 retires M20's '<file>: reference to
-##   assembly '<n>' needs --reference' error);
+##   table (5.11.7) holds since M27 (5.15.4's sjlj clauses catch it), so a
+##   link without references binds it to [mscorlib]; with a reference set
+##   (Inputs/fakepack's FakeCore, which defines it) it binds there. A clause
+##   class the table does not hold (System.InvalidOperationException, cls.o)
+##   is, without references,
+##   '.NET member '<signature>' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>'.
+##   A TypeRef scoped to an AssemblyRef other than the placeholders
+##   ([Foo]System.Exception) binds by name like a [msil.bcl] one, with or
+##   without references (M21 retires M20's '<file>: reference to assembly
+##   '<n>' needs --reference' error);
 ## - the record (5.8.8, 5.8.9). Another major version is 'invalid link-info
 ##   record: version <n> is newer than this toolchain supports (1)'. A newer
 ##   minor version links (msil-ld accepts every minor of major 1), but one
@@ -78,20 +81,28 @@
 # RUN: %{mk} badtok.il --body badtok
 # RUN: %{mk} trunc.il --body trunc
 # RUN: %{mk} tls.il --body tls
+# RUN: %{mk} cls.il --class System.InvalidOperationException
 # RUN: %if ilasm %{ %{as} -output=ok.o ok.il && %{as} -output=foo.o foo.il && %{as} -output=v2.o v2.il %}
 # RUN: %if ilasm %{ %{as} -output=minor.o minor.il && %{as} -output=feat.o feat.il %}
 # RUN: %if ilasm %{ %{as} -output=frame.o frame.il && %{as} -output=c1.o c1.il && %{as} -output=abi.o abi.il %}
 # RUN: %if ilasm %{ %{as} -output=dbg.o dbg.il && %{as} -output=dbg2.o dbg2.il %}
 # RUN: %if ilasm %{ %{as} -output=badop.o badop.il && %{as} -output=badtok.o badtok.il %}
 # RUN: %if ilasm %{ %{as} -output=trunc.o trunc.il && %{as} -output=tls.o tls.il %}
+# RUN: %if ilasm %{ %{as} -output=cls.o cls.il %}
 
 ## The unchanged text links, and so does a v1.1 record that uses nothing new.
 # RUN: %if ilasm %{ msil-ld main.o ok.o --reference=FakeCore.dll -o ok.exe 2>&1 | count 0 %}
 # RUN: %if ilasm %{ msil-ld main.o minor.o --reference=FakeCore.dll -o minor.exe 2>&1 | count 0 %}
 
-## Without references System.Exception is outside the built-in table.
-# RUN: %if ilasm %{ not msil-ld main.o ok.o -o x.exe 2>&1 | %{err} --check-prefix=TABLE %}
-# TABLE: {{^}}msil-ld: error: {{.*}}.NET member '{{.*}}System.Exception{{.*}}' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+## Without references System.Exception binds to the built-in table's
+## [mscorlib], and a clause class outside the table is an error.
+# RUN: %if ilasm %{ msil-ld main.o ok.o -o builtin.exe 2>&1 | count 0 %}
+# RUN: %if ilasm && llvm-cil-dump %{ llvm-cil-dump builtin.exe | FileCheck %s --check-prefix=BUILTIN \
+# RUN:   --implicit-check-not="assemblyref 'FakeCore'" %}
+# BUILTIN: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# BUILTIN: {{^}}    .try L0 to L3 catch [mscorlib]System.Exception handler L3 to L5{{$}}
+# RUN: %if ilasm %{ not msil-ld main.o cls.o -o x.exe 2>&1 | %{err} --check-prefix=TABLE %}
+# TABLE: {{^}}msil-ld: error: {{.*}}.NET member '{{.*}}System.InvalidOperationException{{.*}}' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
 
 ## An AssemblyRef scope other than msil.bcl binds by name.
 # RUN: %if ilasm %{ msil-ld main.o foo.o --reference=FakeCore.dll -o foo.exe 2>&1 | count 0 %}
@@ -99,7 +110,9 @@
 # RUN:   --implicit-check-not="assemblyref 'Foo'" %}
 # FOREIGN: {{^}}assemblyref 'FakeCore' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
 # FOREIGN: {{^}}    .try L0 to L3 catch [FakeCore]System.Exception handler L3 to L5{{$}}
-# RUN: %if ilasm %{ not msil-ld main.o foo.o -o x.exe 2>&1 | %{err} --check-prefix=TABLE %}
+# RUN: %if ilasm %{ msil-ld main.o foo.o -o foo-builtin.exe 2>&1 | count 0 %}
+# RUN: %if ilasm && llvm-cil-dump %{ llvm-cil-dump foo-builtin.exe | FileCheck %s --check-prefix=BUILTIN \
+# RUN:   --implicit-check-not="assemblyref 'Foo'" --implicit-check-not="assemblyref 'FakeCore'" %}
 
 ## Versions and framing.
 # RUN: %if ilasm %{ not msil-ld main.o v2.o -o x.exe 2>&1 | %{err} --check-prefix=MAJOR %}
@@ -311,9 +324,9 @@ Usage: mkobj.py <out.il> [options]
   --symtab-size-delta N
                     added to the SYMTAB subsection's payload size (framing)
   --extra-kind K    append an empty subsection of kind K after SYMTAB
-  --scope S         the assembly that scopes the catch clause's
-                    System.Exception (default msil.bcl, the placeholder of
-                    BCL references)
+  --scope S         the assembly that scopes the catch clause's class
+                    (default msil.bcl, the placeholder of BCL references)
+  --class C         the catch clause's class (default System.Exception)
   --body B          ok (a user string and a catch clause; returns 7),
                     badop (an unknown opcode at IL offset 1), badtok ('call'
                     with a TypeRef token at IL offset 1), trunc (the body
@@ -335,6 +348,7 @@ p.add_argument("--symbol-name")
 p.add_argument("--symtab-size-delta", type=int, default=0)
 p.add_argument("--extra-kind", type=lambda s: int(s, 0))
 p.add_argument("--scope", default="msil.bcl")
+p.add_argument("--class", dest="cls", default="System.Exception")
 p.add_argument("--body", default="ok",
                choices=["ok", "badop", "badtok", "trunc", "tls"])
 a = p.parse_args()
@@ -382,14 +396,14 @@ bodies = {
     pop
     leave.s DONE
   }
-  catch [%s]System.Exception
+  catch [%s]%s
   {
     pop
     leave.s DONE
   }
 DONE:
   ldc.i4.7
-  ret""" % a.scope,
+  ret""" % (a.scope, a.cls),
     "badop": """  .maxstack 1
   ldc.i4.7
   .emitbyte 0xA6

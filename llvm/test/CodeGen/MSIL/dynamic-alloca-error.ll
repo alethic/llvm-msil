@@ -29,13 +29,17 @@
 ;  - llvm.init.trampoline and llvm.adjust.trampoline: 'trampolines are not
 ;    supported for MSIL', once for each;
 ;  - llvm.eh.sjlj.setjmp and llvm.eh.sjlj.longjmp (__builtin_setjmp and
-;    __builtin_longjmp): '<intrinsic> is not supported for MSIL yet (phase 3
-;    setjmp/longjmp)'; llvm.eh.sjlj.setup.dispatch: 'llvm.eh.sjlj.setup.dispatch
-;    is not supported for MSIL'; llvm.eh.return.i32 and llvm.eh.return.i64
-;    (__builtin_eh_return): 'llvm.eh.return is not supported for MSIL'. Without
-;    these the legalizer would silently drop the longjmp and the eh.return and
-;    fold the setjmp to 0, and an unlowered setup.dispatch could not be
-;    selected;
+;    __builtin_longjmp), which MSILLowerSjLj does not lower (it lowers only
+;    the library setjmp family, contract 5.15.4; section 12 row of 2026-10-28
+;    'Row 2026-10-14 ... amended for two of its texts', M27):
+;    '__builtin_setjmp ('llvm.eh.sjlj.setjmp') is not supported for MSIL; use
+;    setjmp' and '__builtin_longjmp ('llvm.eh.sjlj.longjmp') is not supported
+;    for MSIL; use longjmp'; llvm.eh.sjlj.setup.dispatch:
+;    'llvm.eh.sjlj.setup.dispatch is not supported for MSIL'; llvm.eh.return.i32
+;    and llvm.eh.return.i64 (__builtin_eh_return): 'llvm.eh.return is not
+;    supported for MSIL'. Without these the legalizer would silently drop the
+;    longjmp and the eh.return and fold the setjmp to 0, and an unlowered
+;    setup.dispatch could not be selected;
 ;  - a static frame above 2 GiB: 'stack frame of <N> bytes is larger than the
 ;    2 GiB that MSIL supports', where N is the frame size plus the MaxAlign - 8
 ;    bytes of the D13 realignment; the localloc is clamped to 2147483647 bytes,
@@ -168,13 +172,13 @@ define ptr @trampoline(ptr %n) {
 
 ; Each intrinsic is alone in its function, so each function gives exactly one
 ; error. The setjmp's dummy result is 0.
-; ERR: error: {{.*}}in function sjlj_setjmp i32 (ptr): llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp){{$}}
+; ERR: error: {{.*}}in function sjlj_setjmp i32 (ptr): __builtin_setjmp ('llvm.eh.sjlj.setjmp') is not supported for MSIL; use setjmp{{$}}
 define i32 @sjlj_setjmp(ptr %buf) {
   %r = call i32 @llvm.eh.sjlj.setjmp(ptr %buf)
   ret i32 %r
 }
 
-; ERR: error: {{.*}}in function sjlj_longjmp void (ptr): llvm.eh.sjlj.longjmp is not supported for MSIL yet (phase 3 setjmp/longjmp){{$}}
+; ERR: error: {{.*}}in function sjlj_longjmp void (ptr): __builtin_longjmp ('llvm.eh.sjlj.longjmp') is not supported for MSIL; use longjmp{{$}}
 define void @sjlj_longjmp(ptr %buf) {
   call void @llvm.eh.sjlj.longjmp(ptr %buf)
   unreachable

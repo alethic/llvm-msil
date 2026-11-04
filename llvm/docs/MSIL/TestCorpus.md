@@ -71,12 +71,12 @@ triple), as natively, and one is a `diag` entry:
 **CI.** Whether GitHub's runners may download and run CoreMark (EEMBC's licence agreement) and
 c-testsuite (per-test licences) was plan section 10 item 11, which the user answered with R23
 (2026-10-28): allowed. Since M24 (plan 5.17.17) `.github/workflows/msil-ci.yml` sets
-`MSIL_CORPUS_SKIP: ''`, so CI fetches and runs all ten entries. The variable stays for local
+`MSIL_CORPUS_SKIP: ''`, so CI fetches and runs every entry (twelve since M27's `lua` and `lua-tests`). The variable stays for local
 opt-outs: an entry it names is left out (`fetch.py --skip`, lit's `msil_corpus_skip`) and its
 tests are UNSUPPORTED, and while it names `c-testsuite` the `ctest` and `ctest-wsl` legs are
 skipped (GettingStarted.md section 7, "The exit corpus"). CI's corpus cache key takes a hash of
 the skip list, never the list itself (`actions/cache` rejects a key with a comma). The phase
-gate on the development host (`run-m1-gate.ps1`) clears the variable and runs all ten.
+gate on the development host (`run-m1-gate.ps1`) clears the variable and runs them all.
 
 ## C
 

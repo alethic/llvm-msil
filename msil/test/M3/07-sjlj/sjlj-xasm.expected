@@ -1,0 +1,11 @@
+library longjmp to the program's buffer: r=5
+library round trip: 31
+library longjmp from a recursion in the library: r=6
+library longjmp below a program frame without setjmp: r=7
+library longjmp to its memcpy'd copy of the program's buffer: r=8
+library round trip: 41
+library longjmp to its own buffer, a memcpy of the program's: r=9
+library longjmp past a library setjmp frame: r=10 got=0 entries=1 taken=0
+library longjmp(b, 0): r=1
+library round trip: 11
+[exit 0]

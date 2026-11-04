@@ -1,0 +1,17 @@
+# zlib 1.3.2's contrib/blast, hosted: blast() decompresses its header example whole, in 1-byte chunks and truncated, and longjmps out when the input runs out.
+# blast.c (unmodified, from the corpus cache) in libblast.a with the driver
+# blast_main.c, whose input and output functions blast() calls through C
+# function pointers: the example of blast.c's header comment (00 04 82 24
+# 25 8f 80 7f, "AIAIAIAIAIAIA") whole, in 1-byte chunks, partly through
+# blast()'s left/in arguments, with trailing input and cut after each of its
+# first 7 bytes; two headers blast() rejects; an output function that fails;
+# 24 pseudo-random streams. Running out of input is blast()'s longjmp from
+# bits() or decode() to its setjmp (return code 2), past the driver's input
+# function. Built at every level of the leg and compared with the hosted
+# native build of the same sources; the transcript ends [exit 0].
+# Plan 5.17.15 (M27).
+# REQUIRES: msil-corpus-zlib
+# REDEFINE: %{msil_srcs} = %S/blast_main.c
+# REDEFINE: %{msil_archives} = blast=%{msil_corpus}/zlib-1.3.2/contrib/blast/blast.c
+# REDEFINE: %{msil_copts} = -I%{msil_corpus}/zlib-1.3.2/contrib/blast
+# RUN: %{msil_prog}

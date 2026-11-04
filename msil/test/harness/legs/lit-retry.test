@@ -18,6 +18,16 @@
 # with --max 4, printing the four names; (c) one timeout and the passing test:
 # exit 0, that one name; (d) the passing test alone: exit 0, no name.
 # (3) A missing file, a file that is not XML and usage errors exit 2.
+# (4) A harness test that runs lit inside lit (M27; plan section 12, row
+# 'M27.d extended (P-1b leftover: timeouts inside nested lit runs)'): the
+# outer failure text quotes the nested run's output with a second level of
+# lit's '# | ' prefix. Synthetic xunit files with one failed test each:
+# (a) after the last '# executed command:' a check of a nested log whose
+# run ended in the transcript line '+[timeout]', printed as
+# '# | # | +[timeout]': timeout-only, so select exits 0 naming the test;
+# (b) the same nested failure with a transcript that differs in its status
+# instead ('-[exit 0]', '+[exit 1]') and no timeout marker: not timeout-only,
+# exit 4 naming it.
 
 # RUN: rm -rf %t && mkdir -p %t
 
@@ -59,3 +69,14 @@
 # RUN: %{harness_check} contains %t/3c.log "^lit-retry: missing command 'select' \(or --self-test\)$"
 # RUN: %{harness_check} exits 2 %python %S/../../../utils/ci/lit-retry.py select %t/all.xml --max x > %t/3d.log 2>&1
 # RUN: %{harness_check} contains %t/3d.log "^lit-retry: argument --max: not a number: 'x'$"
+
+# (4a)
+# RUN: %{harness_check} write %t/nested-timeout.xml "<?xml version='1.0' encoding='UTF-8'?>" "<testsuites time='61.00'>" "<testsuite name='MSIL' tests='1' failures='1' skipped='0' time='61.00'>" "<testcase classname='MSIL.harness' name='nested-timeout.test' time='61.00'>" "  <failure><![CDATA[Exit Code: 1" "Command Output (stdout):" "--" "# RUN: at line 40" "python harness-check.py contains obj.log PASS" "# executed command: python harness-check.py contains obj.log PASS" "# .---command stderr------------" "# | harness-check: no match for 'PASS' in obj.log" "# | ---- obj.log ----" "# | FAIL: MSIL :: harness/prog/Inputs/nested/m23/also-run-obj.c (1 of 1)" "# | # RUN: at line 2" "# | # executed command: python msil-steps.py --step=run prog.exe --step=also-net8-tc0-run prog.exe" "# | # .---command stdout------------" "# | # | msil-steps: also-net8-tc0-run: python msil-run.py --out also.out prog.exe" "# | # | msil-run: output of prog.exe does not match also-run-obj.expected" "# | # | -[exit 0]" "# | # | +[timeout]" "# | # `-----------------------------" "# | # error: command failed with exit status: 1" "# | ---- end ----" "# `-----------------------------" "# error: command failed with exit status: 1" "--]]></failure>" "</testcase>" "</testsuite>" "</testsuites>"
+# RUN: %python %S/../../../utils/ci/lit-retry.py select %t/nested-timeout.xml > %t/4a.out
+# RUN: %{harness_check} contains %t/4a.out "\AMSIL :: harness/nested-timeout\.test\n\Z"
+
+# (4b)
+# RUN: %{harness_check} write %t/nested-other.xml "<?xml version='1.0' encoding='UTF-8'?>" "<testsuites time='61.00'>" "<testsuite name='MSIL' tests='1' failures='1' skipped='0' time='61.00'>" "<testcase classname='MSIL.harness' name='nested-other.test' time='61.00'>" "  <failure><![CDATA[Exit Code: 1" "Command Output (stdout):" "--" "# RUN: at line 40" "python harness-check.py contains obj.log PASS" "# executed command: python harness-check.py contains obj.log PASS" "# .---command stderr------------" "# | harness-check: no match for 'PASS' in obj.log" "# | ---- obj.log ----" "# | FAIL: MSIL :: harness/prog/Inputs/nested/m23/also-run-obj.c (1 of 1)" "# | # RUN: at line 2" "# | # executed command: python msil-steps.py --step=run prog.exe --step=also-net8-tc0-run prog.exe" "# | # .---command stdout------------" "# | # | msil-steps: also-net8-tc0-run: python msil-run.py --out also.out prog.exe" "# | # | msil-run: output of prog.exe does not match also-run-obj.expected" "# | # | -[exit 0]" "# | # | +[exit 1]" "# | # `-----------------------------" "# | # error: command failed with exit status: 1" "# | ---- end ----" "# `-----------------------------" "# error: command failed with exit status: 1" "--]]></failure>" "</testcase>" "</testsuite>" "</testsuites>"
+# RUN: %{harness_check} exits 4 %python %S/../../../utils/ci/lit-retry.py select %t/nested-other.xml > %t/4b.out 2> %t/4b.err
+# RUN: %{harness_check} equals %t/4b.out
+# RUN: %{harness_check} contains %t/4b.err "^lit-retry: 1 failed test\(s\) not timeout-only, so nothing is re-run: MSIL :: harness/nested-other\.test$"

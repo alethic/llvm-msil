@@ -1,0 +1,52 @@
+# Lua 5.4.9, hosted: an embedding driver runs prog1.lua (formatting, string.pack, utf8, dates, files, sorting) and prog2.lua (pcall, error, coroutines) in fresh states, byte for byte against native.
+# lua_embed.c links the 32 library files of Lua 5.4.9 (liblua.a, from the
+# corpus cache, unmodified) without lua.c: for each script named on its
+# command line it opens a fresh state (luaL_newstate, luaL_openlibs), runs
+# the script with luaL_dofile and prints a failing script's error, then runs
+# chunks of its own through the C API (a top-level error caught by lua_pcall
+# with a message handler, luaL_error from a C function, a coroutine that
+# yields to C twice and then fails). prog1.lua and prog2.lua are
+# toolchain-authored inputs copied from the hosted-libc recon
+# (llvm/docs/MSIL/recon/p3/hosted-libc-files/data/); %{msil_run_opts} copies
+# them next to the program for every run (native oracle, main, .NET
+# Framework, each msil_also_run entry), and %{msil_run_args} names them.
+# Every Lua error and every coroutine yield is a longjmp from luaD_throw to
+# the setjmp of luaD_rawrunprotected (ldo.c: _setjmp and _longjmp under
+# LUA_USE_POSIX on Linux triples, setjmp and longjmp on Windows triples),
+# which MSILLowerSjLj lowers (plan 5.15.4); prog1.lua raises none (the
+# recon's Windows runs differed only in a rounding that M26's UCRT stdio
+# options fixed), prog2.lua and the driver's chunks raise them. The flags
+# are those of the hosted-libc recon (section 1.2), -DLUA_COMPAT_5_3, with
+# Lua's 'make linux' selection LUA_USE_LINUX on Linux triples coming from
+# the forced-include msil_lua_config.h, so one line serves both triples
+# and both builds. The Linux link needs no -lm or -ldl beyond the defaults
+# (glibc 2.34 and later define dlopen in libc.so.6). Built from the corpus
+# cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py) as a
+# multi-TU program with a static archive, at every level of the leg, and
+# compared with the hosted native build of the same sources; the
+# transcript ends [exit 0]. Plan 5.17.15 (M27).
+# ../det/lua.test repeats the REQUIRES and REDEFINE lines for %{msil_det}.
+# REQUIRES: msil-corpus-lua
+# REDEFINE: %{msil_srcs} = %S/../lua/lua_embed.c
+# REDEFINE: %{msil_archives} = lua=%{msil_corpus}/lua-5.4.9/src/lapi.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lcode.c,%{msil_corpus}/lua-5.4.9/src/lctype.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ldebug.c,%{msil_corpus}/lua-5.4.9/src/ldo.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ldump.c,%{msil_corpus}/lua-5.4.9/src/lfunc.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lgc.c,%{msil_corpus}/lua-5.4.9/src/llex.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lmem.c,%{msil_corpus}/lua-5.4.9/src/lobject.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lopcodes.c,%{msil_corpus}/lua-5.4.9/src/lparser.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lstate.c,%{msil_corpus}/lua-5.4.9/src/lstring.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ltable.c,%{msil_corpus}/lua-5.4.9/src/ltm.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lundump.c,%{msil_corpus}/lua-5.4.9/src/lvm.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lzio.c,%{msil_corpus}/lua-5.4.9/src/lauxlib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lbaselib.c,%{msil_corpus}/lua-5.4.9/src/lcorolib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ldblib.c,%{msil_corpus}/lua-5.4.9/src/liolib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lmathlib.c,%{msil_corpus}/lua-5.4.9/src/loadlib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/loslib.c,%{msil_corpus}/lua-5.4.9/src/lstrlib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ltablib.c,%{msil_corpus}/lua-5.4.9/src/lutf8lib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/linit.c
+# REDEFINE: %{msil_copts} = -I%{msil_corpus}/lua-5.4.9/src -DLUA_COMPAT_5_3 \
+# REDEFINE:   -include %S/../lua/msil_lua_config.h
+# REDEFINE: %{msil_run_opts} = --dep %S/../lua/prog1.lua %S/../lua/prog2.lua
+# REDEFINE: %{msil_run_args} = prog1.lua prog2.lua
+# RUN: %{msil_prog}

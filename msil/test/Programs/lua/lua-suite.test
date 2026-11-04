@@ -1,0 +1,110 @@
+# Lua 5.4.9, hosted: Lua's lua.c runs Lua's own test suite (all.lua with -e_U=true) from a copy of the lua-tests tree to 'final OK !!!' and exit 0 on every runtime of the leg.
+# lua.c (unmodified, from the corpus cache) with the 32 library files of
+# lua-embed.test's liblua.a and its flags, plus the test object
+# lua_nosignal.c, which defines signal (both triples) and sigaction (Linux
+# triples) as no-ops with the prototypes of <signal.h>: lua.c installs a
+# SIGINT handler around every chunk, and handing a C function to the host C
+# library is M28's (M28 runs the unmodified lua.c without the object). The
+# suite (the corpus cache's lua-tests-5.4.9: all.lua and the files it runs)
+# exercises errors, pcall in metamethods, coroutines, cstack.lua's stack
+# overflow detection, goto, the garbage collector, files and dates,
+# string.format, string.pack, utf8 and to-be-closed variables; each Lua
+# error and coroutine yield is a longjmp (ldo.c) that MSILLowerSjLj lowers
+# (plan 5.15.4). Its output has random seeds and times, so FileCheck checks
+# its end, 'final OK !!!' and the status line [exit 0], instead of a
+# transcript, and no native build runs here (the native lua.c of the same
+# sources passes the suite on both triples: the DLL C runtime on Windows,
+# E7h in WSL; update-expected.py skips a test without a composite).
+# Explicit RUN lines: for each level of the leg (lua-level=<L>, which
+# lit.local.cfg sets from config.msil_opt_levels), except -O0 on Windows
+# triples, the program is built (%msil_prog_build), verified (%msil_verify)
+# and force-JITed (%msil_jitall), then run with %{msil_run_opts} (--dep-dir
+# copies the
+# lua-tests tree into the private run directory, where the suite reads
+# and writes its files) and %{msil_run_args} (-e_U=true all.lua) on the
+# leg's runtime, on the .NET Framework (msil-run-netfx) and, through
+# %{msil_also_run_check}, on each runtime of the leg's msil_also_run (after
+# jitall there), each run followed by the FileCheck below.
+# -O0 on Windows triples is left out: there the suite's C-stack tests
+# (calls.lua's 'C-stack overflow while handling C-stack overflow', the
+# recursive gsub of cstack.lua: about 200 nested C calls, each with Lua's
+# whole interpreter frame) overflow the main thread's stack (status
+# 0xC00000FD) on .NET with DOTNET_TieredCompilation=0 (dotnet.exe reserves
+# 1.5 MiB), and so does the native lua.exe built at -O0 with the DLL C
+# runtime (1 MiB); the same -O0 image passes on .NET 8 and .NET 10 with
+# tiered compilation and on the .NET Framework (the image's 4 MiB stack
+# reserve). Linux runs -O0 too (an 8 MiB main stack, native and under
+# WSL .NET 10 alike). A leg that runs no level left is UNSUPPORTED here.
+# The exception is accepted in plan section 12's row 'M27.h's
+# `lua-suite.test` as built (the outcome of its native check, ...)'.
+# %{msil_limits} is not redefined (5.17.9): measured runs of the suite
+# (the copy of the tree into the private run directory included) took
+# 6.5-6.8 s on .NET 10, on .NET 10 with DOTNET_TieredCompilation=0 and on
+# the .NET Framework at -O2 on Windows, and 5-12.3 s on WSL .NET 10 at -O0
+# and -O2 with and without TieredCompilation=0 (the slowest, -O0 with
+# tiered compilation, 12.3 s), so the default timeout of 60 s already
+# allows about five times the slowest run, and the default memory cap
+# holds the suite's 16 MiB of Lua memory. Plan 5.17.15 (M27).
+# REQUIRES: msil-corpus-lua, msil-corpus-lua-tests
+# REQUIRES: lua-level=O1 || lua-level=O2 || lua-level=O3 || lua-level=Os || lua-level=Oz || (lua-level=O0 && !msil-triple-windows)
+# REDEFINE: %{msil_srcs} = %{msil_corpus}/lua-5.4.9/src/lua.c %S/lua_nosignal.c
+# REDEFINE: %{msil_archives} = lua=%{msil_corpus}/lua-5.4.9/src/lapi.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lcode.c,%{msil_corpus}/lua-5.4.9/src/lctype.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ldebug.c,%{msil_corpus}/lua-5.4.9/src/ldo.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ldump.c,%{msil_corpus}/lua-5.4.9/src/lfunc.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lgc.c,%{msil_corpus}/lua-5.4.9/src/llex.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lmem.c,%{msil_corpus}/lua-5.4.9/src/lobject.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lopcodes.c,%{msil_corpus}/lua-5.4.9/src/lparser.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lstate.c,%{msil_corpus}/lua-5.4.9/src/lstring.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ltable.c,%{msil_corpus}/lua-5.4.9/src/ltm.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lundump.c,%{msil_corpus}/lua-5.4.9/src/lvm.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lzio.c,%{msil_corpus}/lua-5.4.9/src/lauxlib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lbaselib.c,%{msil_corpus}/lua-5.4.9/src/lcorolib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ldblib.c,%{msil_corpus}/lua-5.4.9/src/liolib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/lmathlib.c,%{msil_corpus}/lua-5.4.9/src/loadlib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/loslib.c,%{msil_corpus}/lua-5.4.9/src/lstrlib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/ltablib.c,%{msil_corpus}/lua-5.4.9/src/lutf8lib.c, \
+# REDEFINE:   %{msil_corpus}/lua-5.4.9/src/linit.c
+# REDEFINE: %{msil_copts} = -I%{msil_corpus}/lua-5.4.9/src -DLUA_COMPAT_5_3 \
+# REDEFINE:   -include %S/msil_lua_config.h
+# REDEFINE: %{msil_run_opts} = --dep-dir %{msil_corpus}/lua-tests-5.4.9
+# REDEFINE: %{msil_run_args} = -e_U=true all.lua
+
+# The commands of one level, %{lua_level}, on the image %{lua_image}.
+# DEFINE: %{lua_level} = O0
+# DEFINE: %{lua_image} = %t.%{lua_level}.d/prog.exe
+# REDEFINE: %{msil_also_run_image} = %{lua_image}
+# DEFINE: %{lua_suite} = \
+# DEFINE:   rm -rf %t.%{lua_level}.d \
+# DEFINE:   && %msil_prog_build --level %{lua_level} --workdir %t.%{lua_level}.d --out %{lua_image} \
+# DEFINE:      --src %{msil_srcs} --archives='%{msil_archives}' \
+# DEFINE:   && %msil_verify %{lua_image} \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %{lua_image} %} \
+# DEFINE:   && %msil_exec --out %{lua_image}.out %{msil_run_opts} -- %{lua_image} %{msil_run_args} \
+# DEFINE:   && FileCheck --input-file=%{lua_image}.out --match-full-lines %s \
+# DEFINE:   %if msil-run-netfx %{ \
+# DEFINE:     && %msil_exec --netfx --out %{lua_image}.netfx.out %{msil_run_opts} \
+# DEFINE:        -- %{lua_image} %{msil_run_args} \
+# DEFINE:     && FileCheck --input-file=%{lua_image}.netfx.out --match-full-lines %s \
+# DEFINE:   %} \
+# DEFINE:   %{msil_also_run_check}
+
+# RUN: %if lua-level=O0 && !msil-triple-windows %{ %{lua_suite} %}
+
+# REDEFINE: %{lua_level} = O1
+# RUN: %if lua-level=O1 %{ %{lua_suite} %}
+
+# REDEFINE: %{lua_level} = O2
+# RUN: %if lua-level=O2 %{ %{lua_suite} %}
+
+# REDEFINE: %{lua_level} = O3
+# RUN: %if lua-level=O3 %{ %{lua_suite} %}
+
+# REDEFINE: %{lua_level} = Os
+# RUN: %if lua-level=Os %{ %{lua_suite} %}
+
+# REDEFINE: %{lua_level} = Oz
+# RUN: %if lua-level=Oz %{ %{lua_suite} %}
+
+# CHECK: final OK !!!
+# CHECK: [exit 0]

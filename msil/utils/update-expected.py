@@ -238,6 +238,16 @@ test per listed name, whose expected file msil_ctest_format.py writes from
 <name>.c.expected plus [exit 0]; the name is the one
 msil/test/Programs/c-testsuite/lit.local.cfg opens) is skipped as a whole.
 
+M27 (plan 5.17.2): the program inputs. A test's REDEFINE: values of
+%{msil_run_opts} (msil-run.py options, such as --stdin FILE, --dep FILE or
+--dep-dir DIR) and %{msil_run_args} (the program's arguments) go to the
+native run as every run of lit's composites takes them: the options before
+the '--' that precedes the program, the arguments after it; both are empty
+by default. %if is decided as above and %{msil_corpus}, %{s:stem}, %s, %S,
+%p and %t (the directory of the test's split-file parts and preparing
+commands) are replaced; a value that uses another substitution, or that
+does not split into words, fails the test (FAIL (test file)).
+
 --clang may also be a command line (a stand-in compiler of the harness
 self-tests, written as msil-prog.py's --clang takes it).
 
@@ -1205,6 +1215,44 @@ class Oracle:
         text = self.placeholder(info, src, "%{msil_copts}", "")
         return msil_prog.split_words(text)
 
+    def run_inputs(self, info, src, work):
+        """The program inputs of the test src (info is its TestInfo; plan
+        5.17.2, M27): (the words of its REDEFINE: value of %{msil_run_opts},
+        the msil-run.py options that come before the program; those of
+        %{msil_run_args}, the program's arguments after it), both empty by
+        default, as every run of lit's composites takes them. %if is decided
+        and %{msil_corpus}, %{s:stem}, %s, %S, %p and %t (work/t, the
+        directory of build_prog) are replaced, a path with a blank quoted.
+        Raises TestFileError for a value that does not split into words or
+        that uses another substitution."""
+        test_dir = os.path.dirname(os.path.abspath(src))
+        stem = os.path.splitext(os.path.basename(src))[0]
+        result = []
+        for name in ("%{msil_run_opts}", "%{msil_run_args}"):
+            text = info.redefines.get(name, "")
+            try:
+                if "%if " in text:
+                    text = self.decide_if(text)
+                for key, sub in (
+                    ("%{msil_corpus}", self.args.corpus_dir.replace("\\", "/")),
+                    ("%{s:stem}", stem),
+                    ("%s", os.path.abspath(src)),
+                    ("%S", test_dir),
+                    ("%p", test_dir),
+                    ("%t", os.path.join(work, "t")),
+                ):
+                    text = text.replace(key, msil_prog.quote_word(sub))
+                unknown = UNKNOWN_SUBST_RE.findall(text)
+                if unknown:
+                    raise TestFileError(
+                        "%s: no oracle value for %s"
+                        % (name, ", ".join(sorted(set(unknown))))
+                    )
+                result.append(msil_prog.split_words(text))
+            except (msil_prog.UsageError, ValueError) as e:
+                raise TestFileError("%s: %s" % (name, e))
+        return result[0], result[1]
+
     def expect_stem(self, info, src):
         """The stem of the expected file: the %{msil_expect} REDEFINE: value
         (M23), else the test's own path without its suffix."""
@@ -1549,6 +1597,12 @@ class Oracle:
         each naming the level when the run has several)."""
         args = self.args
         at = "" if len(args.levels) == 1 else " at " + level
+        try:
+            run_opts, run_args = self.run_inputs(info, src, work)
+        except TestFileError as e:
+            log.err("update-expected: %s: %s\n" % (src, e))
+            log.out("FAIL (test file): %s\n" % src)
+            return None
         if kind == "prog":
             exe, run_mode = self.build_prog(info, work, log, level, mode)
         else:
@@ -1564,7 +1618,9 @@ class Oracle:
             "--mem-limit-mb",
             str(mode.mem_limit_mb),
         ]
-        run += ["--", exe]
+        # The test's program inputs (plan 5.17.2): its msil-run.py options
+        # before the program, its arguments after it, as lit's runs pass them.
+        run += run_opts + ["--", exe] + run_args
         proc = subprocess.run(run, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out = msil_run.text_of(proc.stdout)
         status = out.rstrip("\n").split("\n")[-1]

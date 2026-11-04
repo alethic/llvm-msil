@@ -1,16 +1,17 @@
 ; The legacy codegen pipeline of MSILPassConfig (ImplementationPlan.md 5.3,
 ; recon passes-frame.md 4.2) was fixed in M2 (decision D33); M11 removed the
 ; second invoke lowering (section 12 rows of 2026-10-20, recon
-; m11/eh-passes.md), and M26 fixed the IR slots of 5.13.6 (P-4). This test
-; pins the order of the MSIL passes and of the generic passes next to them, at
-; -O0 and -O2 on the three triples:
+; m11/eh-passes.md), M26 fixed the IR slots of 5.13.6 (P-4), and M27 filled
+; slot P8. This test pins the order of the MSIL passes and of the generic
+; passes next to them, at -O0 and -O2 on the three triples:
 ; - IR (5.13.6): MSILPrepareIR (P1) runs first of the target's IR passes, then
 ;   AddMissingPrototypes (P2), LowerInvoke (P3), UnreachableBlockElim (P4),
 ;   FixFunctionBitcasts (P5), PrepareVariadics (P6), ExpandVariadics (P7),
-;   LowerDynamicAlloca (P9), (-O2 only here) OptimizeReturned (P12) and
-;   IndirectBrExpand (P13), ahead of the generic IR passes (P14). P6, P7 and
-;   P9 run at every optimization level (P-1). P8 (M27), P10 (M31) and P11
-;   (M28) do not exist yet; their milestones add their lines here;
+;   LowerSjLj (P8, M27), LowerDynamicAlloca (P9), (-O2 only here)
+;   OptimizeReturned (P12) and IndirectBrExpand (P13), ahead of the generic
+;   IR passes (P14). P6, P7, P8 and P9 run at every optimization level (P-1).
+;   P10 (M31) and P11 (M28) do not exist yet; their milestones add their
+;   lines here;
 ; - exceptions: the exception model is always None (decision D8), and
 ;   MSILPassConfig::addPassesToHandleExceptions adds nothing, so LowerInvoke
 ;   runs exactly once, in addIRPasses, and UnreachableBlockElim exactly twice:
@@ -48,7 +49,8 @@
 ; pass manager schedules in between. -verify-machineinstrs is left out
 ; because it inserts machine verifier passes (EXPENSIVE_CHECKS builds insert
 ; them anyway, and the ordered checks skip them). The module has no function
-; definitions; pipeline-knr-variadic.ll checks what the order does to code.
+; definitions; pipeline-knr-variadic.ll and pipeline-sjlj-bitcast.ll check
+; what the order does to code.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=MSIL \
 ; DEFINE:   --implicit-check-not="Register Allocator" \
@@ -90,6 +92,7 @@
 ; CHECK:       MSIL Fix Function Bitcasts
 ; CHECK:       MSIL Prepare Variadic Calls
 ; CHECK:       Expand variadic functions
+; CHECK:       MSIL Lower setjmp and longjmp
 ; CHECK:       MSIL Lower Dynamic Allocas
 ; O0-NOT:      MSIL Optimize Returned
 ; O2:          MSIL Optimize Returned

@@ -1,0 +1,8 @@
+# Run in a nested lit by ../../run-inputs.test only: %{msil_prog_O2} without
+# a REDEFINE of %{msil_run_opts} or %{msil_run_args}, so every run of the
+# program gets neither options nor arguments. The stand-in program exits 6.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_O2}
+#--- main.c
+// prog-value: 6

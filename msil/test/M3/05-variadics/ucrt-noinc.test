@@ -38,10 +38,15 @@
 # - sscanf, vsscanf, swscanf and vswscanf read fixed strings; fscanf,
 #   vfscanf, fwscanf and vfwscanf read, in turn, one file that the program
 #   writes in its private run directory and then removes; scanf, vscanf,
-#   wscanf and vwscanf read the harness's stdin, which is always empty
-#   (msil-run.py and update-expected.py give programs no input), so each
-#   returns EOF and leaves its argument alone: a call through the member to
-#   the UCRT's stdin, not a conversion.
+#   wscanf and vwscanf read, in turn, the lines of stdin.txt, which every
+#   run gets as its stdin (REDEFINE: %{msil_run_opts} = --stdin FILE, plan
+#   5.17.2: the native oracle's run, the main run, the .NET Framework run
+#   and each msil_also_run run alike), each an integer and a string. The
+#   wide forms' %s is the UCRT's wide string conversion only while the
+#   scanf options word has its legacy wide specifiers bit (bit 1, set by
+#   default), so their strings show that word: read as ISO's narrow %s,
+#   the six bytes of 'gamma' would fill three wide characters, shown as
+#   'gma###'.
 # Linux triples run the standard narrow functions only (no wide stream or
 # Microsoft form: glibc's wchar_t is 4 bytes and its streams take a single
 # orientation), hence ucrt-noinc.linux.expected. Plan 5.15.2, 5.17.13 (M26,
@@ -54,7 +59,13 @@
 # UNSUPPORTED: msil-link-output=il && msil-triple-windows
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/noinc.c
+# REDEFINE: %{msil_run_opts} = --stdin %t/stdin.txt
 # RUN: %{msil_prog}
+#--- stdin.txt
+31 alpha
+-7 beta
+1024 gamma
+88 delta
 #--- noinc.c
 /* No <stdio.h>: the declarations the program writes itself. */
 #include <stdarg.h>
@@ -376,12 +387,12 @@ int main(void) {
   x = y = 0;
   n = my_vsscanf("-3 ff rest", "%d %x", &x, &y);
   printf("vsscanf %d: %d %d\n", n, x, y);
-  /* stdin is empty: the harness runs every program with no input. */
+  /* stdin: the first two lines of stdin.txt. */
   x = 5;
-  n = scanf("%d", &x);
-  printf("scanf on empty stdin %d, x %d\n", n, x);
-  n = my_vscanf("%d", &x);
-  printf("vscanf on empty stdin %d, x %d\n", n, x);
+  n = scanf("%d %7s", &x, w);
+  printf("scanf from stdin %d: %d %s\n", n, x, w);
+  n = my_vscanf("%d %7s", &x, w);
+  printf("vscanf from stdin %d: %d %s\n", n, x, w);
 
   /* fscanf and vfscanf (and the wide forms) on a file of the private run
      directory. */
@@ -413,11 +424,17 @@ int main(void) {
 
 #ifdef _WIN32
   microsoft_and_wide();
+  /* stdin: the last two lines of stdin.txt; %s is the wide conversion. */
+  wchar_t ws[8];
   x = 5;
-  n = wscanf(L"%d", &x);
-  printf("wscanf on empty stdin %d, x %d\n", n, x);
-  n = my_vwscanf(L"%d", &x);
-  printf("vwscanf on empty stdin %d, x %d\n", n, x);
+  wfill(ws, 8);
+  n = wscanf(L"%d %7s", &x, ws);
+  wshow("wscanf from stdin", n, ws, 6);
+  printf("wscanf value %d\n", x);
+  wfill(ws, 8);
+  n = my_vwscanf(L"%d %7s", &x, ws);
+  wshow("vwscanf from stdin", n, ws, 6);
+  printf("vwscanf value %d\n", x);
 #endif
   puts("done");
   return 0;

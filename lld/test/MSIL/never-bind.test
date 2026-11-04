@@ -42,8 +42,16 @@
 ##   ten: _setjmp, setjmp, __sigsetjmp, sigsetjmp, longjmp, _longjmp,
 ##   siglongjmp and __longjmp_chk on Linux, and _setjmpex, _setjmp, _setjmp3
 ##   and longjmp on windows-msvc. An object definition resolves them. From
-##   M27 the backend lowers every such call, so only older objects meet this
-##   error.
+##   M27 the backend lowers every such call (MSILLowerSjLj, 5.15.4), so only
+##   an object built without the lowering meets this error: the objects and
+##   the LTO links that reference the family here are built with llc's and
+##   code generation's hidden -msil-disable-sjlj-lowering (M27.b; through
+##   msil-ld's -mllvm for LTO), which leaves the module unchanged. Under
+##   --lto-emit-asm msil-ld neither binds nor reports an N4 name, because
+##   code generation lowers every call and use (the section 12 row 'M27
+##   5.9.6 and 5.10.13 amended (setjmp family under --lto-emit-asm)'), so
+##   that mode has no N4 error; lto-sjlj.test and obj-sjlj.test link the
+##   lowered family.
 ## - Import names: the native libraries are searched by a symbol's import
 ##   name (msil-import-name, C's import_name) when it has one, so the guards
 ##   also test that name. Ordinary symbols imported as __extendhfsf2 (N1),
@@ -53,6 +61,9 @@
 ##   line or N4's error, and a weak reference keeps its trap stub. Objects
 ##   and LTO images are checked through their objects' import attributes,
 ##   --lto-emit-asm text through the merged module's (the import annotation).
+##   my_setjmp is returns_twice, and a call of a returns_twice function
+##   outside the family is one of MSILLowerSjLj's errors (5.15.4), so these
+##   inputs are built without the lowering too.
 ## Through CIL objects (llc -filetype=obj), LTO with an image (the reference
 ## that code generation creates after LTO names '<output>.lto.o') and
 ## --lto-emit-asm. In whole-program text, which links no CIL object, the
@@ -89,12 +100,12 @@
 # RUN: llc -filetype=obj tl.ll -o tl.o
 # RUN: llvm-ar rcs libtl.a tl.o
 # RUN: llc -filetype=obj use.ll -o use.o
-# RUN: llc -filetype=obj sj.ll -o sj.o
-# RUN: llc -filetype=obj sj2.ll -o sj2.o
+# RUN: llc -msil-disable-sjlj-lowering -filetype=obj sj.ll -o sj.o
+# RUN: llc -msil-disable-sjlj-lowering -filetype=obj sj2.ll -o sj2.o
 # RUN: llc -filetype=obj sjdef.ll -o sjdef.o
-# RUN: llc -filetype=obj sj-win.ll -o sj-win.o
-# RUN: llc -filetype=obj imp.ll -o imp.o
-# RUN: llc -filetype=obj impweak.ll -o impweak.o
+# RUN: llc -msil-disable-sjlj-lowering -filetype=obj sj-win.ll -o sj-win.o
+# RUN: llc -msil-disable-sjlj-lowering -filetype=obj imp.ll -o imp.o
+# RUN: llc -msil-disable-sjlj-lowering -filetype=obj impweak.ll -o impweak.o
 # RUN: llvm-as half.ll -o half.bc
 # RUN: llvm-as direct.ll -o direct.bc
 # RUN: llvm-as weak.ll -o weak.bc
@@ -342,16 +353,13 @@
 # N4-NONE-NOT: Stack dump
 # N4-NONE-NOT: LLVM ERROR
 
-## N4 through LTO: the bitcode file is named, with an image and in
-## --lto-emit-asm.
-# RUN: not msil-ld sj.bc libc.so.6 -o x.exe > sj-lto.txt 2>&1
-# RUN: not msil-ld --lto-emit-asm sj.bc libc.so.6 -o x.il > sj-text.txt 2>&1
+## N4 through LTO with an image, code generation not lowering the family:
+## the bitcode file is named. (Under --lto-emit-asm msil-ld leaves the
+## family to code generation, see above.)
+# RUN: not msil-ld -mllvm -msil-disable-sjlj-lowering sj.bc libc.so.6 -o x.exe > sj-lto.txt 2>&1
 # RUN: FileCheck %s --check-prefix=N4 -DFILE=sj.bc --input-file=sj-lto.txt
-# RUN: FileCheck %s --check-prefix=N4 -DFILE=sj.bc --input-file=sj-text.txt
 # RUN: FileCheck %s --check-prefix=N4-NUM8 --input-file=sj-lto.txt
-# RUN: FileCheck %s --check-prefix=N4-NUM8 --input-file=sj-text.txt
 # RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-lto.txt
-# RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-text.txt
 # N4-NUM8-COUNT-8: {{^}}msil-ld: error: {{.+}}
 # N4-NUM8-NOT:     {{.}}
 
@@ -392,9 +400,10 @@
 ## --lto-emit-asm.
 # RUN: not msil-ld imp.o libc.so.6 libgcc_s.so.1 -o imp.exe 2>&1 | %{err} --check-prefix=IMPORT -DREF=imp.o
 # RUN: not ls imp.exe
-# RUN: not msil-ld imp.bc libc.so.6 libgcc_s.so.1 -o imp-lto.exe 2>&1 | %{err} --check-prefix=IMPORT -DREF=imp.bc
+# RUN: not msil-ld -mllvm -msil-disable-sjlj-lowering imp.bc libc.so.6 libgcc_s.so.1 -o imp-lto.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=IMPORT -DREF=imp.bc
 # RUN: not ls imp-lto.exe
-# RUN: not msil-ld --lto-emit-asm imp.bc libc.so.6 libgcc_s.so.1 -o imp.il 2>&1 \
+# RUN: not msil-ld -mllvm -msil-disable-sjlj-lowering --lto-emit-asm imp.bc libc.so.6 libgcc_s.so.1 -o imp.il 2>&1 \
 # RUN:   | %{err} --check-prefix=IMPORT -DREF=imp.bc
 # RUN: not ls imp.il
 # IMPORT:      {{^}}msil-ld: error: undefined symbol: my_ext{{$}}
@@ -412,7 +421,8 @@
 # RUN: msil-ld impweak.o libc.so.6 libgcc_s.so.1 -o impweak.exe 2>&1 | count 0
 # RUN: llvm-cil-dump impweak.exe | FileCheck %s --check-prefix=IMPORT-STUB --implicit-check-not=pinvokeimpl \
 # RUN:   --implicit-check-not=moduleref
-# RUN: msil-ld impweak.bc libc.so.6 libgcc_s.so.1 -o impweak-lto.exe 2>&1 | count 0
+# RUN: msil-ld -mllvm -msil-disable-sjlj-lowering impweak.bc libc.so.6 libgcc_s.so.1 -o impweak-lto.exe 2>&1 \
+# RUN:   | count 0
 # RUN: llvm-cil-dump impweak-lto.exe | FileCheck %s --check-prefix=IMPORT-STUB --implicit-check-not=pinvokeimpl \
 # RUN:   --implicit-check-not=moduleref
 # IMPORT-STUB: {{^}}  .method '<msil>undef_my_ext' float32(int32) flags=0x0013 impl=0x0000{{$}}

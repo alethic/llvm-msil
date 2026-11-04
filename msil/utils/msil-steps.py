@@ -55,6 +55,15 @@ is then skipped too:
 lit expands the words before msil-steps.py starts: substitutions, %if,
 quotes, and wildcards, against the files that exist at that time.
 
+The runs of a composite carry the test's program inputs (plan 5.17.2, M27):
+the words of %{msil_run_opts} among msil-run.py's options before the image
+(before the '--' that ends the dependency options, where there is one) and
+those of %{msil_run_args} after the image, both empty by default. They stay
+in the step's command line and reach msil-run.py unchanged, in the WSL
+batch too, and msil-run.py's own parser decides which step runs in WSL, so
+a program argument never counts as an option. A program argument that
+starts with --step= would start a new step, so none may.
+
 Exit status: 0 when every step passes, else the exit status of the first
 failing step; 2 on a usage error of msil-steps.py itself.
 """
@@ -136,9 +145,25 @@ def options_of(argv):
 
 def runs_in_wsl(script, argv):
     """Whether the arguments argv of script run a program or jitall in WSL
-    (the steps that msil-run.py --steps runs)."""
+    (the steps that msil-run.py --steps runs). A msil-run.py command line is
+    read with msil-run.py's own parser, so a program argument after the image
+    (%{msil_run_args}, plan 5.17.2) that looks like one of its options is not
+    taken for one; a command line that does not parse is decided from its
+    words before the first '--'."""
     if script not in WSL_SCRIPTS:
         return False
+    if script == "msil-run.py":
+        try:
+            args = load("msil-run.py").parse_args(list(argv), quiet=True)
+        except (Exception, SystemExit):  # a usage error, or argparse's exit
+            args = None
+        if args is not None:
+            return (
+                args.runner == "wsl"
+                and not args.tool
+                and args.steps is None
+                and args.steps_inside is None
+            )
     words = options_of(argv)
     wsl = "--runner=wsl" in words or any(
         a == "--runner" and b == "wsl" for a, b in zip(words, words[1:])

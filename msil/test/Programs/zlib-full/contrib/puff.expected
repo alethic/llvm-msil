@@ -1,0 +1,28 @@
+cov 1: 2
+cov 2: 2
+cov 3: -2
+cov 4: 2
+cov 5: 0, 1 bytes from 6 of 6; -f: 1, 0 bytes, hash 811c9dc5
+cov 6: -10
+cov 7: 2
+cov 8: 2
+cov 9: -7
+cov 10: -10
+cov 11: 0, 1 bytes from 3 of 3; -f: 1, 0 bytes, hash 811c9dc5
+cov 12: -10
+cov 13: -11
+cov 14: -3
+cov 15: -4
+cov 16: -5
+cov 17: -8
+cov 18: -6
+cov 19: -9
+zeros.raw: 0, 1234567 bytes from 2517 of 2517; -w: 0, 1234567 bytes, hash 84922227
+zeros.raw: 0, 1234567 bytes from 2517 of 2517; -f: 1, 617283 bytes, hash 811c9dc5
+built mixed: 0, 328 bytes from 58 of 58; -w: 0, 328 bytes, hash 832c351e
+built mixed: 0, 328 bytes from 58 of 58; -f: 1, 164 bytes, hash 811c9dc5
+built mixed, prefixes: 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
+built stored: 0, 10 bytes from 25 of 25; -w: 0, 10 bytes, hash e985c3f3
+built stored, prefixes: 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
+built too far: -11
+[exit 0]

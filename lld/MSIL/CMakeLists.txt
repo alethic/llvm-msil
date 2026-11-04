@@ -33,6 +33,7 @@ add_lld_library(lldMSIL
   BitReader
   CLI
   Core
+  IPO
   LTO
   MC
   Object

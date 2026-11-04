@@ -1,0 +1,40 @@
+example: 0, 13 bytes, hash 26960f60, 1 calls, 0 left, "AIAIAIAIAIAIA"
+example in 1-byte chunks: 0, 13 bytes, hash 26960f60, 8 calls, 0 left, "AIAIAIAIAIAIA"
+example, 3 bytes through left: 0, 13 bytes, hash 26960f60, 3 calls, 0 left, "AIAIAIAIAIAIA"
+example with 2 trailing bytes: 0, 13 bytes, hash 26960f60, 1 calls, 2 left, "AIAIAIAIAIAIA"
+example cut to 0 bytes: 2, 0 bytes, hash 811c9dc5, 1 calls, 0 left
+example cut to 1 bytes: 2, 0 bytes, hash 811c9dc5, 2 calls, 0 left
+example cut to 2 bytes: 2, 0 bytes, hash 811c9dc5, 2 calls, 0 left
+example cut to 3 bytes: 2, 0 bytes, hash 811c9dc5, 2 calls, 0 left
+example cut to 4 bytes: 2, 1 bytes, hash c40bf6cc, 2 calls, 0 left, "A"
+example cut to 5 bytes: 2, 2 bytes, hash 23d5135f, 3 calls, 0 left, "AI"
+example cut to 6 bytes: 2, 13 bytes, hash 26960f60, 3 calls, 0 left, "AIAIAIAIAIAIA"
+example cut to 7 bytes: 2, 13 bytes, hash 26960f60, 3 calls, 0 left, "AIAIAIAIAIAIA"
+literal flag 2: -1, 0 bytes, hash 811c9dc5, 1 calls, 1 left
+dictionary 7: -2, 0 bytes, hash 811c9dc5, 1 calls, 0 left
+failing output: 1, 0 bytes, hash 811c9dc5, 1 calls, 0 left
+random 0 (1 bytes): 2, 0 bytes, hash 811c9dc5, 2 calls, 0 left
+random 1 (4 bytes): 2, 1 bytes, hash ca0c003e, 3 calls, 0 left, "O"
+random 2 (7 bytes): -3, 0 bytes, hash 811c9dc5, 2 calls, 2 left
+random 3 (10 bytes): -3, 1 bytes, hash f70c4715, 2 calls, 3 left, "r"
+random 4 (13 bytes): -3, 2 bytes, hash 72c4469b, 2 calls, 4 left
+random 5 (16 bytes): -3, 1 bytes, hash d10c0b43, 5 calls, 0 left, "T"
+random 6 (19 bytes): -3, 3 bytes, hash 6cf9e1df, 4 calls, 1 left
+random 7 (22 bytes): -3, 4 bytes, hash fd25a179, 3 calls, 1 left, "AOLl"
+random 8 (25 bytes): -3, 2 bytes, hash ed0550d1, 2 calls, 2 left
+random 9 (28 bytes): -3, 1 bytes, hash e10c2473, 1 calls, 0 left, "d"
+random 10 (31 bytes): -3, 1 bytes, hash 260c9112, 5 calls, 0 left, "#"
+random 11 (34 bytes): -3, 0 bytes, hash 811c9dc5, 2 calls, 0 left
+random 12 (37 bytes): -3, 2 bytes, hash 48bd48b8, 3 calls, 2 left
+random 13 (40 bytes): -3, 1 bytes, hash cb0c01d1, 2 calls, 3 left, "N"
+random 14 (43 bytes): -3, 1 bytes, hash f70c4715, 2 calls, 4 left, "r"
+random 15 (46 bytes): -3, 3 bytes, hash bb19f614, 7 calls, 0 left, "tsl"
+random 16 (49 bytes): -3, 1 bytes, hash 480b3398, 3 calls, 1 left
+random 17 (52 bytes): -3, 0 bytes, hash 811c9dc5, 2 calls, 1 left
+random 18 (55 bytes): -3, 6 bytes, hash 58488908, 3 calls, 1 left
+random 19 (58 bytes): -3, 0 bytes, hash 811c9dc5, 1 calls, 1 left
+random 20 (61 bytes): -3, 0 bytes, hash 811c9dc5, 4 calls, 0 left
+random 21 (64 bytes): -3, 1 bytes, hash e30c2799, 3 calls, 1 left, "f"
+random 22 (67 bytes): -3, 0 bytes, hash 811c9dc5, 2 calls, 2 left
+random 23 (70 bytes): -3, 1 bytes, hash ea0c329e, 2 calls, 3 left, "o"
+[exit 0]

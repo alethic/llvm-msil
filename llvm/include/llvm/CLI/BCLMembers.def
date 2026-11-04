@@ -129,5 +129,17 @@ CLI_BCL_TYPE(BitConverter, "System", "BitConverter", true)
 CLI_BCL_METHOD(BitConverter_GetBytes, BitConverter, "GetBytes", false,
                "uint8[]", "int32", Required, "", true)
 
+// M27: setjmp and longjmp (plan 5.15.4)
+// __msil_sjlj_throw throws ExternalException(null, (int)status), and the
+// filter of a setjmp wrapper reads its HResult: no exception type is shared
+// between assemblies.
+CLI_BCL_TYPE(Exception, "System", "Exception", true)
+CLI_BCL_TYPE(ExternalException, "System.Runtime.InteropServices",
+             "ExternalException", true)
+CLI_BCL_METHOD(ExternalException_ctor, ExternalException, ".ctor", true,
+               "void", "string, int32", Required, "", true)
+CLI_BCL_METHOD(Exception_get_HResult, Exception, "get_HResult", true, "int32",
+               "", Required, "", true)
+
 #undef CLI_BCL_TYPE
 #undef CLI_BCL_METHOD

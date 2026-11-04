@@ -60,6 +60,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTarget() {
   initializeMSILAddMissingPrototypesLegacyPass(PR);
   initializeMSILFixFunctionBitcastsLegacyPass(PR);
   initializeMSILPrepareVariadicsLegacyPass(PR);
+  initializeMSILLowerSjLjLegacyPass(PR);
   initializeMSILLowerDynamicAllocaLegacyPass(PR);
   initializeMSILOptimizeReturnedLegacyPass(PR);
   initializeMSILDAGToDAGISelLegacyPass(PR);
@@ -294,7 +295,7 @@ void MSILPassConfig::addIRPasses() {
   //   P5  MSILFixFunctionBitcasts
   //   P6  MSILPrepareVariadics
   //   P7  ExpandVariadics (Lowering mode, MSIL ABIs)
-  //   P8  MSILLowerSjLj (reserved, M27)
+  //   P8  MSILLowerSjLj
   //   P9  MSILLowerDynamicAlloca
   //   P10 MSILLowerThreadLocal (reserved, M31)
   //   P11 MSILLowerIndirectCalls (reserved, M28)
@@ -327,6 +328,13 @@ void MSILPassConfig::addIRPasses() {
 
   // P7: lower variadic definitions and calls over a native-layout va_list.
   addPass(createExpandVariadicsPass(ExpandVariadicsMode::Lowering));
+
+  // P8: route the calls that may longjmp after a setjmp site through
+  // wrappers whose whole body is an IL .try with a fixed filter, and turn
+  // longjmp into the per-module helper __msil_longjmp. This runs after P7, so
+  // a variadic call that longjmps is already a fixed-arity call when it is
+  // wrapped, and before P9, whose cycle analysis must see setjmp's re-entry.
+  addPass(createMSILLowerSjLjLegacyPass());
 
   // P9: keep each dynamic alloca that lies on no CFG cycle for a mid-function
   // localloc, and diagnose the others.

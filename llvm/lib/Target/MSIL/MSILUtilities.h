@@ -14,14 +14,15 @@
 /// \file
 /// This file contains the declaration of the MSIL-specific utility functions:
 /// the IL name of a global value, the helpers the MachineInstr passes share,
-/// the standalone import table (decision D14, frozen) and the imports of
-/// msil-ld's linked text.
+/// the standalone import table (decision D14, frozen), the imports of
+/// msil-ld's linked text and the per-module helpers of the IR passes.
 ///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_MSIL_MSILUTILITIES_H
 #define LLVM_LIB_TARGET_MSIL_MSILUTILITIES_H
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include <cstddef>
 #include <optional>
@@ -30,6 +31,7 @@
 namespace llvm {
 
 class Function;
+class FunctionType;
 class GlobalValue;
 class GlobalVariable;
 class MachineFunction;
@@ -208,6 +210,39 @@ const cli::TrailerDefInfo *getOfferedTrailerDef(const Module &M,
 /// signature of the trailer definition \p D (cli::getTrailerDefSignature).
 bool matchesTrailerDefSignature(const cli::TrailerDefInfo &D,
                                 const Signature &S);
+
+/// Returns the per-module helper \p Name of type \p Ty (plan 5.14.6, delivery
+/// kind K4), the one way an IR pass creates one:
+/// 'define linkonce_odr hidden <Ty> @<Name>(...) unnamed_addr nounwind' in
+/// a COMDAT 'any' of the same name, so that msil-ld keeps one copy per
+/// assembly (a SYMTAB WEAK HIDDEN symbol), the IR linker merges the copies
+/// under LTO, -shared never exports it, and whole-program text treats it as
+/// an ordinary definition (D26). When \p M already defines the helper with
+/// type \p Ty, that definition is returned unchanged. Otherwise the helper
+/// (or a declaration of it with type \p Ty) is given that shape, and then
+/// \p BuildBody adds its body, and may adjust its attributes (a helper whose
+/// address is compared drops unnamed_addr; one that never returns adds
+/// noreturn). A global of that name with another type, or one that is not a
+/// function, is an internal error: helper names start with '__msil_' (name
+/// class N3), and a helper's name, type and meaning never change once
+/// committed (T10).
+Function *getOrCreateModuleHelper(Module &M, StringRef Name, FunctionType *Ty,
+                                  function_ref<void(Function &)> BuildBody);
+
+/// Whether \p Name is a setjmp function of the C library (plan 5.15.4, 'Names
+/// recognized'): a call of a declaration of that name is a setjmp site, whose
+/// first argument is the jmp_buf. The MSVC spellings may take a second
+/// argument (the frame address on x86_64, llvm.sponentry on aarch64), and
+/// _setjmp3 more. MSILLowerSjLj lowers the sites; MSILPrepareVariadics
+/// rejects a variadic declaration without a fixed buffer parameter.
+bool isSetjmpName(StringRef Name);
+
+/// Whether \p Name is a longjmp function of the C library (plan 5.15.4,
+/// 'Names recognized'), taking the jmp_buf and the value: every use of a
+/// declaration of that name becomes __msil_longjmp (MSILLowerSjLj), and
+/// MSILPrepareVariadics rejects a variadic declaration without fixed
+/// parameters for both.
+bool isLongjmpName(StringRef Name);
 
 } // end namespace MSIL
 

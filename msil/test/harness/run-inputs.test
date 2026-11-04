@@ -1,0 +1,53 @@
+# %{msil_run_opts} and %{msil_run_args} (plan 5.17.2, M27): every run of a
+# program takes msil-run.py options before the image, followed by '--' where
+# the composite lists dependencies, and the program's arguments after it.
+# Both are empty by default. A nested lit with -a runs the suite
+# Inputs/run-inputs (its %{msil_prog} tests build with the stand-ins of
+# prog/lit.local.cfg) on .NET 10 with msil_also_run=10+tc0, on the local
+# runner:
+# (1) prog-inputs.test (%{msil_prog_O2}, options '--stdin <file>',
+#     arguments 'first --runner wsl', the second of which spells a
+#     msil-run.py option): the main run, the msil_also_run run and, where
+#     those legs run (a Windows triple with the .NET Framework), the native
+#     oracle's run and the Framework run each name the stdin file after
+#     their --out and before a '--' that precedes the program, and end with
+#     the program and the three arguments; and the test passes, so no step
+#     took an argument for an option of its own (msil-steps.py reads each
+#     run with msil-run.py's parser);
+# (2) prog-defaults.test (no REDEFINE): each of those runs has nothing
+#     between --out and the dependency options and ends with the program;
+# (3) check-inputs.test, explicit RUN lines (plan 5.12.3) whose own run
+#     passes the two placeholders: %{msil_also_run_check} runs the image
+#     with the stdin file before it and the arguments after it, and the
+#     program, whose exit status counts its arguments and reads its stdin
+#     (Inputs/run-inputs/args-stdin.il), exits 34 in both runs, which
+#     FileCheck checks, so the runs really received both;
+# (4) check-defaults.test (no REDEFINE): the msil_also_run run has nothing
+#     between --out and the image and ends with it, and the program exits 9
+#     (no argument, empty stdin) in both runs;
+# (5) loud-inputs.test, the loud-failure composite %{msil_prog_loud_O0}
+#     (plan 5.17.4): its main, msil_also_run and Framework runs are built
+#     like (1)'s.
+# REQUIRES: dotnet-runtime-10, msil-jitall
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_dotnet_runtime=10 --param msil_also_run=10+tc0 %S/Inputs/run-inputs > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/Inputs/run-inputs/prog-inputs\.test " "^PASS: MSIL :: harness/Inputs/run-inputs/prog-defaults\.test " "^PASS: MSIL :: harness/Inputs/run-inputs/check-inputs\.test " "^PASS: MSIL :: harness/Inputs/run-inputs/check-defaults\.test " "^PASS: MSIL :: harness/Inputs/run-inputs/loud-inputs\.test "
+
+# (1)
+# RUN: %{harness_check} contains %t.log "^# \| msil-steps: run: .*msil-run\.py'? .*--out '?\S*prog-inputs\.test\.tmp\.O2\.out'? (?:.* )?--stdin '?\S*prog-inputs\.test\.tmp\Winput\.txt'? (?:.* )?-- '?\S*prog-inputs\.test\.tmp\.O2\.d/prog\.exe'? first --runner wsl$" "^# \| msil-steps: also-net10-tc0-run: .*msil-run\.py'? .*--env '?DOTNET_TieredCompilation=0'? .*--out '?\S*prog-inputs\.test\.tmp\.O2\.also-net10-tc0\.out'? (?:.* )?--stdin '?\S*prog-inputs\.test\.tmp\Winput\.txt'? (?:.* )?-- '?\S*prog-inputs\.test\.tmp\.O2\.d/prog\.exe'? first --runner wsl$"
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# \| msil-steps: native-run: .*msil-run\.py'? .* --native .*--out '?\S*prog-inputs\.test\.tmp\.O2\.native\.out'? (?:.* )?--stdin '?\S*prog-inputs\.test\.tmp\Winput\.txt'? (?:.* )?-- '?\S*prog-inputs\.test\.tmp\.O2\.native\.d/prog\.exe'? first --runner wsl$" "^# \| msil-steps: netfx-run: .*msil-run\.py'? .* --netfx .*--out '?\S*prog-inputs\.test\.tmp\.O2\.netfx\.out'? (?:.* )?--stdin '?\S*prog-inputs\.test\.tmp\Winput\.txt'? (?:.* )?-- '?\S*prog-inputs\.test\.tmp\.O2\.d/prog\.exe'? first --runner wsl$" %}
+
+# (2)
+# RUN: %{harness_check} contains %t.log "^# \| msil-steps: run: .*msil-run\.py'? .*--out '?\S*prog-defaults\.test\.tmp\.O2\.out'? --dep-dir .* '?\S*prog-defaults\.test\.tmp\.O2\.d/prog\.exe'?$" "^# \| msil-steps: also-net10-tc0-run: .*msil-run\.py'? .*--out '?\S*prog-defaults\.test\.tmp\.O2\.also-net10-tc0\.out'? --dep-dir .* '?\S*prog-defaults\.test\.tmp\.O2\.d/prog\.exe'?$"
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# \| msil-steps: native-run: .*msil-run\.py'? .*--out '?\S*prog-defaults\.test\.tmp\.O2\.native\.out'? --dep-dir .* '?\S*prog-defaults\.test\.tmp\.O2\.native\.d/prog\.exe'?$" "^# \| msil-steps: netfx-run: .*msil-run\.py'? .*--out '?\S*prog-defaults\.test\.tmp\.O2\.netfx\.out'? --dep-dir .* '?\S*prog-defaults\.test\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %{harness_check} lacks %t.log "--stdin '?\S*prog-defaults" "prog-defaults\S*prog\.exe'? first"
+
+# (3)
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? .*--env '?DOTNET_TieredCompilation=0'? .*--out '?\S*args-stdin\.dll\.also-net10-tc0\.out'? (?:.* )?--stdin '?\S*check-inputs\.test\.tmp\Winput\.txt'? (?:.* )?'?\S*check-inputs\.test\.tmp\Wargs-stdin\.dll'? first --runner wsl$" "^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*args-stdin\.dll\.also-net10-tc0\.out'? --match-full-lines '?\S*check-inputs\.test'?$"
+
+# (4)
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? .*--out '?\S*check-defaults\.test\.tmp\.dll\.out'? '?\S*check-defaults\.test\.tmp\.dll'?$" "^# executed command: .*msil-run\.py'? .*--env '?DOTNET_TieredCompilation=0'? .*--out '?\S*check-defaults\.test\.tmp\.dll\.also-net10-tc0\.out'? '?\S*check-defaults\.test\.tmp\.dll'?$" "^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*check-defaults\.test\.tmp\.dll\.also-net10-tc0\.out'? --match-full-lines '?\S*check-defaults\.test'?$"
+
+# (5)
+# RUN: %{harness_check} contains %t.log "^# \| msil-steps: run: .*msil-run\.py'? .*--stderr-out .*--out '?\S*loud-inputs\.test\.tmp\.O0\.out'? (?:.* )?--stdin '?\S*loud-inputs\.test\.tmp\Winput\.txt'? (?:.* )?-- '?\S*loud-inputs\.test\.tmp\.O0\.d/prog\.exe'? first --runner wsl$" "^# \| msil-steps: also-net10-tc0-run: .*msil-run\.py'? .*--out '?\S*loud-inputs\.test\.tmp\.O0\.also-net10-tc0\.out'? (?:.* )?--stdin '?\S*loud-inputs\.test\.tmp\Winput\.txt'? (?:.* )?-- '?\S*loud-inputs\.test\.tmp\.O0\.d/prog\.exe'? first --runner wsl$"
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# \| msil-steps: netfx-run: .*msil-run\.py'? .*--out '?\S*loud-inputs\.test\.tmp\.O0\.netfx\.out'? (?:.* )?--stdin '?\S*loud-inputs\.test\.tmp\Winput\.txt'? (?:.* )?-- '?\S*loud-inputs\.test\.tmp\.O0\.d/prog\.exe'? first --runner wsl$" %}

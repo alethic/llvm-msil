@@ -1,6 +1,6 @@
 # MSIL backend: status of Phase 2
 
-State after milestone P-1b (2026-11-03, branch `msil`, with upstream llvm-project main at
+State after milestone M27 (2026-11-04, branch `msil`, with upstream llvm-project main at
 `1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
 M24-M35, M24 laid the foundations of Phase 3, M25 built the helper archive
 `clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple, and M26 made
@@ -11,7 +11,10 @@ triple `msil64-unknown-dotnet`, whose assemblies name no CPU, operating system o
 library and run on every 64-bit little-endian .NET (section 2, "The portable target
 msil64-unknown-dotnet (P-1a)"), and P-1b gave it its C library: the freestanding part of
 LLVM's libc as the shared library assembly `c.dll`, 529 functions without an operating
-system layer (section 2, "The managed C library c.dll (P-1b)").
+system layer (section 2, "The managed C library c.dll (P-1b)"). M27 then made `setjmp` and
+`longjmp` work on the host triples, through IL exception clauses that the backend now emits,
+within one assembly and across library assemblies; Lua 5.4.9 passes its own test suite, and
+zlib's `puff` and `blast` match their native builds (section 2, "setjmp and longjmp (M27)").
 `clang -c` compiles C to CIL objects, and `msil-ld`, an lld flavor, links them, archives of them, LLVM bitcode, native
 libraries and library assemblies into IL-only .NET images that it writes itself, binding the
 base class library against the reference assemblies it is given; `clang -S` plus `ilasm`, the
@@ -128,7 +131,14 @@ cell, the errno numbers of llvm-libc's generic set extended with POSIX's, an app
 list at version 1.0.0.0 and an empty `libm.a`; every function that needs an operating system
 (the heap, stdio streams, `exit`, clocks, the environment, threads) stays absent until P-2 or
 P-3, an undeclared function through the headers and a link error naming `c.dll` through a
-program's own prototype (section 2, "The managed C library c.dll (P-1b)"). How to build and use
+program's own prototype (section 2, "The managed C library c.dll (P-1b)"). M27 made
+`setjmp` and `longjmp` work: a compiler pass routes every call that may `longjmp` after a
+`setjmp` site through a wrapper whose whole body is an IL `.try` with a filter, `longjmp` arms
+the target frame's status block, which a prefix of the `jmp_buf` names, and throws a BCL
+exception that only that frame's filter accepts, so no exception type is shared between
+assemblies; `msil-ld` keeps refusing to bind the family to a native library, every `longjmp` is
+a first-chance CLR exception (7-44 us, by runtime), and a `longjmp` through native frames will
+work on Windows only (section 2, "setjmp and longjmp (M27)"). How to build and use
 it is in [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in
 section 3 of [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every
 later amendment.
@@ -309,6 +319,7 @@ What each case links is in section 2, "The link-semantics matrix".
 | `crt-xt` (P3) | `main`, then the `.CRT$XT` entry at exit (MSVC CRT) | `global destructors are not supported yet: p_term in <file>` | obj, lto | windows-msvc |
 | `atexit-order` (P3) | the handlers in the reverse order of registration | `undefined symbol: atexit` | obj, lto | linux-gnu, windows-msvc |
 | `variadic-def-xtu` (P3; transcript since M26) | 42 | `variadic function definitions are not supported for MSIL yet` (until M26; since M26 the native transcript) | obj, lto | linux-gnu, windows-msvc |
+| `sjlj-xasm` (M27) | each program site returns the value of the library's `longjmp`, and 1 for `longjmp(b, 0)` | the native transcript (a row that Phase 3 adds, plan 5.17.12) | obj, lto | linux-gnu, windows-msvc |
 
 The P3 rows cover everything plan 5.9.16 leaves to Phase 3: thread-local data (`p5-tls`),
 destructors (`p6-dtors`, and the destructor tables `.fini_array` and `.CRT$XT*` of `fini-array`
@@ -320,7 +331,12 @@ pointers passed to native code (`native-callback`) and a variadic definition cal
 another object (`variadic-def-xtu`: `clang -c` reports the definition under `obj`, and a caller
 alone gets `calls to variadic functions are not supported for MSIL yet`; `msil-ld`'s LTO reports
 the definition under `lto`; M26 made it the first P3 row to print its transcript, with the
-milestone in its `From` column, on both pipelines and triples). The three cases whose native build
+milestone in its `From` column, on both pipelines and triples). `sjlj-xasm` is the first row that
+Phase 3 adds: a program and a `-shared` library each set up `setjmp` sites, and the library
+longjmps to the program's buffers (directly, from a recursion, to `memcpy`'d copies, past a
+library frame with its own `setjmp`, and with the value 0), so a throw of one assembly's
+`__msil_longjmp` is caught by the other's filter with no shared exception type
+(`msil/test/M3/07-sjlj/sjlj-xasm.test`, section 2, "setjmp and longjmp (M27)"). The three cases whose native build
 has undefined behaviour,
 `weak-def-sig-mismatch/double`, `float-int-mismatch` and `type-mismatch`, and the Windows half of
 `initarray-args` stop with their named diagnostics on both pipelines. Measured while M23 was
@@ -369,7 +385,7 @@ From M23 the legs of `msil/utils/ci/lit-legs.ps1` and `lit-legs.sh` are the set 
 `net8` runs every MSIL FileCheck directory and `msil/test` through objects with `msil_also_run`,
 the old `obj`, `obj-wsl`, `net10`, `net8-tc0` and `wsl-net10-tc0` legs are folded into `net8` and
 `wsl-net10`, and `programs`, `programs-lto` and `det` (with their WSL twins) and `ctest` (Windows only) read the
-exit corpus. `run-m1-gate.ps1` adds two rows of its own: `corpus` (`fetch.py --check` of all ten
+exit corpus. `run-m1-gate.ps1` adds two rows of its own: `corpus` (`fetch.py --check` of all twelve
 entries before the legs, with `-FetchCorpus` a fetch first) and `determinism`
 (`msil/utils/ci/det-manifest.py build` from two work directories and `compare`). It clears
 `MSIL_CORPUS_SKIP`, so the phase gate always runs CoreMark and c-testsuite.
@@ -2453,7 +2469,10 @@ defects that Phase 2 left, and gives the tests and gates what Phase 3 needs:
     referencing file and name, `<file>: '<name>' cannot be bound to a native library: setjmp
     and longjmp are lowered by the compiler` (under LTO `<file>` is the bitcode file); only a
     definition in an object resolves it. Until M24 the Linux object pipeline bound these names
-    to `libc.so.6` without a word, and such programs ran by accident (section 3).
+    to `libc.so.6` without a word, and such programs ran by accident (section 3). Since M27 the
+    compiler lowers every call and use of the family, so only an object built without the
+    lowering, or a data reference to such a name, meets this error, and `--lto-emit-asm`
+    neither binds nor reports a function of the family ("setjmp and longjmp (M27)" below).
 
   Each class line follows the `undefined symbol: <name>` line and comes before the `>>>
   referenced by` lines, once per symbol. A call of an N1, N2 or N3 name, or of a trailer
@@ -3037,7 +3056,10 @@ UnreachableBlockElim up to P3-P4, without changing the IL of a program that uses
   scope with them at `-O0`) are deleted, since a `localloc` lives until its method returns, as
   the frame does. A dynamic alloca on a cycle (a VLA declared in a loop, `alloca` in a loop) is
   the error `a dynamic stack allocation that can repeat within one call (a VLA or alloca in a
-  loop) is not supported for MSIL yet`, once per function, until M32's shadow stack. The other
+  loop) is not supported for MSIL yet`, once per function, until M32's shadow stack (H1). Since
+  M27 a dynamic alloca that a `longjmp` can re-enter, that is, one after a `setjmp` site with a
+  wrapped call, counts as one that can repeat within one call and gets the same error even with
+  no loop in the source ("setjmp and longjmp (M27)" below). The other
   frame texts lose their phase: `llvm.stacksave is not supported for MSIL yet` and its
   `llvm.stackrestore` twin (backstops that the pass leaves nothing to reach), `llvm.frameaddress
   is not supported for MSIL yet` and `llvm.stackaddress is not supported for MSIL yet`; `dynamic
@@ -3337,7 +3359,7 @@ LR4).
   | User `thread_local` | M31: Phase 2's error | M31, under the Dotnet rule set |
   | Threads (`pthread_*`, `thrd_*`) | P-3: absent | P-3 |
   | `-static` | P-3: T-P9 and T-P11; the sysroot holds no `libc.a` | P-3: the static C library with the shared C state |
-  | setjmp/longjmp | M27 | M27 (with the signal mask on dotnet) |
+  | setjmp/longjmp | M27: N4 for an object's call, T-P3 in whole-program text | lowered since M27, with the signal mask; a `sigsetjmp` site whose mask is not the constant 0 references `sigprocmask`, `undefined symbol` with N6's line until a signal design; first tested by MC-1 ("setjmp and longjmp (M27)" below) |
   | Cyclic dynamic allocas, `__builtin_frame_address` | M32: M26's error | M32's shadow stack |
   | `strsignal`, `signal.h`, `raise`, `sigprocmask` | absent until a signal design | |
   | fenv (`fe*`) | absent (`math_errhandling` is `MATH_ERRNO` only) | no step plans it |
@@ -3489,8 +3511,8 @@ the host triples' behaviour is unchanged.
   missing comparison macros.
 
   `setjmp.h` declares `setjmp`, `longjmp`, `sigsetjmp` and `siglongjmp`, and nothing defines
-  them: the compiler lowers the calls (M27); until then a call is `msil-ld`'s `'setjmp' cannot
-  be bound to a native library: setjmp and longjmp are lowered by the compiler`.
+  them: the compiler lowers the calls (since M27; until then a call was `msil-ld`'s `'setjmp'
+  cannot be bound to a native library: setjmp and longjmp are lowered by the compiler`).
 - **How an absent function fails (plan 5.19.1 rule 2).** Through the installed headers it is
   undeclared, so C99 and later stop at clang's `call to undeclared library function 'malloc'
   with type 'void *(__size_t)' ...; ISO C99 and later do not support implicit function
@@ -3677,12 +3699,305 @@ empty build directory, and `libc-exports.test`, `--check-append-only` on synthet
 `legs/describe-sh.test`, `legs/portable-tag.test` and `legs/portable-tag-sh.test` cover the
 legs' second setup step).
 
+### setjmp and longjmp (M27)
+
+M27 (plan section 6, M27) implements plan contract 5.15.4, `setjmp` and `longjmp` (Design.md
+4.6; Phase 3 decisions R8 and R11), on the host triples, and gives the backend IL exception
+clauses once, for M28's thunk filter, M32's fault clauses and MC-1's `msil_catch` to reuse. A
+module without a reference to the `setjmp` family is left untouched and keeps its IL
+(`il-snapshot.py --compare` of `msil/test/M1` and `llvm/test/CodeGen/MSIL` against HEAD's IL):
+
+- **The model (E1).** `MSILLowerSjLj` (`llvm/lib/Target/MSIL/MSILLowerSjLj.cpp`, pass
+  `msil-lower-sjlj`, 'MSIL Lower setjmp and longjmp'), at slot P8 of the canonical IR pipeline
+  between ExpandVariadics (P7) and `MSILLowerDynamicAlloca` (P9), adapted from the Emscripten
+  half of WebAssembly's `WebAssemblyLowerEmscriptenEHSjLj.cpp` at `1838cefa99c0`, rewrites every
+  function that calls `setjmp`. Each call after a `setjmp` site that may `longjmp` goes through
+  an internal wrapper whose whole body is an IL `.try` with a fixed filter. `longjmp` becomes
+  the per-module helper `__msil_longjmp`, which arms a status block `{i32 label, i32 val}` in
+  the target frame, named by a 16-byte prefix of the `jmp_buf`, and throws
+  `System.Runtime.InteropServices.ExternalException(null, (int)<status block>)`. The filter of
+  the wrapper whose block is armed accepts it; that wrapper returns, and its caller branches to
+  its dispatch block, which reads `val`, disarms the block, restores the stack
+  (`llvm.stackrestore` of the site's `llvm.stacksave`, which `MSILLowerDynamicAlloca` (P9)
+  deletes under H0 until M32's shadow stack, since no dynamic alloca that a `longjmp` can
+  re-enter compiles before then) and, after a `sigsetjmp` site, the
+  signal mask, and continues after the site with `val` as `setjmp`'s result. No exception type
+  is shared between assemblies: the protocol is the BCL type, the `HResult` and the prefix.
+  Nothing is keyed by the buffer's address, so a jump through a `memcpy`'d buffer works. The
+  signal mask is the exception: the restore block of a mask-saving site reads offsets 64 and
+  72 through the buffer its `sigsetjmp` or `__sigsetjmp` call received, not through the one
+  passed to `siglongjmp` (the status block stays `{i32 label, i32 val}`), so a jump through a
+  copy restores the mask the original buffer holds at the time of the jump, where glibc
+  restores the copy's. The two differ only when the original is changed after the copy
+  (cleared, or filled again by a site that saves no mask). SSA is rebuilt
+  (`SSAUpdaterBulk`), so no value is demoted. After a `longjmp` the values held in memory keep
+  their latest value: volatile locals, address-taken locals and globals. A non-volatile local
+  modified between the `setjmp` and the `longjmp` has an indeterminate value, as C17
+  7.13.2.1p3 says: at `-O1` and above it can show its value from before the `setjmp`, because
+  the SSA values on the edge from the site to its continuation come from code that is already
+  promoted (a local set to 2 after the site and printed after the jump prints 2 at `-O0` and 1
+  at `-O2`). Tests check only volatile or unmodified locals after a `longjmp` (plan 5.17.13).
+  A dynamic alloca or VLA that a `longjmp` can re-enter, that is, one after a `setjmp` site
+  with a wrapped call, counts as one that can repeat within one call: it is the error `a dynamic
+  stack allocation that can repeat within one call (a VLA or alloca in a loop) is not supported
+  for MSIL yet` even with no loop in the source, until M32's shadow stack (H1).
+- **The names.** `setjmp` sites are calls of `setjmp`, `_setjmp` (with one or two arguments: the
+  second, `llvm.frameaddress(0)` on windows-msvc or `llvm.sponentry` on aarch64 Windows, is
+  erased when nothing else uses it, so `setjmp` on windows-msvc no longer stops at
+  `llvm.frameaddress is not supported for MSIL yet`), `__sigsetjmp`, `sigsetjmp`, `_setjmpex`
+  and `_setjmp3`. Every call and every other use (a taken address) of `longjmp`, `_longjmp`,
+  `siglongjmp` and `__longjmp_chk` becomes `__msil_longjmp`. Only declarations are intercepted.
+- **The `jmp_buf` prefix**, which fits glibc's 200 bytes, the UCRT's 256 on x64, the 192 of
+  arm64 and P-1b's opaque 200 on `msil64-unknown-dotnet`:
+
+  | Offset | Size | Field | Written by |
+  |---|---|---|---|
+  | 0 | 4 | magic `0x314A534D` (`'MSJ1'`) | the `setjmp` site |
+  | 4 | 4 | the site's label, 1..N within its function | the `setjmp` site |
+  | 8 | 8 | the address of the function's status block | the `setjmp` site |
+  | 64 | 4 | mask saved: the mask argument is not 0 (glibc's and musl's offset) | a `sigsetjmp` or `__sigsetjmp` site on a Linux or `*-unknown-dotnet` triple |
+  | 72 | 128 | the saved signal mask, `sigprocmask(SIG_BLOCK, NULL, buf + 72)` | the same site, when its mask argument is not the constant 0 |
+
+  The restore block of such a site calls `sigprocmask(SIG_SETMASK, buf + 72, NULL)` when offset
+  64 is set, after a `siglongjmp` or a `longjmp` alike, as glibc's both do; only these sites
+  reference `sigprocmask` (in standalone `-S` and llc text D14's undefined-function error).
+- **The wrapped calls.** A call is wrapped when a site reaches it (computed before the rewrite,
+  so a loop back to the site counts) and its callee may `longjmp`: every callee but intrinsics,
+  inline assembly, the wrappers, `__msil_sjlj_throw`, calls the pass inserted, `willreturn`
+  callees and the C library functions that `TargetLibraryInfo` knows and that take no function
+  pointer (`strlen` is not wrapped; `qsort`, `signal`, `atexit`, `pthread_create` and the rest
+  of the sjlj recon's callback list are, and so is `abort`, because a `SIGABRT` handler may
+  `longjmp`). Calls of `__msil_longjmp` are wrapped too, so a function that longjmps to its own
+  buffer catches its own throw. A direct call goes through `__msil_sjlj_invoke.<n>`, one per
+  callee, call-site type, calling convention and set of copied call-site attributes (for a
+  variadic callee, per argument list), an indirect one through `__msil_sjlj_invoke_ind.<n>`, one
+  per call-site type, calling convention and set of copied call-site attributes, which takes the
+  callee first (so a `byval` call and a plain-pointer call of the same IR type never share one); the two
+  counters start at 0 in first-use order. A wrapper is `internal noinline` with
+  `"msil-sjlj-invoke"="<index of the status parameter>"`; its parameters are the call's
+  arguments with their attributes, then the status block's address, and its inner call keeps
+  the call-site type and every call-site attribute (`"msil-fixed-arity"` included), while
+  `noreturn` leaves the outer call. Operand bundles do not reach the wrapper, and an indirect
+  wrapper drops `sret` from a parameter that the callee shifted past the second position. After
+  a wrapped call the caller loads the status block's label and branches to the dispatch block
+  when it is not 0; a function whose sites have no wrapped call still stores the prefix, and
+  each of its sites returns 0.
+- **The IL.** For each function with `"msil-sjlj-invoke"` the AsmPrinter writes (`[core]` is
+  `[mscorlib]` in whole-program text and `[msil.bcl]`, which `msil-ld` binds, in CIL objects
+  and object-form text; `<s>` is the status argument):
+
+  ```text
+    .try {
+  @EH<f>_0:
+    <the body; each return is [stloc R] leave @EH<f>_6, always the long form>
+    } filter {
+  @EH<f>_1:
+    isinst [core]System.Runtime.InteropServices.ExternalException
+    dup
+    brtrue.s @EH<f>_2
+    pop
+    ldc.i4.0
+    br.s @EH<f>_4
+  @EH<f>_2:
+    callvirt instance int32 [core]System.Exception::get_HResult()
+    ldarg <s>
+    conv.i4
+    bne.un.s @EH<f>_3
+    ldarg <s>
+    ldind.i4
+    ldc.i4.0
+    cgt.un
+    br.s @EH<f>_4
+  @EH<f>_3:
+    ldc.i4.0
+  @EH<f>_4:
+    endfilter
+    } {
+  @EH<f>_5:
+    pop
+    leave.s @EH<f>_6
+    }
+  @EH<f>_6:
+    [ldloc R]
+    ret
+  ```
+
+  `R` is an extra local of the IL return type of a value-returning wrapper, and `.maxstack` is
+  at least 3. A CIL object holds the same clause (`llvm-cil-dump`: `.try L0 to L3 filter L3
+  handler L20 to L22`). The filter tests `isinst`, not the exact type: a foreign exception fails the `HResult`
+  test or finds the wrapper's own block unarmed.
+- **The helpers** (plan 5.14.6 K4, made through the new `MSIL::getOrCreateModuleHelper`):
+  `__msil_longjmp(ptr, i32)`, `linkonce_odr hidden` in a COMDAT, `noreturn`, without
+  `unnamed_addr` because it replaces `&longjmp`, checks the magic, makes a value of 0 into 1,
+  arms the target block (`val`, then `label`) and calls `__msil_sjlj_throw(status)`; a buffer
+  without the magic calls `__msil_sjlj_throw(null)`, whose `HResult` 0 matches no filter, so
+  the process ends on the unhandled `ExternalException`. `__msil_sjlj_throw(ptr)` has the IR
+  body `unreachable` and the IL body `ldnull; ldarg.0; conv.i4; newobj instance void
+  [core]System.Runtime.InteropServices.ExternalException::.ctor(string, int32); throw`
+  (`.maxstack 3`), which the AsmPrinter writes. An assembly holds one copy of each (`msil-ld`
+  keeps one COMDAT copy), so `&longjmp` compares equal across its objects; a `-shared` library
+  exports neither, nor a wrapper.
+- **IL exception clauses in the backend.** `MSILTargetStreamer::emitExceptionClause(Kind,
+  TryBegin, TryEnd, HandlerBegin, HandlerEnd, FilterBegin)`, called after `.locals` and before
+  the first instruction, innermost clause first: the text streamer prints the scoped `.try {
+  } filter { } { }` and `.try { } fault { }` forms (and `finally`), checking that the blocks are
+  contiguous, and the object streamer records the clause, which `MSILObjectWriter` gives to
+  `cli::MethodBodyInfo::Clauses` with label offsets as for branch targets; `msil-ld` copies
+  object clauses since M20. A `catch` clause, a missing label or blocks that are not contiguous
+  are internal errors. `MSILEHClauses.{h,cpp}` decide which functions get the whole-body `.try`
+  and write the throw helper's body; the instructions the AsmPrinter writes take the object
+  token order of plan rule R6.
+- **BCL rows.** `BCLMembers.def` gained the block `// M27: setjmp and longjmp (plan 5.15.4)`:
+  the types `System.Exception` and `System.Runtime.InteropServices.ExternalException`,
+  `ExternalException::.ctor(string, int32)` and `Exception::get_HResult()`, all required and
+  mscorlib-safe, so `msil-ld --print-bcl-table` prints 28 entries, which
+  `check-mscorlib-safe.py` proves on the .NET Framework 4.8, .NET 8, .NET 10 and WSL .NET 10.
+- **Diagnostics**, each exit status 1 with no crash and well-formed output (a diagnosed
+  function's body becomes `unreachable`, in IL `ldnull; throw`; a use in a global initializer
+  becomes null): a use of a `setjmp` name other than a call, `taking the address of '<name>' is
+  not supported for MSIL`; a call of another `returns_twice` function, `calling the
+  returns_twice function '<name>' is not supported for MSIL` (`vfork`, `getcontext`); a
+  variadic declaration of a `setjmp` name without a fixed buffer parameter (of `sigsetjmp` or
+  `__sigsetjmp`, also without a fixed savemask) or of a `longjmp` name without a fixed buffer
+  or value parameter, `a variadic declaration of '<name>' is not supported for MSIL; declare it
+  with its C library prototype` (in MSILPrepareVariadics, P6, before ExpandVariadics rewrites
+  the calls; each call is erased, its value poison); in a module that uses the family, a global
+  named `__msil_longjmp` or `__msil_sjlj_throw` that is not a function of the helper's type,
+  `'<name>' is reserved for the MSIL toolchain (a setjmp and longjmp helper)`, once per name,
+  after which the pass lowers nothing in the module; and the
+  GCC builtins, which the pass does not lower, `__builtin_setjmp ('llvm.eh.sjlj.setjmp') is not
+  supported for MSIL; use setjmp` and `__builtin_longjmp ('llvm.eh.sjlj.longjmp') is not
+  supported for MSIL; use longjmp` (until M27 `llvm.eh.sjlj.setjmp is not supported for MSIL yet
+  (phase 3 setjmp/longjmp)` and its twin).
+- **`msil-ld`.** M24's guard stays (plan 5.14.2 N4): a name of the family never binds to a
+  native library, `<file>: '<name>' cannot be bound to a native library: setjmp and longjmp are
+  lowered by the compiler`. Since M27 only an object built without the lowering (llc's hidden
+  test option `-msil-disable-sjlj-lowering`) or a data reference (`@longjmp = external global`
+  in IR) meets it. `--lto-emit-asm`, which binds the merged module before code generation
+  lowers the calls, neither binds nor reports a function of the family
+  (`SymbolTable::bindLateSymbols` and `annotateImports`), and on the Linux triples, when the
+  module declares `__sigsetjmp` or `sigsetjmp`, it binds `sigprocmask` quietly as a function
+  that code generation may call (`--print-imports` lists it once the text declares its
+  P/Invoke); links that write objects or images were already right, because late binding after
+  LTO sees no family reference (plan section 12, row 'M27 5.9.6 and 5.10.13 amended (setjmp
+  family under --lto-emit-asm)'). The import analysis of `--lto-emit-asm` now asks upstream's
+  `llvm::isExpandedVariadicCallingConv` which calls ExpandVariadics expanded, instead of a copy
+  of its rule (an M26 leftover; no output changes). A `>>> referenced by <file>:(<name>)` line
+  never names an internal wrapper: for a reference from `__msil_sjlj_invoke.<n>` in a CIL
+  object, `msil-ld` names the methods of that object that call the wrapper, so an object link
+  reports `(main)` as LTO does (plan section 12, row '5.9.14 and 5.10.14 as built (setjmp
+  wrappers in the reference report)').
+- **Across assemblies and native frames** (R8). A `-shared` library's `__msil_longjmp` arms a
+  frame of its program through the buffer, and the program's filter accepts the throw with no
+  shared type, and the reverse (`M3/07-sjlj/sjlj-xasm.test`, matrix row `sjlj-xasm`). Within
+  an assembly a `longjmp` never crosses a thunk. Through another assembly's function pointer
+  (a library calling a program callback that longjmps) it works on both OSes until M28,
+  because such a pointer is still Phase 2's managed `calli` (`sjlj-xasm-callback.test`); from
+  M28 the call goes through the callee's native-callable thunk, and on the Linux triples M28's
+  miss path makes it fail fast with the thunk filter's message. Out of a C function that native
+  code called (a callback under native `qsort`, which until M28 only the undiagnosed callback
+  gap of section 3 can produce) a `longjmp` works on Windows and aborts the process on Linux,
+  where the CLR cannot unwind a managed exception through native frames (status 134; from M28
+  the thunk filter's FailFast with its message). A native `longjmp` cannot use a buffer that
+  our `setjmp` filled, and `__msil_longjmp` refuses a native one (no magic).
+- **Limits** (R8). Every `longjmp` is a first-chance CLR exception, which debuggers and
+  `AppDomain.FirstChanceException` handlers see, and a round trip costs about 26-44 us on the
+  .NET Framework and .NET 8 (.NET 8: 26 us on Windows, 44 on Linux) and 7-9 us on .NET 10,
+  against about 65 ns natively with glibc and 2 us with the UCRT; a wrapped call that does not
+  `longjmp` costs 1-3 ns on .NET 8 and 10 and 5-8 ns on the .NET Framework (sjlj recon 6.3).
+  `__builtin_setjmp` and `__builtin_longjmp` stay errors. The windows-gnu (MinGW), musl and
+  aarch64 spellings follow the contract but are unverified, since none is an execution triple.
+  A `longjmp` out of a signal handler needs a handler, which `signal` and `sigaction` install
+  only from M28 (both take a C function pointer and are callback-list link errors until then).
+- **The portable triple.** On `msil64-unknown-dotnet` the same lowering runs within and across
+  managed assemblies, with the mask condition of the Linux triples (plan section 12, P-1r R1),
+  over P-1b's opaque 200-byte `jmp_buf`; every function pointer is managed there, so no native
+  frame or thunk filter is involved. A `sigsetjmp` site whose mask is not the constant 0
+  references `sigprocmask`, which `c.dll` does not export until a signal design: a link error
+  with N6's line, and under `--lto-emit-asm`, which cannot import from `c.dll`, the backstop
+  `undefined function 'sigprocmask' was not resolved by msil-ld`. M27's execution tests run on
+  the host triples only (`sjlj-lower.ll` checks the lowering's IR, the mask included, on
+  `msil64-unknown-dotnet` too); MC-1's `msil/test/Portable/03-sjlj` will be the first portable
+  execution tests.
+- **Verification** (D21's filter part, plan 5.17.16; section 4). The wrappers' clauses need no
+  new allowance: pass 1 accepts no new ILVerify code or PEVerify message, and the neutralized
+  copy keeps every clause as ildasm prints it, turns `leave.s` into `leave` and moves no
+  replaced instruction across a block boundary. Any verifier message on such a method is a
+  defect, or a new D21 question for the user.
+- **Harness.** A test gives every run of its program `msil-run.py` options and program
+  arguments through `%{msil_run_opts}` and `%{msil_run_args}` (plan 5.17.2), which the native
+  oracle, the main run, the .NET Framework run, each `msil_also_run` run and
+  `%{msil_also_run_check}` take, and `update-expected.py`'s native runs too
+  (`msil/test/README.md`). The corpus manifest gained `lua` (Lua 5.4.9) and `lua-tests` (its
+  test suite), so it pins twelve entries (about 21 MB); `msil/test/Programs/lua` joins the
+  hosted programs of the `programs*`, `programs-hosted(-wsl)` and `det*` legs, and no leg is new.
+  `lit-retry.py` strips every level of lit's `# | ` prefix, so a nested lit run's tool timeout
+  in a harness test is retried like any other (a P-1b leftover). The IL baseline of the gate's
+  comparison was written with HEAD's build before M27's.
+- **Leftovers of M26 and P-1b.** `M3/05-variadics/ucrt-noinc.test` gives its `scanf`,
+  `vscanf`, `wscanf` and `vwscanf` members input on stdin (`--stdin` through
+  `%{msil_run_opts}`), so they convert values and show the UCRT scanf options word's
+  legacy-wide-specifier bit; `Programs/zlib-full/fortify.test` checks that the `-O2` image
+  P/Invokes `__vprintf_chk`, `__vfprintf_chk` and `__vsnprintf_chk`, so the fortified header
+  path cannot drop out unnoticed; `lld/test/MSIL/shared-variadic.test` links a `-shared` DLL
+  from bitcode that defines a `dllexport` variadic function at `--lto-O0` and `--lto-O2` and
+  pins its VARARG export; and `harness/portable/lit-config.test` pins lit's explicit
+  `--param msil_portable_sysroot`.
+- **Tests.** `msil/test/M3/07-sjlj` holds six split-file programs. Four print after a
+  `longjmp` only what C17 defines: `sjlj-semantics` (the sjlj recon's 14 cases, from a basic
+  round trip and `longjmp(b, 0)` to Lua's chained handlers, 1000 round trips from varying depth
+  and, on Linux, `sigsetjmp` and `_setjmp`; plus a function that longjmps to its own buffer,
+  `&longjmp` taken in a second translation unit, and a 24-byte structure passed and returned by
+  value across a site; per-OS expected files, since `sizeof(jmp_buf)` differs), `sjlj-xasm`
+  and `sjlj-xasm-callback` (above) and `sigsetjmp-mask` (Linux: the mask that `siglongjmp` and
+  `longjmp` restore after `sigsetjmp(b, 1)`, and leave alone after mask 0, `setjmp` and
+  `_setjmp`); two are loud failures with hand-written expected files (plan 5.17.4):
+  `sjlj-loud-nobuf` (a `longjmp` to a buffer that no `setjmp` filled ends on the unhandled
+  `ExternalException` of `__msil_longjmp`'s refusal) and `sjlj-loud-trap` (a trap inside a
+  wrapped call ends on its own unhandled `NullReferenceException`, which every wrapper filter
+  declines). `msil/test/Programs/lua` builds Lua 5.4.9 as a hosted program: `lua-embed` (an
+  embedding driver runs two Lua scripts and three C API chunks, every Lua error and coroutine
+  yield a `longjmp`, byte for byte against native) and `lua-suite` (Lua's own `lua.c`, with
+  `signal` and `sigaction` stubbed as no-ops in a test object until M28, runs Lua's test suite
+  to `final OK !!!` and exit status 0 on every runtime of the leg; at `-O0` on the Windows
+  triples it is left out, because its C-stack tests overflow `dotnet.exe`'s 1.5 MB main-thread
+  stack under `DOTNET_TieredCompilation=0`, as the native `-O0` build overflows its 1 MB one,
+  although the image passes on .NET 8 and .NET 10 with tiered compilation and on the Framework); `Programs/det/lua.test` builds the driver twice; and
+  `Programs/zlib-full/contrib` runs zlib's `puff` and `blast` on built, truncated and
+  corrupt streams against native, every truncated stream a `longjmp`. The matrix row
+  `sjlj-xasm` is `transcript` on both pipelines and triples (section 1). FileCheck tests:
+  `sjlj-lower.ll` (the IR after P8 on both triples: names, the prefix, the dispatch, wrapper
+  identity and attributes, reachability, the helpers, an untouched module and
+  `-msil-disable-sjlj-lowering`), `sjlj-diag.ll`, `sjlj-eh.ll` (the IL of wrappers and the
+  throw helper in whole-program and object-form text, ilasm round trips, the clause through
+  `llvm-cil-dump`) and `pipeline-sjlj-bitcast.ll` (a setjmp caller calling through a mismatched
+  prototype wraps the call that P5 left) in `llvm/test/CodeGen/MSIL`, with P8 in `pipeline.ll`
+  and the new texts in `dynamic-alloca-error.ll`; in `lld/test/MSIL` `obj-sjlj.test` (two
+  objects, each with a setjmp caller and a `longjmp`, link into one `__msil_longjmp` and one
+  `__msil_sjlj_throw`, the clauses survive, no family name is imported, and a `-shared` link
+  exports no `__msil_*` name) and `lto-sjlj.test` (images and `--lto-emit-asm` text of bitcode
+  that uses the family, with `sigprocmask` on Linux), while `never-bind.test` builds its N4
+  objects with `-msil-disable-sjlj-lowering`, `bcl-reference-option.test` pins the four rows and
+  `msil/test/M2/05-refs/mscorlib-safe.test` 28 entries. The harness gained
+  `verify-eh-filter.test`, `verify-eh-filter-masked.test` and `run-inputs.test`
+  (`msil/test/README.md`).
+
+Tests in the tree after M27: `llvm/test/CodeGen/MSIL` 162 (154 llc tests, 7 MIR tests and
+`irsymtab-linker-options.ll`; new: `sjlj-lower.ll`, `sjlj-diag.ll`, `sjlj-eh.ll` and
+`pipeline-sjlj-bitcast.ll`), `lld/test/MSIL` 135 (new: `obj-sjlj.test` and `lto-sjlj.test`),
+`msil/test/M3` 38 (six in `07-sjlj`), `msil/test/Programs` 248 lit tests (the nine programs,
+the five of `zlib-full` with its two in `contrib`, the two of `lua`, eleven `det` tests and
+`check-recipe.test`, and c-testsuite's 220), `msil/test/Portable` 36 (unchanged),
+`msil/test/harness` 159 (86 at the top level; new: `verify-eh-filter.test`,
+`verify-eh-filter-masked.test` and `run-inputs.test`), and `CLITests` with 461 tests (M27 adds
+none).
+
 ## 3. What Phase 2 does not do
 
 Phase 2 is the linker phase; most of what it leaves out is Phase 3's (plan section 7, P3-A and
 P3-B). The middle column says what a program meets today, the last one where it is planned:
-plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24, M25 and M26
-changed name theirs. The rows describe the host triples; what the portable triple
+plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24, M25, M26 and
+M27 changed name theirs. The rows describe the host triples; what the portable triple
 `msil64-unknown-dotnet` leaves out, and until which step, is the table "What stays loud on
 msil64" in section 2, "The portable target msil64-unknown-dotnet (P-1a)", and the last rows
 below. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row whose
@@ -3694,8 +4009,8 @@ milestone has not come (section 1).
 | Variadic functions: definitions and calls | done in M26 (section 2, "Variadic functions and acyclic dynamic allocas (M26)"): definitions and calls over a native-layout `va_list`, native variadic functions through their `va_list` variants or with fixed arity per call site, the UCRT's `printf` family on windows-msvc. What stays an error: a floating-point variadic argument or a structure by value passed to a fixed-arity native function (the first on the System V triples only), a native variadic function with neither a variant nor a list entry, the address of a native variadic function (until M28), a `musttail` call, and the backstops for prototype-less and fixed-arity declarations, for the AArch64 Darwin triples and for calling conventions other than C. A C variadic function called through a pointer by native code or by another assembly fails fast from M28. Until M26 every definition and call was an error, and a call of a native variadic function (`printf`) was `native function 'printf' (<module>) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)` | done (M26), Design.md 4.7; native addresses M28 |
 | The `va_arg` instruction in LLVM IR (other front ends, hand-written IR; clang expands C's `va_arg` itself) | since M26 expanded on the `char *` triples (Windows) and, on the System V and AAPCS64 triples, the error `the va_arg instruction is not supported for MSIL on this triple; clang lowers C's va_arg itself` (until M26 on every triple `the va_arg instruction is not supported for MSIL yet (phase 3 variadics)`). One of a struct or array type is invalid IR on every target since upstream 74a120bff99f (merged at 1838cefa99c0): the IR verifier rejects it with `va_arg with an aggregate type is not supported` (clang: `invalid LLVM IR input: ...`; llc: then `input module cannot be verified`). Only in IR that skipped the verifier (`llc -disable-verify`) does it reach the backend, which reports it with the text above before instruction selection, which crashed on it (as it does natively), and gives its function no method (M12) | phase 3 (Design.md 4.7) |
 | `thread_local` / `_Thread_local` | error: `thread-local variable @<name> is not supported for MSIL yet`, also for a `weak` declaration that nothing defines (which is not made null, unlike other weak declarations) | phase 3 (Design.md 4.4) |
-| Dynamic `alloca`, VLAs, `stacksave`/`stackrestore`, `__builtin_frame_address` | since M26 a dynamic alloca on no loop of its function is a `localloc` in the middle of the method, and `stacksave`/`stackrestore` in such functions are deleted; one in a loop is `a dynamic stack allocation that can repeat within one call (a VLA or alloca in a loop) is not supported for MSIL yet`, and `__builtin_frame_address` is `llvm.frameaddress is not supported for MSIL yet` (section 2, M26). Until M26 every one was an error (`... phase 3 shadow stack`) | acyclic: done (M26); in loops and `__builtin_frame_address(0)`: M32's shadow stack (Design.md 4.2) |
-| `setjmp`/`longjmp` | an error on every path since M24. On the Linux triples clang calls the C library's functions (`_setjmp`, `__sigsetjmp`, `longjmp`, ...): `-S` and llc report `undefined function '_setjmp' is not defined in this module and is not a Phase-1 import`, and `msil-ld` reports each name of the family once per referencing file, `<file>: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler` (section 2, "Phase 3 foundations (M24)"). On the Windows triples clang's `setjmp` passes the frame address, so `clang -c` and `-S` stop at `llvm.frameaddress is not supported for MSIL yet` (until M26 with ` (phase 3 shadow stack)`), and `msil-ld` refuses `_setjmp`, `_setjmpex` and `longjmp` in the same way. `__builtin_setjmp`/`__builtin_longjmp` are `llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)` (and `longjmp`). Until M24 this row said only "error", which was wrong for the Linux object pipeline: `msil-ld` bound the functions to `libc.so.6` without a diagnostic, and simple programs ran by accident (backlog recon BL15) | M27 (Design.md 4.6) |
+| Dynamic `alloca`, VLAs, `stacksave`/`stackrestore`, `__builtin_frame_address` | since M26 a dynamic alloca on no loop of its function is a `localloc` in the middle of the method, and `stacksave`/`stackrestore` in such functions are deleted; one in a loop is `a dynamic stack allocation that can repeat within one call (a VLA or alloca in a loop) is not supported for MSIL yet`, and since M27 so is one that a `longjmp` can re-enter (one after a `setjmp` site with a wrapped call), even with no loop in the source; `__builtin_frame_address` is `llvm.frameaddress is not supported for MSIL yet` (section 2, M26). Until M26 every one was an error (`... phase 3 shadow stack`) | acyclic: done (M26); in loops, after a `setjmp` site with a wrapped call, and `__builtin_frame_address(0)`: M32's shadow stack (Design.md 4.2) |
+| `setjmp`/`longjmp` | done in M27 (section 2, "setjmp and longjmp (M27)"): every call that may `longjmp` after a `setjmp` site goes through a wrapper with a whole-body IL `.try` and filter, and `longjmp` throws an `ExternalException` that only the target frame's filter accepts, within one assembly and across library assemblies, on every pipeline and in `-S` and llc text. What stays: every `longjmp` is a first-chance CLR exception (about 26-44 us on the .NET Framework and .NET 8, 7-9 us on .NET 10); a `longjmp` out of a C function that native code called works on Windows and aborts the process on Linux (status 134, from M28 the thunk filter's FailFast), and through another assembly's function pointer it works on both OSes until M28, then on Windows only; `__builtin_setjmp`/`__builtin_longjmp` are `__builtin_setjmp ('llvm.eh.sjlj.setjmp') is not supported for MSIL; use setjmp` (and `longjmp`); taking the address of a `setjmp` name and calling another `returns_twice` function (`vfork`, `getcontext`) are errors; `msil-ld` still refuses to bind the family to a native library (N4), which only an object built without the lowering meets; the windows-gnu, musl and aarch64 spellings are unverified. From M24 to M27 it was an error on every path: on the Linux triples `-S` and llc reported `undefined function '_setjmp' is not defined in this module and is not a Phase-1 import` and `msil-ld` each name of the family, `<file>: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler`; on the Windows triples clang's `setjmp`, which passes the frame address, stopped at `llvm.frameaddress is not supported for MSIL yet`; and the builtins were `llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)`. Until M24 this row said only "error", which was wrong for the Linux object pipeline: `msil-ld` bound the functions to `libc.so.6` without a diagnostic, and simple programs ran by accident (backlog recon BL15) | done (M27), Design.md 4.6; native frames and other assemblies' pointers: M28 |
 | Atomics (`_Atomic`, `__atomic_*`, `__sync_*`) | error (only fences work): every atomic operation becomes a call of a function of libatomic's interface (`__atomic_load_4`, ...; since M25's lock-free cap of 8 bytes a 16-byte one is the generic `__atomic_load`, `__atomic_store`, ...), which `-S`, llc and `msil-ld --lto-emit-asm` report as `runtime helper '<name>' is an atomic operation that only msil-ld links` (until M25 `runtime helper '<name>' is not available for MSIL yet (phase 3)`). In a CIL object it is an undefined symbol, and since M24 `msil-ld` binds it natively only on the Linux triples, to `libatomic.so.1` when the link names it (`-latomic`, as a native build does; else `undefined symbol: <name>` with `>>> an atomic operation: link with -latomic, as a native build does`), never on the Windows triples (`>>> an atomic operation (libatomic's interface)`); the helper archive defines no `__atomic_*` function (compiler-rt's `atomic.c` stays out of it, R4/R5), and `__sync_*` names are compiler-runtime helpers, which never bind natively | M30 (the native lock path) |
 | Global destructors, `atexit` | error, also a destructor table (`.fini_array*`, `.CRT$XT*`) since M20 (`global destructors are not supported yet: <s> in <file>`). `atexit` binds to no native library: glibc defines it only in machine code (`symbol 'atexit' is defined only in native object code (.../libc_nonshared.a(atexit.oS)); MSIL cannot link machine code`), with a glibc sysroot that has `libc_nonshared.a`; with the E7 sysroot, whose `libc.so` script names no `libc_nonshared.a`, and on the Windows triples, whose UCRT does not export it, the link stops with `undefined symbol: atexit` (the matrix rows `p6-dtors`, `fini-array`, `crt-xt` and `atexit-order` pin these errors) | phase 3 (Design.md 4.1), which intercepts `atexit` |
 | `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. Where it differs, the helper archive `clang_rt.builtins` forwards since M25 the native `long double` functions that have a `double` counterpart (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...: 170 of `msil-ld`'s 174 names) to that counterpart, and a native binding of one of the others (`fromfpl`, `fromfpxl`, `ufromfpl`, `ufromfpxl` and every `_Float64x` and `_Float128` function), or of any of them in a link without the archive, is the permanent link error `native function '<name>' (<module>) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart` (section 2, "Native libraries and P/Invokes" and "The helper archive (M25)"; in M15-M24 every name was `... takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)`); windows-msvc and `aarch64-w64-windows-gnu` bind them. Since M26 an `L` length modifier before a floating conversion of a `printf` format is a clang warning on the triples where `long double` differs, and of a `scanf` format an error (section 2, M26), and c-testsuite's `00204`, which prints `%Lf`, is excluded on linux-gnu (section 1) | permanent (Design.md 3; section 6, item 14); native `long double` functions: forwarded in M25, the others permanent errors |
@@ -3863,6 +4178,21 @@ of these are clean:
    `stind` and `calli` become calls of checking stubs), reassembled, and verified again by
    ILVerify and PEVerify with no allowance but the `MemoryCopy` message.
 
+Phase 3 amends D21 once, by plan 5.17.16 (the user's decision of 2026-10-28 on R11), with three
+parts, each entering `msil-verify.py` with the milestone that first emits its shape. Since M27
+the first, exception clauses, holds its filter half: the setjmp wrappers' whole-body `.try`
+with a `filter` block that ends in `endfilter` and a handler block, left by `leave` or
+`leave.s` (M28's thunk filter will have the same shape; M32 adds `fault` clauses). It needs no
+allowance: pass 1 accepts no new ILVerify code or PEVerify message, and `ilverify-allowed.txt`
+only names the part in a comment. In pass 2 every clause stays as ildasm prints it, `leave.s`
+becomes `leave` like every short branch, `endfilter` stays, and no replaced instruction or
+pending prefix moves across a block boundary, so a type error inside a protected block is still
+found there (`msil/test/harness/verify-eh-filter.test` and `verify-eh-filter-masked.test`). Neither
+ILVerify nor PEVerify reported anything for the filter shape. The other two parts, delegate
+construction (M28) and `Interlocked` on a `native int` address (M30), come with their
+milestones; any other verifier message on backend output is a defect, or a new D21 question
+for the user.
+
 Stack *types* are checked only by the verifiers (the JIT accepts most type errors silently), and
 mixing of `native int` and `int64` only by PEVerify, so that check runs on Windows. Every gate
 passes `--param msil_require_verify=1`, which makes a missing ILVerify, ildasm, jitall, PEVerify
@@ -3932,6 +4262,8 @@ deal with it:
 | How an executable starts | `dotnet <name>.dll` (or `.exe`) with `<name>.runtimeconfig.json`; the SDK adds a native apphost `<name>.exe` | same | `<name>.exe` directly, no configuration file | `msil-ld` writes an EXE image under any name and no runtimeconfig or apphost; since M23 it warns when a `.exe` is bound to .NET's core library or to `netstandard` 2.1 or later, which the .NET Framework cannot start (section 2, "Reference assemblies and the base class library") |
 | A program run with an older build of a library than the one it was linked against (a lower `--assembly-version`; M22) | `System.IO.FileNotFoundException` | same | runs (no strong name, so the version is not checked) | the AssemblyRef carries the library's exact version and no public key token (a token would make the .NET Framework refuse the unsigned library; recon exports-multiasm 3), so a newer build of the library serves an older program everywhere |
 | When a library's module initializers run (M22) | when the first method that refers to the library is JIT-compiled | same | same (also ReadyToRun) | the program's own `<Module>::.cctor` names every linked library with `ldtoken`, so all of them initialize before `main` |
+| The cost of a `longjmp` (M27: a first-chance `ExternalException`, a filter and a `leave`; per round trip, sjlj recon 6.3) | about 26 us on Windows, 44 us on Linux | about 6.6 us on Windows, 8.5 us on Linux | about 27 us | none: the design accepts it (R8); a call that may `longjmp` but does not costs 1-3 ns (5-8 ns on the Framework) for its wrapper; natively a round trip costs about 65 ns with glibc and 2 us with the UCRT |
+| A managed exception thrown through native frames (a `longjmp` out of a C function that native code called, such as a `qsort` comparator) | caught on Windows; on Linux the process aborts (SIGABRT, status 134) | same as .NET 8 | caught | before M28 only the undiagnosed callback gap (section 3) puts native frames there; from M28 the Linux thunks fail fast with a message instead (R8) |
 
 - **Deep recursion.** `dotnet x.dll` on Windows runs `main` on the host's main thread, whose
   stack is 1.5 MB, while native Linux programs get 8 MB by default (`ulimit -s`, which the Linux
@@ -3943,6 +4275,11 @@ deal with it:
 - **Traps and undefined behaviour** surface as .NET exceptions where native code gets a signal: a
   trap is an unhandled `System.NullReferenceException`, integer division by zero a
   `System.DivideByZeroException`. On Windows an unhandled exception exits with `0xE0434352`.
+- **First-chance exceptions.** Every `longjmp` (M27) throws and catches a CLR exception, so a
+  debugger that stops on first-chance exceptions stops at each one, and an
+  `AppDomain.FirstChanceException` handler of a host sees each one; the exception is a
+  `System.Runtime.InteropServices.ExternalException` whose `HResult` is the low 32 bits of the
+  target frame's status-block address, thrown by `__msil_sjlj_throw`.
 - **Tiered compilation.** Short programs run almost entirely as Tier-0 code, which is why the
   gate repeats the suite with `DOTNET_TieredCompilation=0` (since M23 through `msil_also_run`,
   on the image already verified); no difference in results is known.
@@ -4008,3 +4345,9 @@ program defines them, before its constructors run, as the native start-up does, 
 `legacy_stdio_float_rounding` and `iso_stdio_wide_specifiers` opt-outs (section 2, M26). It
 was applied to [Design.md](Design.md) 4.7 (items 1 and 2 of "Calling native variadic
 functions") on 2026-11-02, with the user's approval.
+
+M27 proposes no Design.md item: what it built is what Design.md 4.6 says (wrappers with an IL
+exception filter, `ExternalException` with the status block in `HResult`, the 16-byte
+`jmp_buf` prefix, no shared exception type, no native binding of the family, `longjmp` through
+native frames on Windows only, and every `longjmp` a first-chance exception), with the details
+in plan 5.15.4 and section 2, "setjmp and longjmp (M27)".

@@ -418,9 +418,18 @@ findReferencingDefinitions(BitcodeFile &file, StringRef irName) {
   return ret;
 }
 
+// True if \p m is an internal setjmp wrapper (plan 5.14.2 N3, 5.15.4 step 3)
+// of a direct callee.
+static bool isSetjmpWrapper(const InputMethod &m) {
+  return m.name.starts_with("__msil_sjlj_invoke.");
+}
+
 // The methods and segments of the CIL objects whose token sites or
 // relocations name \p sym, in load order: only live ones if \p liveOnly, and
-// LTO objects only if \p includeLTO.
+// LTO objects only if \p includeLTO. An internal setjmp wrapper stands for
+// the methods of its object whose token sites name it, its callers, each
+// listed once (plan 5.9.14 and 5.10.14 as built); the wrapper itself only if
+// it has none.
 static SmallVector<const InputChunk *, 0>
 getReferencingChunks(const Symbol *sym, bool liveOnly, bool includeLTO) {
   SmallVector<const InputChunk *, 0> chunks;
@@ -430,14 +439,44 @@ getReferencingChunks(const Symbol *sym, bool liveOnly, bool includeLTO) {
     if (f->isLTO && !includeLTO)
       continue;
     const TokenMap &tokens = f->getTokenMap();
-    for (InputMethod *m : f->methods()) {
-      if (m->discarded || (liveOnly && !m->live))
-        continue;
-      if (any_of(m->sites, [&](const TokenSite &site) {
+    ArrayRef<InputMethod *> methods = f->methods();
+    auto isCandidate = [&](const InputMethod *m) {
+      return !m->discarded && !(liveOnly && !m->live);
+    };
+    // The methods that name sym, by index in load order.
+    SmallVector<bool, 0> refers(methods.size(), false);
+    for (auto [i, m] : enumerate(methods))
+      refers[i] =
+          isCandidate(m) && any_of(m->sites, [&](const TokenSite &site) {
             return tokens.lookup(site.token).sym == sym;
-          }))
-        chunks.push_back(m);
+          });
+    // Each wrapper that names sym gives way to its callers.
+    for (size_t i = 0, e = methods.size(); i != e; ++i) {
+      if (!refers[i] || !isSetjmpWrapper(*methods[i]))
+        continue;
+      uint32_t wrapperToken = methods[i]->token;
+      const Symbol *wrapperSym = f->getSymbol(methods[i]->symbolIndex);
+      bool hasCaller = false;
+      for (size_t j = 0; j != e; ++j) {
+        const InputMethod *m = methods[j];
+        if (j == i || !isCandidate(m))
+          continue;
+        if (any_of(m->sites, [&](const TokenSite &site) {
+              if (site.token == wrapperToken)
+                return true;
+              const Symbol *s = tokens.lookup(site.token).sym;
+              return s && s == wrapperSym;
+            })) {
+          hasCaller = true;
+          refers[j] = true;
+        }
+      }
+      if (hasCaller)
+        refers[i] = false;
     }
+    for (auto [i, m] : enumerate(methods))
+      if (refers[i])
+        chunks.push_back(m);
     for (InputSegment *seg : f->segments()) {
       if (seg->discarded || (liveOnly && !seg->live))
         continue;
@@ -1023,6 +1062,11 @@ void SymbolTable::bindLateSymbols() {
         checkLinkerDefinedKind(*sym);
         continue;
       }
+      // Code generation lowers every call and use of a setjmp-family
+      // function (plan 5.14.2 N4, 5.15.4), so it is neither bound nor
+      // reported; the import-annotation pass leaves it alone too.
+      if (!sym->isData() && isSetjmpFamilyName(sym->getName()))
+        continue;
       if (sym->visibility() == STV_DEFAULT) {
         // A native object given on the command line defines it: the lookup
         // refuses its machine code, and the import-annotation pass reports

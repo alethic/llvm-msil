@@ -14,7 +14,14 @@
 # features.h warns and leaves the checks out, which is example.test's
 # build), so this test builds at -O2 alone, whatever the leg's levels. The
 # transcript is example.test's (%{msil_expect} names its expected files).
-# Linux triples only: _FORTIFY_SOURCE is glibc's. Plan 5.17.15 (M26).
+# That transcript is also what an unfortified build prints, so the second
+# RUN line checks that the fortified path is really in the -O2 image: its
+# listing (%msil_cil_dump, under msil-cil-dump) has the P/Invokes of
+# __vprintf_chk (printf), __vfprintf_chk (fprintf) and __vsnprintf_chk
+# (snprintf and vsnprintf), which example.test's image has not
+# (plan section 12, 'M27.h extended (M26 leftover: fortify.test's checked
+# calls)').
+# Linux triples only: _FORTIFY_SOURCE is glibc's. Plan 5.17.15 (M26, M27).
 # REQUIRES: msil-corpus-zlib, msil-triple-linux
 # REDEFINE: %{msil_expect} = %S/example
 # REDEFINE: %{msil_srcs} = %{msil_corpus}/zlib-1.3.2/test/example.c
@@ -29,3 +36,7 @@
 # REDEFINE: %{msil_copts} = -I%{msil_corpus}/zlib-1.3.2 -DZ_HAVE_UNISTD_H \
 # REDEFINE:   -D_LARGEFILE64_SOURCE=1 -D_FORTIFY_SOURCE=2
 # RUN: %{msil_prog_O2}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump %t.O2.d/prog.exe | FileCheck %s --check-prefix=FORTIFY %}
+# FORTIFY-DAG: .pinvokeimpl '{{[^']+}}' entry '__vprintf_chk' flags={{.+}}
+# FORTIFY-DAG: .pinvokeimpl '{{[^']+}}' entry '__vfprintf_chk' flags={{.+}}
+# FORTIFY-DAG: .pinvokeimpl '{{[^']+}}' entry '__vsnprintf_chk' flags={{.+}}

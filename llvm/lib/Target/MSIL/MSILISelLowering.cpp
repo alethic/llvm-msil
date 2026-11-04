@@ -331,7 +331,7 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
                       ISD::EH_DWARF_CFA},
                      MVT::i64, Custom);
   // The stack address (the shadow stack), the setjmp/longjmp builtins
-  // (phase 3) and llvm.eh.return are diagnosed the same way, and must be
+  // and llvm.eh.return are diagnosed the same way, and must be
   // Custom too. The legalizer looks up the EH nodes by their first result
   // type and silently turns Legal into Expand, which drops the longjmp and
   // the eh.return, folds the setjmp to 0 and leaves the dispatch setup to
@@ -695,17 +695,16 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
   case ISD::INIT_TRAMPOLINE:
   case ISD::ADJUST_TRAMPOLINE:
     return LowerUnsupported(Op, DAG, "trampolines are not supported for MSIL");
-  // setjmp/longjmp wait for phase 3; CIL cannot unwind to an address.
+  // CIL cannot unwind to an address. MSILLowerSjLj lowers only the library
+  // setjmp family (plan 5.15.4), so the GCC builtins stay errors.
   case ISD::EH_SJLJ_SETJMP:
-    return LowerUnsupported(
-        Op, DAG,
-        "llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 "
-        "setjmp/longjmp)");
+    return LowerUnsupported(Op, DAG,
+                            "__builtin_setjmp ('llvm.eh.sjlj.setjmp') is not "
+                            "supported for MSIL; use setjmp");
   case ISD::EH_SJLJ_LONGJMP:
-    return LowerUnsupported(
-        Op, DAG,
-        "llvm.eh.sjlj.longjmp is not supported for MSIL yet (phase 3 "
-        "setjmp/longjmp)");
+    return LowerUnsupported(Op, DAG,
+                            "__builtin_longjmp ('llvm.eh.sjlj.longjmp') is not "
+                            "supported for MSIL; use longjmp");
   case ISD::EH_SJLJ_SETUP_DISPATCH:
     return LowerUnsupported(
         Op, DAG, "llvm.eh.sjlj.setup.dispatch is not supported for MSIL");

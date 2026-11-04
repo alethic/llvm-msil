@@ -1,0 +1,65 @@
+# A trap inside a call that a setjmp site's wrapper encloses is a loud failure of its own: the wrapper's filter declines the trap's exception, so the process ends on the unhandled System.NullReferenceException and never returns to the site.
+# After a setjmp site MSILLowerSjLj (plan 5.15.4) sends every call that may
+# longjmp through an internal wrapper whose body is an IL .try with a fixed
+# filter; the filter accepts only an ExternalException whose HResult is the
+# low half of the frame's own armed status block. llvm.trap is 'ldnull;
+# throw' (a NullReferenceException, M1/03-control/trap.ll), which is not an
+# ExternalException, so the wrapper around the trapping call declines it, as
+# does the wrapper around the call into the function with the second site
+# (an armed block is never involved: nothing longjmps), and the process ends
+# on the trap's exception rather than at either site. The transcript is
+# hand-written (plan 5.17.4: a loud failure has no native oracle; natively a
+# trap is a signal or a fail-fast, not this line): the lines printed before
+# the trap, then the unhandled exception. The LOUD line matches the
+# program's own stderr line, written before the trap; the trap has no
+# message of its own, and the runtime's report of the exception is never
+# matched. LOUD-NOT pins that neither site returned. Plan 5.15.4, 5.17.4,
+# 5.17.13 (M27, M3/07-sjlj).
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/trap.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: trap: trapping inside a wrapped call
+# LOUD-NOT: trap: returned to
+#--- trap.c
+#include <setjmp.h>
+#include <stdio.h>
+
+static jmp_buf outer, inner;
+static volatile int armed = 1;
+
+__attribute__((noinline)) static void boom(void) {
+  if (armed) {
+    fputs("trap: trapping inside a wrapped call\n", stderr);
+    fflush(stderr);
+    __builtin_trap();
+  }
+  puts("boom did not trap");
+}
+
+/* A second frame with a site of its own between main's site and the trap. */
+__attribute__((noinline)) static void middle(void) {
+  int r = setjmp(inner);
+  if (r == 0) {
+    puts("inner site set; calling the trapping function");
+    fflush(stdout);
+    boom();
+  }
+  printf("returned to the inner site: r=%d\n", r);
+  fprintf(stderr, "trap: returned to the inner site: r=%d\n", r);
+}
+
+int main(void) {
+  int r = setjmp(outer);
+  if (r == 0) {
+    puts("outer site set");
+    fflush(stdout);
+    middle();
+    puts("middle returned");
+    return 0;
+  }
+  printf("returned to the outer site: r=%d\n", r);
+  fprintf(stderr, "trap: returned to the outer site: r=%d\n", r);
+  return 0;
+}

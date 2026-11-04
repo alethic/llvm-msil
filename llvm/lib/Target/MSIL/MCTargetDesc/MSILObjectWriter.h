@@ -36,6 +36,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/CLI.h"
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/CLI/BCLMembers.h"
 #include "llvm/CLI/Signature.h"
@@ -53,6 +54,7 @@ class MCAssembler;
 class MCFixup;
 class MCFragment;
 class MCSection;
+class MCSymbol;
 class MCValue;
 class raw_pwrite_stream;
 struct MSILMethodDecl;
@@ -61,6 +63,18 @@ struct MSILMethodDecl;
 /// object target streamer reaches it through MSIL::getObjectTargetWriter.
 /// Every string and signature it is given is copied.
 class MSILObjectWriter final : public MCMSILObjectTargetWriter {
+public:
+  /// An exception clause of a method by the labels of its blocks
+  /// (MSILTargetStreamer::emitExceptionClause): writeObject turns them into
+  /// offsets in the method's code, as it resolves branch targets.
+  struct ClauseLabels {
+    cli::ExceptionClauseKind Kind;
+    const MCSymbol *TryBegin, *TryEnd, *HandlerBegin, *HandlerEnd;
+    /// Filter clauses only; the filter block ends at HandlerBegin.
+    const MCSymbol *FilterBegin;
+  };
+
+private:
   /// The entity that a token fixup names, copied from its MSILMemberRefExpr.
   struct TokenOperand {
     MSILMemberRefExpr::Kind Kind = MSILMemberRefExpr::Method;
@@ -80,6 +94,8 @@ class MSILObjectWriter final : public MCMSILObjectTargetWriter {
     bool Public;
     unsigned MaxStack;
     std::vector<cli::TypeSig> Locals;
+    /// Innermost first.
+    std::vector<ClauseLabels> Clauses;
   };
   /// An address field (emitAddressField).
   struct FieldRecord {
@@ -124,10 +140,12 @@ public:
   /// the base name of \p SourceFile (rule O3), comes with setLinkInfo.
   void setModule(StringRef SourceFile, const Triple &TT);
   /// Adds the method definition \p M, whose code is the content of \p Sec,
-  /// with its .maxstack and its locals (emitMethodBegin to emitMethodEnd).
+  /// with its .maxstack, its locals and its exception clauses, innermost
+  /// first, whose labels \p Sec defines (emitMethodBegin to emitMethodEnd).
   /// Only functions (MSILMethodKind::Function) have methods in an object.
   void addMethod(MCSection &Sec, const MSILMethodDecl &M, unsigned MaxStack,
-                 ArrayRef<cli::TypeSig> Locals);
+                 ArrayRef<cli::TypeSig> Locals,
+                 ArrayRef<ClauseLabels> Clauses = {});
   /// Adds the address field \p Name of a global variable that the object
   /// defines (emitAddressField): 'public' if \p Public, else 'assembly'.
   void addAddressField(StringRef Name, bool Public);

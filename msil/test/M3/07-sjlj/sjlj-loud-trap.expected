@@ -1,0 +1,3 @@
+outer site set
+inner site set; calling the trapping function
+[unhandled exception: System.NullReferenceException]

@@ -35,6 +35,7 @@
 
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSIL.h"
+#include "MSILEHClauses.h"
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSubtarget.h"
 #include "llvm/ADT/SmallVector.h"
@@ -208,6 +209,9 @@ static bool stackCheck(MachineFunction &MF) {
     }
   }
 
+  // The AsmPrinter-written filter of a whole-body clause and the throw
+  // helper's body need more than the machine instructions (plan 5.15.4).
+  MaxStack = std::max(MaxStack, MSIL::getMinMaxStack(MF.getFunction()));
   LLVM_DEBUG(dbgs() << ".maxstack " << MaxStack << '\n');
   MFI.setMaxStack(MaxStack);
   return Changed;

@@ -37,6 +37,7 @@ ModulePass *createMSILPrepareIRLegacyPass();
 ModulePass *createMSILAddMissingPrototypesLegacyPass();
 ModulePass *createMSILFixFunctionBitcastsLegacyPass();
 ModulePass *createMSILPrepareVariadicsLegacyPass();
+ModulePass *createMSILLowerSjLjLegacyPass();
 ModulePass *createMSILLowerDynamicAllocaLegacyPass();
 
 /// MSILFixFunctionBitcasts' "msil-lto" branch (cli::classifyCall's table,
@@ -81,6 +82,7 @@ void initializeMSILDAGToDAGISelLegacyPass(PassRegistry &);
 void initializeMSILExplicitLocalsLegacyPass(PassRegistry &);
 void initializeMSILFixFunctionBitcastsLegacyPass(PassRegistry &);
 void initializeMSILLowerDynamicAllocaLegacyPass(PassRegistry &);
+void initializeMSILLowerSjLjLegacyPass(PassRegistry &);
 void initializeMSILNullifyDebugValueListsLegacyPass(PassRegistry &);
 void initializeMSILOptimizeLiveIntervalsLegacyPass(PassRegistry &);
 void initializeMSILOptimizeReturnedLegacyPass(PassRegistry &);

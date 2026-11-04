@@ -15,6 +15,13 @@
 ## export and the program's binding are the same on the SysV triple, where
 ## va_list is the 24-byte structure passed by pointer (one native int), as on
 ## the Win64 triple, where it is a char*.
+## A -shared link from bitcode keeps the DLL storage class through
+## ExpandVariadics (section 12 row 'M27.f extended (M26 leftover: the
+## variadic export of an LTO-built DLL)'): the dllexport variadic vsum is
+## exported with its ABI descriptor at --lto-O0 and --lto-O2, the variadic
+## vhidden without dllexport is not (a link with no dllexport definition
+## would export every function, so vhidden keeps the check meaningful), and
+## prog.o links against either DLL.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -29,6 +36,10 @@
 # RUN: llc -filetype=obj prog-sysv.ll -o prog-sysv.o
 # RUN: llvm-as prog-sysv.ll -o prog-sysv.bc
 # RUN: msil-ld -shared lib-sysv.o -o libsysv.dll 2>&1 | count 0
+# RUN: llvm-as lib-export.ll -o lib-export.bc
+# RUN: mkdir lto0 lto2
+# RUN: msil-ld -shared --lto-O0 lib-export.bc -o lto0/libexp.dll 2>&1 | count 0
+# RUN: msil-ld -shared --lto-O2 lib-export.bc -o lto2/libexp.dll 2>&1 | count 0
 
 # DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="not supported yet"
@@ -72,6 +83,19 @@
 # RUN: llvm-cil-dump prog-sysv-lto.exe | FileCheck %s --check-prefix=CALL-SYSV --implicit-check-not=adapt_
 # CALL-SYSV: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
 # CALL-SYSV: {{^}}    L{{[0-9]+}}: call int32(int32, native int) [libsysv]libsysv::'vsum'{{$}}
+
+## The variadic export of an LTO-built DLL.
+# RUN: llvm-cil-dump --link-info lto0/libexp.dll | FileCheck %s --check-prefix=TABLE-LTO
+# RUN: llvm-cil-dump --link-info lto2/libexp.dll | FileCheck %s --check-prefix=TABLE-LTO
+# TABLE-LTO:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil {{.*}}{{$}}
+# TABLE-LTO-NEXT: {{^}}ExportClass 'libexp'{{$}}
+# TABLE-LTO-NEXT: {{^}}Function VARARG ABI 'vsum' VARARG fixed=1{{$}}
+# TABLE-LTO-NOT:  {{.}}
+# RUN: msil-ld prog.o lto0/libexp.dll -o prog-exp0.exe 2>&1 | count 0
+# RUN: msil-ld prog.o lto2/libexp.dll -o prog-exp2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog-exp2.exe | FileCheck %s --check-prefix=CALL-EXP --implicit-check-not=adapt_
+# CALL-EXP: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CALL-EXP: {{^}}    L{{[0-9]+}}: call int32(int32, native int) [libexp]libexp::'vsum'{{$}}
 
 ## A FixedParams difference, and a fixed declaration of the variadic export.
 # RUN: not msil-ld prog-fp2.o lib.dll -o x.exe 2>&1 | %{err} --check-prefix=FP2
@@ -156,6 +180,28 @@ define i32 @main() {
 }
 
 declare i32 @_open(ptr, i32, ...)
+
+#--- lib-export.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __declspec(dllexport) int vsum(int n, ...); int vhidden(int n, ...);
+define dllexport i32 @vsum(i32 %n, ...) {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+define i32 @vhidden(i32 %n, ...) {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
 
 #--- lib-sysv.ll
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

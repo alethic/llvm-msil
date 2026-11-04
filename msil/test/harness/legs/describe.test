@@ -149,7 +149,7 @@
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant wrong-prog-pipeline > %t/5d.log
 # RUN: %{harness_check} contains %t/5d.log "^legs-check: error: lto run 1: prog_pipeline 'obj', not 'lto'$"
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant drop-hosted > %t/5e.log
-# RUN: %{harness_check} contains %t/5e.log "^legs-check: error: programs-lto: paths \[[^]]*'msil/test/Programs/jsmn'\], lit \[\]; not the nine programs and the hosted programs \['msil/test/Programs/zlib-full'"
+# RUN: %{harness_check} contains %t/5e.log "^legs-check: error: programs-lto: paths \[[^]]*'msil/test/Programs/jsmn', 'msil/test/Programs/zlib-full'\], lit \[\]; not the nine programs and the hosted programs \['msil/test/Programs/zlib-full', 'msil/test/Programs/lua'\]$"
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant ctest-lto-untagged > %t/5f.log
 # RUN: %{harness_check} contains %t/5f.log "^legs-check: error: ctest-lto: tag '', kind 'lit', 1 runs; not 'Exit', lit, 1$"
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant check-msil > %t/5g.log

@@ -22,12 +22,14 @@
 #include "MSILMachineFunctionInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/TrailerDefs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/IR/Comdat.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
@@ -420,4 +422,46 @@ const cli::TrailerDefInfo *MSIL::getOfferedTrailerDef(const Module &M,
 bool MSIL::matchesTrailerDefSignature(const cli::TrailerDefInfo &D,
                                       const Signature &S) {
   return toMethodSig(S) == cli::getTrailerDefSignature(D);
+}
+
+Function *
+MSIL::getOrCreateModuleHelper(Module &M, StringRef Name, FunctionType *Ty,
+                              function_ref<void(Function &)> BuildBody) {
+  GlobalValue *GV = M.getNamedValue(Name);
+  auto *F = dyn_cast_if_present<Function>(GV);
+  if (GV && (!F || F->getFunctionType() != Ty))
+    reportFatalInternalError("per-module helper '" + Name +
+                             "' is already defined with another type");
+  if (F && !F->isDeclaration())
+    return F;
+  if (!F)
+    F = Function::Create(Ty, GlobalValue::LinkOnceODRLinkage, Name, M);
+  F->setLinkage(GlobalValue::LinkOnceODRLinkage);
+  F->setVisibility(GlobalValue::HiddenVisibility);
+  F->setDSOLocal(true);
+  F->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+  F->setDLLStorageClass(GlobalValue::DefaultStorageClass);
+  if (M.getTargetTriple().supportsCOMDAT()) {
+    Comdat *C = M.getOrInsertComdat(Name);
+    C->setSelectionKind(Comdat::Any);
+    F->setComdat(C);
+  }
+  F->addFnAttr(Attribute::NoUnwind);
+  BuildBody(*F);
+  assert(!F->isDeclaration() && "a per-module helper needs a body");
+  return F;
+}
+
+bool MSIL::isSetjmpName(StringRef Name) {
+  return StringSwitch<bool>(Name)
+      .Cases({"setjmp", "_setjmp", "__sigsetjmp", "sigsetjmp", "_setjmpex",
+              "_setjmp3"},
+             true)
+      .Default(false);
+}
+
+bool MSIL::isLongjmpName(StringRef Name) {
+  return StringSwitch<bool>(Name)
+      .Cases({"longjmp", "_longjmp", "siglongjmp", "__longjmp_chk"}, true)
+      .Default(false);
 }

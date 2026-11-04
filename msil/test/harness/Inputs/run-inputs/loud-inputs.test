@@ -1,0 +1,18 @@
+# Run in a nested lit by ../../run-inputs.test only: the loud-failure
+# composite %{msil_prog_loud_O0} (plan 5.17.4) with msil-run.py options and
+# program arguments. The stand-in program writes the check line's text to
+# stderr and throws, so every run's transcript is the hand-written
+# loud-inputs.expected.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# REDEFINE: %{msil_run_opts} = --stdin %t/input.txt
+# REDEFINE: %{msil_run_args} = first --runner wsl
+# RUN: %{msil_prog_loud_O0}
+# LOUD: msil: error: the construct needs M99 (loud-inputs)
+#--- main.c
+// prog-value: 3
+// prog-stderr: msil: error: the construct needs M99 (loud-inputs)
+// prog-throw: System.InvalidOperationException the thrown text
+#--- input.txt
+4

@@ -23,6 +23,13 @@
 #
 # ILVerify cannot verify calli at all ("Error []: ... ImportCalli not
 # implemented", no code); msil-verify.py reports that as a note, not here.
+#
+# Phase 3's parts of D21 (plan 5.17.16) live in msil-verify.py's code, not
+# here, because an entry cannot check the listing. EH clauses (the filter
+# half from M27: the setjmp wrappers' whole-body '.try' with a fixed filter
+# ending in 'endfilter', left by leave/leave.s): no entry and no new code or
+# message in either pass; the neutralized copy keeps every clause as ildasm
+# prints it.
 
 # localloc (the static frame, D13), cpblk and initblk (D15).
 Unverifiable: Instruction cannot be verified\.

@@ -18,6 +18,7 @@ add_llvm_target(MSILCodeGen
   MSILCleanCodeAfterTrap.cpp
   MSILDataSegment.cpp
   MSILDebugValueManager.cpp
+  MSILEHClauses.cpp
   MSILExplicitLocals.cpp
   MSILFixFunctionBitcasts.cpp
   MSILFrameLowering.cpp
@@ -26,6 +27,7 @@ add_llvm_target(MSILCodeGen
   MSILISelLoweringCall.cpp
   MSILInstrInfo.cpp
   MSILLowerDynamicAlloca.cpp
+  MSILLowerSjLj.cpp
   MSILMCInstLower.cpp
   MSILMachineFunctionInfo.cpp
   MSILNullifyDebugValueLists.cpp

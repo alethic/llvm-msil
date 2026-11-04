@@ -20,6 +20,7 @@
 #include "llvm/CLI/BCLMembers.h"
 #include "llvm/CLI/LinkInfo.h"
 #include "llvm/CLI/Opcodes.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -57,6 +58,37 @@ void MSILTargetStreamer::emitHelperInstruction(cli::Opcode, StringRef,
 
 void MSILTargetStreamer::emitDataImportField(StringRef) {
   reportTrailerOnly("the address field of a native data import");
+}
+
+void MSILTargetStreamer::checkExceptionClause(cli::ExceptionClauseKind Kind,
+                                              const MCSymbol *TryBegin,
+                                              const MCSymbol *TryEnd,
+                                              const MCSymbol *HandlerBegin,
+                                              const MCSymbol *HandlerEnd,
+                                              const MCSymbol *FilterBegin) {
+  if (!TryBegin || !TryEnd || !HandlerBegin || !HandlerEnd)
+    reportFatalInternalError("MSIL: an exception clause without the labels of "
+                             "its blocks");
+  switch (Kind) {
+  case cli::ExceptionClauseKind::Catch:
+    // ILAsm's 'catch' and the clause's class token have no operand here.
+    reportFatalInternalError("MSIL: a catch clause is not supported");
+  case cli::ExceptionClauseKind::Filter:
+    // The filter block lies between the protected block and the handler.
+    if (!FilterBegin || TryEnd != FilterBegin)
+      reportFatalInternalError("MSIL: the filter block of an exception clause "
+                               "does not follow its protected block");
+    break;
+  case cli::ExceptionClauseKind::Finally:
+  case cli::ExceptionClauseKind::Fault:
+    if (FilterBegin || TryEnd != HandlerBegin)
+      reportFatalInternalError("MSIL: the handler of an exception clause does "
+                               "not follow its protected block");
+    break;
+  }
+  if (TryBegin == TryEnd || HandlerBegin == HandlerEnd ||
+      (FilterBegin && FilterBegin == HandlerBegin))
+    reportFatalInternalError("MSIL: an empty block in an exception clause");
 }
 
 /// Prints \p T as canonical listing v1 text, which ILAsm accepts for the
@@ -179,7 +211,74 @@ void MSILTargetAsmStreamer::emitLocals(ArrayRef<cli::TypeSig> Locals) {
   emitLine(OS.str());
 }
 
+void MSILTargetAsmStreamer::emitExceptionClause(cli::ExceptionClauseKind Kind,
+                                                const MCSymbol *TryBegin,
+                                                const MCSymbol *TryEnd,
+                                                const MCSymbol *HandlerBegin,
+                                                const MCSymbol *HandlerEnd,
+                                                const MCSymbol *FilterBegin) {
+  checkExceptionClause(Kind, TryBegin, TryEnd, HandlerBegin, HandlerEnd,
+                       FilterBegin);
+  // The scoped form of ILAsm (II.19): each block is a brace pair, and the
+  // lines print before the labels that start and end the blocks.
+  unsigned Clause = ClauseProgress.size();
+  unsigned Ordinal = 0;
+  auto Add = [&](const MCSymbol *Sym, ScopeMark Mark, StringRef Text) {
+    ScopeLines[Sym].push_back({Clause, Ordinal++, Mark, Text});
+  };
+  Add(TryBegin, ScopeMark::Open, "  .try {");
+  switch (Kind) {
+  case cli::ExceptionClauseKind::Filter:
+    Add(FilterBegin, ScopeMark::Middle, "  } filter {");
+    Add(HandlerBegin, ScopeMark::Middle, "  } {");
+    break;
+  case cli::ExceptionClauseKind::Finally:
+    Add(HandlerBegin, ScopeMark::Middle, "  } finally {");
+    break;
+  case cli::ExceptionClauseKind::Fault:
+    Add(HandlerBegin, ScopeMark::Middle, "  } fault {");
+    break;
+  case cli::ExceptionClauseKind::Catch:
+    llvm_unreachable("checkExceptionClause rejects catch clauses");
+  }
+  Add(HandlerEnd, ScopeMark::Close, "  }");
+  ClauseProgress.push_back({0, Ordinal});
+}
+
+void MSILTargetAsmStreamer::emitLabel(MCSymbol *Symbol) {
+  auto It = ScopeLines.find(Symbol);
+  if (It == ScopeLines.end())
+    return;
+  SmallVector<ScopeLine, 2> Lines = std::move(It->second);
+  ScopeLines.erase(It);
+  // The ends close the innermost block first and the beginnings open the
+  // outermost one first, so that nested clauses that share a label nest.
+  auto Rank = [](const ScopeLine &L) { return static_cast<unsigned>(L.Mark); };
+  llvm::stable_sort(Lines, [&](const ScopeLine &A, const ScopeLine &B) {
+    if (A.Mark != B.Mark)
+      return Rank(A) > Rank(B);
+    return A.Mark == ScopeMark::Open ? A.Clause > B.Clause
+                                     : A.Clause < B.Clause;
+  });
+  for (const ScopeLine &L : Lines) {
+    // A clause's boundaries print in their order (open, middles, close);
+    // otherwise its blocks are not contiguous in the code.
+    unsigned &Printed = ClauseProgress[L.Clause].first;
+    if (Printed != L.Ordinal)
+      reportFatalInternalError("MSIL: the blocks of an exception clause are "
+                               "not contiguous in the code");
+    ++Printed;
+    emitLine(L.Text);
+  }
+}
+
 void MSILTargetAsmStreamer::emitMethodEnd(StringRef Name) {
+  // Every label of every clause was emitted inside the method.
+  if (!ScopeLines.empty() ||
+      any_of(ClauseProgress, [](const auto &P) { return P.first != P.second; }))
+    reportFatalInternalError("MSIL: an exception clause of method '" + Name +
+                             "' names a label that its code does not define");
+  ClauseProgress.clear();
   SmallString<64> Str;
   raw_svector_ostream OS(Str);
   OS << "} // end of method ";

@@ -44,8 +44,10 @@
 #     msil/test/M3 directory (08-atomics, 10-hosted), apart from M26's O4
 #     lines for 05-variadics/ucrt-noinc.test on x86_64-pc-windows-msvc-msil
 #     (its printf family comes from the helper archive's CIL member, plan
-#     5.14.3 A9) and for 05-variadics/shared-variadic.test on every triple
-#     (a -shared library and its program; neither line is checked here). O6
+#     5.14.3 A9), for 05-variadics/shared-variadic.test on every triple and
+#     M27's for 07-sjlj/sjlj-xasm.test and sjlj-xasm-callback.test on every
+#     triple (-shared libraries and their programs; none of these lines is
+#     checked here). O6
 #     is msil-verify.py's
 #     (--equiv-skip <the real file> --test <path> --md-baseline): b.exe has a
 #     metadata message that its baseline a.exe lacks (a literal field without

@@ -30,6 +30,7 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/Support/Compiler.h"
 #include <cstdint>
+#include <optional>
 #include <utility>
 
 namespace llvm {
@@ -58,6 +59,11 @@ class LLVM_LIBRARY_VISIBILITY MSILMCInstLower {
   /// The branches of the function being emitted that take their short form:
   /// (MachineInstr, index of the branch among the MCInsts it lowers to).
   DenseSet<std::pair<const MachineInstr *, unsigned>> ShortBranches;
+  /// Return-as-leave mode (plan 5.15.4): when set, the label after the
+  /// whole-body clause that each return leaves to, and the local that holds
+  /// the returned value across the 'leave'.
+  const MCSymbol *LeaveTarget = nullptr;
+  std::optional<unsigned> LeaveResultLocal;
 
   /// Lowers \p MI into \p Out with every branch in its long form. \p Emit is
   /// false while computeBranchForms lays the function out: no diagnostics,
@@ -109,6 +115,21 @@ public:
   /// block's label, and runs MSIL::relaxBranches. lower() then uses the
   /// chosen forms, the 'br' after a 'switch' included.
   void computeBranchForms(const MachineFunction &MF);
+
+  /// Enters return-as-leave mode for the method of a whole-body clause
+  /// (MSILWholeBodyTry), before computeBranchForms: every RETURN lowers to
+  /// 'stloc <ResultLocal>' (when it returns a value) and 'leave <Done>',
+  /// always the long form, since the protected block cannot contain 'ret'.
+  void setReturnAsLeave(const MCSymbol *Done,
+                        std::optional<unsigned> ResultLocal) {
+    LeaveTarget = Done;
+    LeaveResultLocal = ResultLocal;
+  }
+  /// Leaves return-as-leave mode: RETURN lowers to 'ret'.
+  void clearReturnAsLeave() {
+    LeaveTarget = nullptr;
+    LeaveResultLocal.reset();
+  }
 
   /// The signature that the call \p MI actually uses: its explicit register
   /// defs are the values it pushes and its explicit register uses the values

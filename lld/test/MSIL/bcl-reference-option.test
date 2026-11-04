@@ -46,7 +46,10 @@
 ##   parameter lists print as BCLMembers.def writes them; then P-1a's four
 ##   rows of the msil64-unknown-dotnet guard (5.18.7 PE8:
 ##   System.PlatformNotSupportedException, its constructor(string),
-##   System.BitConverter and GetBytes(int32)).
+##   System.BitConverter and GetBytes(int32)); then M27's four rows for
+##   setjmp and longjmp (5.15.4 and M27.a item 4: System.Exception,
+##   System.Runtime.InteropServices.ExternalException, its constructor
+##   (string, int32) and Exception::get_HResult()).
 ## The pack is Inputs/fakepack (gen.py): FakeCore (the core library),
 ## FakeInterop (Marshal) and FakeThreading (Interlocked). p1.o requests every
 ## Phase 1 member (data with a relocation, a variable-length memmove, a fence
@@ -210,6 +213,10 @@
 # TABLE-NEXT: {{^}}method instance void [mscorlib]System.PlatformNotSupportedException::.ctor(string){{$}}
 # TABLE-NEXT: {{^}}type [mscorlib]System.BitConverter{{$}}
 # TABLE-NEXT: {{^}}method uint8[] [mscorlib]System.BitConverter::GetBytes(int32){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Exception{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Runtime.InteropServices.ExternalException{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.Runtime.InteropServices.ExternalException::.ctor(string, int32){{$}}
+# TABLE-NEXT: {{^}}method instance int32 [mscorlib]System.Exception::get_HResult(){{$}}
 # TABLE-NOT:  {{.}}
 
 #--- notes.txt

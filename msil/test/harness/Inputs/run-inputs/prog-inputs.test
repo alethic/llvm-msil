@@ -1,0 +1,13 @@
+# Run in a nested lit by ../../run-inputs.test only: %{msil_prog_O2} with
+# msil-run.py options (a stdin file) and program arguments, one of which
+# spells a msil-run.py option, for every run of the program. The stand-in
+# program ignores both and exits 5.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_run_opts} = --stdin %t/input.txt
+# REDEFINE: %{msil_run_args} = first --runner wsl
+# RUN: %{msil_prog_O2}
+#--- main.c
+// prog-value: 5
+#--- input.txt
+4

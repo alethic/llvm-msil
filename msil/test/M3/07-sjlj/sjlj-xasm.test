@@ -1,0 +1,210 @@
+# Matrix case sjlj-xasm: setjmp and longjmp across a -shared library with direct calls only: the library longjmps to the program's buffer, to a memcpy'd copy of it, past a setjmp frame of its own (whose filter declines), and with the value 0 (setjmp returns 1).
+# The library sjlib (%{msil_shlibs}, linked with -shared; natively sjlib.dll
+# with sjlib.lib on Windows, libsjlib.so on Linux) has its own setjmp sites
+# and its own __msil_longjmp (one per assembly, plan 5.15.4), and neither
+# assembly knows a type of the other: the library's __msil_longjmp arms the
+# program frame's status block through the buffer's 'MSJ1' prefix and
+# throws System.Runtime.InteropServices.ExternalException with the block's
+# address as its HResult, and the program's wrapper filter accepts it
+# because its own block is armed and the HResult matches (sj 6.1). The
+# cases:
+# - the library longjmps to the program's buffer, directly, from a
+#   recursion inside the library, and below a program frame that has no
+#   setjmp of its own;
+# - the library copies the program's buffer with memcpy, into a local and
+#   into a buffer of its own that the program fills with memcpy, and
+#   longjmps to the copy (nothing is keyed by the buffer's address);
+# - a library function with a setjmp site of its own sits between the
+#   program's site and a library longjmp aimed at the program: the
+#   library's wrapper filter declines (its block is not armed and the
+#   HResult is not its block's), the program's catches, and the library's
+#   site is never taken;
+# - longjmp(b, 0) from the library makes the program's setjmp return 1;
+# - a setjmp/longjmp round trip inside the library, between the program's
+#   cases, so each assembly's helper and blocks work beside the other's.
+# Only direct calls cross the boundary: a library that calls a program
+# function through a pointer is sjlj-xasm-callback.test. Every run gets the
+# library beside the program through %{msil_prog}'s --dep-dir, on every
+# runtime the leg runs. Like the other %{msil_shlibs} tests it does not run
+# with msil_link_output=il (msil-prog.py refuses --shlibs there). Plan
+# 5.15.4, 5.17.12 (row sjlj-xasm), 5.17.13 (M27, M3/07-sjlj).
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = sjlib=%t/sjlib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- sjlib.h
+#include <setjmp.h>
+#include <stddef.h>
+#ifdef _WIN32
+#ifdef SJLIB_BUILD
+#define API __declspec(dllexport)
+#else
+#define API __declspec(dllimport)
+#endif
+#else
+#define API __attribute__((visibility("default")))
+#endif
+
+/* longjmp(b, v). */
+API void sj_jump(jmp_buf b, int v);
+/* Recurses n times inside the library, then longjmp(b, v). */
+API void sj_deep(jmp_buf b, int n, int v);
+/* Copies size bytes at buf into a local jmp_buf and longjmps to the copy. */
+API void sj_copy_jump(const void *buf, size_t size, int v);
+/* The library's own buffer, which the program fills, and a longjmp to it. */
+API void *sj_slot(void);
+API void sj_jump_slot(int v);
+/* Sets up a setjmp site of its own, then longjmp(target, v) from below it;
+   returns -1 if its own site is taken and -2 if the longjmp returns. */
+API int sj_guarded(jmp_buf target, int v);
+/* How often sj_guarded's own site was set up and taken. */
+API int sj_guard_entries(void);
+API int sj_guard_taken(void);
+/* A setjmp/longjmp round trip inside the library: 10 * r + tries. */
+API int sj_local(int v);
+#--- sjlib.c
+#define SJLIB_BUILD
+#include <string.h>
+
+#include "sjlib.h"
+
+static jmp_buf slot;
+static int guard_entries, guard_taken;
+
+__attribute__((noinline)) static void inner_jump(jmp_buf b, int v) {
+  longjmp(b, v);
+}
+
+API void sj_jump(jmp_buf b, int v) { longjmp(b, v); }
+
+API void sj_deep(jmp_buf b, int n, int v) {
+  if (n == 0)
+    inner_jump(b, v);
+  sj_deep(b, n - 1, v);
+}
+
+API void sj_copy_jump(const void *buf, size_t size, int v) {
+  jmp_buf mine;
+  memcpy(mine, buf, size);
+  inner_jump(mine, v);
+}
+
+API void *sj_slot(void) { return slot; }
+
+API void sj_jump_slot(int v) { inner_jump(slot, v); }
+
+API int sj_guarded(jmp_buf target, int v) {
+  jmp_buf own;
+  ++guard_entries;
+  if (setjmp(own) != 0) {
+    ++guard_taken;
+    return -1;
+  }
+  inner_jump(target, v);
+  return -2;
+}
+
+API int sj_guard_entries(void) { return guard_entries; }
+API int sj_guard_taken(void) { return guard_taken; }
+
+API int sj_local(int v) {
+  jmp_buf b;
+  volatile int tries = 0;
+  int r = setjmp(b);
+  if (r == 0) {
+    ++tries;
+    inner_jump(b, v);
+  }
+  return 10 * r + tries;
+}
+#--- main.c
+#include <setjmp.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "sjlib.h"
+
+static jmp_buf pb;
+
+/* A program frame without a setjmp between the site and the library. */
+__attribute__((noinline)) static void via_program(int v) {
+  sj_jump(pb, v);
+  puts("via_program: not reached");
+}
+
+static void direct(void) {
+  int r = setjmp(pb);
+  if (r == 0) {
+    sj_jump(pb, 5);
+    puts("direct: not reached");
+  }
+  printf("library longjmp to the program's buffer: r=%d\n", r);
+}
+
+static void deep(void) {
+  int r = setjmp(pb);
+  if (r == 0)
+    sj_deep(pb, 4, 6);
+  printf("library longjmp from a recursion in the library: r=%d\n", r);
+}
+
+static void through_program_frame(void) {
+  int r = setjmp(pb);
+  if (r == 0)
+    via_program(7);
+  printf("library longjmp below a program frame without setjmp: r=%d\n", r);
+}
+
+static void copied_by_library(void) {
+  jmp_buf b;
+  int r = setjmp(b);
+  if (r == 0)
+    sj_copy_jump(b, sizeof b, 8);
+  printf("library longjmp to its memcpy'd copy of the program's buffer: "
+         "r=%d\n",
+         r);
+}
+
+static void copied_into_library(void) {
+  jmp_buf b;
+  int r = setjmp(b);
+  if (r == 0) {
+    memcpy(sj_slot(), b, sizeof b);
+    sj_jump_slot(9);
+  }
+  printf("library longjmp to its own buffer, a memcpy of the program's: "
+         "r=%d\n",
+         r);
+}
+
+static void past_library_site(void) {
+  volatile int got = 0;
+  int r = setjmp(pb);
+  if (r == 0)
+    got = sj_guarded(pb, 10);
+  printf("library longjmp past a library setjmp frame: r=%d got=%d "
+         "entries=%d taken=%d\n",
+         r, got, sj_guard_entries(), sj_guard_taken());
+}
+
+static void zero_value(void) {
+  int r = setjmp(pb);
+  if (r == 0)
+    sj_jump(pb, 0);
+  printf("library longjmp(b, 0): r=%d\n", r);
+}
+
+int main(void) {
+  direct();
+  printf("library round trip: %d\n", sj_local(3));
+  deep();
+  through_program_frame();
+  copied_by_library();
+  printf("library round trip: %d\n", sj_local(4));
+  copied_into_library();
+  past_library_site();
+  zero_value();
+  printf("library round trip: %d\n", sj_local(0));
+  return 0;
+}

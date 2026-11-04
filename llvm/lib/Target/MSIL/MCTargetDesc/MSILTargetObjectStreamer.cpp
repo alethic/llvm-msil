@@ -11,8 +11,9 @@
 /// object events of the AsmPrinter (MSILTargetStreamer.h; plan 5.3 as amended
 /// for M19) to MSILObjectWriter, in their order. Each method gets a section
 /// of its own, so that its branches resolve inside it and the writer finds
-/// its code. Comments and blank lines are text only; the whole-program
-/// directives never occur in an object.
+/// its code; its exception clauses go with it, and the writer turns their
+/// labels into offsets. Comments and blank lines are text only; the
+/// whole-program directives never occur in an object.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -50,6 +51,8 @@ struct PendingMethod {
   bool Public = true;
   unsigned MaxStack = 0;
   SmallVector<cli::TypeSig, 8> Locals;
+  /// The exception clauses, innermost first (emitExceptionClause).
+  SmallVector<MSILObjectWriter::ClauseLabels, 1> Clauses;
 };
 
 /// The object implementation of MSILTargetStreamer.
@@ -83,6 +86,17 @@ public:
   }
   void emitLocals(ArrayRef<cli::TypeSig> Locals) override {
     getPending(".locals").Locals.assign(Locals.begin(), Locals.end());
+  }
+  void emitExceptionClause(cli::ExceptionClauseKind Kind,
+                           const MCSymbol *TryBegin, const MCSymbol *TryEnd,
+                           const MCSymbol *HandlerBegin,
+                           const MCSymbol *HandlerEnd,
+                           const MCSymbol *FilterBegin) override {
+    checkExceptionClause(Kind, TryBegin, TryEnd, HandlerBegin, HandlerEnd,
+                         FilterBegin);
+    getPending("an exception clause")
+        .Clauses.push_back(
+            {Kind, TryBegin, TryEnd, HandlerBegin, HandlerEnd, FilterBegin});
   }
   void emitMethodEnd(StringRef Name) override;
   void emitPInvoke(const MSILMethodDecl &M, StringRef Lib,
@@ -173,7 +187,7 @@ void MSILTargetObjectStreamer::emitMethodEnd(StringRef Name) {
   Decl.Name = P.Name;
   Decl.Sig = &P.Sig;
   Decl.Public = P.Public;
-  getWriter().addMethod(*P.Section, Decl, P.MaxStack, P.Locals);
+  getWriter().addMethod(*P.Section, Decl, P.MaxStack, P.Locals, P.Clauses);
   Pending.reset();
 }
 

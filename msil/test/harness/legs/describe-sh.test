@@ -113,7 +113,7 @@
 # RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant wsl-leg > %t/4d.log
 # RUN: %{harness_check} contains %t/4d.log "^legs-check: error: lit-legs\.sh has the Quick or WSL leg ctest-wsl$"
 # RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant drop-hosted > %t/4e.log
-# RUN: %{harness_check} contains %t/4e.log "^legs-check: error: programs-lto: paths \[[^]]*'msil/test/Programs/jsmn'\], lit \[\]; not the nine programs and the hosted programs \['msil/test/Programs/zlib-full'"
+# RUN: %{harness_check} contains %t/4e.log "^legs-check: error: programs-lto: paths \[[^]]*'msil/test/Programs/jsmn', 'msil/test/Programs/zlib-full'\], lit \[\]; not the nine programs and the hosted programs \['msil/test/Programs/zlib-full', 'msil/test/Programs/lua'\]$"
 # RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant ctest-lto-untagged > %t/4f.log
 # RUN: %{harness_check} contains %t/4f.log "^legs-check: error: ctest-lto: tag '', kind 'lit', 1 runs; not 'Exit', lit, 1$"
 # RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant check-msil > %t/4g.log

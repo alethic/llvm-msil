@@ -2024,14 +2024,52 @@ void MSILAsmPrinter::emitFunctionBodyStart() {
   SmallVector<cli::TypeSig, 16> Locals;
   for (MVT VT : MFI->getLocals())
     Locals.push_back(MSIL::toTypeSig(MSIL::toValType(VT, PointerSizeInBits)));
+  // A setjmp wrapper's whole-body .try, with its result local R, and the
+  // throw helper's written body (plan 5.15.4, MSILEHClauses.h).
+  WholeBody.reset();
+  MCInstLowering->clearReturnAsLeave();
+  WritesBody = MSIL::isSjLjThrowHelper(F);
+  if (MSIL::getWholeBodyKind(F) != MSIL::WholeBodyKind::None)
+    WholeBody.emplace(F, TM, OutContext, getFunctionNumber(), MFI->getResults(),
+                      Locals);
   TS.emitLocals(Locals);
+  if (WritesBody) {
+    MSIL::emitSjLjThrowBody(F, TM, OutContext, [this](const MCInst &Inst) {
+      emitWrittenInstruction(Inst);
+    });
+    return;
+  }
+  if (WholeBody) {
+    WholeBody->emitBegin(TS, *OutStreamer);
+    MCInstLowering->setReturnAsLeave(WholeBody->getDoneLabel(),
+                                     WholeBody->getResultLocal());
+  }
 
   // msil-ld never relaxes branches (plan 5.8), so their forms are chosen
   // once, before the first instruction is emitted.
   MCInstLowering->computeBranchForms(*MF);
 }
 
+void MSILAsmPrinter::emitFunctionBodyEnd() {
+  if (!WholeBody)
+    return;
+  WholeBody->emitEnd(*OutStreamer, [this](const MCInst &Inst) {
+    emitWrittenInstruction(Inst);
+  });
+  WholeBody.reset();
+  MCInstLowering->clearReturnAsLeave();
+}
+
+void MSILAsmPrinter::emitWrittenInstruction(const MCInst &Inst) {
+  if (ObjectMode)
+    noteObjectTokens(nullptr, Inst);
+  EmitToStreamer(*OutStreamer, Inst);
+}
+
 void MSILAsmPrinter::emitInstruction(const MachineInstr *MI) {
+  // The throw helper's body is the one emitFunctionBodyStart wrote.
+  if (WritesBody)
+    return;
   assert(matchesCalleeSignature(*MI, *this, ObjectMode) &&
          "a direct call does not match its callee's signature");
 
@@ -2046,7 +2084,7 @@ void MSILAsmPrinter::emitInstruction(const MachineInstr *MI) {
   // The token rows that these instructions name, in the order the streamer
   // receives them (rule R6).
   if (ObjectMode)
-    noteObjectTokens(*MI, Insts);
+    noteObjectTokens(MI, Insts);
   for (const MCInst &Inst : Insts)
     EmitToStreamer(*OutStreamer, Inst);
 }
@@ -2264,11 +2302,11 @@ void MSILAsmPrinter::collectCallABIs(const Function &Caller) {
   }
 }
 
-void MSILAsmPrinter::noteObjectTokens(const MachineInstr &MI,
+void MSILAsmPrinter::noteObjectTokens(const MachineInstr *MI,
                                       ArrayRef<MCInst> Insts) {
   const GlobalValue *Callee = nullptr;
-  if (MSIL::isCallDirect(MI.getOpcode())) {
-    const MachineOperand &MO = MSIL::getCalleeOp(MI);
+  if (MI && MSIL::isCallDirect(MI->getOpcode())) {
+    const MachineOperand &MO = MSIL::getCalleeOp(*MI);
     if (MO.isGlobal()) {
       Callee = MO.getGlobal();
       CalledValues.insert(Callee);
@@ -2316,6 +2354,9 @@ void MSILAsmPrinter::noteObjectTokens(const MachineInstr &MI,
             MemberRefKey(FnAddrRef, Ref->getName().str(), MSIL::Signature(), 0);
         break;
       case MSILMemberRefExpr::BCLMember:
+        // A BCL type ('isinst', plan 5.15.4) is a TypeRef row.
+        if (cli::getBCLMemberInfo(Ref->getBCLMember()).isType())
+          continue;
         Key = MemberRefKey(BCLRef, std::string(), MSIL::Signature(),
                            static_cast<unsigned>(Ref->getBCLMember()));
         break;

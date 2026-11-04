@@ -51,6 +51,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Endian.h"
@@ -217,11 +218,12 @@ void MSILObjectWriter::setModule(StringRef /*SourceFile*/, const Triple &T) {
 
 void MSILObjectWriter::addMethod(MCSection &Sec, const MSILMethodDecl &M,
                                  unsigned MaxStack,
-                                 ArrayRef<cli::TypeSig> Locals) {
+                                 ArrayRef<cli::TypeSig> Locals,
+                                 ArrayRef<ClauseLabels> Clauses) {
   assert(M.Kind == MSILMethodKind::Function && M.Sig &&
          "an object's methods are the functions it defines");
-  Methods.push_back(
-      {&Sec, M.Name.str(), *M.Sig, M.Public, MaxStack, Locals.vec()});
+  Methods.push_back({&Sec, M.Name.str(), *M.Sig, M.Public, MaxStack,
+                     Locals.vec(), Clauses.vec()});
 }
 
 void MSILObjectWriter::addAddressField(StringRef Name, bool Public) {
@@ -297,6 +299,43 @@ struct TokenSite {
   ResolvedToken Token;
 };
 } // end anonymous namespace
+
+/// The exception clause \p C of the method whose code, \p CodeSize bytes,
+/// is the content of \p Sec, with the offsets of its labels, or
+/// std::nullopt if a label is not defined in \p Sec or the blocks are not
+/// in the order try, filter, handler.
+static std::optional<cli::ExceptionClause>
+resolveClause(const MCAssembler &Asm, const MCSection &Sec,
+              const MSILObjectWriter::ClauseLabels &C, uint64_t CodeSize) {
+  auto Offset = [&](const MCSymbol *Sym) -> std::optional<uint64_t> {
+    uint64_t Value;
+    if (!Sym || !Sym->isInSection() || &Sym->getSection() != &Sec ||
+        !Asm.getSymbolOffset(*Sym, Value) || Value > CodeSize)
+      return std::nullopt;
+    return Value;
+  };
+  std::optional<uint64_t> TryBegin = Offset(C.TryBegin),
+                          TryEnd = Offset(C.TryEnd),
+                          HandlerBegin = Offset(C.HandlerBegin),
+                          HandlerEnd = Offset(C.HandlerEnd);
+  if (!TryBegin || !TryEnd || !HandlerBegin || !HandlerEnd ||
+      *TryBegin >= *TryEnd || *TryEnd > *HandlerBegin ||
+      *HandlerBegin >= *HandlerEnd)
+    return std::nullopt;
+  cli::ExceptionClause EC;
+  EC.Kind = C.Kind;
+  EC.TryOffset = *TryBegin;
+  EC.TryLength = *TryEnd - *TryBegin;
+  EC.HandlerOffset = *HandlerBegin;
+  EC.HandlerLength = *HandlerEnd - *HandlerBegin;
+  if (C.Kind == cli::ExceptionClauseKind::Filter) {
+    std::optional<uint64_t> FilterBegin = Offset(C.FilterBegin);
+    if (!FilterBegin || *FilterBegin < *TryEnd || *FilterBegin >= *HandlerBegin)
+      return std::nullopt;
+    EC.ClassTokenOrFilterOffset = *FilterBegin;
+  }
+  return EC;
+}
 
 uint64_t MSILObjectWriter::writeObject(MCAssembler &Asm,
                                        raw_pwrite_stream &OS) {
@@ -607,10 +646,25 @@ uint64_t MSILObjectWriter::writeObject(MCAssembler &Asm,
            Twine(M.MaxStack) + ", more than the 65535 that CIL allows");
       continue;
     }
+    // The exception clauses, with the offsets of their labels in the
+    // method's code, as branch targets resolve (plan 5.15.4).
+    SmallVector<cli::ExceptionClause, 1> Clauses;
+    for (const ClauseLabels &C : M.Clauses) {
+      std::optional<cli::ExceptionClause> EC =
+          resolveClause(Asm, *M.Section, C, Code.size());
+      if (!EC) {
+        Fail("MSIL: an exception clause of method '" + M.Name +
+             "' names a label outside its code, or its blocks are out of "
+             "order");
+        break;
+      }
+      Clauses.push_back(*EC);
+    }
     cli::MethodBodyInfo Body;
     Body.Code = arrayRefFromStringRef(Code.str());
     Body.MaxStack = M.MaxStack;
     Body.LocalVarSigToken = MB.getToken(LocalSigs[I]);
+    Body.Clauses = Clauses;
     MB.setMethodBodyOffset(MethodRows[I], Bodies.addBody(Body));
   }
   if (Failed)

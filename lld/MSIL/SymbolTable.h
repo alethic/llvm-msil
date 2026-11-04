@@ -145,6 +145,10 @@ public:
   //   section X: code generation defines it as data (plan 5.9.6, 5.9.9), so
   //   a function reference of it is plan 5.9.5's "symbol type mismatch"
   //   against data "in <internal>";
+  // - an undefined setjmp-family function (plan 5.14.2 N4) is neither
+  //   bound nor reported, whatever its visibility: code generation lowers
+  //   every call and use of it (MSILLowerSjLj, plan 5.15.4), and the
+  //   import-annotation pass leaves it alone too;
   // - any other undefined symbol, function or data, goes to LTO, whose
   //   import-annotation pass binds or reports what the merged module still
   //   refers to (plan 5.9.6 "When it runs", 5.10.13);
@@ -270,7 +274,9 @@ public:
   // inputs that referred to it before LTO, then the methods and segments of
   // the CIL objects whose token sites or relocations name it, as
   // "<file>:(<name>)" (only live ones if \p liveOnly; the LTO objects' only
-  // if no bitcode input referred to it).
+  // if no bitcode input referred to it); an internal setjmp wrapper
+  // '__msil_sjlj_invoke.<n>' is listed as its callers in the same object
+  // (the wrapper only if it has none; plan 5.9.14 and 5.10.14 as built).
   void reportUnresolved(std::string msg, const Symbol *sym, bool liveOnly);
 
   // reportUnresolved() with plan 5.9.14's first line for the undefined

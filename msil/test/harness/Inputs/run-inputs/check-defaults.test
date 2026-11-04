@@ -1,0 +1,9 @@
+# Run in a nested lit by ../../run-inputs.test only: check-inputs.test
+# without a REDEFINE of %{msil_run_opts} or %{msil_run_args}. The program
+# (args-stdin.il) gets no argument and an empty stdin, so it exits 9 in the
+# main run and in every run of msil_also_run.
+# DEFINE: %{cd_image} = %t.dll
+# REDEFINE: %{msil_also_run_image} = %{cd_image}
+# RUN: %ilasm -dll -output=%{cd_image} %S/args-stdin.il
+# RUN: %msil_exec --out %{cd_image}.out %{msil_run_opts} %{cd_image} %{msil_run_args} && FileCheck --input-file=%{cd_image}.out --match-full-lines %s %{msil_also_run_check}
+# CHECK: [exit 9]
