@@ -8,9 +8,10 @@
 # ===----------------------------------------------------------------------===#
 """Run msil/utils/ci/lit-legs.ps1 or lit-legs.sh against a stand-in build
 directory, for ci-legs-corpus.test, ci-legs-corpus-sh.test and M24's leg
-tests (describe*.test, exit-tag*.test, timeout-retry*.test) and P-1a's
-(portable-tag*.test), and give calibrate-label.test a build whose lit plays
-a scenario.
+tests (describe*.test, exit-tag*.test, timeout-retry*.test), P-1a's
+(portable-tag*.test) and P-1b's (the portable setup's build-libc.py step,
+describe*.test), and give calibrate-label.test a build whose lit plays a
+scenario.
 
     ci-legs.py setup BUILD
         Make BUILD/bin/llvm-lit.py (what msil-lit.ps1 runs) and
@@ -58,16 +59,31 @@ a scenario.
         is set (P-1a: the portable legs' setup, plan 5.18.10 PX4), it plays
         that script: 'ok' prints 'stand-in build-builtins.py: <args>' and
         exits 0, 'fail' prints 'stand-in build-builtins.py: planted failure'
-        and exits 1. It appends each command line it receives ('argv: <a>
-        <b> ...') to DIR/calls.log.
-    ci-legs.py python3 DIR ok|fail
+        and exits 1. When its first argument is a file named build-libc.py
+        (P-1b: the portable legs' second setup step, plan 5.18.10), it plays
+        that script as $MSIL_FAKE_LIBC says: 'ok' prints
+        'stand-in build-libc.py:' followed by its arguments, each after one
+        space, and exits 0; 'fail'
+        prints 'stand-in build-libc.py: planted failure' and exits 1; 'real'
+        runs the real script, but only when --build-dir is among its
+        arguments. Otherwise it refuses with exit status 2 ('stand-in
+        python: build-libc.py needs MSIL_FAKE_LIBC', or 'stand-in python:
+        build-libc.py without --build-dir', on stderr), so that no test can
+        run the real build-libc.py on the real build: given no --build-dir it
+        builds llvm-libc in $MSIL_BUILD_DIR, else in the repository's build/.
+        It appends each command line it receives ('argv: <a> <b> ...') to
+        DIR/calls.log.
+    ci-legs.py python3 DIR ok|fail [ok|fail|real]
         Make DIR/python3, a POSIX shell script that stands in for
         lit-legs.sh's python3 when DIR comes first on PATH
-        (portable-tag-sh.test): when its first argument is a file named
-        build-builtins.py it plays that script as 'ci-legs.py python' does
-        with MSIL_FAKE_BUILTINS=ok or fail and appends 'argv: <a> <b> ...'
-        to DIR/calls.log; any other command line runs the python3 that
-        PATH without its first entry finds.
+        (portable-tag-sh.test, describe-sh.test): when its first argument
+        is a file named build-builtins.py it plays that script as
+        'ci-legs.py python' does with MSIL_FAKE_BUILTINS set to the first
+        mode, and when it is a file named build-libc.py it plays that script
+        as 'ci-legs.py python' does with MSIL_FAKE_LIBC set to the second
+        mode ('real' included; no second mode: the refusal); either way it
+        appends 'argv: <a> <b> ...' to DIR/calls.log. Any other command
+        line runs the python3 that PATH without its first entry finds.
     ci-legs.py error-message LOG
         Print 'error-message: <text>' for each error that pwsh reported in
         LOG (the output of 'ci-legs.py ps1') in its concise view
@@ -274,11 +290,29 @@ if builtins and args and os.path.basename(args[0]) == "build-builtins.py":
         sys.exit(1)
     sys.stderr.write("stand-in python: unknown MSIL_FAKE_BUILTINS %r\n" % builtins)
     sys.exit(2)
+if args and os.path.basename(args[0]) == "build-libc.py":
+    libc = os.environ.get("MSIL_FAKE_LIBC", "")
+    if libc == "ok":
+        print("stand-in build-libc.py:%s" % "".join(" " + a for a in args[1:]))
+        sys.exit(0)
+    if libc == "fail":
+        print("stand-in build-libc.py: planted failure")
+        sys.exit(1)
+    if libc == "real" and "--build-dir" in args[1:]:
+        sys.exit(subprocess.call([sys.executable] + args))
+    if libc == "real":
+        sys.stderr.write("stand-in python: build-libc.py without --build-dir\n")
+    elif libc:
+        sys.stderr.write("stand-in python: unknown MSIL_FAKE_LIBC %r\n" % libc)
+    else:
+        sys.stderr.write("stand-in python: build-libc.py needs MSIL_FAKE_LIBC\n")
+    sys.exit(2)
 sys.exit(subprocess.call([sys.executable] + args))
 """
 
 # The stand-in python3 of 'ci-legs.py python3' (lit-legs.sh's python3, found
-# on PATH); @MODE@ is ok or fail.
+# on PATH); @MODE@ is ok or fail, @LIBC@ ok, fail, real or empty (the
+# refusal).
 STAND_IN_PYTHON3 = r"""#!/bin/sh
 here=$(cd "$(dirname "$0")" && pwd)
 case "$1" in
@@ -291,6 +325,34 @@ case "$1" in
     fi
     echo "stand-in build-builtins.py: planted failure"
     exit 1
+    ;;
+*/build-libc.py|build-libc.py)
+    printf 'argv: %s\n' "$*" >> "$here/calls.log"
+    case "@LIBC@" in
+    ok)
+        shift
+        printf 'stand-in build-libc.py:'
+        for a in "$@"; do printf ' %s' "$a"; done
+        printf '\n'
+        exit 0
+        ;;
+    fail)
+        echo "stand-in build-libc.py: planted failure"
+        exit 1
+        ;;
+    real)
+        case " $* " in
+        *" --build-dir "*)
+            PATH=${PATH#*:}
+            exec python3 "$@"
+            ;;
+        esac
+        echo "stand-in python: build-libc.py without --build-dir" >&2
+        exit 2
+        ;;
+    esac
+    echo "stand-in python: build-libc.py needs MSIL_FAKE_LIBC" >&2
+    exit 2
     ;;
 esac
 PATH=${PATH#*:}
@@ -320,12 +382,12 @@ def python_stand_in(directory):
     return 0
 
 
-def python3_stand_in(directory, mode):
+def python3_stand_in(directory, mode, libc=""):
     directory = os.path.abspath(directory)
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, "python3")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(STAND_IN_PYTHON3.replace("@MODE@", mode))
+        f.write(STAND_IN_PYTHON3.replace("@MODE@", mode).replace("@LIBC@", libc))
     os.chmod(path, 0o755)
     print(path.replace("\\", "/"))
     return 0
@@ -483,8 +545,13 @@ def main(argv):
         return scenario(argv[1], argv[2:])
     if len(argv) == 2 and argv[0] == "python":
         return python_stand_in(argv[1])
-    if len(argv) == 3 and argv[0] == "python3" and argv[2] in ("ok", "fail"):
-        return python3_stand_in(argv[1], argv[2])
+    if (
+        len(argv) in (3, 4)
+        and argv[0] == "python3"
+        and argv[2] in ("ok", "fail")
+        and argv[3:] in ([], ["ok"], ["fail"], ["real"])
+    ):
+        return python3_stand_in(*argv[1:])
     if len(argv) == 2 and argv[0] == "error-message":
         return error_messages(argv[1])
     try:
@@ -504,7 +571,7 @@ def main(argv):
         return usage(str(e))
     return usage(
         "usage: setup BUILD | scenario BUILD [--no-xunit] NAME=OUTCOME... | python DIR | "
-        "python3 DIR ok|fail | error-message LOG | "
+        "python3 DIR ok|fail [ok|fail|real] | error-message LOG | "
         "ps1 BUILD [VAR=VALUE...] -- [ARG...] | "
         "sh [--distro D] BUILD [VAR=VALUE...] -- [ARG...]"
     )

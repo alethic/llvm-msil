@@ -1,0 +1,161 @@
+# ctype, wctype and wchar from c.dll: every character class of all 256 byte values and EOF in the C locale, toupper and tolower, WEOF from btowc(EOF) and EOF from wctob(WEOF), the wide classes and case mappings with WEOF, the wide string functions, wcstol and wcstod with end pointers, the ASCII round trip through mbrtowc, wcrtomb, mbstowcs and wcstombs, and MB_CUR_MAX against the UTF-8 converters: MB_CUR_MAX is MB_LEN_MAX, 4, wctomb and wcrtomb store U+20AC in 3 bytes and U+1F600 in 4, and a char[MB_CUR_MAX] buffer holds the longest character with the byte after it untouched.
+# Plan 5.19.4 (ctype 30, wctype 16 and wchar 47 ship at P-1b), 5.19.6 and
+# 5.18.2 PC2 (wint_t is int, WEOF is -1 of type int; brief Q5 (b): btowc,
+# wctob and the wctype functions handle the signed type), 5.19.1 rule 2
+# (swprintf is absent: absent.test). The expected classes are C17 7.4.1's
+# definitions in the C locale ('C' locale classes are exactly the basic
+# ASCII ranges: isalpha is A-Z and a-z, isspace the six white-space
+# characters, iscntrl 0-31 and 127, and no byte above 127 is in any class),
+# computed here from those ranges, never from a run. btowc(EOF) is WEOF and
+# wctob(WEOF) is EOF (C17 7.29.6.1.1, 7.29.6.1.2); the wide classes of WEOF
+# are false and towupper(WEOF) is WEOF (7.30.2.1, 7.30.3.1). Group 7 pins
+# MB_CUR_MAX (5.19.6's frozen row, section 12's row 'Contract 5.19.6,
+# 5.19.14 and 5.13.5 amended (MB_CUR_MAX as built)'): c.dll's C locale
+# stores UTF-8, at most MB_LEN_MAX (4) bytes per character, and C17
+# 7.22.7.3 and 7.29.6.3.3 bound what wctomb and wcrtomb store by
+# MB_CUR_MAX, so MB_CUR_MAX is 4 on dotnet (stdlib-macros.h's __dotnet__
+# branch; a _Static_assert, so a char[MB_CUR_MAX] buffer never overflows
+# here). The expected bytes are the UTF-8 encodings of U+20AC (E2 82 AC)
+# and U+1F600 (F0 9F 98 80) from RFC 3629 section 3; the C locale's
+# encoding is stateless, so wctomb(NULL, wc) is 0 (C17 7.22.7.3p2). Each
+# failed group sets one bit of the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# REDEFINE: %{msil_copts} = -fno-builtin
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <ctype.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+#include <wctype.h>
+
+/* 7: MB_CUR_MAX is MB_LEN_MAX, the longest UTF-8 character (4 bytes). */
+_Static_assert(MB_CUR_MAX == 4, "MB_CUR_MAX is 4 on dotnet (5.19.6)");
+_Static_assert(MB_CUR_MAX == MB_LEN_MAX, "MB_CUR_MAX equals MB_LEN_MAX");
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static volatile int v_eof = EOF;
+static volatile wint_t v_weof = WEOF;
+
+int main(void) {
+  /* 0: every byte value against C17 7.4.1 in the C locale. */
+  int bad = 0;
+  for (int ch = 0; ch < 256; ++ch) {
+    int upper = ch >= 'A' && ch <= 'Z', lower = ch >= 'a' && ch <= 'z';
+    int digit = ch >= '0' && ch <= '9';
+    int xdigit = digit || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+    int space = ch == ' ' || (ch >= '\t' && ch <= '\r');
+    int blank = ch == ' ' || ch == '\t';
+    int cntrl = ch < 32 || ch == 127;
+    int print = ch >= 32 && ch < 127;
+    int graph = ch > 32 && ch < 127;
+    int alpha = upper || lower, alnum = alpha || digit;
+    int punct = graph && !alnum;
+    bad |= !isupper(ch) != !upper;
+    bad |= !islower(ch) != !lower;
+    bad |= !isalpha(ch) != !alpha;
+    bad |= !isdigit(ch) != !digit;
+    bad |= !isxdigit(ch) != !xdigit;
+    bad |= !isalnum(ch) != !alnum;
+    bad |= !isspace(ch) != !space;
+    bad |= !isblank(ch) != !blank;
+    bad |= !iscntrl(ch) != !cntrl;
+    bad |= !isprint(ch) != !print;
+    bad |= !isgraph(ch) != !graph;
+    bad |= !ispunct(ch) != !punct;
+    bad |= toupper(ch) != (lower ? ch - 'a' + 'A' : ch);
+    bad |= tolower(ch) != (upper ? ch - 'A' + 'a' : ch);
+  }
+  CHECK(0, !bad);
+
+  /* 1: EOF is in no class and maps to itself. */
+  CHECK(1, !isalpha(v_eof) && !isspace(v_eof) && !isprint(v_eof) && !iscntrl(v_eof));
+  CHECK(1, toupper(v_eof) == EOF && tolower(v_eof) == EOF);
+
+  /* 2: WEOF is -1 of type int; btowc(EOF) is WEOF, wctob(WEOF) is EOF. */
+  CHECK(2, WEOF == -1 && (wint_t)-1 < 0 && v_weof == -1);
+  CHECK(2, btowc(v_eof) == WEOF && wctob(v_weof) == EOF);
+  CHECK(2, btowc('A') == L'A' && wctob(L'z') == 'z' && btowc(0) == 0);
+
+  /* 3: wide classes and case mappings, with WEOF. */
+  CHECK(3, iswalpha(L'a') && iswdigit(L'7') && iswspace(L'\t') && iswupper(L'Q'));
+  CHECK(3, iswxdigit(L'F') && iswpunct(L'!') && iswcntrl(L'\n') && iswblank(L' '));
+  CHECK(3, !iswalpha(L'1') && !iswdigit(L'x') && !iswalpha(v_weof) && !iswspace(v_weof));
+  CHECK(3, towupper(L'a') == L'A' && towlower(L'Z') == L'z' && towupper(L'1') == L'1');
+  CHECK(3, towupper(v_weof) == WEOF && towlower(v_weof) == WEOF);
+  CHECK(3, iswctype(L'b', wctype("alpha")) && !iswctype(L'b', wctype("digit")));
+  CHECK(3, wctype("no-such-class") == 0);
+
+  /* 4: wide strings. */
+  wchar_t w[32];
+  CHECK(4, wcslen(L"wide") == 4 && wcscmp(L"abc", L"abd") < 0 && wcsncmp(L"abX", L"abY", 2) == 0);
+  CHECK(4, wcscpy(w, L"ab") == w && wcscat(w, L"cd") == w && wcscmp(w, L"abcd") == 0);
+  CHECK(4, wcschr(w, L'c') == w + 2 && wcsrchr(L"a.b.c", L'.') != NULL && wcsstr(w, L"bc") == w + 1);
+  CHECK(4, wmemset(w, L'z', 3) == w && w[0] == L'z' && w[2] == L'z' && w[3] == L'd');
+  CHECK(4, wcsspn(L"aab", L"a") == 2 && wcscspn(L"ab;c", L";") == 2 && wcsnlen(L"abc", 2) == 2);
+  CHECK(4, wmemcmp(L"ab", L"ac", 2) < 0 && wcscasecmp(L"ABC", L"abc") == 0);
+
+  /* 5: wcstol and wcstod with end pointers. */
+  wchar_t *end;
+  const wchar_t *ws = L"  -123xyz";
+  CHECK(5, wcstol(ws, &end, 10) == -123 && end == ws + 6);
+  ws = L"0x1f";
+  CHECK(5, wcstoul(ws, &end, 0) == 31 && end == ws + 4);
+  ws = L"2.5e1!";
+  CHECK(5, wcstod(ws, &end) == 25.0 && end == ws + 5);
+
+  /* 6: the ASCII round trip through the multibyte functions. */
+  mbstate_t st;
+  memset(&st, 0, sizeof st);
+  wchar_t wc = 0;
+  char mb[8];
+  CHECK(6, mbsinit(&st) && mbrtowc(&wc, "A", 1, &st) == 1 && wc == L'A');
+  CHECK(6, mbrtowc(&wc, "", 1, &st) == 0 && wc == 0);
+  CHECK(6, wcrtomb(mb, L'q', &st) == 1 && mb[0] == 'q');
+  CHECK(6, mbstowcs(w, "text", 32) == 4 && wcscmp(w, L"text") == 0);
+  CHECK(6, wcstombs(mb, L"back", sizeof mb) == 4 && strcmp(mb, "back") == 0);
+  CHECK(6, mblen("x", 1) == 1 && mblen("", 1) == 0);
+
+  /* 7: wctomb and wcrtomb store at most MB_CUR_MAX bytes: U+20AC in 3 and
+     U+1F600 in 4, into a char[MB_CUR_MAX] buffer whose next byte stays. */
+  struct {
+    char b[MB_CUR_MAX];
+    unsigned char guard;
+  } out;
+  const volatile wchar_t euro = 0x20AC, grin = 0x1F600;
+  memset(&out, 0, sizeof out);
+  out.guard = 0x5A;
+  int n = wctomb(out.b, euro);
+  CHECK(7, n == 3 && n <= (int)MB_CUR_MAX);
+  CHECK(7, (unsigned char)out.b[0] == 0xE2 && (unsigned char)out.b[1] == 0x82 &&
+               (unsigned char)out.b[2] == 0xAC);
+  n = wctomb(out.b, grin);
+  CHECK(7, n == 4 && n <= (int)MB_CUR_MAX);
+  CHECK(7, (unsigned char)out.b[0] == 0xF0 && (unsigned char)out.b[1] == 0x9F &&
+               (unsigned char)out.b[2] == 0x98 && (unsigned char)out.b[3] == 0x80);
+  CHECK(7, out.guard == 0x5A && sizeof out.b == 4);
+  CHECK(7, wctomb(NULL, euro) == 0);
+  memset(&st, 0, sizeof st);
+  memset(&out, 0, sizeof out);
+  out.guard = 0xA5;
+  CHECK(7, wcrtomb(out.b, euro, &st) == 3 && (unsigned char)out.b[0] == 0xE2 &&
+               (unsigned char)out.b[1] == 0x82 && (unsigned char)out.b[2] == 0xAC);
+  CHECK(7, wcrtomb(out.b, grin, &st) == 4 && (unsigned char)out.b[0] == 0xF0 &&
+               (unsigned char)out.b[1] == 0x9F && (unsigned char)out.b[2] == 0x98 &&
+               (unsigned char)out.b[3] == 0x80);
+  CHECK(7, out.guard == 0xA5 && mbsinit(&st));
+  return (int)fails;
+}

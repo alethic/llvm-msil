@@ -47,8 +47,9 @@ runs its second list, `libc.txt`, hosted, and the legs `programs-hosted`,
 Since P-1a, the first step of the portable work (plan 5.18), `Portable/`
 holds the execution tests of the portable triple `msil64-unknown-dotnet`,
 whose images name no CPU, operating system or native library: freestanding
-programs linked with `-nolibc` until the managed C library `c.dll` exists
-(P-1b), which check themselves and run on .NET 10, .NET 10 with
+programs linked with `-nolibc` (P-1b adds programs that link the managed C
+library `c.dll` from the portable sysroot, and the link errors that stay
+until P-3), which check themselves and run on .NET 10, .NET 10 with
 TieredCompilation=0, a .NET Framework 4.8 direct start and WSL .NET 10,
 and under the 32-bit hosts, where the image's width guard must refuse
 them. They run only under `--param msil_triple=msil64-unknown-dotnet`, in
@@ -750,11 +751,39 @@ configuration error that names it. `00-freestanding/lit.local.cfg` puts
 `%{msil_portable_cflags}` (`-nolibc -ffreestanding`) at the front of
 `%{msil_ldflags}`, so every link of the directory, the program's, the
 `-shared` libraries of `%{msil_shlibs}` and the links a test runs itself,
-drops `-lc`, which nothing provides before P-1b, and keeps the helper
-archive `clang_rt.builtins`.
+drops `-lc` and keeps the helper archive `clang_rt.builtins`.
+
+Since P-1b, `01-libc/` and `90-loud/` use the C library: each directory's
+`lit.local.cfg` puts `%{msil_portable_libc_cflags}` (`--sysroot="<the
+portable sysroot>"`, lit's `msil_portable_sysroot`, by default the build's
+`lib/clang-runtimes/msil64-unknown-dotnet`, which
+`msil/utils/build/build-libc.py` fills) at the front of `%{msil_cflags}`
+(`01-libc/` puts it at the end instead and drops `-ffreestanding`: its programs are hosted C) and at the front of
+`%{msil_ldflags}`, so the programs include
+the sysroot's generated headers and every link takes `c.dll` through the
+driver's default `-lc`. Without the feature `msil-portable-sysroot` (the
+sysroot holds `include/stdio.h` and `lib/msil64-unknown-dotnet/c.dll` and
+`libm.a`) both directories are UNSUPPORTED, and under
+`msil_require_portable=1`, `msil_require_link=1` or `msil_require_exec=1`
+that is a configuration error naming `build-libc.py`. `01-libc/`
+sets `%{msil_deps}` to the sysroot's `c.dll`, so every run copies it
+beside the image (deploying `c.dll` is the user's job, plan 5.19.7, so the
+harness does it), and defines `%{libc_sysroot}`, `%{libc_libdir}`
+(`<sysroot>/lib/msil64-unknown-dotnet`) and `%{libc_dll}`. `90-loud/`
+defines `%{msil_portable_libc_archive}` and
+`%{msil_portable_libc_archive_dir}`, the build tree's intermediate
+`<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a` (found from the
+sysroot three directories up, or `--param
+msil_portable_libc_archive=PATH`), and the feature
+`msil-portable-libc-archive` (a missing archive is a configuration error
+under the same three parameters). `01-libc/` finds the same archive the same way for `fnptr-identity`'s private C library and defines `%{msil_portable_libc_archive}` and the feature too (a missing archive makes those RUN lines UNSUPPORTED, and is a configuration error under the same three parameters). In both directories the tests that link `c.dll` are UNSUPPORTED
+under `msil-link-output=il`, because `--lto-emit-asm` cannot import an
+assembly.
 
 | Directory | Since | Covers |
 |---|---|---|
+| `01-libc/` | P-1b | eighteen tests of the C library `c.dll` (plan 5.19.15), fourteen of them self-checking `%{msil_prog}` programs against the installed sysroot, one image per test and level on every runtime of the leg: `strto` (`strtod` with its end pointer, `strtof`, `strtold`, `strtol`, `strtoull`, `strtoimax`, the `ato*` functions, `ERANGE` on overflow and errno untouched by a successful conversion), `errno-xasm` (errno set in `c.dll`, in the program and in a second `-shared` assembly, read by the others: one cell), `qsort-calli` (`qsort`, `qsort_r`, `bsearch`, `lfind` and `lsearch` calling program comparators, and a comparator from a `-shared` library), `fnptr-identity` (`&strlen` equal in two translation units, in data of the program and of a library, and in that library's code, and equal to the addresses that `c.dll` itself takes in its code, its initialized data and a late function, through a private `c.dll` linked from the build tree's `libc.a` with a probe object when the feature `msil-portable-libc-archive` is present), `math-bits` (seventeen correctly rounded functions against fixed bit patterns, the exact functions, `math_errhandling == MATH_ERRNO`, `ERANGE`/`EDOM` from `log`, and two errno deviations from C17 inherited from upstream llvm-libc, pinned as built: `sqrt` and `sqrtf` of a negative argument return NaN and leave errno unchanged, and `pow(0, y<0)` sets `EDOM` instead of `ERANGE`), `snprintf` (P-0's formats, truncation, flags, widths, precisions, length modifiers, rounding, infinities and NaNs, `%a`, `%m`, `%#m`, `%n`, `%lc`, `%ls`, a `va_list` handed to `vsnprintf`), `snprintf-xasm` (variadic calls from a `-shared` library into `c.dll`), `string` (the string and strings families, `-fno-builtin`), `ctype-wchar` (all 256 bytes and `EOF` in the C locale, `WEOF` from `btowc(EOF)` and `wctob(WEOF)`, the wide classes and string functions, the multibyte round trip), `strerror` (each of the 80 numbers of plan 5.19.5 through `strerror`, `strerror_r`, `%m` and `%#m`, from llvm-libc's message tables), `datamodel-headers` (`_Static_assert`s on every errno number, among them `EOVERFLOW` 35, `EDEADLK` 75 and `ENOSYS` 38, `WEOF` and `wint_t`, the layouts of `struct tm`, `jmp_buf`, `mbstate_t`, `struct lconv`, `div_t` and its siblings, `struct timespec`, `FILE` incomplete, and `gmtime`'s `tm_gmtoff` and `tm_zone`), `libm-empty` (`-lm` against the empty `libm.a`, the math from `c.dll`), `probe-run` (P-0's `run/prog.c` re-run on msil64, and `div`, `ldiv`, `lldiv`, `imaxdiv` and `localeconv` through the portable ABI) and `families` (stdbit, complex by value across the boundary, the integer stdlib and inttypes functions, `a64l`, `strfromd`, `memalignment`, the `_l` functions, a `uselocale` round trip, `insque`, `remque`, `tfind`, `twalk`, `asctime`); and four that run no program: `absent` (nine cases, through `%{msil_prog_fail_O0}`, `%{msil_prog_fail_O2}` and `-fsyntax-only` compiles: (1) `malloc`, `exit`, `printf`, `rand`, `localtime`, `fetestexcept`, `strsignal` and the upstream stubs `swprintf` and `strptime` through the program's own prototypes, each an undefined symbol with N6's line naming `c.dll`; (2) the same names but `fetestexcept` through the headers, each an undeclared function in C; (3) the objects the headers declare but `c.dll` does not define (`stdin`, `stdout`, `stderr`, `daylight`, `timezone`, `tzname`, `program_invocation_name`, `program_invocation_short_name`), each an undefined symbol at link with no class line; (4) `malloc` through `<stdlib.h>` in C++17, an undeclared identifier; (5) `assert` with `NDEBUG` unset, whose `__assert_fail` fails at link with N6's line; (6) `<fenv.h>` not installed; (7) `iscanonical`, `issignaling` and `l64a` through the program's own prototypes, undefined symbols with no class line; (8) the same through the headers: `iscanonical` and `issignaling` expand to undeclared functions, `l64a` is undeclared in C17 and C23; (9) the missing C17 7.12.14 comparison macros, `isless` and `isunordered` undeclared functions in C17), `cdll-shape` (`c.dll` itself through `%msil_verify` and `%msil_jitall`, and its `llvm-cil-dump` listing: assembly `c` 1.0.0.0, only `mscorlib`, no `ImplMap` or `ModuleRef`, the export class `c`, no absent function and no OS stub), `header-decls` (every name of `msil/lib/libc/msil64-unknown-dotnet.exports` but `__llvm_libc_errno` declared by the installed headers: one translation unit that includes every top-level header and takes each name's address compiles as C17, C23 and C++17, and the same unit with `l64a` added fails naming it) and `other-targets` (P-1b's hooks in llvm-libc's public headers stay invisible to other targets: compiled from the repository's `libc/include` for `x86_64-unknown-none` and `riscv32-unknown-elf`, `struct tm` without `tm_gmtoff` or `tm_zone`, `math_errhandling` `MATH_ERRNO | MATH_ERREXCEPT`, `MB_CUR_MAX` 1, the 36 original generic errno numbers unchanged and the appended POSIX names present; on `powerpc-unknown-elf` `fenv_t.h` and `__jmp_buf.h` still reach their `#error`; no sysroot needed). The expected constants come from C17, C23 and POSIX, llvm-libc's tables or a correctly rounded reference (mpmath), each named in a comment, never from a run |
+| `90-loud/` | P-1b | five `%{msil_prog_fail_O0}` tests of the portable link errors that stay until P-3, each line pinned whole with FileCheck (`{{^}}` and `{{$}}`, only paths and the referencing object as wildcards) and `--implicit-check-not` for `LLVM ERROR`, `PLEASE submit` and any other `msil-ld: error`: `static` (`-static` is T-P9, with no `msil-ld` run; `-Wl,-Bstatic -lc` and `-l:libc.a` find no `libc.a` in the sysroot), `libc-static` (T-P11 for the build tree's `libc.a` by path and through `-L`, for a member without state, one with a static of its own and the errno provider, against a positive control that links `c.dll`), `atomic-generic` (N2's portable line for a generic and an aligned 16-byte `__atomic_load` and a 24-byte `_Atomic` load), `pthread-create` (N6 naming `c.dll` for `pthread_create` and `thrd_create`; `<pthread.h>` not found) and `native-so` (T-P4 for an ELF `.so` that `ld.lld` writes, by path and as `-l:libnative.so`, and a plain `unable to find library -lnative` for `-lnative`; `REQUIRES: msil-ld-lld`). They run no program, so they have no expected files |
 | `00-freestanding/` | P-1a | thirteen self-checking `%{msil_prog}` programs without a C library, compiled with `-ffreestanding` and linked with `-nolibc`: `datamodel` (plan 5.18.2 PC2's sizes, alignments, signedness, spellings and limits and 5.18.3's predefines, `int` `wint_t`, signed `char`, `max_align_t` 8 and the absent host macros, as `_Static_assert`s and again at run time), `int64-arith` (the guard recon's `wide.c` multiply and plan D2's `native int` shapes), `int128` (inline division, shifts, conversions, `__int128` parameters, results, globals and members), `bitint-wide` (`_BitInt(200)` and `unsigned _BitInt(129)` multiply, divide and remainder, expanded inline without a helper, as parameters and results of `noinline` functions, as initialized globals, through a function pointer, and read with `va_arg` from the `MSILPortable` indirect slots), `float-bits` (bit casts, signed zeros, infinities, NaNs, subnormals, `fabs`, `copysign`, conversions and correctly rounded arithmetic), `varargs` (variadic definitions and calls through the `MSILPortable` slots: every promoted type, `__int128` in 16-aligned slots, `long double`, structures by value as pointers, `va_copy`, a `va_list` handed on, a call through a pointer), `fnptr-calli` (managed function pointers: `calli` through locals, tables and structure fields, and the identity of `&f` within a file, across files and across a `-shared` library and its program, both ways), `shared-pair` (a `-shared` library that exports a hidden function only through `--export`, and its program, both guarded; with `llvm-cil-dump`, the guard first in each `<Module>::.cctor`, and the program's link without `--export` failing with `undefined symbol: sp_hidden`), `ctors-order` (`__attribute__((constructor))` entries with and without priorities and `.init_array` and `.init_array.N` slots in three objects, sorted stably by priority), `startstop` (`__start_`/`__stop_` of sections filled by two objects), `helpers` (the portable helper archive: `_Float16` conversions and arithmetic, `__muldc3`, `__divdc3`, `__mulsc3`, `__divsc3`, `__powidf2`, `__powisf2`, the `-ftrapv` helpers and `int_util.c`, with a FileCheck of the linked members), `cxx-freestanding` (C++17 sources without exceptions or RTTI, through a redefined `%{msil_cflags}`, and no C++ runtime: a global object with a non-trivial constructor and a trivial destructor initialized dynamically in the module initializer after the guard and the image relocations, a class template and a function template instantiated for several types, a virtual call through a base pointer across two translation units, and an `extern "C"` `main`) and `guard-x86` (`REQUIRES: msil-dotnet-x86`: the `-O2` image of `wide.c` exits 0 on the leg's 64-bit runtime, then fails under the 32-bit .NET 8 and .NET 10 hosts and, as a `%msil_set_32bitreq` copy, on a .NET Framework direct start, each with an unhandled `TypeInitializationException` or `PlatformNotSupportedException` and stderr holding only T-P10's width message, never the byte-order one). `helpers`, `fnptr-calli` and `shared-pair` say `UNSUPPORTED: msil-link-output=il` |
 
 Every `Portable/` test follows these rules (plan 5.18.10 PX2 and plan 5.17.4's
@@ -798,9 +827,61 @@ them out (`--filter-out=MSIL :: Programs/`).
 
 `harness/` holds the self-tests of the runner, the verifier, jitall,
 `update-expected.py`, `il-snapshot.py`, `%msil_canon`, the equivalence
-oracles and lit's configuration: 154 tests, 81 at the top level, 16 in
+oracles and lit's configuration: 156 tests, 83 at the top level, 16 in
 `prog/`, 29 in `legs/`, 6 in `portable/`, 6 in `pipeline/`, 5 in
 `pipeline-obj/` and 11 in `equiv/`.
+P-1b added `build-libc.test` (`msil/utils/build/build-libc.py`, black-box,
+building nothing: `--self-test` and the self-test lines that match plan
+5.19.3 and 5.19.7, among them the export list without `errno` plus
+`__llvm_libc_errno`, a stale list refused before the configure, the
+configure variables, the `c.dll` link options, the empty `libm.a`, no
+installed `libc.a`, the stamp's 1.0.0.0, the append-only cases, the build
+lock (pinned on Windows only, the only system that has one) and
+`--check-reproducible`'s refusals, each leaving everything in place (an OUT
+that holds anything but the marker `.build-libc-relink` and the files the
+relink writes, a `c.dll` without the marker, near-miss names such as
+`c.dll.bak`, links, among them a file link named `c.dll`, links to the build
+and a new directory below one, extended-length paths of the build, an
+extended-length OUT with a name in its path that ends in a dot or a space
+(Windows), an OUT that becomes a link during the lock wait, a mount point,
+the place a link moved a build or repository directory to, and the directory
+that really holds a file the relink reads or compares with, also from the
+command line), the refusal of a relink that is the installed `c.dll` itself,
+an earlier run's `c.dll` replaced beside the marker, a mount point that
+appears in OUT after the last check stopping the run (exit 1), and
+`empty_dir` removing links without what they reach; eleven usage errors,
+each exit 2 with a `build-libc.py: error:` line and nothing written;
+`--check` on an empty build directory, exit 1 naming `c.dll`, `libm.a`,
+`include/stdio.h` and `c.dll.stamp`, with `$MSIL_BUILD_DIR` honoured, and on
+a sysroot that lacks only the stamp; and `--check-reproducible` against a
+stand-in build with empty tool files, exit 2 with its refusal before the
+build lock for the stand-in's `lib/clang` as written, a junction or symbolic
+link to it, a new directory below that link, such a link to the build, the
+place such a link moved the libc tree (`runtimes/msil64-unknown-dotnet`) to,
+a directory outside both that holds a stray file and one that holds only a
+`c.dll` without the marker, its sentinels and those files left in place) and
+`libc-exports.test` (`--check-append-only OLD NEW` on synthetic lists: equal
+and appended lists pass, and a deleted middle or last name, a reordering, an
+insertion, a rename and a shorter list fail with exit 1 naming the name and
+`append-only`, neither file rewritten; `--check-exports` on the checked-in
+list; and the checked-in list against the Goal: C identifiers and `#` lines
+only, `__llvm_libc_errno` and samples of every shipped family present, and
+`errno`, the `*_modular`, f16, bf16 and f128 functions, the heap, exit,
+clock, environment, stdio stream, `rand`, `localtime`, fenv, signal,
+`swprintf`, `strptime`, hash-table and `setjmp` names and
+`__stack_chk_fail` absent, with each pattern's failure path on a synthetic
+list; and the list's exact size, 530 names, with the counter checked on a synthetic list), and extended `legs/describe.test` and `legs/describe-sh.test` (the
+portable legs' calls in order, `build-builtins.py --build-dir B --triple
+msil64-unknown-dotnet`, then `build-libc.py --build-dir B`, then lit, both
+outputs in one setup log, the row `setup failed: build-libc.py (exit 1;
+<log>)` for a planted failure with no lit run, the real `build-libc.py` on
+the stand-in build exiting 2 with nothing written, and a builtins failure
+stopping before `build-libc.py`) and `legs/portable-tag.test` and
+`legs/portable-tag-sh.test` (their passing rows set the libc stand-in
+too). `legs/Inputs/ci-legs.py`'s stand-in Python plays `build-libc.py`
+through `MSIL_FAKE_LIBC=ok|fail|real` (`real` runs the script, and only with
+`--build-dir`); unset, it refuses with exit 2, so no test can start a real
+llvm-libc build in the repository's build directory.
 P-1a added `portable/lit-config.test` (nested lit runs of `lit.cfg.py` on
 `Inputs/nested-portable` with `msil_triple=msil64-unknown-dotnet`: the
 portable substitutions and features and the absent ones, the expected-file
@@ -808,7 +889,7 @@ OS, the configuration errors of a suffixed portable triple, of
 `msil_native_oracle=required`, of `msil_require_portable=1` and of
 `msil_require_x86=1` (each branched on the outer run's features, the WSL
 runner's x86 error included) and the native-oracle warning, and a host-triple
-run of `msil/test/Portable` that reports all thirteen tests UNSUPPORTED),
+run of `msil/test/Portable` that reports every test UNSUPPORTED; from P-1b, `msil_require_portable=1` also needs the portable sysroot, and its error without one names `build-libc.py`),
 `portable/x86-runner.test` (an ilasm-built image in the portable PE32/I386
 `ILONLY` envelope: exit 4 under the 32-bit .NET 8 and .NET 10 through
 `%msil_dotnet_x86 --runtime-major 8|10` against 8 in a 64-bit process, the
@@ -1113,6 +1194,7 @@ pwsh -NoProfile -File msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_r
 python build/bin/llvm-lit.py -sv msil/test/M1/00-smoke
 python build/bin/llvm-lit.py -sv msil/test/M3/10-hosted   (hosted: on Windows from a VS x64 developer prompt)
 python msil/utils/build/build-builtins.py --triple msil64-unknown-dotnet   (once, then:)
+python msil/utils/build/build-libc.py                                      (c.dll and the sysroot, P-1b; then:)
 python build/bin/llvm-lit.py -sv --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 msil/test/Portable
 ninja -C build check-msil-exec       (this suite)
 ninja -C build check-msil-m1-02-fp   (one directory; check-msil-m2-00-link, check-msil-m3-10-hosted, ...)
@@ -1251,12 +1333,15 @@ start, `msil_require_portable=1` and `msil_require_x86=1`, so `guard-x86`
 is never silently UNSUPPORTED) and `portable-smoke-wsl` (with `-Wsl` too,
 as for an `-Exit` leg named `*-wsl`: the WSL runtime parameters with the
 portable triple in place of the Linux one, `msil_also_run=10+tc0` and
-`msil_require_portable=1`; no native oracle, no E7h). Each first runs the
-stamped setup `python msil/utils/build/build-builtins.py --build-dir
-<build> --triple msil64-unknown-dotnet` (log
-`build/lit-results/<leg>.setup.log`); when it fails, the row fails with
-`setup failed: build-builtins.py --triple msil64-unknown-dotnet (exit N;
-<log>)` and no lit runs. A portable leg is never tagged `-Exit`, so
+`msil_require_portable=1`; no native oracle, no E7h). Each first runs its
+stamped setup steps, in order, `python msil/utils/build/build-builtins.py
+--build-dir <build> --triple msil64-unknown-dotnet` and, since P-1b,
+`python msil/utils/build/build-libc.py --build-dir <build>` (the C library
+`c.dll` and the portable sysroot), both appended to the log
+`build/lit-results/<leg>.setup.log`; the first step that fails ends the
+setup and fails the row with `setup failed: <script>[ <arguments>] (exit
+N; <log>)`, for example `setup failed: build-libc.py (exit 1; <log>)`, and
+no lit runs. A portable leg is never tagged `-Exit`, so
 `-Exit` alone selects neither, and the Phase 3 exit gate,
 `check-matrix.py --legs` and the `matrix-legs` row never see them;
 `run-m1-gate.ps1 -Portable -NoWsl` drops the `-wsl` one. `lit-legs.sh
@@ -1560,7 +1645,8 @@ Since M24 a test may also set these placeholders (plan 5.17.2-5.17.4,
 
   | Test | OSes | Expected file | Reason |
   |---|---|---|---|
-  | `Portable/00-freestanding/datamodel.test`, `int64-arith.test`, `int128.test`, `bitint-wide.test`, `float-bits.test`, `varargs.test`, `fnptr-calli.test`, `shared-pair.test`, `ctors-order.test`, `startstop.test`, `helpers.test`, `cxx-freestanding.test`, `guard-x86.test` (P-1a) | `windows,linux` | `<stem>.expected`, `[exit 0]`, for both OSes | `portable: no stdout before P-2; the program checks itself`: each program sets one bit of its exit status per failed check, so `[exit 0]` is the only correct transcript; `guard-x86`'s 32-bit runs are checked by their own `LOUD:` and status lines, not by the expected file |
+  | `Portable/01-libc/strto.test`, `errno-xasm.test`, `qsort-calli.test`, `fnptr-identity.test`, `math-bits.test`, `snprintf.test`, `snprintf-xasm.test`, `string.test`, `ctype-wchar.test`, `strerror.test`, `datamodel-headers.test`, `libm-empty.test`, `probe-run.test`, `families.test` (P-1b) | `windows,linux` | `<stem>.expected`, `[exit 0]`, for both OSes | `portable: no stdout before P-2; the program checks itself`: each program sets one bit of its exit status per failed group of checks, so `[exit 0]` is the only correct transcript. `absent.test`, `cdll-shape.test`, `header-decls.test` and `other-targets.test` run no program and have no expected file, nor do the tests of `Portable/90-loud` |
+| `Portable/00-freestanding/datamodel.test`, `int64-arith.test`, `int128.test`, `bitint-wide.test`, `float-bits.test`, `varargs.test`, `fnptr-calli.test`, `shared-pair.test`, `ctors-order.test`, `startstop.test`, `helpers.test`, `cxx-freestanding.test`, `guard-x86.test` (P-1a) | `windows,linux` | `<stem>.expected`, `[exit 0]`, for both OSes | `portable: no stdout before P-2; the program checks itself`: each program sets one bit of its exit status per failed check, so `[exit 0]` is the only correct transcript; `guard-x86`'s 32-bit runs are checked by their own `LOUD:` and status lines, not by the expected file |
 - A loud failure, a construct that the toolchain cannot see before its
   feature's milestone, throws or fails fast at run time, and its test runs
   `%{msil_prog_loud_<L>}` for each level it checks (`O0` .. `Oz`): the build
@@ -1626,7 +1712,8 @@ Since M24 a test may also set these placeholders (plan 5.17.2-5.17.4,
 | `msil_require_corpus` | `0` | `1` (M23, the corpus legs): a missing or stale stamp, or an entry the stamp lacks and `msil_corpus_skip` does not name, is a configuration error naming `fetch.py --cache <dir>` |
 | `msil_corpus_skip` | empty | M23: comma list of manifest names left out on purpose (the legs pass `$MSIL_CORPUS_SKIP`); their tests are UNSUPPORTED with a note, and a name the manifest lacks is a configuration error |
 | `msil_glibc_sysroot` | `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot` on Windows when it holds `usr/include/stdio.h`; empty disables it | a glibc sysroot with headers, as `msil/utils/make-glibc-sysroot.sh` makes it, for the hosted tests of `M2/09-hosted/` (feature `msil-glibc-sysroot`, substitution `%{msil_glibc_sysroot}`; M15) and, since M24, for hosted directories on the Linux triple: their headers (`%{msil_hosted_cflags}`, feature `msil-hosted`) and the E7h oracle, which also needs the sysroot's `usr/lib/x86_64-linux-gnu/crt1.o`, `crti.o`, `crtn.o`, `libc_nonshared.a` and `libc.so` (feature `msil-linux-hosted-oracle`). A value given explicitly, as the `hosted` leg and the legs that run `M3/` for the Linux triple give it, without `usr/include/stdio.h` is a configuration error |
-| `msil_require_portable` | `0` | `1` (P-1a; the portable legs and the P-steps' gate steps): a missing portable toolchain (feature `msil-portable`) or portable helper archive (feature `msil-portable-builtins`) is the configuration error `msil_require_portable=1, but ...` instead of UNSUPPORTED (P-1b adds the sysroot) |
+| `msil_require_portable` | `0` | `1` (P-1a; the portable legs and the P-steps' gate steps): a missing portable toolchain (feature `msil-portable`) or portable helper archive (feature `msil-portable-builtins`) is the configuration error `msil_require_portable=1, but ...` instead of UNSUPPORTED, and since P-1b so is a missing portable sysroot (feature `msil-portable-sysroot`) |
+| `msil_portable_sysroot` | `<the build>/lib/clang-runtimes/msil64-unknown-dotnet` (beside the `bin/` that holds clang) | P-1b, plan 5.19.3: the portable sysroot that `msil/utils/build/build-libc.py` installs; feature `msil-portable-sysroot` when it holds `include/stdio.h`, `lib/msil64-unknown-dotnet/c.dll` and `lib/msil64-unknown-dotnet/libm.a`, and substitution `%{msil_portable_libc_cflags}`. A missing default is UNSUPPORTED for the tests that need it (a configuration error under `msil_require_portable=1`); a value given explicitly that lacks those files is always a configuration error |
 | `msil_require_x86` | `0` | `1` (P-1a; `portable-smoke`): missing 32-bit starts (feature `msil-dotnet-x86`) are the configuration error `msil_require_x86=1, but ...`, so `guard-x86` is never silently UNSUPPORTED |
 | `msil_probe_cache` | `<build>/tools/msil/test/probe-cache.json` | M24, plan 5.17.10: the file in which the probes that start a process keep their results (clang's `-print-file-name=include`, `dotnet --list-runtimes`, the NuGet global-packages folder, `dotnet --list-sdks` for `%msil_csc`, `ilverify --version`, the WSL dotnet and `msil_wsl_ilasm` probes, the compile of E7's `start.o`), each under a key of the path, size and mtime of every file it depends on, the parameters that select it and the environment variables it reads, with the SHA-256 of `lit.cfg.py` for the whole file; a probe whose key differs runs again and the file is rewritten atomically. lit notes `probe cache: hit` or `probe cache: miss (<reason>)`; empty disables the cache |
 
@@ -1674,7 +1761,9 @@ and `msil-ld` link a `-nostdlib -ffreestanding` program for
 `msil64-unknown-dotnet`; the probe cache keeps both answers while clang and
 `msil-ld` are unchanged; P-1a), `msil-portable-builtins` (the portable
 helper archive `<resource dir>/lib/msil64-unknown-dotnet/libclang_rt.builtins.a`
-exists and `-print-libgcc-file-name` names it; P-1a), `msil-dotnet-x86`
+exists and `-print-libgcc-file-name` names it; P-1a),
+`msil-portable-sysroot` (the portable sysroot `msil_portable_sysroot` holds
+`include/stdio.h`, `c.dll` and `libm.a`; P-1b), `msil-dotnet-x86`
 (Windows with the local runner: `%ProgramFiles(x86)%\dotnet\dotnet.exe`
 with Microsoft.NETCore.App 8.x and 10.x, and the 32-bit .NET Framework
 `clr.dll`; the 32-bit starts of `Portable/00-freestanding/guard-x86`; P-1a),
@@ -1731,9 +1820,12 @@ links of `Portable/00-freestanding`), `%msil_dotnet_x86` (`msil-run.py
 writes a runtimeconfig for that major with `rollForward` `LatestPatch`) and
 `%msil_set_32bitreq` (`msil-run.py --set-32bitreq IN OUT`, a copy of an
 image with the CorFlags bit `32BITREQUIRED` set, for the 32-bit .NET
-Framework start of `%msil_exec --netfx`). P-1b adds
-`%{msil_portable_libc_cflags}` and `msil_portable_sysroot` for the tests
-that use `c.dll`.
+Framework start of `%msil_exec --netfx`). Since P-1b (plan 5.19.3):
+`%{msil_portable_libc_cflags}` (`--sysroot="<msil_portable_sysroot>"`,
+quoted, forward slashes: the sysroot's headers, `c.dll` through the default
+`-lc` and the empty `libm.a`; the flags of `Portable/01-libc` and
+`Portable/90-loud`), while `%{msil_portable_cflags}` keeps the freestanding
+flags.
 For programs of several files (M14): `%msil_ld` (`msil-ld` under
 `msil-run.py --tool` limits), `%msil_ar` and `%msil_nm` (the tree's `llvm-ar`
 and `llvm-nm`), `%msil_prog_build` (`msil-prog.py` with the tools, the triple,

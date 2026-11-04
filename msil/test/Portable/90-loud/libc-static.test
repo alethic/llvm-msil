@@ -1,0 +1,76 @@
+# msil-ld refuses a static copy of the C library on msil64-unknown-dotnet until P-3 (T-P11): a program that takes any member of the libc build tree's libc.a, by path or through -L, fails to link with T-P11's whole text, whichever member it takes.
+# Plan 5.18.6 PL10 and 5.19.8 ('-static before P-3', the third loud layer,
+# pinned here on the real archive): build-libc.py keeps the archive that it
+# links c.dll from in the build tree (<build>/runtimes/msil64-unknown-dotnet/
+# libc/lib/libc.a, never installed before P-3), and its symbol index defines
+# __llvm_libc_errno (5.19.5's exported errno provider). A link of it would
+# give the program a private copy with its own errno cell and statics, the
+# private-state static C library the user's decision of 2026-11-01 rules
+# out, so an output other than the C library itself that takes any
+# definition from a member of such an archive is the error
+#   the C library cannot be linked statically for msil64-unknown-dotnet yet: link the shared C library c.dll (-lc)
+# The archive comes after the program's object and before the driver's -lc
+# (%{msil_libs}), so each name the program needs is taken from it first:
+#   strlen.c: strlen only (a member without state);
+#   strtok.c: strtok, a member with a static of its own;
+#   errno.c:  errno only (__llvm_libc_errno, the provider member that
+#             build-libc.py adds to the archive);
+#   -L:       strlen.c with the archive's directory as a -L directory: the
+#             driver's own -lc searches it before the sysroot's, and on
+#             dotnet a directory without c.dll gives libc.a (5.18.6 PL6).
+# Each refusal is T-P11 alone (no undefined symbol, no other msil-ld error).
+# The same objects link without the archive (c.dll gives every name), so the
+# archive is the only cause. A link that writes --lto-emit-asm text cannot
+# import c.dll (msil_link_output=il), so the test needs linked images.
+# REQUIRES: msil-portable-libc-archive
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t %t.ok && split-file %s %t && mkdir -p %t.ok
+# DEFINE: %{tp11_check} = FileCheck %s --check-prefix=TP11 --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: error" --implicit-check-not="undefined symbol"
+# TP11:      {{^}}msil-ld: error: the C library cannot be linked statically for msil64-unknown-dotnet yet: link the shared C library c.dll (-lc){{$}}
+# TP11-NEXT: {{^}}clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation){{$}}
+# TP11:      {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#
+# REDEFINE: %{msil_libs} = %{msil_portable_libc_archive}
+# REDEFINE: %{msil_srcs} = %t/strlen.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{tp11_check}
+# REDEFINE: %{msil_srcs} = %t/strtok.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{tp11_check}
+# REDEFINE: %{msil_srcs} = %t/errno.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{tp11_check}
+#
+# REDEFINE: %{msil_libs} = -L%{msil_portable_libc_archive_dir}
+# REDEFINE: %{msil_srcs} = %t/strlen.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{tp11_check}
+#
+# Without the archive the same programs link against c.dll.
+# RUN: %clang_portable %{msil_cflags} -O0 -c %t/strlen.c -o %t.ok/strlen.o
+# RUN: %clang_portable %{msil_ldflags} -O0 %t.ok/strlen.o -o %t.ok/strlen.exe
+# RUN: %clang_portable %{msil_cflags} -O0 -c %t/strtok.c -o %t.ok/strtok.o
+# RUN: %clang_portable %{msil_ldflags} -O0 %t.ok/strtok.o -o %t.ok/strtok.exe
+# RUN: %clang_portable %{msil_cflags} -O0 -c %t/errno.c -o %t.ok/errno.o
+# RUN: %clang_portable %{msil_ldflags} -O0 %t.ok/errno.o -o %t.ok/errno.exe
+#--- strlen.c
+#include <string.h>
+
+static volatile const char *word = "hello";
+
+int main(void) {
+  /* Never runs from the archive: the link stops. */
+  return strlen((const char *)word) != 5;
+}
+#--- strtok.c
+#include <string.h>
+
+int main(void) {
+  char list[] = "a,b";
+  /* strtok keeps its position in a static of its member. */
+  return strtok(list, ",") == 0 || strtok(0, ",") == 0;
+}
+#--- errno.c
+#include <errno.h>
+
+int main(void) {
+  /* errno is (*__llvm_libc_errno()), the provider member's only name. */
+  errno = ERANGE;
+  return errno != ERANGE;
+}

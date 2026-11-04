@@ -38,6 +38,13 @@ typedef unsigned int fenv_t;
 typedef struct {
   unsigned int __fpc;
 } fenv_t;
+#elif defined(__msil32__) || defined(__msil64__)
+// The portable .NET targets have no floating-point environment: fenv.h is not
+// installed and no fenv function is an entry point (brief Q20 (a)). This opaque
+// type exists only for FPUtil's dummy get_env/set_env (FEnvImpl.h).
+typedef struct {
+  unsigned int __unused;
+} fenv_t;
 #else
 #error "fenv_t not defined for your platform"
 #endif

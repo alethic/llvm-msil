@@ -1,0 +1,118 @@
+# c.dll's export list msil/lib/libc/msil64-unknown-dotnet.exports is
+# append-only (plan 5.19.7, P-1b): a later change may only add lines at its
+# end, and a name is never removed, moved or retyped. build-libc.py checks it
+# (the gate runs 'build-libc.py --check-append-only <HEAD's list> <the
+# working tree's list>'), run black-box here:
+# (1) on synthetic lists, one name per line under a '#' comment line:
+#     --check-append-only OLD NEW exits 0 when NEW equals OLD and when NEW
+#     appends names at its end, saying it keeps OLD's names and appends that
+#     many; it exits 1 with a 'build-libc.py: error:' line that says the list
+#     is append-only and names the offending name when NEW deletes a name
+#     in the middle or the last one, reorders two names, inserts a name in
+#     the middle or renames one. Each failing case differs from a passing one
+#     in that one edit, so the check cannot pass by accepting every list, and
+#     neither list is ever rewritten.
+# (2) The checked-in list: --check-exports (it regenerates the list from
+#     libc/config/dotnet/msil64/entrypoints.txt and compares; no build
+#     needed) exits 0 and names both files.
+# (3) The checked-in list holds P-1b's shipped set as the milestone's Goal
+#     states it: one C identifier per line besides '#' comment lines;
+#     __llvm_libc_errno in place of errno (5.19.5); the string, stdlib,
+#     ctype, wchar, locale and math entry points and the four printf
+#     functions to buffers (snprintf, sprintf, vsnprintf, vsprintf), and the
+#     pure time functions asctime, asctime_r, difftime, gmtime and gmtime_r.
+#     It lacks every absent function of the Goal: no *_modular variant, no
+#     f16, bf16 or f128 math, no exit, abort, atexit or heap function, no
+#     clock, time or environment, no stdio stream function, no rand, no
+#     localtime family, mktime or strftime (brief Q18 (a)), no fenv function
+#     (brief Q20 (a)), no strsignal, signal or raise (brief Q21 (a)), no
+#     swprintf or strptime (upstream stubs that only fail), no hash table of
+#     search.h, no setjmp family (declared, never defined) and no
+#     __stack_chk_fail (5.19.7). The failure path: a synthetic list with
+#     each absent name, and one with a line that is no C identifier, is
+#     caught by the same patterns, and a list without the shipped names
+#     lacks them.
+# (4) The checked-in list's exact size (5.19.4: the count is generated,
+#     never typed, and pinned here): 530 names, the entry points of
+#     entrypoints.txt but errno, plus __llvm_libc_errno, without
+#     copysignf80 and fabsf80 (no f80 surface) and without iscanonical,
+#     issignaling (three each) and l64a (no installed header declares
+#     them). A name counts as each line
+#     that is neither blank nor a '#' comment; a synthetic list with
+#     comments, a blank line and three names counts 3. An append (a later
+#     stage) updates this number together with the list.
+# build-libc.test checks the rest of build-libc.py's command line.
+
+# DEFINE: %{bl} = "%python" "%S/../../utils/build/build-libc.py"
+# DEFINE: %{ex_list} = %S/../../lib/libc/msil64-unknown-dotnet.exports
+# DEFINE: %{ex_format} = "^(?!#)(?![A-Za-z_][A-Za-z0-9_]*$).+$"
+# DEFINE: %{ex_absent} = "^errno$" "_modular$" "(f16|bf16|f128)$" "^(malloc|calloc|realloc|free|aligned_alloc|exit|_Exit|abort|atexit|at_quick_exit|quick_exit)$" "^(clock|time|timespec_get|getenv|setenv|unsetenv|system)$" "^(printf|vprintf|fprintf|vfprintf|puts|fputs|putchar|fputc|fopen|fclose|fflush|fwrite|fread|scanf|fscanf|getchar|perror)$" "^(rand|srand|rand_r)$" "^(localtime|localtime_r|mktime|strftime)$" "^fe[a-z]+$" "^(strsignal|signal|raise|kill)$" "^(swprintf|strptime)$" "^(hcreate|hcreate_r|hsearch|hsearch_r|hdestroy|hdestroy_r)$" "^(setjmp|longjmp|sigsetjmp|siglongjmp)$" "^__stack_chk_fail$"
+# DEFINE: %{ex_count} = "%python" -c "import sys; print(sum(1 for l in open(sys.argv[1], encoding='utf-8') if l.strip() and not l.startswith('#')))"
+# DEFINE: %{ex_shipped} = "^__llvm_libc_errno$" "^strlen$" "^memcpy$" "^strerror$" "^strtod$" "^strtol$" "^qsort$" "^bsearch$" "^isalpha$" "^btowc$" "^wctob$" "^localeconv$" "^sinf$" "^pow$" "^snprintf$" "^sprintf$" "^vsnprintf$" "^vsprintf$" "^asctime$" "^asctime_r$" "^difftime$" "^gmtime$" "^gmtime_r$"
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %{harness_check} write %t/old.exports "# c.dll exports" "abs" "atoi" "strlen"
+# RUN: %{harness_check} write %t/same.exports "# c.dll exports" "abs" "atoi" "strlen"
+# RUN: %{harness_check} write %t/append.exports "# c.dll exports" "abs" "atoi" "strlen" "strnlen" "wcslen"
+# RUN: %{harness_check} write %t/delete.exports "# c.dll exports" "abs" "strlen"
+# RUN: %{harness_check} write %t/delete-last.exports "# c.dll exports" "abs" "atoi"
+# RUN: %{harness_check} write %t/reorder.exports "# c.dll exports" "atoi" "abs" "strlen"
+# RUN: %{harness_check} write %t/insert.exports "# c.dll exports" "abs" "bsearch" "atoi" "strlen"
+# RUN: %{harness_check} write %t/rename.exports "# c.dll exports" "abs" "atoi" "strnlen"
+# RUN: %{bl} --check-append-only %t/old.exports %t/same.exports > %t/same.log 2>&1
+# RUN: %{harness_check} contains %t/same.log "keeps the 3 names of \S*old\.exports and appends 0\b"
+# RUN: %{bl} --check-append-only %t/old.exports %t/append.exports > %t/append.log 2>&1
+# RUN: %{harness_check} contains %t/append.log "keeps the 3 names of \S*old\.exports and appends 2\b"
+# RUN: cat %t/same.log %t/append.log > %t/pass.log
+# RUN: %{harness_check} lacks %t/pass.log "error" "append-only"
+# RUN: %{harness_check} exits 1 %{bl} --check-append-only %t/old.exports %t/delete.exports > %t/delete.log 2>&1
+# RUN: %{harness_check} contains %t/delete.log "^build-libc\.py: error: .*\batoi\b.*\bappend-only\b"
+# RUN: %{harness_check} exits 1 %{bl} --check-append-only %t/old.exports %t/delete-last.exports > %t/delete-last.log 2>&1
+# RUN: %{harness_check} contains %t/delete-last.log "^build-libc\.py: error: .*\bstrlen\b.*\bappend-only\b"
+# RUN: %{harness_check} exits 1 %{bl} --check-append-only %t/old.exports %t/reorder.exports > %t/reorder.log 2>&1
+# RUN: %{harness_check} contains %t/reorder.log "^build-libc\.py: error: .*\babs\b.*\bappend-only\b"
+# RUN: %{harness_check} exits 1 %{bl} --check-append-only %t/old.exports %t/insert.exports > %t/insert.log 2>&1
+# RUN: %{harness_check} contains %t/insert.log "^build-libc\.py: error: .*\batoi\b.*\bappend-only\b"
+# RUN: %{harness_check} exits 1 %{bl} --check-append-only %t/old.exports %t/rename.exports > %t/rename.log 2>&1
+# RUN: %{harness_check} contains %t/rename.log "^build-libc\.py: error: .*\bstrlen\b.*\bappend-only\b"
+# RUN: cat %t/delete.log %t/delete-last.log %t/reorder.log %t/insert.log %t/rename.log > %t/fail.log
+# RUN: %{harness_check} lacks %t/fail.log "keeps the \d+ names"
+# RUN: %{harness_check} equals %t/old.exports "# c.dll exports" "abs" "atoi" "strlen"
+# RUN: %{harness_check} equals %t/append.exports "# c.dll exports" "abs" "atoi" "strlen" "strnlen" "wcslen"
+# RUN: %{harness_check} equals %t/delete.exports "# c.dll exports" "abs" "strlen"
+# RUN: %{harness_check} equals %t/reorder.exports "# c.dll exports" "atoi" "abs" "strlen"
+# The reverse direction: the appended list is OLD, the original list drops
+# its last two names.
+# RUN: %{harness_check} exits 1 %{bl} --check-append-only %t/append.exports %t/old.exports > %t/shrink.log 2>&1
+# RUN: %{harness_check} contains %t/shrink.log "^build-libc\.py: error: .*\bstrnlen\b.*\bappend-only\b"
+
+# (2)
+# RUN: %{bl} --check-exports > %t/check-exports.log 2>&1
+# RUN: %{harness_check} contains %t/check-exports.log "msil/lib/libc/msil64-unknown-dotnet\.exports\b.*libc/config/dotnet/msil64/entrypoints\.txt"
+# RUN: %{harness_check} lacks %t/check-exports.log "error"
+
+# (3)
+# RUN: %{harness_check} lacks %{ex_list} %{ex_format} %{ex_absent}
+# RUN: %{harness_check} contains %{ex_list} %{ex_shipped}
+# The failure paths.
+# RUN: %{harness_check} write %t/bad.exports "# a list with every absent name" "errno" "sprintf_modular" "sinf16" "fabsbf16" "sqrtf128" "malloc" "exit" "abort" "atexit" "clock" "time" "getenv" "printf" "fopen" "puts" "rand" "localtime" "mktime" "strftime" "feclearexcept" "strsignal" "signal" "raise" "swprintf" "strptime" "hsearch" "setjmp" "longjmp" "__stack_chk_fail"
+# RUN: %{harness_check} lacks %t/bad.exports %{ex_format}
+# RUN: %{harness_check} contains %t/bad.exports %{ex_absent}
+# RUN: %{harness_check} lacks %t/bad.exports %{ex_shipped}
+# RUN: %{harness_check} write %t/bad-format-1.exports "# two names on a line" "strlen strnlen"
+# RUN: %{harness_check} write %t/bad-format-2.exports "# a path" "lib/strlen"
+# RUN: %{harness_check} write %t/bad-format-3.exports "# a leading digit" "1strlen"
+# RUN: %{harness_check} write %t/bad-format-4.exports "# an indented comment" " # strlen"
+# RUN: %{harness_check} contains %t/bad-format-1.exports %{ex_format}
+# RUN: %{harness_check} contains %t/bad-format-2.exports %{ex_format}
+# RUN: %{harness_check} contains %t/bad-format-3.exports %{ex_format}
+# RUN: %{harness_check} contains %t/bad-format-4.exports %{ex_format}
+
+# (4)
+# RUN: %{ex_count} %{ex_list} > %t/count.log
+# RUN: %{harness_check} contains %t/count.log "\A530\n\Z"
+# RUN: %{harness_check} write %t/count3.exports "# a comment" "abs" "" "# another comment" "atoi" "strlen" "   "
+# RUN: %{ex_count} %t/count3.exports > %t/count3.log
+# RUN: %{harness_check} contains %t/count3.log "\A3\n\Z"

@@ -1,0 +1,112 @@
+# P-0's probe program run/prog.c re-run on msil64-unknown-dotnet through the portable ABI (its hand-built SysV va_list replaced by a real snprintf call), and the struct shapes that the portable ABIInfo can change: div, ldiv, lldiv and imaxdiv results returned by value from c.dll, and the struct lconv that localeconv returns in the C locale after setlocale.
+# Plan 5.19.15 ('P-1b re-runs P-0's probe programs (recon/p3/portable-libc-
+# files/run/) on msil64, because the probe used the SysV host ABI with host
+# macros removed and the portable ABIInfo can change div/ldiv/imaxdiv/
+# localeconv shapes'), recon portable-libc 4.3 (the probe's checks and its
+# values, which run/prog.c states: qsort, strtod("2.5e1xyz"),
+# strtol("-0x1F", 0, 16), sinf(0.5f) between 0.4794255 and 0.4794256,
+# exp(1.0) == 2.718281828459045, pow(2.5, 2) and sqrt(2), strlen, strcmp,
+# strstr, isalpha, ERANGE through the errno cell, the snprintf string),
+# 5.19.6 (div_t, ldiv_t, lldiv_t, imaxdiv_t and struct lconv are llvm-libc's,
+# frozen at P-1b). C17 7.22.6.2 and 7.8.2.2: div truncates toward zero, quot
+# * denom + rem == numer. C17 7.11.1.1 and 7.11.2.1: setlocale(LC_ALL, "C")
+# returns "C"; in the C locale decimal_point is ".", thousands_sep and
+# grouping are "", and the char members are CHAR_MAX. Each failed group sets
+# one bit of the exit status (the probe returned 42 on success; here 0).
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/prog.c
+# RUN: %{msil_prog}
+#--- prog.c
+/* P-0 libc recon's run/prog.c, with the sysroot's headers instead of its
+   hand-written prototypes and snprintf instead of its SysV va_list. */
+#include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <locale.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+
+static volatile float v_halff = 0.5f;
+static volatile double v_one = 1.0, v_25 = 2.5, v_two = 2.0;
+static const char *volatile v_ptr;
+static const char *opaque(const char *s) {
+  v_ptr = s;
+  return v_ptr;
+}
+
+int main(void) {
+  int fails = 0;
+  /* The probe's checks, bit for bit. */
+  int a[6] = {5, 3, 6, 1, 4, 2};
+  qsort(a, 6, sizeof(int), cmp);
+  for (int i = 0; i < 6; i++)
+    if (a[i] != i + 1)
+      fails |= 1;
+  char *end;
+  double d = strtod(opaque("2.5e1xyz"), &end);
+  if (d != 25.0 || *end != 'x')
+    fails |= 2;
+  if (strtol(opaque("-0x1F"), 0, 16) != -31)
+    fails |= 2;
+  float s = sinf(v_halff);
+  if (!(s > 0.4794255f && s < 0.4794256f))
+    fails |= 4;
+  double e = exp(v_one);
+  if (e != 2.718281828459045)
+    fails |= 4;
+  if (pow(v_25, v_two) != 6.25 || sqrt(v_two) != 1.4142135623730951)
+    fails |= 4;
+  if (strlen(opaque("hello")) != 5 || strcmp(opaque("abc"), "abd") >= 0 ||
+      strstr(opaque("haystack"), "st") == 0 || !isalpha('q'))
+    fails |= 8;
+  strtod(opaque("1e999"), 0);
+  if (*__llvm_libc_errno() != 34 || errno != ERANGE) /* ERANGE through the errno cell */
+    fails |= 8;
+  {
+    char buf[96];
+    int n = snprintf(buf, sizeof buf, "%d|%s|%.3f|%x", 42, opaque("str"), 3.14159, 0);
+    if (n != 14 || strcmp(buf, "42|str|3.142|0") != 0)
+      fails |= 16;
+  }
+
+  /* 5: div, ldiv, lldiv and imaxdiv return their structs by value. */
+  volatile int n7 = -7, d2 = 2;
+  div_t q = div(n7, d2);
+  ldiv_t lq = ldiv(LONG_MIN + 1, 1000000007L);
+  lldiv_t llq = lldiv(LLONG_MAX, -3);
+  imaxdiv_t iq = imaxdiv(INTMAX_MIN, 10);
+  if (q.quot != -3 || q.rem != -1)
+    fails |= 32;
+  if (lq.quot * 1000000007L + lq.rem != LONG_MIN + 1 || lq.rem > 0 || lq.rem <= -1000000007L)
+    fails |= 32;
+  if (llq.quot != -3074457345618258602LL || llq.rem != 1)
+    fails |= 32;
+  if (iq.quot != INTMAX_MIN / 10 || iq.rem != -8)
+    fails |= 32;
+
+  /* 6: setlocale and localeconv in the C locale. */
+  const char *loc = setlocale(LC_ALL, "C");
+  if (!loc || strcmp(loc, "C") != 0)
+    fails |= 64;
+  loc = setlocale(LC_NUMERIC, NULL);
+  if (!loc || strcmp(loc, "C") != 0)
+    fails |= 64;
+  struct lconv *lc = localeconv();
+  if (!lc || strcmp(lc->decimal_point, ".") != 0 || strcmp(lc->thousands_sep, "") != 0 ||
+      strcmp(lc->grouping, "") != 0 || strcmp(lc->currency_symbol, "") != 0 ||
+      strcmp(lc->int_curr_symbol, "") != 0)
+    fails |= 128;
+  if (!lc || lc->frac_digits != CHAR_MAX || lc->n_sign_posn != CHAR_MAX ||
+      lc->int_frac_digits != CHAR_MAX || lc->int_n_sign_posn != CHAR_MAX)
+    fails |= 128;
+  return fails;
+}

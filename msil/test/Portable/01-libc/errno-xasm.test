@@ -1,0 +1,81 @@
+# errno across assembly boundaries: c.dll sets errno and the program reads it; the program sets it and a second -shared assembly reads it; that library sets it and the program reads it; the library's call into c.dll sets it for both; every assembly sees one cell, the address that c.dll's exported __llvm_libc_errno returns.
+# Plan 5.19.5 (errno is llvm-libc's (*__llvm_libc_errno()), mode EXTERNAL:
+# until P-3 one process cell in c.dll, a hidden global behind the exported
+# function; brief Q16 (a)), 5.19.7 (c.dll exports __llvm_libc_errno through
+# the export list, portable-libc D1: the hidden-declared provider is forced
+# out), 5.19.1 rule 4 (os.h's LIBC_TARGET_OS_IS_DOTNET selects the dotnet
+# OS layer, whose errno.cpp is that provider). errlib is a -shared assembly
+# built from its own source and linked against c.dll (%{msil_shlibs} with
+# the directory's --sysroot); the program links both, and every run has
+# c.dll and errlib.dll beside it. The values come from C17: strtod and
+# strtol set ERANGE on overflow (7.22.1.3p10, 7.22.1.4p8); EDOM and ENOSYS
+# are distinct values the programs store themselves (5.19.5's numbers are
+# pinned by datamodel-headers). Each failed group sets one bit of the exit
+# status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = errlib=%t/errlib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- errlib.c
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
+#define API __attribute__((visibility("default")))
+API int lib_read_errno(void) { return errno; }
+API void lib_set_errno(int value) { errno = value; }
+API int *lib_errno_address(void) { return &errno; }
+/* A call from the library into c.dll that sets errno. */
+API int lib_strtol_overflow(void) {
+  const char *volatile s = "99999999999999999999";
+  errno = 0;
+  long v = strtol(s, 0, 10);
+  return v == LONG_MAX ? errno : -1;
+}
+#--- main.c
+#include <errno.h>
+#include <math.h>
+#include <stdlib.h>
+
+int lib_read_errno(void);
+void lib_set_errno(int value);
+int *lib_errno_address(void);
+int lib_strtol_overflow(void);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static const char *volatile v_big = "1e999";
+
+int main(void) {
+  /* 0: c.dll sets errno; the program reads it. */
+  errno = 0;
+  CHECK(0, strtod(v_big, 0) == HUGE_VAL);
+  CHECK(0, errno == ERANGE);
+  /* 1: the program sets errno; errlib reads it. */
+  errno = EDOM;
+  CHECK(1, lib_read_errno() == EDOM);
+  /* 2: errlib sets errno; the program reads it. */
+  lib_set_errno(ENOSYS);
+  CHECK(2, errno == ENOSYS);
+  /* 3: errlib's call into c.dll sets errno for errlib and the program. */
+  errno = 0;
+  CHECK(3, lib_strtol_overflow() == ERANGE && errno == ERANGE);
+  /* 4: one cell: the same address in the program, in errlib and from
+     c.dll's exported function. */
+  int *here = &errno;
+  CHECK(4, here == lib_errno_address() && here == __llvm_libc_errno());
+  /* 5: a store through the cell's address is errno everywhere. */
+  *lib_errno_address() = EILSEQ;
+  CHECK(5, errno == EILSEQ && lib_read_errno() == EILSEQ);
+  errno = 0;
+  CHECK(5, lib_read_errno() == 0);
+  return (int)fails;
+}

@@ -1,0 +1,37 @@
+# Public headers of LLVM libc on msil64-unknown-dotnet.
+#
+# The headers that declare the shipped entry points of entrypoints.txt, plus the
+# headers of types and macros alone (float.h, limits.h, stdint.h, stdckdint.h,
+# uchar.h, features.h). The generated headers declare only the shipped entry
+# points, so an absent function is undeclared. assert.h ships for static_assert
+# and NDEBUG; its assert() needs __assert_fail, which is absent until P-2.
+# setjmp.h declares setjmp, longjmp, sigsetjmp and siglongjmp, which the compiler
+# intercepts and nothing defines (entrypoints.txt). fenv.h is not installed: no
+# fenv function ships (brief Q20 (a)), and its FE_* macros would claim
+# floating-point exception support that the target does not have. signal.h,
+# threads.h, pthread.h, unistd.h and the other OS headers come with their stages.
+set(TARGET_PUBLIC_HEADERS
+    libc.include.assert
+    libc.include.complex
+    libc.include.ctype
+    libc.include.errno
+    libc.include.features
+    libc.include.float
+    libc.include.inttypes
+    libc.include.limits
+    libc.include.locale
+    libc.include.math
+    libc.include.search
+    libc.include.setjmp
+    libc.include.stdbit
+    libc.include.stdckdint
+    libc.include.stdint
+    libc.include.stdio
+    libc.include.stdlib
+    libc.include.string
+    libc.include.strings
+    libc.include.time
+    libc.include.uchar
+    libc.include.wchar
+    libc.include.wctype
+)

@@ -15,7 +15,9 @@
 # and each Portable leg is a FAIL row naming its setup log; with the non-lit
 # legs, which the stand-in cannot pass, each run exits 1.
 # (3) With a stand-in Python (Inputs/ci-legs.py python, MSIL_PYTHON) that
-# plays build-builtins.py: MSIL_FAKE_BUILTINS=ok makes -Leg portable-smoke
+# plays build-builtins.py and, from P-1b, the setup's second step
+# build-libc.py (MSIL_FAKE_LIBC=ok here; describe.test checks that step):
+# MSIL_FAKE_BUILTINS=ok makes -Leg portable-smoke
 # and -Leg portable-smoke-wsl PASS rows whose setup ran with the build
 # directory and the portable triple and whose one lit invocation passes
 # exactly the paths, params and lit arguments of -Describe; =fail makes
@@ -58,19 +60,19 @@
 # RUN: %python %S/Inputs/ci-legs.py python %t/py > %t/py.txt
 # DEFINE: %{portable_py} = %t/py/python.cmd
 # RUN: %python %S/Inputs/ci-legs.py setup %t/b3
-# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b3 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=ok MSIL_CI_RESULTS=%t/rows-3 -- -Leg portable-smoke > %t/3a.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b3 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=ok MSIL_FAKE_LIBC=ok MSIL_CI_RESULTS=%t/rows-3 -- -Leg portable-smoke > %t/3a.log
 # RUN: %{harness_check} contains %t/rows-3 "\Alit-legs\tportable-smoke\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
 # RUN: %{harness_check} contains %t/py/calls.log "^argv: \S*build-builtins\.py --build-dir \S*b3 --triple msil64-unknown-dotnet$"
 # RUN: %{harness_check} contains %t/b3/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: --build-dir \S*b3 --triple msil64-unknown-dotnet$"
 # RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke %t/b3/lit-calls.log > %t/3a-calls.log
 # RUN: %{harness_check} contains %t/3a-calls.log "^legs-check: portable-smoke: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
 # RUN: rm -f %t/b3/lit-calls.log
-# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b3 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=ok MSIL_CI_RESULTS=%t/rows-3b -- -Leg portable-smoke-wsl > %t/3b.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b3 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=ok MSIL_FAKE_LIBC=ok MSIL_CI_RESULTS=%t/rows-3b -- -Leg portable-smoke-wsl > %t/3b.log
 # RUN: %{harness_check} contains %t/rows-3b "\Alit-legs\tportable-smoke-wsl\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
 # RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke-wsl %t/b3/lit-calls.log > %t/3b-calls.log
 # RUN: %{harness_check} contains %t/3b-calls.log "^legs-check: portable-smoke-wsl: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
 # RUN: %python %S/Inputs/ci-legs.py setup %t/b4
-# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/b4 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=fail MSIL_CI_RESULTS=%t/rows-3c -- -Leg portable-smoke > %t/3c.log
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/b4 MSIL_PYTHON=%{portable_py} MSIL_FAKE_BUILTINS=fail MSIL_FAKE_LIBC=ok MSIL_CI_RESULTS=%t/rows-3c -- -Leg portable-smoke > %t/3c.log
 # RUN: %{harness_check} contains %t/rows-3c "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-builtins\.py --triple msil64-unknown-dotnet \(exit 1; \S*b4/lit-results/portable-smoke\.setup\.log\)\n\Z"
 # RUN: %{harness_check} contains %t/b4/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: planted failure$"
 # RUN: %{harness_check} missing %t/b4/lit-calls.log

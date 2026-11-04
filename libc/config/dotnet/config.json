@@ -1,0 +1,82 @@
+{
+  "errno": {
+    "LIBC_CONF_ERRNO_MODE": {
+      "value": "LIBC_ERRNO_MODE_EXTERNAL"
+    }
+  },
+  "threads": {
+    "LIBC_CONF_THREAD_MODE": {
+      "value": "LIBC_THREAD_MODE_SINGLE"
+    }
+  },
+  "printf": {
+    "LIBC_CONF_PRINTF_DISABLE_FIXED_POINT": {
+      "value": true
+    },
+    "LIBC_CONF_PRINTF_DISABLE_FLOAT": {
+      "value": false
+    },
+    "LIBC_CONF_PRINTF_DISABLE_INDEX_MODE": {
+      "value": false
+    },
+    "LIBC_CONF_PRINTF_DISABLE_WRITE_INT": {
+      "value": false
+    },
+    "LIBC_CONF_PRINTF_FLOAT_TO_STR_USE_MEGA_LONG_DOUBLE_TABLE": {
+      "value": false
+    },
+    "LIBC_CONF_PRINTF_DISABLE_STRERROR": {
+      "value": false
+    },
+    "LIBC_CONF_PRINTF_DISABLE_WIDE": {
+      "value": false
+    },
+    "LIBC_COPT_PRINTF_DISABLE_BITINT": {
+      "value": true
+    },
+    "LIBC_CONF_PRINTF_MODULAR": {
+      "value": false
+    }
+  },
+  "scanf": {
+    "LIBC_CONF_SCANF_DISABLE_INDEX_MODE": {
+      "value": false
+    },
+    "LIBC_CONF_SCANF_DISABLE_FLOAT": {
+      "value": false
+    }
+  },
+  "qsort": {
+    "LIBC_CONF_QSORT_IMPL": {
+      "value": "LIBC_QSORT_QUICK_SORT"
+    }
+  },
+  "str_to_float": {
+    "LIBC_CONF_STRTOFLOAT_DISABLE_EISEL_LEMIRE": {
+      "value": false
+    },
+    "LIBC_CONF_STRTOFLOAT_DISABLE_CLINGER_FAST_PATH": {
+      "value": false
+    }
+  },
+  "math": {
+    "LIBC_CONF_MATH_OPTIMIZATIONS": {
+      "value": "(LIBC_MATH_NO_EXCEPT | LIBC_MATH_ASSUME_ROUND_NEAREST_ONLY)"
+    }
+  },
+  "general": {
+    "LIBC_ADD_NULL_CHECKS": {
+      "value": true
+    }
+  },
+  "codegen": {
+    "LIBC_CONF_ENABLE_STRONG_STACK_PROTECTOR": {
+      "value": false
+    }
+  },
+  "ctype": {
+    "LIBC_CONF_CTYPE_SMALLER_ASCII": {
+      "value": false
+    }
+  }
+}

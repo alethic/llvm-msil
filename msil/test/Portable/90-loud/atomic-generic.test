@@ -1,0 +1,102 @@
+# Atomics that take the lock path stay undefined on msil64-unknown-dotnet until P-3: a generic 16-byte __atomic_load, an aligned 16-byte one and a 24-byte _Atomic struct fail to link with N2's portable line.
+# Plan 5.18.6 PL3 (N2's line on dotnet: '>>> an atomic operation
+# (libatomic's interface), which msil64-unknown-dotnet does not provide
+# yet'), 5.18.9's rows 'Sized atomics' and 'Lock-path atomics (16-byte,
+# generic, misaligned)', 5.19.16, and the 2026-11-02 P-1a row for 5.18.1 PT7
+# (MSILSystemLibrary lists libatomic, so an atomic that AtomicExpand does not
+# lower inline becomes an __atomic_* call that msil-ld reports, not a
+# compile-time error). The portable C library has no atomics library: M30
+# makes the sized 1-8-byte atomics inline on every triple, and the lock path
+# (16-byte, generic-size and misaligned atomics) stays undefined on dotnet
+# until P-3's interned-name Monitor locks (P-1r row R6), so these three cases
+# hold until P-3:
+#   generic.c: GCC's generic __atomic_load on an 8-aligned 16-byte struct
+#              (misaligned for its size: the generic call __atomic_load);
+#   aligned.c: the same builtin on a 16-aligned 16-byte struct (wider than
+#              the 8-byte lock-free limit: the sized call __atomic_load_16);
+#   struct.c:  a load of a 24-byte _Atomic struct (no sized call exists: the
+#              generic __atomic_load).
+# Each case is one undefined symbol with N2's line and the function that
+# references it; no other msil-ld error, and no C library line (N6). The
+# objects are compiled (the frontend's -Watomic-alignment warnings are
+# silenced in the sources) and the link stops. A link that writes
+# --lto-emit-asm text cannot import c.dll (msil_link_output=il), so the test
+# needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{n2_check} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: error" --implicit-check-not=">>> a C library function"
+#
+# REDEFINE: %{msil_srcs} = %t/generic.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{n2_check} --check-prefixes=GENERIC,LINK
+# GENERIC:      {{^}}msil-ld: error: undefined symbol: __atomic_load{{$}}
+# GENERIC-NEXT: {{^}}>>> an atomic operation (libatomic's interface), which msil64-unknown-dotnet does not provide yet{{$}}
+# GENERIC-NEXT: {{^}}>>> referenced by {{.*}}generic.o:(load_pair){{$}}
+#
+# REDEFINE: %{msil_srcs} = %t/aligned.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{n2_check} --check-prefixes=ALIGNED,LINK
+# ALIGNED:      {{^}}msil-ld: error: undefined symbol: __atomic_load_16{{$}}
+# ALIGNED-NEXT: {{^}}>>> an atomic operation (libatomic's interface), which msil64-unknown-dotnet does not provide yet{{$}}
+# ALIGNED-NEXT: {{^}}>>> referenced by {{.*}}aligned.o:(load_pair){{$}}
+#
+# REDEFINE: %{msil_srcs} = %t/struct.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{n2_check} --check-prefixes=STRUCT,LINK
+# STRUCT:      {{^}}msil-ld: error: undefined symbol: __atomic_load{{$}}
+# STRUCT-NEXT: {{^}}>>> an atomic operation (libatomic's interface), which msil64-unknown-dotnet does not provide yet{{$}}
+# STRUCT-NEXT: {{^}}>>> referenced by {{.*}}struct.o:(load_triple){{$}}
+#
+# LINK:      {{^}}clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation){{$}}
+# LINK:      {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#--- generic.c
+#pragma clang diagnostic ignored "-Watomic-alignment"
+struct pair {
+  long long lo, hi;
+};
+
+struct pair shared_pair = {1, 2};
+
+__attribute__((noinline)) long long load_pair(void) {
+  struct pair p;
+  __atomic_load(&shared_pair, &p, __ATOMIC_SEQ_CST);
+  return p.lo + p.hi;
+}
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return load_pair() != 3;
+}
+#--- aligned.c
+#pragma clang diagnostic ignored "-Watomic-alignment"
+struct pair {
+  _Alignas(16) long long lo;
+  long long hi;
+};
+
+struct pair shared_pair = {1, 2};
+
+__attribute__((noinline)) long long load_pair(void) {
+  struct pair p;
+  __atomic_load(&shared_pair, &p, __ATOMIC_SEQ_CST);
+  return p.lo + p.hi;
+}
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return load_pair() != 3;
+}
+#--- struct.c
+#pragma clang diagnostic ignored "-Watomic-alignment"
+struct triple {
+  long long a, b, c;
+};
+
+_Atomic struct triple shared_triple;
+
+__attribute__((noinline)) long long load_triple(void) {
+  struct triple t = shared_triple;
+  return t.a + t.b + t.c;
+}
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return load_triple() != 0;
+}

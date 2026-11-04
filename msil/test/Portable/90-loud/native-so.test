@@ -1,0 +1,47 @@
+# msil64-unknown-dotnet binds no native code: a native shared object given by path or as -l:<file> is T-P4, and -l never finds a .so on dotnet, so -lnative is a plain library-not-found.
+# Plan 5.18.6 PL2 (on dotnet late binding has no native step: a native
+# library given as an input is T-P4, '<file>' is a native library, which
+# msil64-unknown-dotnet cannot link: the portable target binds no native
+# code) and PL6 (on dotnet the -l candidates are <name>.dll, lib<name>.dll
+# and lib<name>.a, never .so; -l:<file> takes the file as on every triple),
+# 5.18.9's row 'Native libraries, import attributes' (a permanent error,
+# brief Q3 (a)), which P-1b pins here with the other portable texts.
+# libnative.so is an ELF x86-64 shared object that ld.lld writes from a
+# linker script defining native_add3, so no native compiler is needed; the
+# program references native_add3 through its own prototype.
+#   path: the shared object by path after the program's object: T-P4 alone
+#         (no undefined symbol: the refusal stops the link first);
+#   -l:   -L<dir> -l:libnative.so: T-P4 for the file it names;
+#   -l:   -L<dir> -lnative: no candidate on dotnet, lld's 'unable to find
+#         library -lnative' and no T-P4.
+# The options reach only the link (%{msil_native_libs}). A link that writes
+# --lto-emit-asm text cannot import c.dll (msil_link_output=il), so the test
+# needs linked images.
+# REQUIRES: msil-ld-lld
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t %t.nat && split-file %s %t && mkdir -p %t.nat
+# RUN: %ld_lld -m elf_x86_64 -shared -soname libnative.so %t/native.lds -o %t.nat/libnative.so
+# REDEFINE: %{msil_srcs} = %t/main.c
+# DEFINE: %{tp4_check} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: error" --implicit-check-not="undefined symbol"
+#
+# REDEFINE: %{msil_native_libs} = %t.nat/libnative.so
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{tp4_check} --check-prefixes=TP4,LINK
+# REDEFINE: %{msil_native_libs} = -L%t.nat -l:libnative.so
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{tp4_check} --check-prefixes=TP4,LINK
+# TP4: {{^}}msil-ld: error: '{{.*}}libnative.so' is a native library, which msil64-unknown-dotnet cannot link: the portable target binds no native code{{$}}
+#
+# REDEFINE: %{msil_native_libs} = -L%t.nat -lnative
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{tp4_check} --check-prefixes=NOTFOUND,LINK --implicit-check-not="is a native library"
+# NOTFOUND: {{^}}msil-ld: error: unable to find library -lnative{{$}}
+#
+# LINK:      {{^}}clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation){{$}}
+# LINK:      {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#--- native.lds
+native_add3 = 0x1000;
+#--- main.c
+int native_add3(int a, int b, int c);
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return native_add3(1, 2, 3) != 6;
+}

@@ -22,9 +22,10 @@
 # required, and msil_require_portable and msil_require_x86 other than 0 or 1;
 # msil_native_oracle=1 is a warning and the run goes on.
 # (3) msil_require_portable=1 loads exactly when the outer run has
-# msil-portable and msil-portable-builtins, and otherwise is fatal naming
-# what is missing; msil_require_x86=1 loads exactly when the outer run has
-# msil-dotnet-x86, and is fatal under msil_runner=wsl on Windows.
+# msil-portable, msil-portable-builtins and msil-portable-sysroot (P-1b's
+# sysroot), and otherwise is fatal naming what is missing;
+# msil_require_x86=1 loads exactly when the outer run has msil-dotnet-x86,
+# and is fatal under msil_runner=wsl on Windows.
 # (4) A host-triple run of msil/test/Portable (the outer run's triple when it
 # is not the portable one) reports every test UNSUPPORTED (P-1a.l's
 # lit.local.cfg) and runs none.
@@ -65,12 +66,13 @@
 # RUN: %{harness_check} contains %t/2f.log "fatal: msil: --param msil_require_x86=2 is not a boolean \(use 0 or 1\)$"
 
 # (3)
-# RUN: %if msil-portable && msil-portable-builtins %{ %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3a.log 2>&1 %}
-# RUN: %if msil-portable && msil-portable-builtins %{ %{harness_check} contains %t/3a.log "^  MSIL :: harness/portable/Inputs/nested-portable/flags\.test$" %}
-# RUN: %if !msil-portable || !msil-portable-builtins %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3a.log 2>&1 %}
-# RUN: %if !msil-portable || !msil-portable-builtins %{ %{harness_check} contains %t/3a.log "fatal: msil: msil_require_portable=1, but " %}
+# RUN: %if msil-portable && msil-portable-builtins && msil-portable-sysroot %{ %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3a.log 2>&1 %}
+# RUN: %if msil-portable && msil-portable-builtins && msil-portable-sysroot %{ %{harness_check} contains %t/3a.log "^  MSIL :: harness/portable/Inputs/nested-portable/flags\.test$" %}
+# RUN: %if !msil-portable || !msil-portable-builtins || !msil-portable-sysroot %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3a.log 2>&1 %}
+# RUN: %if !msil-portable || !msil-portable-builtins || !msil-portable-sysroot %{ %{harness_check} contains %t/3a.log "fatal: msil: msil_require_portable=1, but " %}
 # RUN: %if !msil-portable %{ %{harness_check} contains %t/3a.log "msil_require_portable=1, but no portable toolchain: 'cl[a]ng --target=msil64-unknown-dotnet -nostdlib' cannot build a program" %}
 # RUN: %if !msil-portable-builtins %{ %{harness_check} contains %t/3a.log "no portable helper archive \S+/msil64-unknown-dotnet/libclang_rt\.builtins\.a \(build it with 'python msil/utils/build/build-builtins\.py --triple msil64-unknown-dotnet', plan 5\.18\.8\)" %}
+# RUN: %if !msil-portable-sysroot %{ %{harness_check} contains %t/3a.log "no portable sysroot \S+/lib/clang-runtimes/msil64-unknown-dotnet \(it lacks \S+.*; build it with 'python msil/utils/build/build-libc\.py', plan 5\.19\.3\)" %}
 # RUN: %if msil-dotnet-x86 %{ %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_x86=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3b.log 2>&1 %}
 # RUN: %if msil-dotnet-x86 %{ %{harness_check} contains %t/3b.log "^  MSIL :: harness/portable/Inputs/nested-portable/flags\.test$" %}
 # RUN: %if !msil-dotnet-x86 %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=msil64-unknown-dotnet --param msil_require_x86=1 --param msil_probe_cache= %S/Inputs/nested-portable > %t/3b.log 2>&1 %}

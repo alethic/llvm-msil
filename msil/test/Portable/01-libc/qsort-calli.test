@@ -1,0 +1,134 @@
+# Program comparators called from c.dll: qsort of ints and of structs, qsort_r with a context argument, bsearch, lfind and lsearch, and qsort with a comparator defined in a second -shared assembly; c.dll calls each through the function pointer (an indirect calli into another assembly).
+# Plan 5.19.4 (qsort, qsort_r, bsearch, lfind and lsearch ship at P-1b),
+# 5.19.15 ('qsort with a program comparator (cross-assembly calli)'), recon
+# portable-libc 4.3 (P-0's run/prog.c qsort) and 6.8 (qsort/bsearch/lfind
+# with program comparators), Design.md 4.5 (a function pointer is one
+# address in every assembly). cmplib is a -shared assembly whose exported
+# comparator the program hands to c.dll's qsort. The expected orders are the
+# sorted inputs (C17 7.22.5.2: ascending by the comparator); bsearch and lfind
+# return the element or a null pointer (7.22.5.1; POSIX lfind/lsearch).
+# Counters prove that each comparator ran. Each failed group sets one bit of
+# the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = cmplib=%t/cmplib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- cmplib.c
+#define API __attribute__((visibility("default")))
+static int calls;
+/* Descending order of long long values. */
+API int lib_cmp_desc(const void *a, const void *b) {
+  long long x = *(const long long *)a, y = *(const long long *)b;
+  ++calls;
+  return (x < y) - (x > y);
+}
+API int lib_cmp_calls(void) { return calls; }
+#--- main.c
+#include <search.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+int lib_cmp_desc(const void *a, const void *b);
+int lib_cmp_calls(void);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static int int_calls;
+static int cmp_int(const void *a, const void *b) {
+  int x = *(const int *)a, y = *(const int *)b;
+  ++int_calls;
+  return (x > y) - (x < y);
+}
+
+struct rec {
+  short key;
+  char name[6];
+  double weight;
+};
+static int cmp_rec(const void *a, const void *b) {
+  const struct rec *x = a, *y = b;
+  return (x->key > y->key) - (x->key < y->key);
+}
+
+/* qsort_r: the third argument is the caller's context, here a counter and a
+   sort direction. */
+struct ctx {
+  int calls;
+  int sign;
+};
+static int cmp_ctx(const void *a, const void *b, void *arg) {
+  struct ctx *c = arg;
+  unsigned x = *(const unsigned *)a, y = *(const unsigned *)b;
+  ++c->calls;
+  return c->sign * ((x > y) - (x < y));
+}
+
+static int cmp_elem(const void *a, const void *b) {
+  return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+int main(void) {
+  /* 0: P-0's qsort of ints, with duplicates and negatives. */
+  int a[9] = {5, 3, -6, 1, 4, 2, 3, 0x7fffffff, -0x7fffffff - 1};
+  const int sorted[9] = {-0x7fffffff - 1, -6, 1, 2, 3, 3, 4, 5, 0x7fffffff};
+  qsort(a, 9, sizeof(int), cmp_int);
+  CHECK(0, memcmp(a, sorted, sizeof a) == 0 && int_calls > 0);
+
+  /* 1: 16-byte records, compared by key; the other fields move with it. */
+  struct rec r[5] = {{40, "d", 4.5}, {10, "a", 1.5}, {50, "e", 5.5},
+                     {30, "c", 3.5}, {20, "b", 2.5}};
+  qsort(r, 5, sizeof(struct rec), cmp_rec);
+  int ok = 1;
+  for (int i = 0; i < 5; ++i)
+    ok &= r[i].key == 10 * (i + 1) && r[i].name[0] == 'a' + i && r[i].name[1] == 0 &&
+          r[i].weight == i + 1.5;
+  CHECK(1, ok);
+
+  /* 2: qsort_r, descending through the context. */
+  unsigned u[6] = {7, 0xffffffffu, 0, 42, 7, 1};
+  const unsigned udesc[6] = {0xffffffffu, 42, 7, 7, 1, 0};
+  struct ctx c = {0, -1};
+  qsort_r(u, 6, sizeof(unsigned), cmp_ctx, &c);
+  CHECK(2, memcmp(u, udesc, sizeof u) == 0 && c.calls > 0);
+
+  /* 3: bsearch over the sorted ints: found and not found. */
+  int key = 4, missing = 6;
+  int *hit = bsearch(&key, a, 9, sizeof(int), cmp_int);
+  CHECK(3, hit && hit >= a && hit < a + 9 && *hit == 4);
+  CHECK(3, bsearch(&missing, a, 9, sizeof(int), cmp_int) == NULL);
+
+  /* 4: lfind and lsearch (search.h) over an array of strings: found, not
+     found, and lsearch appending the missing key. */
+  const char *names[4] = {"alpha", "beta", "gamma"};
+  const char *beta = "beta", *delta = "delta";
+  size_t n = 3;
+  CHECK(4, lfind(&beta, names, &n, sizeof(char *), cmp_elem) == &names[1] && n == 3);
+  CHECK(4, lfind(&delta, names, &n, sizeof(char *), cmp_elem) == NULL && n == 3);
+  CHECK(4, lsearch(&delta, names, &n, sizeof(char *), cmp_elem) == &names[3]);
+  CHECK(4, n == 4 && names[3] == delta);
+  CHECK(4, lsearch(&beta, names, &n, sizeof(char *), cmp_elem) == &names[1] && n == 4);
+
+  /* 5: qsort with cmplib's comparator: c.dll calls into a third assembly. */
+  long long ll[7] = {3, -1, 1LL << 40, 0, -(1LL << 50), 3, 9};
+  const long long lldesc[7] = {1LL << 40, 9, 3, 3, 0, -1, -(1LL << 50)};
+  qsort(ll, 7, sizeof(long long), lib_cmp_desc);
+  CHECK(5, memcmp(ll, lldesc, sizeof ll) == 0 && lib_cmp_calls() > 0);
+
+  /* 6: the comparator pointer that the program passes is the one it holds. */
+  int (*mine)(const void *, const void *) = lib_cmp_desc;
+  long long two[2] = {1, 2};
+  int before = lib_cmp_calls();
+  qsort(two, 2, sizeof(long long), mine);
+  CHECK(6, two[0] == 2 && two[1] == 1 && lib_cmp_calls() > before);
+  return (int)fails;
+}

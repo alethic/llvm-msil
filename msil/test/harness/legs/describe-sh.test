@@ -34,6 +34,22 @@
 # fault is reported: portable-smoke untagged, or tagged Exit, or without
 # msil_require_portable, and net8 without init-msil-portable.c; the
 # lit-legs.ps1 fault portable-no-x86 is a usage error here.
+# (5) The P-1b setup (plan 5.18.10, P-1b.c): portable-smoke's setup runs
+# 'python3 build-builtins.py --build-dir <build> --triple
+# msil64-unknown-dotnet' and then 'python3 build-libc.py --build-dir
+# <build>', both logged to portable-smoke.setup.log, before its lit run;
+# --describe shows neither step. With a stand-in python3 first on PATH
+# (Inputs/ci-legs.py python3 DIR <builtins> <libc>): 'ok ok' makes
+# --leg portable-smoke a PASS row whose calls are exactly those two, in that
+# order, and whose one lit invocation passes exactly what --describe shows.
+# The failure paths: build-libc.py failing (planted 'fail': exit 1; 'real',
+# the real script on the stand-in build, which has no bin/clang: exit 2,
+# writing nothing under the build) makes the row 'setup failed: build-libc.py
+# (exit N; <setup log>)' with no lit run, and the setup log keeps
+# build-builtins.py's output before build-libc.py's; build-builtins.py
+# failing stops the setup before build-libc.py runs; and the calls check
+# rejects synthetic calls in the other order, without the build directory or
+# without build-libc.py.
 # describe.test checks lit-legs.ps1 -Describe.
 # REQUIRES: msil-ci-bash
 
@@ -112,3 +128,46 @@
 # RUN: %{harness_check} contains %t/4k.log "^legs-check: error: net8: paths lack clang/test/Preprocessor/init-msil-portable\.c \([$]checkMsil, P-1a\)$"
 # RUN: %{harness_check} exits 2 %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant portable-no-x86 > %t/4l.log 2>&1
 # RUN: %{harness_check} contains %t/4l.log "^legs-check: --plant portable-no-x86: for lit-legs\.sh one of .*, portable-untagged, portable-exit, portable-no-require, check-msil-portable$"
+
+# (5) The P-1b setup (plan 5.18.10, P-1b.c)
+# DEFINE: %{p1b_sh_calls} = "\Aargv: \S*/msil/utils/build/build-builtins\.py --build-dir \S*b5 --triple msil64-unknown-dotnet\nargv: \S*/msil/utils/build/build-libc\.py --build-dir \S*b5\n\Z"
+# DEFINE: %{p1b_sh_path} = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# RUN: %{harness_check} lacks %t/describe.json "build-libc" "build-builtins" "setup"
+# RUN: %python %S/Inputs/ci-legs.py python3 %t/py5 ok ok > %t/py5.txt
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b5
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/b5 PATH=%t/py5:%{p1b_sh_path} MSIL_CI_RESULTS=%t/rows-5a -- --leg portable-smoke > %t/5a.log
+# RUN: %{harness_check} contains %t/rows-5a "\Alit-legs\tportable-smoke\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
+# RUN: %{harness_check} contains %t/py5/calls.log %{p1b_sh_calls}
+# RUN: %{harness_check} contains %t/b5/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: --build-dir \S*b5 --triple msil64-unknown-dotnet\nstand-in build-libc\.py: --build-dir \S*b5$"
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke %t/b5/lit-calls.log > %t/5a-calls.log
+# RUN: %{harness_check} contains %t/5a-calls.log "^legs-check: portable-smoke: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# The failure paths.
+# RUN: %python %S/Inputs/ci-legs.py python3 %t/py5b ok fail > %t/py5b.txt
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b5b
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/b5b PATH=%t/py5b:%{p1b_sh_path} MSIL_CI_RESULTS=%t/rows-5b -- --leg portable-smoke > %t/5b.log
+# RUN: %{harness_check} contains %t/rows-5b "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-libc\.py \(exit 1; \S*b5b/lit-results/portable-smoke\.setup\.log\)\n\Z"
+# RUN: %{harness_check} contains %t/b5b/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: --build-dir \S*b5b --triple msil64-unknown-dotnet\nstand-in build-libc\.py: planted failure$"
+# RUN: %{harness_check} missing %t/b5b/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py python3 %t/py5c ok real > %t/py5c.txt
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b5c
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/b5c PATH=%t/py5c:%{p1b_sh_path} MSIL_CI_RESULTS=%t/rows-5c -- --leg portable-smoke > %t/5c.log
+# RUN: %{harness_check} contains %t/rows-5c "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-libc\.py \(exit 2; \S*b5c/lit-results/portable-smoke\.setup\.log\)\n\Z"
+# RUN: %{harness_check} contains %t/b5c/lit-results/portable-smoke.setup.log "^build-libc\.py: error: \S*b5c/bin/clang does not exist "
+# RUN: %{harness_check} missing %t/b5c/lit-calls.log
+# RUN: %{harness_check} missing %t/b5c/runtimes
+# RUN: %{harness_check} missing %t/b5c/lib
+# RUN: %python %S/Inputs/ci-legs.py python3 %t/py5d fail ok > %t/py5d.txt
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b5d
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/b5d PATH=%t/py5d:%{p1b_sh_path} MSIL_CI_RESULTS=%t/rows-5d -- --leg portable-smoke > %t/5d.log
+# RUN: %{harness_check} contains %t/rows-5d "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-builtins\.py --triple msil64-unknown-dotnet \(exit 1; \S*b5d/lit-results/portable-smoke\.setup\.log\)\n\Z"
+# RUN: %{harness_check} contains %t/py5d/calls.log "\Aargv: \S*/msil/utils/build/build-builtins\.py --build-dir \S*b5d --triple msil64-unknown-dotnet\n\Z"
+# RUN: %{harness_check} lacks %t/b5d/lit-results/portable-smoke.setup.log "build-libc"
+# RUN: %{harness_check} missing %t/b5d/lit-calls.log
+# RUN: %{harness_check} write %t/calls-1.log "argv: /r/msil/utils/build/build-libc.py --build-dir /t/b5" "argv: /r/msil/utils/build/build-builtins.py --build-dir /t/b5 --triple msil64-unknown-dotnet"
+# RUN: %{harness_check} write %t/calls-2.log "argv: /r/msil/utils/build/build-builtins.py --build-dir /t/b5 --triple msil64-unknown-dotnet" "argv: /r/msil/utils/build/build-libc.py"
+# RUN: %{harness_check} write %t/calls-3.log "argv: /r/msil/utils/build/build-builtins.py --build-dir /t/b5 --triple msil64-unknown-dotnet"
+# RUN: %{harness_check} write %t/calls-ok.log "argv: /r/msil/utils/build/build-builtins.py --build-dir /t/b5 --triple msil64-unknown-dotnet" "argv: /r/msil/utils/build/build-libc.py --build-dir /t/b5"
+# RUN: %{harness_check} lacks %t/calls-1.log %{p1b_sh_calls}
+# RUN: %{harness_check} lacks %t/calls-2.log %{p1b_sh_calls}
+# RUN: %{harness_check} lacks %t/calls-3.log %{p1b_sh_calls}
+# RUN: %{harness_check} contains %t/calls-ok.log %{p1b_sh_calls}

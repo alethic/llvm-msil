@@ -1,6 +1,6 @@
 # MSIL backend: status of Phase 2
 
-State after milestone P-1a (2026-11-02, branch `msil`, with upstream llvm-project main at
+State after milestone P-1b (2026-11-03, branch `msil`, with upstream llvm-project main at
 `1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
 M24-M35, M24 laid the foundations of Phase 3, M25 built the helper archive
 `clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple, and M26 made
@@ -8,9 +8,10 @@ variadic functions and the dynamic allocas outside loops work (section 2, "Phase
 (M24)", "The helper archive (M25)" and "Variadic functions and acyclic dynamic allocas
 (M26)"). P-1a, the first step of the portable work inserted after M26, added the portable
 triple `msil64-unknown-dotnet`, whose assemblies name no CPU, operating system or native
-library and run on every 64-bit little-endian .NET, for freestanding programs until its C
-library `c.dll` comes with P-1b (section 2, "The portable target msil64-unknown-dotnet
-(P-1a)").
+library and run on every 64-bit little-endian .NET (section 2, "The portable target
+msil64-unknown-dotnet (P-1a)"), and P-1b gave it its C library: the freestanding part of
+LLVM's libc as the shared library assembly `c.dll`, 529 functions without an operating
+system layer (section 2, "The managed C library c.dll (P-1b)").
 `clang -c` compiles C to CIL objects, and `msil-ld`, an lld flavor, links them, archives of them, LLVM bitcode, native
 libraries and library assemblies into IL-only .NET images that it writes itself, binding the
 base class library against the reference assemblies it is given; `clang -S` plus `ilasm`, the
@@ -118,7 +119,16 @@ with a wasm-style LP64 data model (`int` `wchar_t` and `wint_t`, a binary64 `lon
 `__ELF__` or host macro), a driver with a sysroot, a third rule set of `msil-ld`, Dotnet, that
 binds no native code, an AnyCPU PE32 envelope whose module initializer refuses a 32-bit or
 big-endian process with `PlatformNotSupportedException`, the portable helper archive, and the
-`-Portable` legs (section 2, "The portable target msil64-unknown-dotnet (P-1a)"). How to build and use
+`-Portable` legs (section 2, "The portable target msil64-unknown-dotnet (P-1a)"). P-1b built
+the fork's LLVM libc with its own CMake for the portable triple and linked it into `c.dll`,
+which the driver links by default and which a program needs beside it at run time: the
+string, ctype, wchar, stdlib conversion and sort, math, complex, locale, search and pure time
+functions and the buffer formatters `snprintf` and `vsnprintf`, with errno in one exported
+cell, the errno numbers of llvm-libc's generic set extended with POSIX's, an append-only export
+list at version 1.0.0.0 and an empty `libm.a`; every function that needs an operating system
+(the heap, stdio streams, `exit`, clocks, the environment, threads) stays absent until P-2 or
+P-3, an undeclared function through the headers and a link error naming `c.dll` through a
+program's own prototype (section 2, "The managed C library c.dll (P-1b)"). How to build and use
 it is in [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in
 section 3 of [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every
 later amendment.
@@ -3392,6 +3402,281 @@ the top level, `legs/` 29, `portable/` 6; new: `mscorlib-safe.test`, `portable/l
 `CLITrailerTest`, 2 of `CLIImageLayoutTest`), and new MSIL cases of `TripleTest`
 (`TargetParserTests`) and `TargetRegistry` (`MCTests`).
 
+### The managed C library c.dll (P-1b)
+
+P-1b (plan section 6, P-1b) gives the portable triple its C library, stage 1 of plan contract
+5.19: the fork's own LLVM libc (`libc/`), built by llvm-libc's CMake for
+`msil64-unknown-dotnet` and linked by `msil-ld` into the shared library assembly `c.dll`. Stage
+1 is the freestanding part of the library only: every function that needs an operating system
+is absent, never a stub (plan 5.19.1 rule 2). A portable program now includes the C headers and
+links `c.dll` by default (the driver's `-lc`); it still has no output channel, because stdio
+comes with P-2, so it formats into buffers and reports through its exit status
+(GettingStarted.md, "The portable target"). No source file of LLVM, clang or lld changed, and
+the host triples' behaviour is unchanged.
+
+- **What ships (plan 5.19.4).** 529 C functions, the measured freestanding closure: every
+  candidate entry point whose object and support objects reference no heap, atomics, exit
+  path, clock, `FILE` stream, environment, signal names or hash-table global. By header:
+  `complex.h` 16, `ctype.h` 30, `inttypes.h` 6, `locale.h` 6 (`duplocale`, `freelocale`,
+  `localeconv`, `newlocale`, `setlocale`, `uselocale`: the C locale only, so the `*_l`
+  functions ignore their `locale_t`), `math.h` 235 (no f16, bf16, f80 or f128 function), `search.h`
+  7 (`insque`, `lfind`, `lsearch`, `remque`, `tfind`, `twalk`, `twalk_r`), `stdbit.h` 70,
+  `stdio.h` 4 (`snprintf`, `sprintf`, `vsnprintf`, `vsprintf`: buffers only), `stdlib.h` 37
+  (`strto*`, `ato*`, `strfrom*`, `qsort`, `qsort_r`, `bsearch`, `abs`, `div` and their
+  siblings, the multibyte functions, `a64l`, `memalignment`), `string.h` 39,
+  `strings.h` 12, `time.h` 5 (`asctime`, `asctime_r`, `difftime`, `gmtime`, `gmtime_r`),
+  `wchar.h` 46 and `wctype.h` 16. The installed headers are `assert.h`, `complex.h`, `ctype.h`,
+  `errno.h`, `features.h`, `float.h`, `inttypes.h`, `limits.h`, `locale.h`, `math.h`,
+  `search.h`, `setjmp.h`, `stdbit.h`, `stdckdint.h`, `stdint.h`, `stdio.h`, `stdlib.h`,
+  `string.h`, `strings.h`, `time.h`, `uchar.h`, `wchar.h` and `wctype.h`, generated by
+  llvm-libc, so each declares only the shipped functions; `fenv.h`, `pthread.h`, `signal.h`,
+  `threads.h` and the POSIX headers are not installed. Every exported function is declared by
+  an installed header: `iscanonical`, `iscanonicalf`, `iscanonicall`, `issignaling`,
+  `issignalingf`, `issignalingl` and `l64a` build upstream but are not shipped, because
+  llvm-libc's `math.yaml` and `stdlib.yaml` declare none of them, so no installed header would
+  reach them (and `l64a` also answers wrongly: `l64a(0)` gives six padding characters where
+  POSIX requires an empty string); a later stage may add them once a header declares them.
+  The configuration
+  (`libc/config/dotnet/config.json`): errno mode `LIBC_ERRNO_MODE_EXTERNAL`, thread mode
+  `LIBC_THREAD_MODE_SINGLE`, printf with floating point, index mode, `%n`, `%m` and wide
+  characters (no fixed point, no `_BitInt`, no `*_modular` variant), scanf with floating point
+  and index mode, `strtod`'s Eisel-Lemire and Clinger fast paths, quick-sort `qsort`, math
+  `LIBC_MATH_NO_EXCEPT | LIBC_MATH_ASSUME_ROUND_NEAREST_ONLY` only (so the math functions keep
+  errno and stay correctly rounded), null checks on, no stack protector. Release builds define
+  `NDEBUG`, so no shipped function reaches `LIBC_ASSERT`. A debug build (without `NDEBUG`)
+  fails to link by construction, not by a test: `LIBC_ASSERT` then calls `write_to_stderr` and
+  `internal::exit`, which only have declarations for dotnet (`OSUtil/dotnet/io.h` and the
+  generic `OSUtil/exit.h`) and no definition, so the `c.dll` link reports them as undefined
+  symbols. The P-1b gate's step 8 proves only that the release archive `libc.a` references
+  neither.
+- **What is absent, and why (plan 5.19.4, 5.19.16).** `libc/config/dotnet/msil64/entrypoints.txt`
+  names each absent candidate in a comment with its reason and the step that brings it:
+
+  | Absent | Why | Comes with |
+  |---|---|---|
+  | `malloc`, `calloc`, `realloc`, `free`, `aligned_alloc`, `strdup`, `strndup`, `wcsdup`, `tsearch`, `tdelete`, `tdestroy`, `asprintf`, `vasprintf`, `sscanf`, `vsscanf` | no heap | P-2 |
+  | `exit`, `_Exit`, `quick_exit`, `abort`, `atexit`, `at_quick_exit`, `__cxa_atexit`, and `assert` without `NDEBUG` (`__assert_fail`) | no exit path | P-2 |
+  | the stdio streams (`printf`, `puts`, `fopen`, ..., the wide stream functions, `fwide`) | no `FILE` layer | P-2 |
+  | `getenv`, `setenv`, `time`, `clock`, `clock_gettime`, `timespec_get`, `tzset` | no environment or clock | P-2 |
+  | `localtime`, `localtime_r`, `ctime`, `ctime_r`, `mktime`, `strftime`, `strftime_l` | they would answer in UTC (brief Q18 (a)) | P-2 |
+  | `hcreate`, `hsearch` and the rest of the `search.h` hash table | heap, and a raw `thread_local` | P-2 |
+  | `rand`, `srand` | atomics (`__atomic_*_8`) | P-3 |
+  | `pthread_*`, `thrd_*`, `mtx_*`, `cnd_*`, `call_once` | threads | P-3 |
+  | `strsignal`, `signal`, `raise`, `sigprocmask` | no signal design (brief Q21 (a)) | a signal design |
+  | the 16 `fe*` functions | they would succeed silently and `fetestexcept` would always answer 0: the CLR has no floating-point status (brief Q20 (a)) | no step plans them |
+  | `swprintf`, `strptime` | upstream stubs that only fail (`ENOSYS`; a null pointer) | when upstream implements them |
+  | `memset_explicit` | its `asm` statement has an operand, which the portable triple refuses (P-1a) | no step plans it; it may be appended (plan 5.19.7) once the portable triples accept that operand |
+  | `acosh`, `asinh`, `atanh`, `erf`, `lgamma`, `lgamma_r`, `tgamma`, `tgammaf`, `powi`, `powif` | no generic implementation in llvm-libc | upstream |
+
+  Some objects are declared and absent too: llvm-libc's header generator writes a header's yaml
+  `objects` whatever `entrypoints.txt` lists, so the installed `stdio.h` declares
+  `extern FILE *stdin`, `stdout` and `stderr`, `time.h` declares `daylight`, `timezone` and
+  `tzname`, and `errno.h` declares `program_invocation_name` and
+  `program_invocation_short_name`, and `c.dll` defines none of them. A use compiles, unlike an
+  absent function, and fails at link time with `msil-ld`'s plain `undefined symbol: stdout`
+  (an undefined data reference gets no N6 line and no native binding). `stdin`, `stdout` and
+  `stderr` become lvalue macros over exported accessors at P-2 (plan 5.19.6, 5.19.9).
+
+  Some `<math.h>` macros of C are missing or fail to compile, because the installed `math.h`
+  is upstream llvm-libc's. It lacks C99's comparison macros `isgreater`, `isgreaterequal`,
+  `isless`, `islessequal`, `islessgreater` and `isunordered`, so a use is clang's `call to
+  undeclared function 'isgreater'` error; clang's builtins `__builtin_isgreater`,
+  `__builtin_isgreaterequal`, `__builtin_isless`, `__builtin_islessequal`,
+  `__builtin_islessgreater` and `__builtin_isunordered` are the workaround. C23's
+  `iscanonical` and `issignaling` macros (`llvm-libc-macros/math-function-macros.h`, as upstream
+  ships it) expand to the functions above, which no header declares and `c.dll` does not
+  export, so a use is an undeclared-identifier compile error too. `absent.test` pins the
+  missing comparison macros.
+
+  `setjmp.h` declares `setjmp`, `longjmp`, `sigsetjmp` and `siglongjmp`, and nothing defines
+  them: the compiler lowers the calls (M27); until then a call is `msil-ld`'s `'setjmp' cannot
+  be bound to a native library: setjmp and longjmp are lowered by the compiler`.
+- **How an absent function fails (plan 5.19.1 rule 2).** Through the installed headers it is
+  undeclared, so C99 and later stop at clang's `call to undeclared library function 'malloc'
+  with type 'void *(__size_t)' ...; ISO C99 and later do not support implicit function
+  declarations` (clang's note to include `<stdlib.h>` does not help: that header does not
+  declare it). Through the program's own prototype it is a link error with N6's line naming
+  `c.dll`:
+
+  ```
+  msil-ld: error: undefined symbol: malloc
+  >>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide
+  >>> referenced by main.o:(main)
+  ```
+
+  `assert` with `NDEBUG` unset is the exception: `<assert.h>` declares `__assert_fail`, so the program compiles and its link stops at `undefined symbol: __assert_fail` with the same N6 line (`absent.test`). A header that is not installed (`<fenv.h>`, `<pthread.h>`) is clang's `file not found`. No
+  function traps, returns an error code or answers in UTC in place of a missing OS layer.
+- **c.dll and its exports (plan 5.19.7).** The assembly and file name are `c` and `c.dll`, the
+  export class is `c`, the assembly version is 1.0.0.0, and `c.dll` is not strong-named. It
+  exports exactly the 530 names of `msil/lib/libc/msil64-unknown-dotnet.exports`: the 529
+  functions and `__llvm_libc_errno`. `build-libc.py --write-exports` generates the list from the
+  `TARGET_LIBC_ENTRYPOINTS` block of `entrypoints.txt`, and `--check-exports` compares it. The
+  list is `c.dll`'s C ABI and append-only: a later step appends names and raises the version's
+  minor, and never removes, renames or reorders one (`build-libc.py --check-append-only OLD
+  NEW`, a gate step of every libc step). Every libc symbol is hidden in the objects (llvm-libc's
+  hidden namespace plus `-fvisibility=hidden`); `msil-ld --export-list` forces the exports out,
+  `__llvm_libc_errno` included, so no upstream visibility attribute changed. `c.dll` holds no
+  P/Invoke and no module reference, references only `mscorlib`, and neither defines nor
+  references `write_to_stderr` or `internal::exit`, which no release object of the shipped set
+  needs (`llvm-cil-dump --stats-only`: no `ImplMap` or `ModuleRef` table, `AssemblyRef rows=1`).
+  Programs call it through its symbol table as any `-shared` library (M22): a comparator that a
+  program passes to `qsort` is called back across the assembly boundary by `calli`, `&strlen`
+  is the same address in the program, in another library and in `c.dll`, and a `-shared`
+  library's variadic call of `c.dll`'s `snprintf` works (M26).
+- **errno (plan 5.19.5).** `errno` is llvm-libc's `(*__llvm_libc_errno())`; the function is
+  defined in `libc/src/__support/OSUtil/dotnet/errno.cpp` over one cell and exported by
+  `c.dll`, so the program, every `-shared` library and `c.dll` see the same errno. **Thread
+  caveat, a documented exception to fail-loudly until P-3** (brief Q16 (a)): there is one cell
+  for the whole process and nothing checks the calling thread, so a .NET host that calls
+  `c.dll` from several threads races on errno silently, as it does on `strtok`'s state, the
+  hidden `mbstate_t` of `mbrtowc` and its siblings, `setlocale` and the static results of
+  `asctime` and `gmtime`. Until P-3 creates per-thread C state, `c.dll` is a single-threaded C
+  library, as every `LIBC_THREAD_MODE_SINGLE` build of llvm-libc is; no loud check is possible
+  before MC-1, and a per-call thread check would cost every C program.
+- **The errno numbers (frozen at P-1b; brief Q15 (b)).** The portable triple takes llvm-libc's
+  generic errno set, extended in place in
+  `libc/include/llvm-libc-macros/generic-error-number-macros.h` with the 44 POSIX names it
+  lacked and the aliases `EWOULDBLOCK` (= `EAGAIN`) and `EOPNOTSUPP` (= `ENOTSUP`): 82 names,
+  80 numbers, plan 5.19.5's list. They equal Linux's numbers with two differences: **`EOVERFLOW`
+  is 35 and `EDEADLK` is 75**, the other way round from Linux, because the generic set already
+  gave 35 to `EOVERFLOW`. `ENOSYS` is 38, `ERANGE` 34, `EDOM` 33, `EILSEQ` 84. A program that
+  prints or stores errno numbers must not assume Linux's for these two. The extension is an
+  upstream change that every generic-family llvm-libc build (baremetal, GPU) sees; no existing
+  number changed. `strerror`, `strerror_r`, `%m` and `%#m` name every number
+  (`tables/dotnet_platform_errors.h`: the C and POSIX tables plus `ENOTBLK`), and an unknown
+  number gives `Unknown error <n>`.
+- **The frozen C ABI (plan 5.19.6, frozen at P-1b's commit).** With P-1a's data model (the
+  table above, frozen for msil64 too), these libc items never change again:
+
+  | Item | msil64 |
+  |---|---|
+  | errno | `(*__llvm_libc_errno())`, the numbers above |
+  | `wint_t`, `WEOF` | `int`; `WEOF` is `-1` of type `int`, `WINT_MIN` and `WINT_MAX` are `INT_MIN` and `INT_MAX` |
+  | `time_t` | `int64_t` |
+  | `struct timespec` | `tv_sec`, then `tv_nsec` at 8: 16 bytes |
+  | `struct tm` | the nine ISO fields (offsets 0-32), `long tm_gmtoff` at 40 and `const char *tm_zone` at 48: 56 bytes, aligned 8; `gmtime` stores 0 and `"GMT"` |
+  | `clock_t` | `long`, 8 bytes |
+  | `mbstate_t` | 8 bytes, aligned 4 |
+  | `MB_CUR_MAX` | 4, equal to `MB_LEN_MAX`: `c.dll`'s C locale stores UTF-8, so `wctomb`, `wcrtomb` and the `wcs*tombs` functions write up to 4 bytes per character (a `__dotnet__` branch of `stdlib-macros.h`; other targets keep upstream's 1) |
+  | `div_t`, `ldiv_t`, `lldiv_t`, `imaxdiv_t` | 8, 16, 16 and 16 bytes, `quot` first |
+  | `locale_t`, `LC_*`, `struct lconv` | a pointer; `LC_CTYPE` 0 .. `LC_MESSAGES` 5, `LC_ALL` 6; `struct lconv` 96 bytes, aligned 8 |
+  | `FILE` | an incomplete type |
+  | `jmp_buf`, `sigjmp_buf` | opaque, 200 bytes, aligned 8, with room for plan 5.15.4's MSJ1 prefix at 0-15, the mask flag at 64 and the saved mask at 72 (M27) |
+  | `setjmp`, `longjmp`, `sigsetjmp`, `siglongjmp` | declared, never defined |
+
+  `math_errhandling` is `MATH_ERRNO` alone (no `MATH_ERREXCEPT`: the CLR has no floating-point
+  exception flags, brief Q20 (a)); `log(0)` sets `ERANGE` and `log(-1)` `EDOM`.
+  Two deviations inherited from upstream llvm-libc remain: `sqrt`, `sqrtf` and `sqrtl` of an
+  argument less than zero (`-inf` included; `-0` is no error) return a NaN without setting
+  `EDOM`, and `pow` (like `powf`) of a zero base and a negative exponent sets `EDOM` where C17
+  7.12.1p4 calls it a pole error, which sets `ERANGE`. With no `MATH_ERREXCEPT` channel on the
+  CLR, nothing else reports these two errors, so they are listed here to keep
+  `math_errhandling` honest; `msil/test/Portable/01-libc/math-bits.test` pins both.
+- **The empty `libm.a` (brief Q14 (a)).** The math functions are in `c.dll`. So that build
+  systems that pass `-lm` link, the sysroot holds a `libm.a` that is an archive with no members
+  (the 8 bytes `!<arch>\n`) and defines nothing; a program linked with `-lm` takes its math from
+  `c.dll`.
+- **Deployment (brief Q22 (a)).** The driver links `c.dll` from the sysroot, and the program
+  records a reference to the assembly `c`, version 1.0.0.0. Running it needs `c.dll` in the
+  application directory, and copying it there is the user's or the build system's job, as the
+  C# compiler leaves references to the build system; the toolchain writes no `c.dll` beside its
+  output. A program started without it stops with an unhandled
+  `System.TypeInitializationException` of `<Module>` whose inner exception is
+  `System.IO.FileNotFoundException: Could not load file or assembly 'c, Version=1.0.0.0, ...'`,
+  on .NET and on the .NET Framework. Modern .NET loads a newer `c.dll` for an older program and
+  refuses an older one; the .NET Framework does not compare the versions of an assembly that is
+  not strong-named, so there a missing export is a `MissingMethodException` when the caller is
+  compiled.
+- **No static C library before P-3 (plan 5.19.8).** Three loud layers: the driver refuses
+  `-static` (T-P9); the sysroot holds no `libc.a`, so `-Wl,-Bstatic -lc` and `-l:libc.a` find
+  nothing; and `msil-ld` refuses the intermediate archive that `c.dll` is linked from,
+  `<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a`, whose index defines
+  `__llvm_libc_errno`, when a program takes any member of it, by path or through `-L` (T-P11,
+  `the C library cannot be linked statically for msil64-unknown-dotnet yet: link the shared C
+  library c.dll (-lc)`): a static copy would have its own errno and statics.
+- **The build (plan 5.19.3).** `python msil/utils/build/build-libc.py`
+  ([msil/utils/build/README.md](../../../msil/utils/build/README.md)) configures llvm-libc's
+  CMake from `runtimes/` in a tree of its own, `<build>/runtimes/msil64-unknown-dotnet`
+  (`LLVM_ENABLE_RUNTIMES=libc`, `LLVM_LIBC_FULL_BUILD=ON`, `LIBC_TARGET_TRIPLE=msil64-unknown-dotnet`,
+  `LLVM_DEFAULT_TARGET_TRIPLE=msil64-unknown-dotnet`, the build's clang, `llvm-ar` and
+  `msil-ld`, `CMAKE_BUILD_TYPE=Release`, `-fvisibility=hidden`),
+  builds it, adds the errno provider's object to `libc.a` (llvm-libc's archive rule does not
+  follow the header library that would pull it in), links `c.dll` with `msil-ld --shared
+  --export-list=msil/lib/libc/msil64-unknown-dotnet.exports --exclude-libs=ALL
+  --assembly-version=1.0.0.0` and the portable helper archive, and installs the headers,
+  `c.dll` and the empty `libm.a` into the sysroot
+  `<build>/lib/clang-runtimes/msil64-unknown-dotnet` (`include/` and
+  `lib/msil64-unknown-dotnet/`) with a stamp, which also hashes the intermediate `libc.a` and
+  clang's resource headers, so a missing or changed archive or resource header reruns the
+  build and fails `--check`. `c.dll`'s reproducibility is gated: the P-1b gate
+  checks it with `build-libc.py --check-reproducible DIR`, which relinks it from the
+  intermediate `libc.a` and the portable helper archive with the installed link's arguments and
+  requires a byte-identical result, while the compiles' determinism is covered by P-1a's double
+  build of the portable `clang_rt.builtins` (the same clang and `llvm-ar`). The libc's
+  CMake finds its configuration from the triple: `LLVMLibCArchitectures.cmake` maps the arch
+  `msil64` and reads the OS `dotnet` from the triple's last component, so it loads
+  `libc/config/dotnet/config.json` and `libc/config/dotnet/msil64/`. No `LIBC_CONFIG_PATH` is
+  passed: one naming `config/dotnet/msil64` would skip `config.json`, and `entrypoints.txt`
+  stops such a configure. A whole build (the configure, 658 build steps, the link and the install)
+  took 3 minutes 32 seconds on the development host. `build-libc.py` is no CI build row: the portable legs run it as their second setup
+  step, after the portable helper archive, and the P-steps' gates run it explicitly.
+- **The upstream libc changes (plan 5.19.14).** Thirteen upstream files change, each with an `#elif`
+  or `||` branch keyed on dotnet's own macros (`LIBC_TARGET_OS_IS_DOTNET` from `__dotnet__`,
+  `LIBC_TARGET_ARCH_IS_MSIL` from `__msil64__` or `__msil32__`, or `__dotnet__` and `__msil64__`
+  in the public headers), never on `__MSIL__` or `__ELF__`, with two exceptions: the
+  generic errno names, which every generic-family build sees, and
+  `libc/src/locale/uselocale.cpp`, an unconditional defect fix that every llvm-libc target
+  sees, so that `uselocale` returns the
+  previous locale (`LC_GLOBAL_LOCALE` while none was set) and stores its argument only when it
+  is not null, as POSIX requires (llvm-libc's own `locale_test.cpp` already treats the result
+  as the old locale). The files: `os.h`, `architectures.h`,
+  `LLVMLibCArchitectures.cmake`, `generic-error-number-macros.h`, `platform_errors.h`,
+  `OSUtil/io.h` (to a dotnet `io.h` that declares `write_to_stderr` and defines nothing),
+  `math-macros.h` (`math_errhandling`), `stdlib-macros.h` (`MB_CUR_MAX` 4 under `__dotnet__`),
+  `__jmp_buf.h` (msil64 only; msil32 keeps the `#error`
+  until P-4), `struct_tm.h`, `time_utils.h`, `fenv_t.h` (an opaque msil branch, only so
+  that FPUtil compiles: no fenv function is an entry point and `fenv.h` is not installed,
+  brief Q20 (a)) and `uselocale.cpp`. Each has a `hook` block in
+  `msil/utils/upstream-hooks.txt` with `none llvm-libc's tests are not built by the fork` and
+  the `01-libc` test that pins it, and each of the seven new files
+  (`libc/config/dotnet/config.json`, `msil64/entrypoints.txt` and `msil64/headers.txt`,
+  `libc/src/__support/OSUtil/dotnet/io.h`, `errno.cpp` and `CMakeLists.txt`, and
+  `libc/src/__support/StringUtil/tables/dotnet_platform_errors.h`) a `fork-only` line. An
+  upstream merge rebuilds the portable libc and runs P-1b's tests.
+- **The tests.** `msil/test/Portable/01-libc` (18 tests) runs self-checking programs against
+  the installed sysroot on .NET 10, .NET 10 with `TieredCompilation=0`, a .NET Framework 4.8
+  direct start and WSL .NET 10, with `c.dll` copied beside each image: the conversions and
+  errno, errno across three assemblies, comparators called from `c.dll`, `&strlen` identity,
+  math against correctly rounded bit patterns, the printf core, variadic calls across
+  assemblies, the string, ctype, wchar and other families, every errno message, the frozen ABI
+  as `_Static_assert`s, `-lm`, P-0's probe programs re-run on msil64, the absent functions in
+  both forms (with the missing comparison macros), and `c.dll` itself (ILVerify, jitall and its
+  listing); two more compile only: every exported name declared by an installed header, and
+  P-1b's header hooks invisible to `x86_64-unknown-none`, `riscv32-unknown-elf` and
+  `powerpc-unknown-elf`. `msil/test/Portable/90-loud`
+  (5 tests) pins the texts that stay until P-3: T-P9 and the missing sysroot `libc.a`, T-P11 on
+  the real archive, N2 for lock-path atomics, N6 for `pthread_create` and `thrd_create`, and
+  T-P4 for a native `.so`. lit's `--param msil_portable_sysroot=<dir>` (default: the build's
+  sysroot), the feature `msil-portable-sysroot` (required under `msil_require_portable=1`) and
+  `%{msil_portable_libc_cflags}` (`--sysroot=<dir>`) serve them (`msil/test/README.md`).
+
+Tests in the tree after P-1b: `llvm/test/CodeGen/MSIL` 158 (new: `portable-cxx-libc.ll`,
+llvm-libc's C++ shapes at -O0 and -O2: the `LLVM_LIBC_FUNCTION` aliases, COMDAT inline
+functions, the hidden `__llvm_libc_errno` declaration and its provider, in objects and
+whole-program text; `portable-varargs.ll` now pins `va_copy`'s 8 bytes), `lld/test/MSIL` 133
+(new: `portable-forced-export.test`, the hidden provider exported only through
+`--export-list` in `c.dll`'s own link, and `portable-import-module.test`, T-P2 for bitcode
+inputs and for CIL objects; `portable-link.test`, `portable-guard.test`,
+`portable-machine.test` and `portable-identity.test` pin their texts whole),
+`clang/test/Preprocessor/init-msil-portable.c` (now also `__BITINT_MAXWIDTH__` and the
+`__FLT16_*` macros), `clang/test/Driver/msil-dotnet.c` (no host include directory, and PV5's
+whole text), `msil/test/Portable` 36 (13 + 18 + 5) and `msil/test/harness` 156 (83 at the top
+level; new: `build-libc.test`, `build-libc.py`'s self-test, usage errors and `--check` on an
+empty build directory, and `libc-exports.test`, `--check-append-only` on synthetic lists,
+`--check-exports` and the checked-in list against the absent families; `legs/describe.test`,
+`legs/describe-sh.test`, `legs/portable-tag.test` and `legs/portable-tag-sh.test` cover the
+legs' second setup step).
+
 ## 3. What Phase 2 does not do
 
 Phase 2 is the linker phase; most of what it leaves out is Phase 3's (plan section 7, P3-A and
@@ -3429,7 +3714,7 @@ milestone has not come (section 1).
 | Debug information (Portable PDB) | `-g` accepted, nothing emitted | phase 4 |
 | Darwin and i686 triples | clang: `unknown target triple '<triple>'`, for a Darwin triple also when the command only links; `msil-ld`: `unsupported target triple '<codegen triple>' for MSIL` (stock-clang bitcode of such a triple, or such a `--target=`) | phases 4 and 5 |
 | Stack protector (`-fstack-protector*`, `/GS`), control-flow guard, patchable function entries | ignored with a warning (clang-cl's implicit `/GS` is not passed) | |
-| A C library on the portable triple `msil64-unknown-dotnet` | none: a portable program is freestanding (`-ffreestanding`, linked with `-nolibc`), and a C library function is `undefined symbol: <name>` with `>>> a C library function; link the managed C library c.dll (-lc)`; a link without `-nolibc` stops at `unable to find library -lc` (section 2, "The portable target msil64-unknown-dotnet (P-1a)") | P-1b: llvm-libc's freestanding entry points as the shared assembly `c.dll`; P-2: the OS layer (stdio, `malloc`, `exit`, time) and destructors; P-3: threads, `rand`, the lock-path atomics and `-static` |
+| The C library on the portable triple `msil64-unknown-dotnet` | since P-1b the freestanding part of LLVM's libc as the shared assembly `c.dll` (section 2, "The managed C library c.dll (P-1b)"); every OS-dependent function (the heap, stdio streams, `exit` and `atexit`, the environment, clocks and `localtime`, threads, `rand`, signals, fenv) is absent: undeclared through the installed headers, and `undefined symbol: <name>` with `>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide` through a program's own prototype. One errno cell for the whole process, so a multi-threaded .NET host that calls `c.dll` races silently (a documented exception to fail-loudly); `-static` is T-P9 and the build tree's `libc.a` T-P11. Until P-1b a portable program was freestanding only (`-nolibc`) | P-2: the OS layer (stdio, `malloc`, `exit`, time) and destructors; P-3: threads, per-thread errno, `rand`, the lock-path atomics and `-static`; fenv: no step plans it |
 | `msil32-unknown-dotnet` | `-fsyntax-only` and `-E` only; code generation, the PE writer and `msil-ld` stop at T-P1, `target 'msil32-unknown-dotnet' is not supported yet: only msil64-unknown-dotnet is implemented` | P-4 |
 | Basic block sections, late function splitting, basic block address map, static data partitioning (`-fbasic-block-sections=`, `-fsplit-machine-functions`, `-fbasic-block-address-map`, `-fpartition-static-data-sections`) | `-fsplit-machine-functions`, `-fbasic-block-sections=all` and `=list=`, `-fbasic-block-address-map` and `-fpartition-static-data-sections` are a driver error (`unsupported option '...' for target '...'`), because MSIL is not ELF; `-fbasic-block-sections=none` is accepted, and `-fbasic-block-sections=labels` (a deprecated alias) passes the driver as `-fbasic-block-address-map` and ends in the backend's warning `basic block address map is not supported for MSIL; ignored`. Passed to cc1 or llc directly (`-fsplit-machine-functions`, `-mllvm -function-splitting=`, `--basic-block-sections=`, ...), the options are ignored, the address map with that warning: the IL is the same as without them | never: CIL methods have no sections |
 

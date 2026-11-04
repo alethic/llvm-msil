@@ -26,7 +26,12 @@
 #define LIBC_TARGET_ARCH_IS_GPU
 #endif
 
-#if defined(__CLR_VER) || defined(LIBC_TARGET_ARCH_IS_GPU)
+#if defined(__msil32__) || defined(__msil64__)
+#define LIBC_TARGET_ARCH_IS_MSIL
+#endif
+
+#if defined(__CLR_VER) || defined(LIBC_TARGET_ARCH_IS_GPU) ||                  \
+    defined(LIBC_TARGET_ARCH_IS_MSIL)
 #define LIBC_TARGET_ARCH_IS_VM
 #endif
 

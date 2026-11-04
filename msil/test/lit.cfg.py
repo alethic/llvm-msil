@@ -103,7 +103,13 @@
 # and the last configuration errors when missing, and substitutes
 # %msil_portable_triple, %clang_portable, %llc_portable,
 # %{msil_portable_cflags}, %msil_dotnet_x86 and %msil_set_32bitreq (see "the
-# portable target" below).
+# portable target" below). From P-1b (plan 5.19.3): msil_portable_sysroot
+# names the portable sysroot (default: the build's
+# lib/clang-runtimes/msil64-unknown-dotnet, which
+# msil/utils/build/build-libc.py fills with the C headers, c.dll and the
+# empty libm.a); feature msil-portable-sysroot when it holds them (required
+# under msil_require_portable), and %{msil_portable_libc_cflags} is
+# --sysroot=<it>.
 #
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
@@ -131,8 +137,9 @@
 # --param msil_require_csc=1 does it for the SDK's csc of %msil_csc (M22);
 # --param msil_require_corpus=1 (the corpus legs) does it for the exit
 # corpus; --param msil_require_portable=1 and msil_require_x86=1 (the
-# portable legs, P-1a) do it for the portable toolchain and helper archive
-# and for the 32-bit starts; and an explicitly requested runner, runtime, leg or tool that
+# portable legs, P-1a) do it for the portable toolchain, helper archive and
+# (P-1b) sysroot and for the 32-bit starts; and an explicitly requested
+# runner, runtime, leg, tool or sysroot that
 # cannot be used is one too.
 
 import glob
@@ -2404,7 +2411,8 @@ def hosted_headers_why():
     if portable_triple:
         return (
             "hosted mode knows the C headers of Linux and Windows triples only; the "
-            "portable triple %s gets its C library at P-1b (plan 5.18.10)" % msil_triple
+            "portable triple %s gets its C library from the portable sysroot "
+            "(%%{msil_portable_libc_cflags}, plan 5.19.3)" % msil_triple
         )
     return (
         "hosted mode knows the C headers of Linux and Windows triples only, not %s"
@@ -2580,9 +2588,21 @@ if link_missing and config.msil_require_link:
 #                           --target=msil64-unknown-dotnet -rtlib=compiler-rt
 #                           -print-libgcc-file-name' names (see "helper
 #                           archives").
+#   msil-portable-sysroot   (P-1b, plan 5.19.3) the portable sysroot exists:
+#                           --param msil_portable_sysroot=<dir> (default:
+#                           <the build>/lib/clang-runtimes/
+#                           msil64-unknown-dotnet, beside the build's bin/)
+#                           holds include/stdio.h and lib/
+#                           msil64-unknown-dotnet/c.dll and libm.a, which
+#                           'python msil/utils/build/build-libc.py' installs.
+#                           %{msil_portable_libc_cflags} is
+#                           --sysroot=<that dir>; %{msil_portable_cflags}
+#                           stays the freestanding flags. A sysroot named
+#                           explicitly that lacks them is a configuration
+#                           error.
 # --param msil_require_portable=1 (the portable legs pass it) makes a missing
-# toolchain or archive a configuration error instead of UNSUPPORTED (P-1b
-# adds the sysroot).
+# toolchain, archive or sysroot a configuration error instead of
+# UNSUPPORTED.
 #   msil-dotnet-x86         (Windows, msil_runner=local) a 32-bit dotnet.exe
 #                           (%ProgramFiles(x86)%\dotnet\dotnet.exe) with
 #                           Microsoft.NETCore.App 8.x and 10.x, and the 32-bit
@@ -2678,6 +2698,49 @@ else:
         "no portable helper archive %s (build it with 'python "
         "msil/utils/build/build-builtins.py --triple %s', plan 5.18.8)"
         % (slashes(portable_archive) or "(no clang)", PORTABLE_TRIPLE)
+    )
+# The portable sysroot (P-1b, plan 5.19.3): what build-libc.py installs.
+PORTABLE_SYSROOT_FILES = (
+    ("include", "stdio.h"),
+    ("lib", PORTABLE_TRIPLE, "c.dll"),
+    ("lib", PORTABLE_TRIPLE, "libm.a"),
+)
+portable_sysroot = params.get("msil_portable_sysroot")
+portable_sysroot_explicit = bool(portable_sysroot)
+if not portable_sysroot:
+    # The build's sysroot: lib/clang-runtimes/<triple> beside the bin/ that
+    # holds clang (else the build's tools directory).
+    build_bin = (
+        os.path.dirname(os.path.abspath(clang_path))
+        if clang_path
+        else config.llvm_tools_dir
+    )
+    portable_sysroot = os.path.join(
+        os.path.dirname(os.path.abspath(build_bin)),
+        "lib",
+        "clang-runtimes",
+        PORTABLE_TRIPLE,
+    )
+portable_sysroot = os.path.abspath(portable_sysroot)
+portable_sysroot_lacks = [
+    "/".join(parts)
+    for parts in PORTABLE_SYSROOT_FILES
+    if not os.path.isfile(os.path.join(portable_sysroot, *parts))
+]
+if not portable_sysroot_lacks:
+    features.add("msil-portable-sysroot")
+    note("portable sysroot: " + slashes(portable_sysroot))
+elif portable_sysroot_explicit:
+    fatal(
+        "msil_portable_sysroot=%s lacks %s (build it with 'python "
+        "msil/utils/build/build-libc.py', plan 5.19.3)"
+        % (slashes(portable_sysroot), ", ".join(portable_sysroot_lacks))
+    )
+else:
+    portable_problems.append(
+        "no portable sysroot %s (it lacks %s; build it with 'python "
+        "msil/utils/build/build-libc.py', plan 5.19.3)"
+        % (slashes(portable_sysroot), ", ".join(portable_sysroot_lacks))
     )
 if portable_problems:
     if require_portable:
@@ -4222,6 +4285,10 @@ substitutions = [
     # The flags of msil/test/Portable/00-freestanding's programs: no C
     # library (the helper archive stays linked, plan 5.18.4 PV3).
     ("%{msil_portable_cflags}", "-nolibc -ffreestanding"),
+    # The flags of the programs that use the C library (P-1b, plan 5.19.3;
+    # feature msil-portable-sysroot): the portable sysroot's headers, c.dll
+    # and empty libm.a.
+    ("%{msil_portable_libc_cflags}", "--sysroot=" + quote(portable_sysroot)),
     # The 32-bit host (feature msil-dotnet-x86): msil-run.py --dotnet
     # <32-bit dotnet.exe> under this run's limits and --env values, with no
     # runtimeconfig (a test adds --runtime-major 8 or 10).

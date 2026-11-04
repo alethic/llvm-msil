@@ -157,6 +157,17 @@ fork-only clang/test/Preprocessor/init-msil-portable.c
 fork-only clang/test/Preprocessor/init-msil.c
 # The %L format diagnostics of MSIL triples (plan 5.13.5, R15; M26).
 fork-only clang/test/Sema/msil-long-double-format.c
+# The portable C library (P-1b, plan 5.19.3, 5.19.14): llvm-libc's dotnet configuration (entry
+# points, headers, config.json with errno EXTERNAL), its OS layer (the dotnet_util library, the
+# errno provider __llvm_libc_errno, io.h's declaration of write_to_stderr) and the dotnet
+# strerror table; msil/utils/build/build-libc.py builds them into c.dll.
+fork-only libc/config/dotnet/config.json
+fork-only libc/config/dotnet/msil64/entrypoints.txt
+fork-only libc/config/dotnet/msil64/headers.txt
+fork-only libc/src/__support/OSUtil/dotnet/CMakeLists.txt
+fork-only libc/src/__support/OSUtil/dotnet/errno.cpp
+fork-only libc/src/__support/OSUtil/dotnet/io.h
+fork-only libc/src/__support/StringUtil/tables/dotnet_platform_errors.h
 # The ECMA-335 format headers (plan 5.7.2) and the link-info record v1 (5.8.11), header-only.
 fork-only llvm/include/llvm/BinaryFormat/CILOpcodes.def
 fork-only llvm/include/llvm/BinaryFormat/CLI.h
@@ -424,6 +435,86 @@ hook compiler-rt/lib/builtins/int_lib.h
   # branch, so the portable triples (which do not define __ELF__) alias as ELF does.
   none compiler-rt's builtins tests are not built by the fork
   fork msil/test/Portable/00-freestanding/helpers.test
+
+# llvm-libc on the portable target (P-1b, plan 5.19.14): each change is an #elif or || branch
+# for msil or dotnet, except the generic errno extension; the fork builds llvm-libc only for
+# msil64-unknown-dotnet (msil/utils/build/build-libc.py), never its tests, so each block's fork
+# test in msil/test/Portable/01-libc pins the change.
+hook libc/cmake/modules/LLVMLibCArchitectures.cmake
+  # The msil32/msil64 architecture regexes (LIBC_TARGET_ARCHITECTURE_IS_MSIL) and the dotnet
+  # system special case (LIBC_TARGET_OS_IS_DOTNET), so LIBC_TARGET_TRIPLE=msil64-unknown-dotnet
+  # selects libc/config/dotnet/msil64.
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/datamodel-headers.test
+
+hook libc/include/llvm-libc-macros/generic-error-number-macros.h
+  # The 44 POSIX names of StringUtil/tables/posix_errors.h that the generic set lacks, with Linux
+  # asm-generic's numbers except EDEADLK 75, and the aliases EWOULDBLOCK and EOPNOTSUPP, appended
+  # unconditionally (brief Q15 (b)): every generic-family full build (baremetal, GPU) sees them;
+  # no existing number changes. An upstream merge that numbers an added name differently keeps
+  # the frozen number under a __dotnet__ branch of this header (plan 5.19.5).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/datamodel-headers.test
+  fork msil/test/Portable/01-libc/strerror.test
+
+hook libc/include/llvm-libc-macros/math-macros.h
+  # math_errhandling is MATH_ERRNO under __dotnet__ (no floating-point exception flags, brief
+  # Q20 (a)).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/math-bits.test
+
+hook libc/include/llvm-libc-macros/stdlib-macros.h
+  # The dotnet branch: MB_CUR_MAX 4, equal to MB_LEN_MAX, because c.dll's C locale stores UTF-8.
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/ctype-wchar.test
+
+hook libc/include/llvm-libc-types/__jmp_buf.h
+  # The msil branch: a 200-byte jmp_buf (plan 5.19.6).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/datamodel-headers.test
+
+hook libc/include/llvm-libc-types/fenv_t.h
+  # The msil branch: an opaque fenv_t so llvm-libc's FPUtil (FEnvImpl.h) compiles; no fenv
+  # function is an entry point (brief Q20 (a)).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/math-bits.test
+
+hook libc/include/llvm-libc-types/struct_tm.h
+  # tm_gmtoff and tm_zone under dotnet (brief Q19 (a)).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/datamodel-headers.test
+
+hook libc/src/__support/OSUtil/io.h
+  # The msil branch (LIBC_TARGET_ARCH_IS_MSIL) to OSUtil/dotnet/io.h (declares write_to_stderr, defines nothing).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/snprintf.test
+
+hook libc/src/__support/StringUtil/platform_errors.h
+  # The dotnet branch to the fork table tables/dotnet_platform_errors.h.
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/strerror.test
+
+hook libc/src/__support/macros/properties/architectures.h
+  # LIBC_TARGET_ARCH_IS_MSIL (from __msil32__ || __msil64__), inside LIBC_TARGET_ARCH_IS_VM.
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/math-bits.test
+
+hook libc/src/__support/macros/properties/os.h
+  # LIBC_TARGET_OS_IS_DOTNET (from __dotnet__).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/errno-xasm.test
+
+hook libc/src/locale/uselocale.cpp
+  # uselocale returns the previous locale (LC_GLOBAL_LOCALE while none was set) and stores
+  # newloc only when it is not null, as POSIX requires: an unconditional defect fix (every
+  # target gets POSIX's result; llvm-libc's locale_test.cpp already reads the old locale).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/families.test
+
+hook libc/src/time/time_utils.h
+  # tm_gmtoff and tm_zone under dotnet, with struct_tm.h (brief Q19 (a)).
+  none llvm-libc's tests are not built by the fork
+  fork msil/test/Portable/01-libc/datamodel-headers.test
 
 # The lld flavor msil (msil-ld, plan 5.9.1). lld is built from M13; the hooks build tree of the
 # compile leg is configured without lld, so no lld file has a 'compile' line.

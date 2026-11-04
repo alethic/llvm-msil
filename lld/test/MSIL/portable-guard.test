@@ -11,8 +11,9 @@
 ##   System.PlatformNotSupportedException::.ctor(string), throw:
 ##     <assembly> is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit
 ##     <assembly> is built for msil64-unknown-dotnet and needs a little-endian .NET process
-##   (the plan does not say whether <assembly> carries the file extension, so
-##   both spellings are accepted);
+##   where <assembly> is the image's simple name without a file extension
+##   ('prog' for prog.exe, 'lib' for lib.dll, 'my.out' for my.out.exe;
+##   section 12, P-1a, T-P10's <assembly>);
 ## - in a -shared library with a library input, the guard comes before
 ##   phase 2's ldtoken of the library's export class;
 ## - the guard binds the same members through --reference to a reference
@@ -64,6 +65,11 @@
 # RUN: msil-ld -shared lib.o -o lib.dll 2>&1 | count 0
 # RUN: llvm-cil-dump --forms=canon lib.dll > lib.txt
 # RUN: %{listing} method lib.txt '<Module>' .cctor | %{guard} -DASM=lib
+
+## An output name with two dots: only the last extension goes.
+# RUN: msil-ld ret42.o -o my.out.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon my.out.exe > my.out.txt
+# RUN: %{listing} method my.out.txt '<Module>' .cctor | %{guard} -DASM=my.out
 
 ## Two-phase: the guard, then the ldtoken.
 # RUN: msil-ld -shared two.o base.dll -o two.dll 2>&1 | count 0
@@ -128,10 +134,10 @@
 # GUARD-NEXT: {{^}}    L7: ldc.i4.0{{$}}
 # GUARD-NEXT: {{^}}    L8: ldelem.u1{{$}}
 # GUARD-NEXT: {{^}}    L9: brfalse L[[#ORDER:]]{{$}}
-# GUARD-DAG:  {{^}}    L[[#WIDTH]]: ldstr "[[ASM]]{{(\.exe|\.dll)?}} is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit"{{$}}
+# GUARD-DAG:  {{^}}    L[[#WIDTH]]: ldstr "[[ASM]] is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit"{{$}}
 # GUARD-DAG:  {{^}}    L[[#WIDTH+1]]: newobj instance void(string) {{(class )?}}[mscorlib]System.PlatformNotSupportedException::'.ctor'{{$}}
 # GUARD-DAG:  {{^}}    L[[#WIDTH+2]]: throw{{$}}
-# GUARD-DAG:  {{^}}    L[[#ORDER]]: ldstr "[[ASM]]{{(\.exe|\.dll)?}} is built for msil64-unknown-dotnet and needs a little-endian .NET process"{{$}}
+# GUARD-DAG:  {{^}}    L[[#ORDER]]: ldstr "[[ASM]] is built for msil64-unknown-dotnet and needs a little-endian .NET process"{{$}}
 # GUARD-DAG:  {{^}}    L[[#ORDER+1]]: newobj instance void(string) {{(class )?}}[mscorlib]System.PlatformNotSupportedException::'.ctor'{{$}}
 # GUARD-DAG:  {{^}}    L[[#ORDER+2]]: throw{{$}}
 

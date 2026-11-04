@@ -1,0 +1,70 @@
+# Every name that c.dll exports, but __llvm_libc_errno, is declared by an installed header of the portable sysroot: a translation unit that includes every top-level header of <sysroot>/include and takes the address of each name of msil/lib/libc/msil64-unknown-dotnet.exports compiles with no error as C17, C23 and C++17; one name more that no header declares (l64a, removed from the list at P-1b) is an error naming it.
+# Plan 5.19.1 rule 2 (the generated headers declare only the shipped entry
+# points, and a shipped entry point must be reachable through them),
+# 5.19.4, 5.19.7 (the export list), section 12's row 'Contract 5.19.4 and
+# the P-1b Goal amended (exported but undeclared, as built)': iscanonical,
+# iscanonicalf, iscanonicall, issignaling, issignalingf, issignalingl and
+# l64a left the list because llvm-libc's math.yaml and stdlib.yaml declare
+# none of them; this test catches the next such name. __llvm_libc_errno is
+# the forced export behind errno (5.19.5), which <errno.h> reaches through
+# its errno macro. strnlen_s is declared only under __STDC_WANT_LIB_EXT1__
+# (C11 Annex K's opt-in, annex-k-macros.h), so the translation unit defines
+# it as 1 before any include. gen.py writes the translation unit; it fails
+# if the list names nothing or the include directory holds no header, so an
+# empty input never passes. Names are taken with '(void)&name;', which no
+# function-like macro of the headers expands (a function-like macro needs
+# a '(' after its name). Nothing links or runs.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %python %t/gen.py %S/../../../lib/libc/msil64-unknown-dotnet.exports %{libc_sysroot}/include %t/decls.c > %t/gen.log
+# RUN: FileCheck %s --check-prefix=GEN --input-file %t/gen.log
+# GEN: {{^}}gen.py: {{[1-9][0-9]+}} names, {{[1-9][0-9]*}} headers{{$}}
+# RUN: %clang_portable %{msil_portable_libc_cflags} -std=c17 -fsyntax-only -Werror=implicit-function-declaration %t/decls.c
+# RUN: %clang_portable %{msil_portable_libc_cflags} -std=c23 -fsyntax-only -Werror=implicit-function-declaration %t/decls.c
+# RUN: %clang_portable %{msil_portable_libc_cflags} -x c++ -std=c++17 -fsyntax-only %t/decls.c
+#
+# The failure path (plan 5.17.5): the same translation unit with l64a, which
+# no installed header declares, is an undeclared-identifier error.
+# RUN: %python %t/gen.py %S/../../../lib/libc/msil64-unknown-dotnet.exports %{libc_sysroot}/include %t/extra.c --extra l64a > %t/extra.log
+# RUN: not %clang_portable %{msil_portable_libc_cflags} -std=c17 -fsyntax-only -Werror=implicit-function-declaration %t/extra.c > %t/extra.err 2>&1
+# RUN: FileCheck %s --check-prefix=EXTRA --input-file %t/extra.err --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# EXTRA: extra.c:{{[0-9]+}}:{{[0-9]+}}: error: use of undeclared identifier 'l64a'{{$}}
+# EXTRA: {{^}}1 error generated.
+#--- gen.py
+"""gen.py LIST INCLUDE OUT [--extra NAME]: write OUT, a C translation unit
+that defines __STDC_WANT_LIB_EXT1__ as 1, includes every *.h directly in
+INCLUDE (sorted) and takes the address of every name of the export list LIST
+(its lines but '#' comments and blank ones) except __llvm_libc_errno, and of
+NAME. Exit 1 if LIST names nothing or INCLUDE has no header."""
+import os
+import sys
+
+args = sys.argv[1:]
+extra = []
+if "--extra" in args:
+    i = args.index("--extra")
+    extra = [args[i + 1]]
+    del args[i : i + 2]
+export_list, include, out = args
+names = []
+with open(export_list, encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if line and not line.startswith("#") and line != "__llvm_libc_errno":
+            names.append(line)
+headers = sorted(
+    n for n in os.listdir(include)
+    if n.endswith(".h") and os.path.isfile(os.path.join(include, n))
+)
+if not names or not headers:
+    print("gen.py: error: %d names in %s, %d headers in %s"
+          % (len(names), export_list, len(headers), include))
+    sys.exit(1)
+with open(out, "w", encoding="utf-8", newline="\n") as f:
+    f.write("#define __STDC_WANT_LIB_EXT1__ 1\n")
+    for h in headers:
+        f.write("#include <%s>\n" % h)
+    f.write("\nvoid take_every_export(void) {\n")
+    for n in names + extra:
+        f.write("  (void)&%s;\n" % n)
+    f.write("}\n")
+print("gen.py: %d names, %d headers" % (len(names) + len(extra), len(headers)))

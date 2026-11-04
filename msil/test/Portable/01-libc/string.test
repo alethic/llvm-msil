@@ -1,0 +1,120 @@
+# The string and strings families from c.dll: the mem* functions (overlapping memmove, memchr, memrchr, memmem, mempcpy, memccpy), copying and concatenation with their padding and bounds (strncpy, strlcpy, strlcat, stpcpy, stpncpy), comparison and search (strncmp, strcasestr, strchrnul, strspn, strcspn, strpbrk), tokenizing (strtok, strtok_r, strsep), strcoll and strxfrm in the C locale, and strings.h (bcmp, bcopy, bzero, ffs, ffsl, ffsll, index, rindex, strcasecmp, strncasecmp).
+# Plan 5.19.4 (string 40 and strings 12 ship at P-1b; strdup and strndup
+# wait for the heap, P-2). Compiled with -fno-builtin (%{msil_copts}), so
+# every call reaches c.dll instead of a compiler expansion. The expected
+# results follow C17 7.24 (memmove copies as if through a temporary, strncpy
+# pads with null characters, strcoll and strxfrm in the C locale order as
+# strcmp, strtok keeps its state between calls) and POSIX.1-2024 for the
+# extensions (memccpy, stpcpy, stpncpy, strlcpy, strlcat, strsep, strtok_r,
+# ffs, strcasecmp, index, rindex) and their GNU counterparts (memrchr,
+# memmem, mempcpy, strcasestr, strchrnul). Each failed group sets one bit of
+# the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# REDEFINE: %{msil_copts} = -fno-builtin
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <string.h>
+#include <strings.h>
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+int main(void) {
+  char b[64], c[64];
+
+  /* 0: memcpy, memset, memcmp, memmove both ways over an overlap. */
+  memset(b, 'x', sizeof b);
+  memcpy(b, "0123456789", 10);
+  CHECK(0, memcmp(b, "0123456789xx", 12) == 0 && memcmp("abc", "abd", 3) < 0);
+  memmove(b + 2, b, 8);
+  CHECK(0, memcmp(b, "0101234567xx", 12) == 0);
+  memmove(b, b + 4, 6);
+  CHECK(0, memcmp(b, "2345674567xx", 12) == 0);
+  CHECK(0, memcmp("\x80", "\x01", 1) > 0); /* compared as unsigned char */
+
+  /* 1: memchr, memrchr, memmem, mempcpy, memccpy. */
+  const char *hay = "abcabcabd";
+  CHECK(1, memchr(hay, 'c', 9) == hay + 2 && memchr(hay, 'z', 9) == NULL);
+  CHECK(1, memrchr(hay, 'c', 9) == hay + 5 && memrchr(hay, 'a', 0) == NULL);
+  CHECK(1, memmem(hay, 9, "abd", 3) == hay + 6 && memmem(hay, 9, "abe", 3) == NULL);
+  CHECK(1, memmem(hay, 9, "", 0) == hay);
+  CHECK(1, mempcpy(c, "wxyz", 4) == c + 4);
+  memset(c, 0, sizeof c);
+  CHECK(1, memccpy(c, "key=value", '=', 9) == c + 4 && memcmp(c, "key=\0", 5) == 0);
+  CHECK(1, memccpy(c, "abc", '#', 3) == NULL);
+
+  /* 2: strcpy, strncpy (null padding), strcat, strncat, stpcpy, stpncpy,
+     strlcpy and strlcat (they return the length they tried to make). */
+  memset(b, 'x', sizeof b);
+  CHECK(2, strncpy(b, "ab", 5) == b && memcmp(b, "ab\0\0\0x", 6) == 0);
+  CHECK(2, strcpy(b, "foo") == b && strcat(b, "bar") == b && strcmp(b, "foobar") == 0);
+  CHECK(2, strncat(b, "bazqux", 3) == b && strcmp(b, "foobarbaz") == 0);
+  CHECK(2, stpcpy(b, "end") == b + 3 && strcmp(b, "end") == 0);
+  memset(b, 'x', sizeof b);
+  CHECK(2, stpncpy(b, "ab", 4) == b + 2 && memcmp(b, "ab\0\0x", 5) == 0);
+  CHECK(2, strlcpy(c, "truncated", 5) == 9 && strcmp(c, "trun") == 0);
+  CHECK(2, strlcat(c, "cate", 8) == 8 && strcmp(c, "truncat") == 0);
+
+  /* 3: strlen, strnlen, strcmp, strncmp, strchr, strrchr, strchrnul,
+     strstr, strcasestr. */
+  const char *s = "Hello, World";
+  CHECK(3, strlen(s) == 12 && strnlen(s, 5) == 5 && strnlen(s, 50) == 12);
+  CHECK(3, strcmp("abc", "abd") < 0 && strcmp("b", "a") > 0 && strcmp("", "") == 0);
+  CHECK(3, strncmp("abcX", "abcY", 3) == 0 && strncmp("ab", "abc", 3) < 0);
+  CHECK(3, strchr(s, 'o') == s + 4 && strrchr(s, 'o') == s + 8 && strchr(s, '\0') == s + 12);
+  CHECK(3, strchrnul(s, 'z') == s + 12 && strchrnul(s, 'W') == s + 7);
+  CHECK(3, strstr(s, "World") == s + 7 && strstr(s, "world") == NULL && strstr(s, "") == s);
+  CHECK(3, strcasestr(s, "WORLD") == s + 7);
+
+  /* 4: strspn, strcspn, strpbrk. */
+  CHECK(4, strspn("aabbcd", "ab") == 4 && strcspn("hello;world", ";,") == 5);
+  CHECK(4, strpbrk("key=value", "=:") != NULL && *strpbrk("key=value", "=:") == '=');
+  CHECK(4, strpbrk("abc", "xyz") == NULL);
+
+  /* 5: strtok (state between calls), strtok_r, strsep (empty fields). */
+  strcpy(b, "  one, two,,three ");
+  char *t1 = strtok(b, " ,");
+  char *t2 = strtok(NULL, " ,");
+  char *t3 = strtok(NULL, " ,");
+  char *t4 = strtok(NULL, " ,");
+  CHECK(5, t1 && strcmp(t1, "one") == 0 && t2 && strcmp(t2, "two") == 0);
+  CHECK(5, t3 && strcmp(t3, "three") == 0 && t4 == NULL);
+  char *save = NULL;
+  strcpy(c, "a:b");
+  char *r1 = strtok_r(c, ":", &save);
+  char *r2 = strtok_r(NULL, ":", &save);
+  CHECK(5, r1 && strcmp(r1, "a") == 0 && r2 && strcmp(r2, "b") == 0 && !strtok_r(NULL, ":", &save));
+  strcpy(c, "x,,y");
+  char *p = c;
+  char *f1 = strsep(&p, ",");
+  char *f2 = strsep(&p, ",");
+  char *f3 = strsep(&p, ",");
+  CHECK(5, strcmp(f1, "x") == 0 && strcmp(f2, "") == 0 && strcmp(f3, "y") == 0 && p == NULL);
+
+  /* 6: strcoll and strxfrm in the C locale order like strcmp; strerror's
+     own text is the subject of strerror.test. */
+  CHECK(6, strcoll("abc", "abd") < 0 && strcoll("b", "a") > 0 && strcoll("x", "x") == 0);
+  CHECK(6, strxfrm(c, "sort", sizeof c) == 4 && strcmp(c, "sort") == 0);
+  CHECK(6, strxfrm(NULL, "sizing", 0) == 6);
+
+  /* 7: strings.h. */
+  memset(b, 'q', 8);
+  bzero(b, 4);
+  CHECK(7, memcmp(b, "\0\0\0\0qqqq", 8) == 0);
+  bcopy("12345", b + 1, 5);
+  CHECK(7, memcmp(b, "\0" "12345qq", 8) == 0 && bcmp(b + 1, "123", 3) == 0 && bcmp("a", "b", 1) != 0);
+  CHECK(7, ffs(0) == 0 && ffs(0x18) == 4 && ffsl(1L << 40) == 41 && ffsll(1LL << 63) == 64);
+  CHECK(7, index(s, 'l') == s + 2 && rindex(s, 'l') == s + 10);
+  CHECK(7, strcasecmp("HeLLo", "hello") == 0 && strcasecmp("a", "B") < 0);
+  CHECK(7, strncasecmp("ABCdef", "abcXYZ", 3) == 0 && strncasecmp("ABCdef", "abcXYZ", 4) < 0);
+  return (int)fails;
+}

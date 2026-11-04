@@ -25,7 +25,7 @@ struct tm {
   int tm_wday;  // days since Sunday
   int tm_yday;  // days since January
   int tm_isdst; // Daylight Saving Time flag
-#if defined(__linux__)
+#if defined(__linux__) || defined(__dotnet__)
   long tm_gmtoff;
   const char *tm_zone;
 #endif

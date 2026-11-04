@@ -1,0 +1,92 @@
+# The installed c.dll itself: it verifies within the allowed list (ILVerify, and PEVerify on Windows) and every method force-JITs on the leg's runtime; its listing shows the assembly c 1.0.0.0 referencing only mscorlib, no P/Invoke and no module reference, the export class c with __llvm_libc_errno and the freestanding entry points, its export class's methods (but the '<msil>addr_' helpers) exactly the names of the checked-in export list, and neither an absent function nor an OS stub (write_to_stderr, internal::exit) defined anywhere in it.
+# Plan 5.19.7 (c.dll: assembly c, version 1.0.0.0, exports from the checked-in
+# list, including the forced __llvm_libc_errno), 5.19.1 rules 2 and 3 (no
+# stub stands in for an absent function; c.dll is a C library that binds no
+# native code), 5.19.15 ('ILVerify within the allowed list'; 'no trap
+# bodies'), D21 (verification policy), the milestone's Goal (0 pinvokeimpl,
+# 0 moduleref, only mscorlib; neither write_to_stderr nor internal::exit
+# defined or referenced). The names checked present are entry points of
+# 5.19.4's set from each family; the names checked absent are 5.19.4's
+# withheld rows and its removed stubs. Nothing here runs a program.
+# 5.19.15 ('c.dll's ExportClass equals the list'): exports.py takes the
+# methods of class 'c' from the --order=decl listing, drops msil-ld's
+# '<msil>addr_' address helpers, and compares the sorted names with the
+# sorted names of msil/lib/libc/msil64-unknown-dotnet.exports (its lines
+# but '#' comments and blank ones); a name on one side only fails, so an
+# extra default-visibility or leaked builtins export, which msil-ld's
+# --export-list does not refuse, is caught as well as a missing one.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %msil_verify %{libc_dll}
+# RUN: %if msil-jitall %{ %msil_jitall %{libc_dll} %}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump --stats-only %{libc_dll} > %t.stats %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=STATS --input-file %t.stats --implicit-check-not=ImplMap --implicit-check-not=ModuleRef %}
+# STATS: {{^}}# table AssemblyRef rows=1 {{.*}}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump --order=decl %{libc_dll} > %t.dump %}
+# RUN: %if msil-cil-dump %{ %python %t/exports.py %t.dump %S/../../../lib/libc/msil64-unknown-dotnet.exports %}
+# RUN: %if msil-cil-dump %{ grep -E "^(assembly|assemblyref|module|\.class) |^  \.method " %t.dump > %t.decl %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=DECL --input-file %t.decl --implicit-check-not=assemblyref --implicit-check-not=pinvokeimpl --implicit-check-not=write_to_stderr --implicit-check-not=internal4exit %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=ABSENT --input-file %t.decl %}
+# DECL:     {{^}}assembly 'c' ver 1.0.0.0 {{.*}}
+# DECL:     {{^}}module 'c.dll'{{$}}
+# DECL:     {{^}}assemblyref 'mscorlib' ver 4.0.0.0 {{.*}}
+# DECL:     {{^}}.class 'c' {{.*}}
+# DECL-DAG: {{^}}  .method '__llvm_libc_errno' native int() {{.*}}
+# DECL-DAG: {{^}}  .method 'strlen' native int(native int) {{.*}}
+# DECL-DAG: {{^}}  .method 'snprintf' {{.*}}
+# DECL-DAG: {{^}}  .method 'vsnprintf' {{.*}}
+# DECL-DAG: {{^}}  .method 'strtod' float64(native int, native int) {{.*}}
+# DECL-DAG: {{^}}  .method 'qsort' {{.*}}
+# DECL-DAG: {{^}}  .method 'sinf' float32(float32) {{.*}}
+# DECL-DAG: {{^}}  .method 'isalpha' int32(int32) {{.*}}
+# DECL-DAG: {{^}}  .method 'wcslen' {{.*}}
+# DECL-DAG: {{^}}  .method 'gmtime_r' {{.*}}
+# DECL-DAG: {{^}}  .method 'strerror' {{.*}}
+# DECL-DAG: {{^}}  .method 'cabs' {{.*}}
+# DECL-DAG: {{^}}  .method 'stdc_count_ones_ui' {{.*}}
+# DECL-DAG: {{^}}  .method 'localeconv' {{.*}}
+# DECL:     {{^}}.class {{.*}}
+# ABSENT-NOT: {{^}}  .method '{{(malloc|calloc|realloc|free|exit|_Exit|abort|atexit|printf|fprintf|puts|fopen|getenv|time|clock|rand|srand|localtime|localtime_r|mktime|strftime|strsignal|raise|signal|feraiseexcept|fetestexcept|fesetround|swprintf|strptime|setjmp|longjmp|pthread_create|thrd_create)}}'
+# ABSENT-NOT: {{^}}  .method '{{[^']*_modular}}'
+#--- exports.py
+"""exports.py DUMP LIST: the methods of class 'c' in DUMP (llvm-cil-dump
+--order=decl of c.dll), but the '<msil>addr_' helpers, are exactly the names
+of the export list LIST. Exit 1, naming each difference, otherwise."""
+import sys
+
+dump, export_list = sys.argv[1], sys.argv[2]
+methods, classes, in_c = [], 0, False
+with open(dump, encoding="utf-8") as f:
+    for line in f:
+        if line.startswith(".class "):
+            in_c = line.startswith(".class 'c' ")
+            classes += in_c
+        elif in_c and line.startswith("  .method '"):
+            name = line[len("  .method '"):].split("'", 1)[0]
+            if not name.startswith("<msil>addr_"):
+                methods.append(name)
+names = []
+with open(export_list, encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            names.append(line)
+errors = []
+if classes != 1:
+    errors.append("%d classes named 'c' in %s, not 1" % (classes, dump))
+for what, seq in (("export class c", methods), ("export list", names)):
+    dups = sorted({n for n in seq if seq.count(n) > 1})
+    if dups:
+        errors.append("the %s names more than once: %s" % (what, " ".join(dups)))
+extra = sorted(set(methods) - set(names))
+missing = sorted(set(names) - set(methods))
+if extra:
+    errors.append("exported by c.dll but not in the list: " + " ".join(extra))
+if missing:
+    errors.append("in the list but not exported by c.dll: " + " ".join(missing))
+if not names:
+    errors.append("the export list %s names nothing" % export_list)
+for e in errors:
+    print("exports.py: error: " + e)
+if errors:
+    sys.exit(1)
+print("exports.py: export class c equals the list (%d names)" % len(names))

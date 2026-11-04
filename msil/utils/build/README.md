@@ -3,7 +3,8 @@
 PowerShell 7 scripts that configure, build and test the llvm-msil tree on the Windows
 development host, safely shared by several agents (or people) working in one checkout and one
 build directory, and since M25 the Python script `build-builtins.py`, which builds the helper
-archives `clang_rt.builtins` (below). The PowerShell scripts dot-source each other through
+archives `clang_rt.builtins`, and since P-1b `build-libc.py`, which builds the portable
+triple's C library `c.dll` (below). The PowerShell scripts dot-source each other through
 `$PSScriptRoot`, so keep them together in this directory. Run them with
 `pwsh -NoProfile -File <script> ...`; from Git Bash use forward slashes
 (`pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 ...`).
@@ -11,7 +12,7 @@ archives `clang_rt.builtins` (below). The PowerShell scripts dot-source each oth
 Paths: the repository root is three levels above this directory; the build directory is
 `MSIL_BUILD_DIR` when it is set and not empty, else `<repo>/build` (every script also takes
 `-BuildDir`, except `msil-run.ps1`, which uses `MSIL_BUILD_DIR` only; `build-builtins.py`
-takes `--build-dir`, as `msil/utils/jitall/build-jitall.py` and
+and `build-libc.py` take `--build-dir`, as `msil/utils/jitall/build-jitall.py` and
 `msil/utils/mdtools/build-mdtools.py` do, which follow the same rule). Relative test and source
 paths are relative to the repository root.
 
@@ -26,6 +27,7 @@ file handle, so the operating system releases it the moment the holder exits or 
 | exclusive | `msil-configure.ps1`, `msil-build.ps1` (cmake, ninja) | one writer per build directory |
 | shared | `msil-lit.ps1`, `msil-run.ps1`, `msil-gtest.ps1`, `msil-expect-error.ps1` (when the program is in the build directory) | on Windows a running `.exe` cannot be relinked, so tools never run while ninja writes |
 | shared | `build-builtins.py` (M25: a build, `--check` and `--native-oracle`; `--list`, `--check-list` and `--self-test` take none) | it runs the build's clang and `llvm-ar`; it takes the lock itself, in Python, with the same file and sharing rules (below) |
+| exclusive (a build), shared (`--check`, `--check-reproducible`) | `build-libc.py` (P-1b; `--check-exports`, `--write-exports`, `--check-append-only` and `--self-test` take none) | a build writes `<build>/runtimes/` and the portable sysroot under `<build>/lib/`, which lit runs read; it takes the lock itself, in Python, as `build-builtins.py` does |
 | none | `msil-syntax.ps1`, `msil-tblgen.ps1`, `msil-env.ps1` | they write nothing into the build tree |
 | exclusive, on the private hooks tree | `msil/utils/ci/upstream-hooks.ps1` (its compile leg runs cmake and ninja there itself; `-SelfTest` takes the same lock shared) | the hooks tree has its own `.msil-build.lock`; the main build directory's lock is not involved (below) |
 
@@ -210,6 +212,161 @@ python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-d
 python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-dotnet --check
 ```
 
+### build-libc.py (exclusive; P-1b)
+
+Builds the C library of the portable triple `msil64-unknown-dotnet` (plan 5.19.3, 5.19.7): the
+fork's LLVM libc (`libc/`), configured and built by llvm-libc's own CMake, linked by `msil-ld`
+into the shared library assembly `c.dll`, and installed with the generated C headers and an
+empty `libm.a` into the portable sysroot that the clang driver searches. Standard library
+only. The build directory is `--build-dir DIR`, by default `MSIL_BUILD_DIR` when it is set and
+not empty, else `<repo>/build` (the directory rule above); the script uses its `bin/clang`,
+`clang++`, `llvm-ar`, `llvm-ranlib` and `msil-ld`, and `cmake.exe` and `ninja.exe` from the
+Visual Studio environment of `msil-env.ps1` (elsewhere from `PATH`).
+
+- **Configure.** A CMake tree of its own, `<build>/runtimes/msil64-unknown-dotnet`, never the
+  shared tree's cache: `cmake -G Ninja -S <repo>/runtimes` with `LLVM_ENABLE_RUNTIMES=libc`,
+  `LLVM_LIBC_FULL_BUILD=ON`, `LIBC_TARGET_TRIPLE=msil64-unknown-dotnet`,
+  `LLVM_DEFAULT_TARGET_TRIPLE=msil64-unknown-dotnet` (never `LLVM_RUNTIMES_TARGET`, which
+  `LLVMLibCArchitectures.cmake` refuses together with `LIBC_TARGET_TRIPLE`),
+  `CMAKE_{C,CXX,ASM}_COMPILER_TARGET=msil64-unknown-dotnet`, `CMAKE_SYSTEM_NAME=Generic`,
+  `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`, `CMAKE_BUILD_TYPE=Release` (so `NDEBUG`),
+  `CMAKE_{C,CXX}_FLAGS=-fvisibility=hidden`, `LLVM_INCLUDE_TESTS=OFF`, `LLVM_INCLUDE_DOCS=OFF`,
+  `LLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF`, the tools above and this Python. No
+  `LIBC_CONFIG_PATH` and no `LIBC_CONF_*` option is passed: llvm-libc derives the OS `dotnet`
+  and the arch `msil64` from the triple and loads `libc/config/dotnet/config.json` and
+  `libc/config/dotnet/msil64/{entrypoints,headers}.txt` itself; a `LIBC_CONFIG_PATH` of
+  `config/dotnet/msil64` would skip `config.json`, and `entrypoints.txt` then stops the
+  configure with `config/dotnet/config.json was not applied`.
+- **Build and link.** `ninja all libc.src.__support.OSUtil.dotnet.dotnet_util`, then the errno
+  provider's object goes into the intermediate archive
+  `<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a` as the member
+  `dotnet_util.errno.cpp.obj` (llvm-libc's archive rule does not follow the header library
+  that would bring it in; `c.dll`'s forced export of `__llvm_libc_errno` and `msil-ld`'s T-P11
+  on that archive both need it). Then `msil-ld --target=msil64-unknown-dotnet --shared
+  --export-list=msil/lib/libc/msil64-unknown-dotnet.exports --exclude-libs=ALL
+  --assembly-version=1.0.0.0 libc.a <portable clang_rt.builtins> -o c.dll`; the helper
+  archive is the file that `clang --target=msil64-unknown-dotnet -rtlib=compiler-rt
+  -print-libgcc-file-name` names, and without it the script stops with a usage error that says
+  to run `build-builtins.py --triple msil64-unknown-dotnet` first.
+- **Install.** Into `<build>/lib/clang-runtimes/msil64-unknown-dotnet/`: `include/` (llvm-libc's
+  install component `libc-headers`, replaced whole), `lib/msil64-unknown-dotnet/c.dll`,
+  `lib/msil64-unknown-dotnet/libm.a` (the 8 bytes `!<arch>\n`, an archive with no members) and
+  the stamp `lib/msil64-unknown-dotnet/c.dll.stamp`. `libc.a` is never installed: no static C
+  library exists before P-3. `c.dll` relinks byte-identically from the intermediate `libc.a`
+  (`--check-reproducible`, below, checks the relink; the compiles' determinism is covered by
+  P-1a's double build of the portable helper archive).
+- **Stamp.** The SHA-256 of the script, the five tools, the helper archive and the export list,
+  the cmake version, the configure variables, the assembly version, a digest of `libc/`
+  (without its tests, docs, benchmarks, fuzzing and examples), `runtimes/`, `cmake/` and
+  `llvm/cmake/`, and of every installed file, plus the line `archive <sha256>` for the
+  intermediate `<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a` (hashed after the
+  errno provider is added) and the line `resource-headers <sha256>`, a digest of the `include/`
+  tree of clang's resource directory. A missing or changed `libc.a` or resource header makes a
+  build rerun ninja and the provider step and makes `--check` exit 1. A build whose stamp
+  matches and whose installed files are unchanged does nothing; otherwise the stamp goes
+  first, and a failure also removes
+  `c.dll`, so a link fails loudly instead of taking a stale one.
+- **The export list** (`msil/lib/libc/msil64-unknown-dotnet.exports`, plan 5.19.7): the C name
+  of every entry of the `set(TARGET_LIBC_ENTRYPOINTS ...)` block of `entrypoints.txt` but
+  `errno`, plus `__llvm_libc_errno`, one per line after a comment header (530 names at P-1b).
+  It is `c.dll`'s ABI and append-only: `--write-exports` keeps the checked-in names in their
+  order and appends new ones sorted, and refuses when a name would disappear; a build refuses a
+  stale list before it configures.
+
+Modes, at most one (without one the script builds; `--jobs N`, default one per processor, goes
+only with a build): `--check` builds nothing and exits 1 when `c.dll`, `libm.a`,
+`include/stdio.h`, the stamp or the intermediate archive
+`<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a` is missing, naming each and `(build
+them with build-libc.py)`, or when the stamp, that archive or an installed file is stale;
+`--check-exports` exits 1 unless the checked-in export list equals the one `entrypoints.txt`
+gives, and `--write-exports` writes it (neither needs a build); `--check-reproducible DIR` (it
+accepts `--build-dir`, like `--check`) builds nothing and exits 1 when the installed `c.dll` or
+the intermediate `<build>/runtimes/msil64-unknown-dotnet/libc/lib/libc.a` is missing, naming
+each and `(build them with build-libc.py)`; otherwise it empties DIR, writes the marker file
+`.build-libc-relink` in it, relinks `c.dll` into it from that `libc.a` and the portable
+`clang_rt.builtins` with the installed link's arguments, and exits 0 only when the result is
+byte-identical to the installed `c.dll`, else 1, printing both SHA-256 hashes. Give it a new or
+empty scratch directory outside both the repository and the build directory, or one an earlier
+`--check-reproducible` used: it empties DIR only when DIR is empty or holds nothing but regular
+files that an earlier run writes (the marker, `c.dll`, and the `c.dll.tmp` plus seven lowercase
+hex digits that `msil-ld`'s output buffer leaves only when `msil-ld` is killed; `msil-ld` writes
+nothing else beside its `-o` output), and a `c.dll` or `c.dll.tmp` only beside the marker; it
+refuses anything else (it compiles nothing: the compiles' determinism is covered by P-1a's
+double build of the portable `clang_rt.builtins`, which uses the same clang and `llvm-ar`; the
+P-1b gate's step 7 runs it after `--check` and `--check-exports`); `--check-append-only OLD NEW`
+exits 1, with an error that names the name and says `append-only`, unless list NEW starts with
+every name of list OLD in its order (blank and `#` lines aside); `--self-test` checks the script
+offline with stand-in tools, cmake and ninja. Exit status 0, 1 for a failed build or check, 2
+for a usage error (two modes, `--jobs` with a mode or below 1, `--build-dir` with a mode other
+than `--check` and `--check-reproducible`, a missing tool or helper archive for a build (with
+`--check` and `--check-reproducible` it is a failed check, exit 1), an unreadable list,
+`--check-reproducible` without DIR, a DIR that is a file system root or a mount point (a whole
+file system, refused as a file system root), is not a directory, is or holds the repository or
+the build directory, lies in the repository or the build directory, really holds a file the
+relink reads or compares with (`really holds <file>, a file the relink reads or compares with`),
+holds anything but the marker and the files the relink writes (`holds <name>, which is not a
+file the relink writes; give an empty or new directory`), or holds a `c.dll` or `c.dll.tmp`
+without the marker (`holds <name> but not .build-libc-relink, so no relink wrote it; remove it
+or give an empty or new directory`), in any of the forms below (so also through a link or
+alias), on Windows a DIR with a name in its path that ends in a dot or a space (`has a name in
+its path that ends in a dot or a space ('<name>'), which a Windows path drops`:
+`os.path.abspath` drops them even after a `\\?\` prefix, so the directory emptied could be a
+sibling of DIR), a DIR that cannot be listed, a relinked `c.dll` that is the installed one
+itself (`the relinked c.dll is the installed <file> itself`), or, on Windows (the only system
+with a build lock), a build directory whose `.msil-build.lock` is a symbolic link or junction,
+or for a build a hard link to another file), each with a `build-libc.py: error:` line.
+
+The refusal of `--check-reproducible DIR` resolves links and aliases: DIR as written and its
+absolute path (the one it empties) are compared in every form, as written, without a `\\?\`,
+`\\?\UNC\`, `\\.\` or `\??\` prefix, and resolved by `os.path.realpath` (symbolic links,
+junctions, 8.3 names), and by file identity (`st_dev` and `st_ino`, which the system resolves
+through every link, junction, mount point, subst drive and UNC share such as `\\localhost\D$`):
+DIR lies in the repository or the build directory when a directory above any of its forms is one
+of them, and holds one when DIR itself is a directory above one of their forms. DIR really holds
+a file the relink reads or compares with (the installed `c.dll`, the intermediate `libc.a`, the
+helper archive wherever clang reports it, the export list and the five tools) when one of DIR's
+forms is a form of that file's directory, as written or after `os.path.realpath` of the file (a
+file link), or when a regular file in DIR has that file's `st_dev` and `st_ino` (the system
+follows a file link; a path form can lose a trailing dot or space or name a UNC share, a file
+identity cannot), so a relink never replaces the `c.dll` it is compared with (an installed
+`c.dll` that is a file link to an earlier run's output, say). Any other entry in DIR (another
+file, a near-miss name such as `c.dll.bak` or `C.DLL`, a directory, a symbolic link or junction,
+even one named `c.dll`) refuses DIR, naming the first, and so does a `c.dll` without the marker.
+So a directory of the build or the repository that a link moved to another place (a lit output
+directory that holds only `c.dll`, say) is refused without a search for links: it holds other
+names or a `c.dll` without the marker, or nothing that emptying could remove. DIR is checked
+before the script waits for the build lock (up to 240 minutes) and again just before it is
+emptied, so a DIR that changed during the wait is refused too; the helper archive is among the
+files the relink reads only in the second check, once clang has named it. Emptying DIR removes a
+symbolic link or junction in it, never what it reaches, and a mount point in it (a bind mount,
+including one on the same file system, which `/proc/self/mountinfo` names on Linux, or a volume
+mounted on a folder on Windows) stops it with exit 1 (`cannot empty DIR: ... is a mount point;
+unmount it`) before anything below the mount point goes; both can meet only an entry that
+appeared after the last check.
+
+A build takes the build directory's exclusive lock while it writes under `<build>/runtimes/`
+and the sysroot, so it waits for `msil-build.ps1`, lit runs and gtest runs (up to 240 minutes)
+and they wait for it; `--check` and `--check-reproducible` take the shared lock. Never run it
+while holding that directory's lock. A whole build (configure, 658 build steps, link and
+install) took 3 minutes 32 seconds on the development host. It is not a step of `msil/utils/ci/build.ps1` or
+`build.sh`: the portable legs (`lit-legs.ps1 -Portable`, `lit-legs.sh --portable`) run it as
+their second setup step, `build-libc.py --build-dir <build>` after `build-builtins.py
+--build-dir <build> --triple msil64-unknown-dotnet`, and the P-steps' gates run it explicitly.
+
+```powershell
+python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-dotnet --jobs 4
+python D:/llvm-msil/msil/utils/build/build-libc.py --jobs 4
+python D:/llvm-msil/msil/utils/build/build-libc.py --check
+python D:/llvm-msil/msil/utils/build/build-libc.py --check-exports
+python D:/llvm-msil/msil/utils/build/build-libc.py --check-reproducible C:/llvm-msil-scratch/libc-repro
+git show HEAD:msil/lib/libc/msil64-unknown-dotnet.exports > C:/llvm-msil-scratch/exports-old.txt
+python D:/llvm-msil/msil/utils/build/build-libc.py --check-append-only C:/llvm-msil-scratch/exports-old.txt msil/lib/libc/msil64-unknown-dotnet.exports
+```
+
+After changing `libc/config/dotnet/msil64/entrypoints.txt` (a later libc step appends entry
+points), run `--write-exports`, check the diff only appends, and raise the assembly version's
+minor in the same change (plan 5.19.7).
+
 ### msil-lit.ps1 (shared)
 
 Runs `<build>/bin/llvm-lit.py` on source-tree paths; `-LitArgs` (default `-sv`) is split on
@@ -248,10 +405,13 @@ Since P-1a the execution tests of the portable triple, `msil/test/Portable`, run
 need the portable helper archive (`build-builtins.py --triple msil64-unknown-dotnet`, above).
 P-1a's gate runs them as the portable legs pass their parameters; `guard-x86` also needs the
 32-bit `dotnet.exe` with .NET 8 and 10 x86 and the 32-bit .NET Framework
-(`msil/test/README.md`):
+(`msil/test/README.md`). Since P-1b they also need the portable sysroot with `c.dll`
+(`build-libc.py`, above; lit's `--param msil_portable_sysroot=<dir>` names another one, and
+under `msil_require_portable=1` a missing sysroot is a configuration error):
 
 ```powershell
 python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-dotnet
+python D:/llvm-msil/msil/utils/build/build-libc.py
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_triple=msil64-unknown-dotnet --param msil_require_portable=1 --param msil_dotnet_runtime=10 --param msil_also_run=10+tc0 --param msil_run_netfx=1 --param msil_require_x86=1" msil/test/Portable
 ```
 

@@ -90,9 +90,12 @@
 #   portable-smoke  --portable: msil/test/Portable on msil64-unknown-dotnet under obj on .NET 10
 #                and, msil_also_run=10+tc0, .NET 10 with DOTNET_TieredCompilation=0,
 #                msil_require_portable=1, no native oracle (P-1a, plan 5.18.10 PX4; lit-legs.ps1's
-#                portable-smoke also runs the .NET Framework and the 32-bit starts). Setup, first:
-#                'build-builtins.py --build-dir BUILD_DIR --triple msil64-unknown-dotnet' (stamped);
-#                a failed setup fails the row ('setup failed: ...') and runs no lit
+#                portable-smoke also runs the .NET Framework and the 32-bit starts). Setup, first,
+#                in order (each stamped): 'build-builtins.py --build-dir BUILD_DIR --triple
+#                msil64-unknown-dotnet' (P-1a), then 'build-libc.py --build-dir BUILD_DIR' (P-1b,
+#                plan 5.19.3: llvm-libc, c.dll, the empty libm.a and the C headers in the portable
+#                sysroot); the first step that fails ends the setup and fails the row ('setup
+#                failed: <script>[ <arguments>] (exit <n>; <log>)'), and no lit runs
 # Removed in M23, and --leg <name> fails naming the leg that covers it: net10, net8-tc0 and
 # net10-tc0 (net8's msil_also_run entries), obj (net8; objects are the default pipeline).
 #
@@ -610,22 +613,32 @@ run_utc_leg() {
   return $((rc != 0))
 }
 
-# A leg's setup before its lit run (the portable legs: the portable helper archive, plan 5.18.8;
-# build-builtins.py keeps its own stamp), logged to <build>/lit-results/<leg>.setup.log; on a
-# failure it sets LEG_DETAIL and returns 1.
+# A leg's setup before its lit run (the portable legs: the portable helper archive, plan 5.18.8,
+# then llvm-libc and c.dll in the portable sysroot, plan 5.19.3; each script keeps its own stamp),
+# its steps logged one after the other to <build>/lit-results/<leg>.setup.log; the first step that
+# fails sets LEG_DETAIL and returns 1.
 run_leg_setup() {
-  local name=$1 log=$results/$1.setup.log rc=0
+  local name=$1 log=$results/$1.setup.log rc i what
+  local -a scripts=() args=() extra
   case $name in
-    portable-smoke) ;;
+    portable-smoke)
+      scripts=(build-builtins.py build-libc.py)
+      args=("--triple msil64-unknown-dotnet" "") ;;
     *) return 0 ;;
   esac
-  echo "[msil-ci] leg $name: setup: build-builtins.py --triple msil64-unknown-dotnet"
-  python3 "$MSIL_REPO/msil/utils/build/build-builtins.py" --build-dir "$build" \
-    --triple msil64-unknown-dotnet 2>&1 | tee "$log" || rc=$?
-  if ((rc != 0)); then
-    LEG_DETAIL="setup failed: build-builtins.py --triple msil64-unknown-dotnet (exit $rc; $log)"
-    return 1
-  fi
+  : > "$log"
+  for i in "${!scripts[@]}"; do
+    read -r -a extra <<< "${args[i]}"
+    what="${scripts[i]}${args[i]:+ ${args[i]}}"
+    rc=0
+    echo "[msil-ci] leg $name: setup: $what"
+    python3 "$MSIL_REPO/msil/utils/build/${scripts[i]}" --build-dir "$build" "${extra[@]}" 2>&1 |
+      tee -a "$log" || rc=$?
+    if ((rc != 0)); then
+      LEG_DETAIL="setup failed: $what (exit $rc; $log)"
+      return 1
+    fi
+  done
   return 0
 }
 

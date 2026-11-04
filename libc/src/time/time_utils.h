@@ -61,7 +61,7 @@ LIBC_INLINE ErrorOr<tm *> gmtime_internal(const time_t *timer, tm *result) {
     return cpp::unexpected(status.error());
   }
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__dotnet__)
   result->tm_gmtoff = 0;
   result->tm_zone = "GMT";
 #endif

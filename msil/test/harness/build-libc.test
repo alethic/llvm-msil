@@ -1,0 +1,201 @@
+# msil/utils/build/build-libc.py (plan 5.19.3, P-1b), the build of llvm-libc
+# for msil64-unknown-dotnet into the shared assembly c.dll and the portable
+# sysroot, run black-box without building anything:
+# (1) its offline self-test (stand-in cmake, ninja, llvm-ar and msil-ld in a
+#     temporary directory) exits 0 with its final line and reports its checks
+#     of the export list (generated from entrypoints.txt without errno, plus
+#     __llvm_libc_errno, sorted; a stale list refused before the configure),
+#     the configure variables of 5.19.3 (a full build of the triple, Release,
+#     -fvisibility=hidden), the c.dll link (--export-list, --exclude-libs=ALL,
+#     --assembly-version), the sysroot (an empty libm.a, no libc.a), the
+#     append-only check, the usage errors (--check-reproducible with --check,
+#     with --jobs and without a directory), --check, the build lock (Windows,
+#     the only system that has one) and --check-reproducible: an OUT that holds
+#     anything but the marker .build-libc-relink and the files the relink
+#     writes, one that holds a c.dll without the marker, and near-miss names
+#     beside the marker (c.dll.bak, C.DLL, a c.dll.tmp without seven lowercase
+#     hex digits) refused and left in place, an earlier run's c.dll replaced
+#     beside the marker, and refusals of <build>/lib/clang as written and
+#     through a junction (Windows) or a symbolic link (elsewhere) to it or to a
+#     directory holding the build, of a new directory below such a link to
+#     <build>/lib/clang and of an extended-length path of <build>/lib/clang or
+#     of a directory holding the build (Windows) (each leaving
+#     <build>/lib/clang alone), of an extended-length OUT whose name, or the
+#     name of a directory above it, ends in a dot or a space beside the sibling
+#     without it, which holds only the marker (Windows; both left in place), of
+#     an OUT that becomes such a link while the script waits for the build lock
+#     (checked again before emptying), of an OUT that is a mount point (as a
+#     file system root), of the place that a link moved <build>/lib/clang,
+#     <build>/other (which holds only c.dll) or <repository>/clang to and of a
+#     directory holding it (each leaving it alone), of an OUT that holds links
+#     to directories and of one that holds a file link named c.dll (ok or
+#     skipped where the host cannot make a file link; links and what they reach
+#     left), of the directory that a file link moved the helper archive,
+#     msil-ld, the installed c.dll or libc.a to (each named c.dll beside the
+#     marker there; ok or skipped where the host cannot make a file link; all
+#     but the helper archive refused before the build-lock wait and from the
+#     command line (main() without the self-test's stand-in context, its
+#     repository the stand-in one, msil-ld linked in as <build>/bin/msil-ld),
+#     the installed c.dll's also by path where there are no file IDs and, on
+#     Windows, through a UNC loopback path, ok or skipped where the drive's
+#     administrative share is not reachable) and of the directory of a helper
+#     archive that clang reports outside the build (each left in place), of a
+#     link to a directory named with a trailing dot that really holds the
+#     installed c.dll, a file link to it through a UNC loopback path (Windows;
+#     ok or skipped like the UNC case; left in place), and of a relink that is
+#     the installed c.dll itself; a mount point that appears in OUT after the
+#     last check stopping the run (exit 1) before anything below it goes;
+#     empty_dir removing links without touching what they reach; on Windows
+#     also a writer's refusal of a lock file that is a hard link to another
+#     file;
+# (2) a usage error exits 2 with a 'build-libc.py: error:' line and builds,
+#     checks and writes nothing: two modes at once (--check with
+#     --check-exports, --check with --write-exports), --jobs 0, --jobs with
+#     --check and with --self-test, --build-dir with --check-exports,
+#     --check-append-only with one file or with an OLD that cannot be read,
+#     an unknown option, and a build whose --build-dir has no bin/clang (an
+#     empty directory, and one that does not exist, which stays absent);
+# (3) --check against an empty build directory exits 1 (stale, not a usage
+#     error), names each missing sysroot file (c.dll and libm.a in
+#     lib/msil64-unknown-dotnet, include/stdio.h and the stamp c.dll.stamp
+#     under lib/clang-runtimes/msil64-unknown-dotnet), says how to build them
+#     and writes nothing; without --build-dir it checks $MSIL_BUILD_DIR.
+#     The failure path: a sysroot that holds c.dll, libm.a and stdio.h but no
+#     stamp still exits 1, naming the stamp (and the missing intermediate
+#     archive runtimes/msil64-unknown-dotnet/libc/lib/libc.a) but none of the
+#     sysroot files that are present, so the check reads the files it names
+#     instead of reporting a fixed list, and it leaves those files as they
+#     were;
+# (4) --check-reproducible OUT exits 2 with its refusal when OUT is a stand-in
+#     build's lib/clang (which holds a sentinel), a junction (Windows) or a
+#     symbolic link (elsewhere) to it, a new directory below that link, such a
+#     link to the stand-in build itself, the place that such a link moved the
+#     stand-in's libc tree (runtimes/msil64-unknown-dotnet) to, which holds a
+#     sentinel of its own, or a directory outside both that holds a stray file
+#     (both refused as holding a name the relink does not write) or only a
+#     c.dll without the marker, before it takes the build lock or touches OUT:
+#     the sentinels, the stray file and that c.dll stay, no lib/clang/new and
+#     no .msil-build.lock appear. The script runs as a copy in %t/repo, so its
+#     repository is %t/repo and not this checkout (which holds %t), and
+#     --build-dir names the stand-in, whose bin/ holds empty tool files, so a
+#     link that slipped through would get past the tool check and fail later
+#     (exit 1) instead of matching the refusal; nothing reads or writes the
+#     real build directory. The missing installed c.dll and libc.a (and then
+#     the empty tool files) stop an OUT that slipped through before it is
+#     emptied, so the sentinel, stray-file, c.dll and lib/clang/new checks are
+#     guards only: the exit status, the refusal text, the lacks check and (on
+#     Windows, which has the lock) the absent lock file are what fail when the
+#     refusal is missing, and the self-test lines of (1) check that a refused
+#     OUT is left alone.
+# libc-exports.test checks --check-append-only and --check-exports.
+
+# DEFINE: %{bl} = "%python" "%S/../../utils/build/build-libc.py"
+# DEFINE: %{bl_sysroot} = \S*build-libc\.test\.tmp\Wempty\Wlib\Wclang-runtimes\Wmsil64-unknown-dotnet\W
+# DEFINE: %{bl_libdir} = %{bl_sysroot}lib\Wmsil64-unknown-dotnet\W
+# DEFINE: %{bl_end} = (?=,|\s|$)
+# DEFINE: %{bl_copy} = "%python" "%t/repo/msil/utils/build/build-libc.py"
+# DEFINE: %{bl_refused} = ^build-libc\.py: error: --check-reproducible \S*build-libc\.test\.tmp\W
+
+# RUN: rm -rf %t && mkdir -p %t/empty
+
+# (1)
+# RUN: %{bl} --self-test > %t/self-test.log 2>&1
+# RUN: %{harness_check} contains %t/self-test.log "^build-libc\.py --self-test: all checks passed$" "^ok: the export list holds the block's C names without errno, plus __llvm_libc_errno, sorted$" "^ok: a build refuses a stale export list before it configures$" "^ok: the refused build ran no tool$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: the configure passes -DLLVM_LIBC_FULL_BUILD=ON$" "^ok: the configure passes -DLIBC_TARGET_TRIPLE=msil64-unknown-dotnet$" "^ok: the configure passes -DCMAKE_BUILD_TYPE=Release$" "^ok: the configure passes -DCMAKE_C_FLAGS=-fvisibility=hidden$" "^ok: the configure passes -DCMAKE_CXX_FLAGS=-fvisibility=hidden$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: msil-ld links c\.dll with the export list, --exclude-libs=ALL and the version$" "^ok: libm\.a is the bare archive header \(no members\)$" "^ok: libc\.a is not installed$" "^ok: the stamp records 'assembly-version 1\.0\.0\.0'$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: --check-append-only: appending passes$" "^ok: --check-append-only: deleting a line fails$" "^ok: --check-append-only: reordering fails$" "^ok: --check against an empty directory exits 1, naming the missing files$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: a usage error exits 2: --check-reproducible with --check$" "^ok: a usage error exits 2: --check-reproducible with --jobs$" "^ok: a usage error exits 2: --check-reproducible without a directory$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: --check-reproducible refuses an OUT that holds anything but the files the relink writes \(exit 2\)$" "^ok: a refused --check-reproducible leaves everything in OUT in place$" "^ok: --check-reproducible refuses an OUT that holds a c\.dll but not the marker \(exit 2\)$" "^ok: a refused --check-reproducible leaves a c\.dll without the marker in place$" "^ok: --check-reproducible refuses names the relink does not write, such as c\.dll\.bak, C\.DLL or c\.dll\.tmp without seven lowercase hex digits, and leaves them \(exit 2\)$" "^ok: --check-reproducible replaces an earlier run's c\.dll in OUT and leaves only c\.dll and a new marker$" "^ok: --check-reproducible refuses to empty a build-tree directory such as <build>/lib/clang \(exit 2\)$" "^ok: a refused --check-reproducible leaves <build>/lib/clang alone$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: an OUT that becomes a link to <build>/lib/clang while --check-reproducible waits for the build lock is refused \(exit 2\)$" "^ok: a refused --check-reproducible through a link made during the lock wait leaves <build>/lib/clang alone$" "^ok: --check-reproducible stops at a mount point that appears in OUT after its last check \(exit 1\)$" "^ok: a stopped --check-reproducible keeps what is below the mount point$" "^ok: --check-reproducible refuses an OUT that is a mount point as a file system root \(exit 2\)$" "^ok: a refused mount-point OUT keeps what is in it$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: --check-reproducible refuses the place a link moved <build>/lib/clang to \(exit 2\)$" "^ok: --check-reproducible refuses a directory holding the place a link moved <build>/lib/clang to \(exit 2\)$" "^ok: a refused --check-reproducible of the place a link moved <build>/lib/clang to leaves it alone$" "^ok: --check-reproducible refuses the place a link moved <build>/other to \(exit 2\)$" "^ok: --check-reproducible refuses a directory holding the place a link moved <build>/other to \(exit 2\)$" "^ok: a refused --check-reproducible of the place a link moved <build>/other to leaves it alone$" "^ok: --check-reproducible refuses the place a link moved <repository>/clang to \(exit 2\)$" "^ok: --check-reproducible refuses a directory holding the place a link moved <repository>/clang to \(exit 2\)$" "^ok: a refused --check-reproducible of the place a link moved <repository>/clang to leaves it alone$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: --check-reproducible refuses an OUT that holds links to directories \(exit 2\)$" "^(ok: --check-reproducible refuses an OUT that holds a file link named c\.dll \(exit 2\)$|skip: --check-reproducible of an OUT that holds a file link named c\.dll \(no file link: )" "^ok: a refused --check-reproducible leaves the links in OUT and what they reach$" "^ok: empty_dir removes the links in a directory but nothing they reach$" "^ok: --check-reproducible refuses the directory of a helper archive outside the build \(exit 2\)$" "^ok: a refused --check-reproducible leaves a helper archive outside the build in place$" "^ok: --check-reproducible refuses a relinked c\.dll that is the installed one \(exit 2\)$"
+# RUN: %{harness_check} contains %t/self-test.log "^(ok: --check-reproducible refuses the directory a file link moved the helper archive to \(exit 2\)$|skip: --check-reproducible of the directory a file link moved the helper archive to \(no file link: )" "^(ok: a refused --check-reproducible leaves the helper archive and its file link in place$|skip: --check-reproducible of the directory a file link moved the helper archive to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved msil-ld to \(exit 2\)$|skip: --check-reproducible of the directory a file link moved msil-ld to \(no file link: )" "^(ok: a refused --check-reproducible leaves msil-ld and its file link in place$|skip: --check-reproducible of the directory a file link moved msil-ld to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved the installed c\.dll to \(exit 2\)$|skip: --check-reproducible of the directory a file link moved the installed c\.dll to \(no file link: )" "^(ok: a refused --check-reproducible leaves the installed c\.dll and its file link in place$|skip: --check-reproducible of the directory a file link moved the installed c\.dll to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved libc\.a to \(exit 2\)$|skip: --check-reproducible of the directory a file link moved libc\.a to \(no file link: )" "^(ok: a refused --check-reproducible leaves libc\.a and its file link in place$|skip: --check-reproducible of the directory a file link moved libc\.a to \(no file link: )"
+# RUN: %{harness_check} contains %t/self-test.log "^(ok: --check-reproducible refuses the directory a file link moved msil-ld to before the build-lock wait$|skip: --check-reproducible of the directory a file link moved msil-ld to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved the installed c\.dll to before the build-lock wait$|skip: --check-reproducible of the directory a file link moved the installed c\.dll to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved libc\.a to before the build-lock wait$|skip: --check-reproducible of the directory a file link moved libc\.a to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved the installed c\.dll to by path where there are no file IDs \(exit 2\)$|skip: --check-reproducible of the directory a file link moved the installed c\.dll to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved the installed c\.dll to from the command line, before it looks for the build's tools \(exit 2\)$|skip: --check-reproducible of the directory a file link moved the installed c\.dll to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved msil-ld to from the command line, before it looks for the build's tools \(exit 2\)$|skip: --check-reproducible of the directory a file link moved msil-ld to \(no file link: )" "^(ok: --check-reproducible refuses the directory a file link moved libc\.a to from the command line, before it looks for the build's tools \(exit 2\)$|skip: --check-reproducible of the directory a file link moved libc\.a to \(no file link: )"
+# RUN: %if system-windows %{ %{harness_check} contains %t/self-test.log "^ok: --check-reproducible refuses a junction to <build>/lib/clang \(exit 2\)$" "^ok: a refused --check-reproducible through a junction to <build>/lib/clang leaves <build>/lib/clang alone$" "^ok: --check-reproducible refuses a new directory below a junction to <build>/lib/clang \(exit 2\)$" "^ok: a refused --check-reproducible through a new directory below a junction to <build>/lib/clang leaves <build>/lib/clang alone$" "^ok: --check-reproducible refuses a junction to a directory holding the build \(exit 2\)$" "^ok: a refused --check-reproducible through a junction to a directory holding the build leaves <build>/lib/clang alone$" "^ok: --check-reproducible refuses an extended-length path of <build>/lib/clang \(exit 2\)$" "^ok: a refused --check-reproducible through an extended-length path of <build>/lib/clang leaves <build>/lib/clang alone$" "^ok: --check-reproducible refuses an extended-length path of a directory holding the build \(exit 2\)$" "^ok: a refused --check-reproducible through an extended-length path of a directory holding the build leaves <build>/lib/clang alone$" "^ok: --check-reproducible refuses an extended-length OUT whose name ends in a dot \(exit 2\)$" "^ok: a refused --check-reproducible of an OUT whose name ends in a dot leaves it and its sibling without the dot alone$" "^ok: --check-reproducible refuses an extended-length OUT below a directory whose name ends in a dot \(exit 2\)$" "^ok: a refused --check-reproducible of an OUT below a directory whose name ends in a dot leaves it and its sibling without the dot alone$" "^ok: --check-reproducible refuses an extended-length OUT whose name ends in a space \(exit 2\)$" "^ok: a refused --check-reproducible of an OUT whose name ends in a space leaves it and its sibling without the space alone$" "^ok: --check-reproducible refuses an extended-length OUT below a directory whose name ends in a space \(exit 2\)$" "^ok: a refused --check-reproducible of an OUT below a directory whose name ends in a space leaves it and its sibling without the space alone$" "^ok: a build waits for the exclusive build lock while a reader holds it$" "^ok: a writer refuses a lock file that is a hard link and leaves the other file alone$" "^(ok: --check-reproducible refuses a UNC loopback path of the directory a file link moved the installed c\.dll to \(exit 2\)$|skip: --check-reproducible of a UNC loopback path of an input's directory |skip: --check-reproducible of the directory a file link moved the installed c\.dll to \(no file link: )" "^(ok: --check-reproducible refuses a link to a directory named with a trailing dot that really holds the installed c\.dll, a file link to it through a UNC loopback path \(exit 2\)$|skip: --check-reproducible of a link to a directory named with a trailing dot that holds the installed c\.dll \()" "^(ok: a refused --check-reproducible leaves the installed c\.dll in a directory named with a trailing dot in place$|skip: --check-reproducible of a link to a directory named with a trailing dot that holds the installed c\.dll \()" %} %else %{ %{harness_check} contains %t/self-test.log "^ok: --check-reproducible refuses a symbolic link to <build>/lib/clang \(exit 2\)$" "^ok: a refused --check-reproducible through a symbolic link to <build>/lib/clang leaves <build>/lib/clang alone$" "^ok: --check-reproducible refuses a new directory below a symbolic link to <build>/lib/clang \(exit 2\)$" "^ok: a refused --check-reproducible through a new directory below a symbolic link to <build>/lib/clang leaves <build>/lib/clang alone$" "^ok: --check-reproducible refuses a symbolic link to a directory holding the build \(exit 2\)$" "^ok: a refused --check-reproducible through a symbolic link to a directory holding the build leaves <build>/lib/clang alone$" %}
+
+# (2)
+# RUN: %{harness_check} exits 2 %{bl} --check --check-exports > %t/usage-1.log 2>&1
+# RUN: %{harness_check} contains %t/usage-1.log "^build-libc\.py: error: .*--check\b.*--check-exports\b"
+# RUN: %{harness_check} exits 2 %{bl} --check --write-exports > %t/usage-2.log 2>&1
+# RUN: %{harness_check} contains %t/usage-2.log "^build-libc\.py: error: .*--check\b.*--write-exports\b"
+# RUN: %{harness_check} exits 2 %{bl} --build-dir %t/empty --jobs 0 > %t/usage-3.log 2>&1
+# RUN: %{harness_check} contains %t/usage-3.log "^build-libc\.py: error: .*--jobs\b"
+# RUN: %{harness_check} exits 2 %{bl} --check --build-dir %t/empty --jobs 2 > %t/usage-4.log 2>&1
+# RUN: %{harness_check} contains %t/usage-4.log "^build-libc\.py: error: .*--jobs\b"
+# RUN: %{harness_check} exits 2 %{bl} --self-test --jobs 2 > %t/usage-5.log 2>&1
+# RUN: %{harness_check} contains %t/usage-5.log "^build-libc\.py: error: "
+# RUN: %{harness_check} exits 2 %{bl} --check-exports --build-dir %t/empty > %t/usage-6.log 2>&1
+# RUN: %{harness_check} contains %t/usage-6.log "^build-libc\.py: error: .*--build-dir\b"
+# RUN: %{harness_check} write %t/one.exports "strlen"
+# RUN: %{harness_check} exits 2 %{bl} --check-append-only %t/one.exports > %t/usage-7.log 2>&1
+# RUN: %{harness_check} contains %t/usage-7.log "^build-libc\.py: error: .*--check-append-only\b"
+# RUN: %{harness_check} exits 2 %{bl} --check-append-only %t/no-such.exports %t/one.exports > %t/usage-8.log 2>&1
+# RUN: %{harness_check} contains %t/usage-8.log "^build-libc\.py: error: .*no-such\.exports"
+# RUN: %{harness_check} exits 2 %{bl} --check --frobnicate > %t/usage-9.log 2>&1
+# RUN: %{harness_check} contains %t/usage-9.log "^build-libc\.py: error: .*--frobnicate\b"
+# RUN: %{harness_check} exits 2 %{bl} --build-dir %t/empty > %t/usage-10.log 2>&1
+# RUN: %{harness_check} contains %t/usage-10.log "^build-libc\.py: error: \S*build-libc\.test\.tmp\Wempty\Wbin\Wclang(\.exe)? does not exist\b"
+# RUN: %{harness_check} exits 2 %{bl} --build-dir %t/nobuild --jobs 2 > %t/usage-11.log 2>&1
+# RUN: %{harness_check} contains %t/usage-11.log "^build-libc\.py: error: \S*build-libc\.test\.tmp\Wnobuild\Wbin\Wclang(\.exe)? does not exist\b"
+# RUN: cat %t/usage-1.log %t/usage-2.log %t/usage-3.log %t/usage-4.log %t/usage-5.log %t/usage-6.log %t/usage-7.log %t/usage-8.log %t/usage-9.log %t/usage-10.log %t/usage-11.log > %t/usage.log
+# RUN: %{harness_check} lacks %t/usage.log "^ok: " "missing: " "matches " "keeps the \d+ names"
+# RUN: %{harness_check} equals %t/one.exports "strlen"
+# RUN: %{harness_check} missing %t/nobuild
+# RUN: %{harness_check} missing %t/empty/runtimes
+# RUN: %{harness_check} missing %t/empty/lib
+
+# (3)
+# RUN: %{harness_check} exits 1 %{bl} --check --build-dir %t/empty > %t/check.log 2>&1
+# RUN: %{harness_check} contains %t/check.log "missing: .*%{bl_libdir}c\.dll%{bl_end}" "missing: .*%{bl_libdir}libm\.a%{bl_end}" "missing: .*%{bl_sysroot}include\Wstdio\.h%{bl_end}" "missing: .*%{bl_libdir}c\.dll\.stamp%{bl_end}"
+# RUN: %{harness_check} contains %t/check.log "\(build them with build-libc\.py\)$"
+# RUN: %{harness_check} lacks %t/check.log "^ok: " "does not exist \(--build-dir"
+# RUN: %{harness_check} missing %t/empty/runtimes
+# RUN: %{harness_check} missing %t/empty/lib
+# RUN: env MSIL_BUILD_DIR=%t/empty %{harness_check} exits 1 %{bl} --check > %t/check-env.log 2>&1
+# RUN: %{harness_check} contains %t/check-env.log "missing: .*%{bl_libdir}c\.dll%{bl_end}" "missing: .*%{bl_libdir}c\.dll\.stamp%{bl_end}"
+# The failure path: everything but the stamp.
+# RUN: mkdir -p %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/include %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet
+# RUN: %{harness_check} write %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/include/stdio.h "int puts(const char *);"
+# RUN: %{harness_check} write %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet/c.dll "not an assembly"
+# RUN: %{harness_check} write %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet/libm.a "!<arch>"
+# RUN: %{harness_check} exits 1 %{bl} --check --build-dir %t/empty > %t/check-stamp.log 2>&1
+# RUN: %{harness_check} contains %t/check-stamp.log "missing: .*%{bl_libdir}c\.dll\.stamp%{bl_end}"
+# RUN: %{harness_check} lacks %t/check-stamp.log "%{bl_libdir}c\.dll(,|\s|$)" "%{bl_libdir}libm\.a%{bl_end}" "%{bl_sysroot}include\Wstdio\.h%{bl_end}"
+# RUN: %{harness_check} equals %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet/c.dll "not an assembly"
+# RUN: %{harness_check} equals %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet/libm.a "!<arch>"
+# RUN: %{harness_check} missing %t/empty/lib/clang-runtimes/msil64-unknown-dotnet/lib/msil64-unknown-dotnet/c.dll.stamp
+# RUN: %{harness_check} missing %t/empty/runtimes
+
+# (4)
+# RUN: mkdir -p %t/repo/msil/utils/build %t/standin/bin %t/standin/lib/clang %t/standin/runtimes %t/outside %t/moved/rt %t/stray %t/conly
+# RUN: cat %S/../../utils/build/build-libc.py > %t/repo/msil/utils/build/build-libc.py
+# RUN: %python -c "import os, sys; [open(os.path.join(sys.argv[1], t + e), 'w').close() for t in ('clang', 'clang++', 'llvm-ar', 'llvm-ranlib', 'msil-ld') for e in ('', '.exe')]" %t/standin/bin
+# RUN: %{harness_check} write %t/standin/lib/clang/sentinel.txt "keep"
+# RUN: %{harness_check} write %t/moved/rt/sentinel.txt "keep"
+# RUN: %{harness_check} write %t/stray/notes.txt "keep"
+# RUN: %{harness_check} write %t/conly/c.dll "keep"
+# RUN: %if system-windows %{ %python -c "import _winapi, sys; _winapi.CreateJunction(sys.argv[1], sys.argv[2]); _winapi.CreateJunction(sys.argv[3], sys.argv[4])" %t/standin/lib/clang %t/outside/clang %t/standin %t/outside/build %} %else %{ ln -s %t/standin/lib/clang %t/outside/clang %}
+# RUN: %if !system-windows %{ ln -s %t/standin %t/outside/build %}
+# RUN: %if system-windows %{ %python -c "import _winapi, sys; _winapi.CreateJunction(sys.argv[1], sys.argv[2])" %t/moved/rt %t/standin/runtimes/msil64-unknown-dotnet %} %else %{ ln -s %t/moved/rt %t/standin/runtimes/msil64-unknown-dotnet %}
+# RUN: %{harness_check} exits 2 %{bl_copy} --build-dir %t/standin --check-reproducible %t/standin/lib/clang > %t/repro-1.log 2>&1
+# RUN: %{harness_check} contains %t/repro-1.log "%{bl_refused}standin\Wlib\Wclang: the directory to empty lies in the repository or the build directory$"
+# RUN: %{harness_check} exits 2 %{bl_copy} --build-dir %t/standin --check-reproducible %t/outside/clang > %t/repro-2.log 2>&1
+# RUN: %{harness_check} contains %t/repro-2.log "%{bl_refused}outside\Wclang: the directory to empty lies in the repository or the build directory$"
+# RUN: %{harness_check} exits 2 %{bl_copy} --build-dir %t/standin --check-reproducible %t/outside/clang/new > %t/repro-3.log 2>&1
+# RUN: %{harness_check} contains %t/repro-3.log "%{bl_refused}outside\Wclang\Wnew: the directory to empty lies in the repository or the build directory$"
+# RUN: %{harness_check} exits 2 %{bl_copy} --build-dir %t/standin --check-reproducible %t/outside/build > %t/repro-4.log 2>&1
+# RUN: %{harness_check} contains %t/repro-4.log "%{bl_refused}outside\Wbuild: the directory to empty is or holds the repository or the build directory$"
+# RUN: %{harness_check} exits 2 %{bl_copy} --build-dir %t/standin --check-reproducible %t/moved/rt > %t/repro-5.log 2>&1
+# RUN: %{harness_check} contains %t/repro-5.log "%{bl_refused}moved\Wrt: the directory to empty holds sentinel\.txt, which is not a file the relink writes; give an empty or new directory$"
+# RUN: %{harness_check} exits 2 %{bl_copy} --build-dir %t/standin --check-reproducible %t/stray > %t/repro-6.log 2>&1
+# RUN: %{harness_check} contains %t/repro-6.log "%{bl_refused}stray: the directory to empty holds notes\.txt, which is not a file the relink writes; give an empty or new directory$"
+# RUN: %{harness_check} exits 2 %{bl_copy} --build-dir %t/standin --check-reproducible %t/conly > %t/repro-7.log 2>&1
+# RUN: %{harness_check} contains %t/repro-7.log "%{bl_refused}conly: the directory to empty holds c\.dll but not \.build-libc-relink, so no relink wrote it; remove it or give an empty or new directory$"
+# RUN: cat %t/repro-1.log %t/repro-2.log %t/repro-3.log %t/repro-4.log %t/repro-5.log %t/repro-6.log %t/repro-7.log > %t/repro.log
+# RUN: %{harness_check} lacks %t/repro.log "does not exist" "missing: " "running: " "reproducible: "
+# RUN: %{harness_check} equals %t/standin/lib/clang/sentinel.txt "keep"
+# RUN: %{harness_check} equals %t/moved/rt/sentinel.txt "keep"
+# RUN: %{harness_check} equals %t/stray/notes.txt "keep"
+# RUN: %{harness_check} equals %t/conly/c.dll "keep"
+# RUN: %{harness_check} missing %t/standin/lib/clang/new
+# RUN: %{harness_check} missing %t/standin/.msil-build.lock

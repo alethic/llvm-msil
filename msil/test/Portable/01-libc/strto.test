@@ -1,0 +1,129 @@
+# String to number conversions from c.dll: strtod with its end pointer (decimal, hexadecimal, infinity, NaN, no digits), strtof, strtold, strtol and strtoll in bases 0, 10, 16 and 36, strtoul and strtoull with negation and overflow, strtoimax and strtoumax, atoi, atol, atoll, and errno: ERANGE on overflow, untouched by a successful conversion.
+# Plan 5.19.4 (the stdlib and inttypes conversions ship at P-1b), 5.19.5
+# (errno is c.dll's one cell, read by the program through
+# (*__llvm_libc_errno())), recon portable-libc 4.3 (P-0's run/prog.c checks,
+# re-run on msil64). The expected values follow C17 7.22.1.3 and 7.22.1.4:
+# an out-of-range value gives HUGE_VAL, LONG_MAX, LONG_MIN or ULLONG_MAX and
+# ERANGE; strtoul and strtoull negate in the return type; with no conversion
+# the end pointer is the subject string; a successful conversion never sets
+# errno (7.5p3: no library function sets it to zero, and none of these sets
+# it on success). Decimal constants (25.0, 0.1, 0.1f, -3.0) are correctly
+# rounded by both the compiler and the library (C17 7.22.1.3p9, IEC 60559).
+# Every input string passes through opaque(), so no call is folded at -O2.
+# Each failed group sets one bit of the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static const char *opaque(const char *s) {
+  const char *volatile v = s;
+  return v;
+}
+
+int main(void) {
+  char *end;
+  const char *s;
+
+  /* 0: strtod with its end pointer (P-0's case), leading white space, and a
+     subject sequence with no digits. */
+  errno = 0;
+  s = opaque("2.5e1xyz");
+  CHECK(0, strtod(s, &end) == 25.0 && end == s + 5 && *end == 'x');
+  s = opaque("  \t-0.1");
+  CHECK(0, strtod(s, &end) == -0.1 && end == s + 7);
+  s = opaque("  +.e5");
+  CHECK(0, strtod(s, &end) == 0.0 && end == s);
+  CHECK(0, errno == 0);
+
+  /* 1: hexadecimal floating constants, infinity and NaN (C17 7.22.1.3p3). */
+  s = opaque("0x1.8p1z");
+  CHECK(1, strtod(s, &end) == 3.0 && end == s + 7);
+  s = opaque("-0X10");
+  CHECK(1, strtod(s, &end) == -16.0 && end == s + 5);
+  s = opaque("-INFINITY!");
+  double d = strtod(s, &end);
+  CHECK(1, isinf(d) && d < 0 && end == s + 9);
+  s = opaque("inf");
+  CHECK(1, strtod(s, &end) == HUGE_VAL && end == s + 3);
+  s = opaque("nan(123)x");
+  d = strtod(s, &end);
+  CHECK(1, isnan(d) && end == s + 8);
+
+  /* 2: overflow gives +-HUGE_VAL and ERANGE; a later valid conversion leaves
+     errno as it was. */
+  errno = 0;
+  CHECK(2, strtod(opaque("1e999"), 0) == HUGE_VAL && errno == ERANGE);
+  errno = 0;
+  CHECK(2, strtod(opaque("-1e999"), 0) == -HUGE_VAL && errno == ERANGE);
+  CHECK(2, strtod(opaque("1.5"), 0) == 1.5 && errno == ERANGE);
+  errno = 0;
+  CHECK(2, strtof(opaque("1e39"), 0) == HUGE_VALF && errno == ERANGE);
+
+  /* 3: strtol in bases 0, 10, 16 and 36 (P-0's strtol("-0x1F", 0, 16)). */
+  errno = 0;
+  CHECK(3, strtol(opaque("-0x1F"), 0, 16) == -31);
+  s = opaque("0x1Fg");
+  CHECK(3, strtol(s, &end, 0) == 31 && end == s + 4);
+  CHECK(3, strtol(opaque("0777"), 0, 0) == 511);
+  CHECK(3, strtol(opaque("  -42"), 0, 10) == -42);
+  CHECK(3, strtol(opaque("zz"), 0, 36) == 35 * 36 + 35);
+  s = opaque(" +");
+  CHECK(3, strtol(s, &end, 10) == 0 && end == s);
+  CHECK(3, errno == 0);
+
+  /* 4: strtol and strtoll out of range: LONG_MAX or LONG_MIN and ERANGE, the
+     end pointer after every digit. */
+  errno = 0;
+  s = opaque("9223372036854775808x");
+  CHECK(4, strtol(s, &end, 10) == LONG_MAX && errno == ERANGE && end == s + 19);
+  errno = 0;
+  CHECK(4, strtol(opaque("-9223372036854775809"), 0, 10) == LONG_MIN && errno == ERANGE);
+  errno = 0;
+  CHECK(4, strtoll(opaque("-9223372036854775808"), 0, 10) == LLONG_MIN && errno == 0);
+  CHECK(4, strtoll(opaque("0x7fffffffffffffff"), 0, 16) == LLONG_MAX && errno == 0);
+
+  /* 5: strtoul and strtoull: the full range, and negation in the return
+     type (C17 7.22.1.4p5). */
+  errno = 0;
+  CHECK(5, strtoull(opaque("18446744073709551615"), 0, 10) == ULLONG_MAX);
+  CHECK(5, strtoull(opaque("-1"), 0, 10) == ULLONG_MAX);
+  CHECK(5, strtoul(opaque("-2"), 0, 0) == ULONG_MAX - 1);
+  CHECK(5, strtoul(opaque("0xffffffffffffffff"), 0, 0) == ULONG_MAX);
+  CHECK(5, errno == 0);
+
+  /* 6: strtoull and strtoul overflow: ULLONG_MAX and ERANGE. */
+  errno = 0;
+  CHECK(6, strtoull(opaque("18446744073709551616"), 0, 10) == ULLONG_MAX && errno == ERANGE);
+  errno = 0;
+  CHECK(6, strtoul(opaque("-18446744073709551616"), 0, 10) == ULONG_MAX && errno == ERANGE);
+
+  /* 7: strtof, strtold (long double is binary64), strtoimax, strtoumax and
+     the ato* functions. */
+  errno = 0;
+  CHECK(7, strtof(opaque("0.1"), 0) == 0.1f);
+  CHECK(7, strtold(opaque("0.1"), 0) == 0.1L && sizeof(long double) == 8);
+  CHECK(7, strtoimax(opaque("-9223372036854775808"), 0, 10) == INTMAX_MIN);
+  CHECK(7, strtoumax(opaque("0b101"), 0, 16) == 0xb101u);
+  CHECK(7, atoi(opaque("  42abc")) == 42 && atol(opaque("-7")) == -7L);
+  CHECK(7, atoll(opaque("123456789012")) == 123456789012LL);
+  CHECK(7, errno == 0);
+  return (int)fails;
+}

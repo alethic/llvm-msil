@@ -1,0 +1,46 @@
+# -lm links against the sysroot's empty libm.a, and the math still comes from c.dll: a program linked with -lm calls cbrt, hypot, fmod and lround, and its image references the assembly c for them; the installed libm.a is an archive with no members.
+# Plan 5.18.4 PV3 (no -lm by default: the math library is in c.dll; from
+# P-1b the sysroot ships an empty libm.a so that build systems passing -lm
+# link, brief Q14 (a), wasi-libc's convention), 5.18.6 PL2 (an archive with no
+# members is no native library: it defines nothing and links as an empty
+# static library), 5.19.3 (build-libc.py installs libm.a beside c.dll).
+# %{msil_libs} adds -lm to every level's link. The values are exact (C17
+# 7.12: cbrt(27) = 3, hypot(3, 4) = 5, fmod(7.5, 2) = 1.5, lround(-2.5) = -3,
+# rounding halfway cases away from zero). Each failed group sets one bit of
+# the exit status. The listing check reads the -O2 image: an assembly
+# reference to c and calls into c's export class, and no reference to an
+# assembly named after libm.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %msil_ar t %{libc_libdir}/libm.a | count 0
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_libs} = -lm
+# RUN: %{msil_prog}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump --order=decl %t.O2.d/prog.exe > %t.prog.txt %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=IMG --input-file %t.prog.txt --implicit-check-not="assemblyref 'm" --implicit-check-not=libm %}
+# IMG:     {{^}}assemblyref 'c' ver 1.0.0.0 {{.*}}
+# IMG:     {{^}}assemblyref 'mscorlib' ver 4.0.0.0 {{.*}}
+# IMG-DAG: {{^}}    L{{[0-9]+}}: call float64(float64) [c]c::'cbrt'{{$}}
+# IMG-DAG: {{^}}    L{{[0-9]+}}: call float64(float64, float64) [c]c::'hypot'{{$}}
+#--- main.c
+#include <math.h>
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static volatile double v27 = 27.0, v3 = 3.0, v4 = 4.0, v75 = 7.5, v2 = 2.0, vm25 = -2.5;
+
+int main(void) {
+  CHECK(0, cbrt(v27) == 3.0);
+  CHECK(1, hypot(v3, v4) == 5.0);
+  CHECK(2, fmod(v75, v2) == 1.5);
+  CHECK(3, lround(vm25) == -3L);
+  return (int)fails;
+}

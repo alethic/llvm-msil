@@ -6,7 +6,10 @@
 //   <normalized triple> (BareMetal's convention). Headers come in
 //   WebAssembly's order: the resource directory's include, then
 //   <sysroot>/include/<triple>, then <sysroot>/include; -nostdinc,
-//   -nobuiltininc and -nostdlibinc are honoured.
+//   -nobuiltininc and -nostdlibinc are honoured. Every cc1 job carries
+//   -nostdsysteminc, as on BareMetal: without it the frontend would add
+//   /usr/local/include and /usr/include for OS dotnet, the host's C headers
+//   on a Linux host (section 12, P-1a, 5.18.4 PV1-PV3 as built).
 // - The link runs msil-ld with -L<sysroot>/lib/<triple> only, then the
 //   default libraries: -lc, then the helper archive
 //   <resource>/lib/<triple>/libclang_rt.builtins.a when it exists (5.18.8;
@@ -31,8 +34,9 @@
 //   plans the jobs of msil64-unknown-dotnet.
 // - A C++ source compiles as C++ and links with msil-ld like C (the
 //   freestanding C++ of the P-1a exit criterion).
-// - PV5: -fshort-wchar, -mlong-double-80, -mcpu= other than generic and
-//   -march= are errors.
+// - PV5: -fshort-wchar, -mlong-double-*, -mcpu= other than generic and
+//   -march= are clang's generic "unsupported option '<option>' for target
+//   '<triple>'" error, with no MSIL-specific text (section 12, P-1a).
 // msil-ld is matched as '"<dir>msil-ld[.exe]"': no msil-ld binary or sysroot
 // is needed. The link checks pass -resource-dir=%t/res (with the msil64
 // archive) or %t/empty-res (without one), so they do not depend on whether
@@ -53,6 +57,7 @@
 // RUN: %clang -### --target=msil64-unknown-dotnet-msil -resource-dir=%t/res %s 2>&1 \
 // RUN:   | FileCheck --check-prefixes=CC1,LINK %{nojunk} %s
 // CC1:       "-cc1" "-triple" "msil64-unknown-dotnet"
+// CC1-SAME:  "-nostdsysteminc"
 // LINK:      "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=msil64-unknown-dotnet"
 // LINK-SAME: "-L{{[^"]*}}{{/|\\\\}}clang-runtimes{{/|\\\\}}msil64-unknown-dotnet{{/|\\\\}}lib{{/|\\\\}}msil64-unknown-dotnet"
 // LINK-SAME: "{{[^"]*}}.o"
@@ -103,15 +108,18 @@
 // STATIC-NOT: unsupported option '-static'
 
 // The include order.
+// DEFINE: %{nousr} = --implicit-check-not=/usr/include --implicit-check-not=/usr/local/include
 // RUN: %clang -### --target=msil64-unknown-dotnet -resource-dir=%t/res --sysroot=%t/dotnet-sysroot -E %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=INC --implicit-check-not=error: %s
+// RUN:   | FileCheck --check-prefix=INC --implicit-check-not=error: %{nousr} %s
 // INC:      "-cc1" "-triple" "msil64-unknown-dotnet"
+// INC-SAME: "-nostdsysteminc"
 // INC-SAME: "-internal-isystem" "{{[^"]*}}res{{/|\\\\}}include"
 // INC-SAME: "-internal-{{(externc-)?}}isystem" "{{[^"]*}}dotnet-sysroot{{/|\\\\}}include{{/|\\\\}}msil64-unknown-dotnet"
 // INC-SAME: "-internal-{{(externc-)?}}isystem" "{{[^"]*}}dotnet-sysroot{{/|\\\\}}include"
 // RUN: %clang -### --target=msil64-unknown-dotnet -resource-dir=%t/res -E %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=INC-DEFAULT --implicit-check-not=error: %s
+// RUN:   | FileCheck --check-prefix=INC-DEFAULT --implicit-check-not=error: %{nousr} %s
 // INC-DEFAULT:      "-cc1" "-triple" "msil64-unknown-dotnet"
+// INC-DEFAULT-SAME: "-nostdsysteminc"
 // INC-DEFAULT-SAME: "-internal-isystem" "{{[^"]*}}res{{/|\\\\}}include"
 // INC-DEFAULT-SAME: "-internal-{{(externc-)?}}isystem" "{{[^"]*}}clang-runtimes{{/|\\\\}}msil64-unknown-dotnet{{/|\\\\}}include{{/|\\\\}}msil64-unknown-dotnet"
 // INC-DEFAULT-SAME: "-internal-{{(externc-)?}}isystem" "{{[^"]*}}clang-runtimes{{/|\\\\}}msil64-unknown-dotnet{{/|\\\\}}include"
@@ -156,6 +164,7 @@
 // RUN:   | FileCheck --check-prefix=MSIL32 %{nojunk} %s
 // RUN: %clang --target=msil32-dotnet -print-target-triple 2>&1 | FileCheck --check-prefix=TRIPLE32 %s
 // MSIL32:      "-cc1" "-triple" "msil32-unknown-dotnet"
+// MSIL32-SAME: "-nostdsysteminc"
 // MSIL32:      "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=msil32-unknown-dotnet"
 // MSIL32-SAME: "-L{{[^"]*}}{{/|\\\\}}clang-runtimes{{/|\\\\}}msil32-unknown-dotnet{{/|\\\\}}lib{{/|\\\\}}msil32-unknown-dotnet"
 // MSIL32-SAME: "-lc" "-o" "a.exe"
@@ -206,6 +215,7 @@
 // RUN:   -fno-exceptions -fno-rtti %t/prog.cpp 2>&1 \
 // RUN:   | FileCheck --check-prefix=CXX %{nojunk} --implicit-check-not=-lc --implicit-check-not=-lstdc++ %s
 // CXX:      "-cc1" "-triple" "msil64-unknown-dotnet"
+// CXX-SAME: "-nostdsysteminc"
 // CXX-SAME: "-x" "c++" "{{[^"]*}}prog.cpp"
 // CXX-NEXT: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=msil64-unknown-dotnet"
 // CXX-SAME: "{{[^"]*}}.o" "{{[^"]*}}res{{/|\\\\}}lib{{/|\\\\}}msil64-unknown-dotnet{{/|\\\\}}libclang_rt.builtins.a" "-o" "a.exe"
@@ -216,18 +226,22 @@
 // RUN: %clang --target=msil64-unknown-dotnet -mcpu=generic -ffreestanding -fsyntax-only %s
 
 // PV5's errors.
+// The whole text, once per option, and nothing else.
+// DEFINE: %{pv5} = FileCheck --check-prefix=BADOPT --match-full-lines --implicit-check-not=error: \
+// DEFINE:   --implicit-check-not=warning: --implicit-check-not='PLEASE submit' %s
 // RUN: not %clang --target=msil64-unknown-dotnet -fshort-wchar -fsyntax-only %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=SHORTWCHAR %s
+// RUN:   | %{pv5} -DTRIPLE=msil64-unknown-dotnet -DOPT=-fshort-wchar
 // RUN: not %clang --target=msil64-unknown-dotnet -mlong-double-80 -fsyntax-only %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=LD80 %s
+// RUN:   | %{pv5} -DTRIPLE=msil64-unknown-dotnet -DOPT=-mlong-double-80
+// RUN: not %clang --target=msil64-unknown-dotnet -mlong-double-128 -fsyntax-only %s 2>&1 \
+// RUN:   | %{pv5} -DTRIPLE=msil64-unknown-dotnet -DOPT=-mlong-double-128
 // RUN: not %clang --target=msil64-unknown-dotnet -mcpu=x86-64 -fsyntax-only %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=MCPU %s
+// RUN:   | %{pv5} -DTRIPLE=msil64-unknown-dotnet -DOPT=-mcpu=x86-64
 // RUN: not %clang --target=msil64-unknown-dotnet -march=x86-64 -fsyntax-only %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=MARCH %s
-// SHORTWCHAR: error: {{.*}}-fshort-wchar
-// LD80:       error: {{.*}}-mlong-double-80
-// MCPU:       error: {{.*}}x86-64
-// MARCH:      error: {{.*}}x86-64
+// RUN:   | %{pv5} -DTRIPLE=msil64-unknown-dotnet -DOPT=-march=x86-64
+// RUN: not %clang --target=msil32-unknown-dotnet -fshort-wchar -fsyntax-only %s 2>&1 \
+// RUN:   | %{pv5} -DTRIPLE=msil32-unknown-dotnet -DOPT=-fshort-wchar
+// BADOPT: {{.*}}clang{{(\.exe)?}}: error: unsupported option '[[OPT]]' for target '[[TRIPLE]]'
 
 //--- b.o
 //--- prog.cpp

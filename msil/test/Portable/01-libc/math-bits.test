@@ -1,0 +1,132 @@
+# c.dll's math against fixed bit patterns: sinf, cosf, expf, logf, powf, sqrtf, exp, log, log2, pow, sqrt, sin, cos, atan2, cbrt, expm1 and log1p, each correctly rounded; the exact functions (fabs, floor, ceil, trunc, round, fmod, remainder, frexp, ldexp, modf, copysign, nextafter, fma); and math_errhandling == MATH_ERRNO with errno set by a pole error (log(0) gives ERANGE) and a domain error (log(-1) gives EDOM); and, pinned as built, two errno deviations from C17 inherited from upstream llvm-libc: sqrt(-1) and sqrtf(-1) return NaN and leave errno unchanged (C17 7.12.7.5 wants EDOM), and pow(0, -1) returns +inf and sets EDOM (C17 7.12.1p4 classes it as a pole error, ERANGE).
+# Plan 5.19.4 (math without f16, bf16 or f128 ships at P-1b, configured
+# with LIBC_MATH_NO_EXCEPT | LIBC_MATH_ASSUME_ROUND_NEAREST_ONLY only, so
+# math keeps errno and full accuracy), 5.19.15 ('math bit-exact (sinf, exp,
+# pow, sqrt)'; llvm-libc's math is correctly rounded in this configuration),
+# brief Q20 (a) (math_errhandling is MATH_ERRNO: no fenv, so no
+# MATH_ERREXCEPT), 5.19.1 rule 4 (architectures.h's LIBC_TARGET_ARCH_IS_MSIL
+# keeps the x86 macros off; FPUtil's generic paths run), recon portable-libc
+# 4.3 (P-0's run/prog.c values, re-run on msil64). Expected bit patterns:
+# the correctly rounded binary32/binary64 value of the exact result, computed
+# with mpmath at 300 bits and rounded to nearest-even (named per line; pow
+# 2.5^2, cbrt-free exact cases and the exact functions follow C17 7.12 and
+# IEC 60559 directly). C17 7.12.1p3-p4: a domain error stores EDOM and a
+# pole error ERANGE in errno when math_errhandling & MATH_ERRNO. Inputs pass
+# through volatile objects, so nothing is folded at -O2. Each failed group
+# sets one bit of the exit status.
+# Group 7 pins two deviations from C17 7.12 that c.dll inherits from
+# upstream llvm-libc, as built (brief Q20 (a) and 5.19.6 keep
+# math_errhandling at MATH_ERRNO; Status.md lists the deviations): sqrt and
+# sqrtf of a negative number return NaN without storing EDOM, because
+# upstream's generic sqrt (libc/src/__support/FPUtil/generic/sqrt.h, its
+# is_neg branch) never sets errno, where C17 7.12.7.5 asks for a domain
+# error; and pow(0, -1) returns +inf and stores EDOM
+# (libc/src/__support/math/pow_utils.h, its x == 0 branches), where C17
+# 7.12.1p4 classes it as a pole error with ERANGE. A change that makes
+# either conform must update these pins knowingly.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <errno.h>
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+
+/* brief Q20 (a): MATH_ERRNO only (C17 7.12p9: 1 and 2). */
+_Static_assert(MATH_ERRNO == 1 && MATH_ERREXCEPT == 2, "C17 7.12p9");
+_Static_assert(math_errhandling == MATH_ERRNO, "math_errhandling is MATH_ERRNO");
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static uint64_t b64(double d) {
+  uint64_t u;
+  memcpy(&u, &d, sizeof u);
+  return u;
+}
+static uint32_t b32(float f) {
+  uint32_t u;
+  memcpy(&u, &f, sizeof u);
+  return u;
+}
+
+static volatile double v0 = 0.0, v_half = 0.5, v1 = 1.0, v2 = 2.0, v3 = 3.0,
+                       v10 = 10.0, v25 = 2.5, vm25 = -2.5, v_eps = 1e-5,
+                       v_big = 1.0000001, v_1e7 = 1e7;
+static volatile float f_half = 0.5f, f1 = 1.0f, f2 = 2.0f, f3 = 3.0f;
+
+int main(void) {
+  /* 0: binary32 functions (mpmath, rounded to binary32). */
+  CHECK(0, b32(sinf(f_half)) == 0x3EF57744u);     /* sin(0.5)  0.47942555 */
+  CHECK(0, b32(cosf(f_half)) == 0x3F60A940u);     /* cos(0.5)  0.87758255 */
+  CHECK(0, b32(expf(f1)) == 0x402DF854u);         /* e         2.7182817 */
+  CHECK(0, b32(logf(f2)) == 0x3F317218u);         /* ln 2      0.6931472 */
+  CHECK(0, b32(powf(f3, f_half)) == 0x3FDDB3D7u); /* 3^0.5     1.7320508 */
+  CHECK(0, b32(sqrtf(f2)) == 0x3FB504F3u);        /* sqrt 2    1.4142135 */
+
+  /* 1: exp, log, log2 (mpmath, rounded to binary64). */
+  CHECK(1, b64(exp(v1)) == 0x4005BF0A8B145769ull);    /* e (P-0's case) */
+  CHECK(1, b64(exp(vm25)) == 0x3FB50385C094F425ull);  /* e^-2.5 */
+  CHECK(1, b64(log(v10)) == 0x40026BB1BBB55516ull);   /* ln 10 */
+  CHECK(1, b64(log2(v3)) == 0x3FF95C01A39FBD68ull);   /* log2 3 */
+
+  /* 2: pow and sqrt (P-0's cases), and pow near overflow of precision. */
+  CHECK(2, pow(v25, v2) == 6.25);                      /* exact */
+  CHECK(2, b64(pow(v2, v_half)) == 0x3FF6A09E667F3BCDull); /* sqrt 2 */
+  CHECK(2, b64(sqrt(v2)) == 0x3FF6A09E667F3BCDull);        /* sqrt 2 */
+  CHECK(2, b64(pow(v_big, v_1e7)) == 0x4005BF0A790CE6F2ull); /* 1.0000001^1e7 */
+
+  /* 3: sin, cos, atan2, cbrt (mpmath, rounded to binary64). */
+  CHECK(3, b64(sin(v1)) == 0x3FEAED548F090CEEull);
+  CHECK(3, b64(cos(v1)) == 0x3FE14A280FB5068Cull);
+  CHECK(3, b64(atan2(v1, v1)) == 0x3FE921FB54442D18ull); /* pi/4 */
+  CHECK(3, b64(cbrt(v10)) == 0x40013C484138704Full);
+
+  /* 4: expm1 and log1p near 0 (mpmath, rounded to binary64). */
+  CHECK(4, b64(expm1(v_eps)) == 0x3EE4F8BC681CDFB6ull);
+  CHECK(4, b64(log1p(v_eps)) == 0x3EE4F8AEA9AE7317ull);
+
+  /* 5: exact functions (C17 7.12.6-7.12.13, IEC 60559). */
+  int e = 0;
+  double ip = 0.0;
+  CHECK(5, fabs(vm25) == 2.5 && floor(vm25) == -3.0 && ceil(vm25) == -2.0);
+  CHECK(5, trunc(vm25) == -2.0 && round(vm25) == -3.0 && round(v25) == 3.0);
+  CHECK(5, fmod(v10, v3) == 1.0 && remainder(v10, v3) == 1.0 && remainder(v25 * 2 + 0.5, v2) == -0.5);
+  CHECK(5, frexp(v10, &e) == 0.625 && e == 4 && ldexp(v3, 10) == 3072.0);
+  CHECK(5, modf(vm25, &ip) == -0.5 && ip == -2.0);
+  CHECK(5, copysign(v3, -v0) == -3.0 && signbit(copysign(v0, -v1)));
+  CHECK(5, b64(nextafter(v1, v2)) == 0x3FF0000000000001ull && fma(v2, v3, v1) == 7.0);
+
+  /* 6: errno from math (MATH_ERRNO): a pole error and a domain error. */
+  errno = 0;
+  double r = log(v0);
+  CHECK(6, isinf(r) && r < 0 && errno == ERANGE);
+  errno = 0;
+  r = log(-v1);
+  CHECK(6, isnan(r) && errno == EDOM);
+  errno = 0;
+  CHECK(6, log(v1) == 0.0 && errno == 0);
+
+  /* 7: deviations from C17, pinned as built (see the header): sqrt and
+     sqrtf of -1 leave errno unchanged (C17 7.12.7.5: EDOM), and pow(0, -1)
+     stores EDOM (C17 7.12.1p4: a pole error, ERANGE). */
+  errno = 0;
+  r = sqrt(-v1);
+  CHECK(7, isnan(r) && errno == 0);
+  errno = 0;
+  float rf = sqrtf(-f1);
+  CHECK(7, isnan(rf) && errno == 0);
+  errno = 0;
+  r = pow(v0, -v1);
+  CHECK(7, isinf(r) && r > 0 && errno == EDOM);
+  return (int)fails;
+}

@@ -1,0 +1,826 @@
+# Entry points of LLVM libc on msil64-unknown-dotnet.
+#
+# P-1b ships the freestanding entry points only: no listed entry point, and no
+# support object it pulls in, references the heap, atomics, the exit path, a
+# clock, a File stream, the environment, signal names or the hash-table global
+# (contract 5.19.4 of llvm/docs/MSIL/ImplementationPlan.md; the closure was
+# measured on this tree). An OS-dependent function is absent, never a stub: the
+# generated headers do not declare it, so a use is an undeclared-function error,
+# or a link error naming c.dll through a program's own prototype. Every candidate
+# that is not listed is named in a comment at the end, with its reason.
+#
+# Everything, math included, is in TARGET_LIBC_ENTRYPOINTS, so the one archive
+# libc.a holds every object of c.dll (c.dll and libc.a are the same objects);
+# TARGET_LIBM_ENTRYPOINTS stays empty, and the empty libm.a of the sysroot comes
+# from msil/utils/build/build-libc.py. libc.src.errno.errno defines libc_errno,
+# which the errno-setting entry points use; the errno cell is
+# __llvm_libc_errno in src/__support/OSUtil/dotnet (LIBC_ERRNO_MODE_EXTERNAL).
+
+# libc's CMake loads config/dotnet/config.json only when it derives the
+# configuration directory from the triple. A LIBC_CONFIG_PATH naming
+# config/dotnet/msil64 would skip that file silently and build with the default
+# errno and thread modes, so this list refuses such a configuration.
+if(NOT LIBC_CONF_ERRNO_MODE STREQUAL "LIBC_ERRNO_MODE_EXTERNAL" OR
+   NOT LIBC_CONF_THREAD_MODE STREQUAL "LIBC_THREAD_MODE_SINGLE")
+  message(FATAL_ERROR
+    "libc build: config/dotnet/config.json was not applied "
+    "(LIBC_CONF_ERRNO_MODE=${LIBC_CONF_ERRNO_MODE}, "
+    "LIBC_CONF_THREAD_MODE=${LIBC_CONF_THREAD_MODE}); leave LIBC_CONFIG_PATH "
+    "unset for msil64-unknown-dotnet and do not override these options.")
+endif()
+
+set(TARGET_LIBC_ENTRYPOINTS
+    # complex.h entrypoints
+    libc.src.complex.cabs
+    libc.src.complex.cabsf
+    libc.src.complex.carg
+    libc.src.complex.cargf
+    libc.src.complex.cimag
+    libc.src.complex.cimagf
+    libc.src.complex.cimagl
+    libc.src.complex.conj
+    libc.src.complex.conjf
+    libc.src.complex.conjl
+    libc.src.complex.cproj
+    libc.src.complex.cprojf
+    libc.src.complex.cprojl
+    libc.src.complex.creal
+    libc.src.complex.crealf
+    libc.src.complex.creall
+
+    # ctype.h entrypoints
+    libc.src.ctype.isalnum
+    libc.src.ctype.isalnum_l
+    libc.src.ctype.isalpha
+    libc.src.ctype.isalpha_l
+    libc.src.ctype.isascii
+    libc.src.ctype.isblank
+    libc.src.ctype.isblank_l
+    libc.src.ctype.iscntrl
+    libc.src.ctype.iscntrl_l
+    libc.src.ctype.isdigit
+    libc.src.ctype.isdigit_l
+    libc.src.ctype.isgraph
+    libc.src.ctype.isgraph_l
+    libc.src.ctype.islower
+    libc.src.ctype.islower_l
+    libc.src.ctype.isprint
+    libc.src.ctype.isprint_l
+    libc.src.ctype.ispunct
+    libc.src.ctype.ispunct_l
+    libc.src.ctype.isspace
+    libc.src.ctype.isspace_l
+    libc.src.ctype.isupper
+    libc.src.ctype.isupper_l
+    libc.src.ctype.isxdigit
+    libc.src.ctype.isxdigit_l
+    libc.src.ctype.toascii
+    libc.src.ctype.tolower
+    libc.src.ctype.tolower_l
+    libc.src.ctype.toupper
+    libc.src.ctype.toupper_l
+
+    # errno.h entrypoints
+    libc.src.errno.errno
+
+    # inttypes.h entrypoints
+    libc.src.inttypes.imaxabs
+    libc.src.inttypes.imaxdiv
+    libc.src.inttypes.strtoimax
+    libc.src.inttypes.strtoumax
+    libc.src.inttypes.wcstoimax
+    libc.src.inttypes.wcstoumax
+
+    # locale.h entrypoints
+    libc.src.locale.duplocale
+    libc.src.locale.freelocale
+    libc.src.locale.localeconv
+    libc.src.locale.newlocale
+    libc.src.locale.setlocale
+    libc.src.locale.uselocale
+
+    # math.h entrypoints
+    libc.src.math.acos
+    libc.src.math.acosf
+    libc.src.math.acoshf
+    libc.src.math.acospif
+    libc.src.math.asin
+    libc.src.math.asinf
+    libc.src.math.asinhf
+    libc.src.math.asinpi
+    libc.src.math.asinpif
+    libc.src.math.atan
+    libc.src.math.atan2
+    libc.src.math.atan2f
+    libc.src.math.atan2l
+    libc.src.math.atanf
+    libc.src.math.atanhf
+    libc.src.math.canonicalize
+    libc.src.math.canonicalizef
+    libc.src.math.canonicalizel
+    libc.src.math.cbrt
+    libc.src.math.cbrtf
+    libc.src.math.ceil
+    libc.src.math.ceilf
+    libc.src.math.ceill
+    libc.src.math.copysign
+    libc.src.math.copysignf
+    libc.src.math.copysignl
+    libc.src.math.cos
+    libc.src.math.cosf
+    libc.src.math.cosh
+    libc.src.math.coshf
+    libc.src.math.cospif
+    libc.src.math.daddl
+    libc.src.math.ddivl
+    libc.src.math.dfmal
+    libc.src.math.dmull
+    libc.src.math.dsqrtl
+    libc.src.math.dsubl
+    libc.src.math.erff
+    libc.src.math.exp
+    libc.src.math.exp10
+    libc.src.math.exp10f
+    libc.src.math.exp10m1f
+    libc.src.math.exp2
+    libc.src.math.exp2f
+    libc.src.math.exp2m1f
+    libc.src.math.expf
+    libc.src.math.expm1
+    libc.src.math.expm1f
+    libc.src.math.fabs
+    libc.src.math.fabsf
+    libc.src.math.fabsl
+    libc.src.math.fadd
+    libc.src.math.faddl
+    libc.src.math.fdim
+    libc.src.math.fdimf
+    libc.src.math.fdiml
+    libc.src.math.fdiv
+    libc.src.math.fdivl
+    libc.src.math.ffma
+    libc.src.math.ffmal
+    libc.src.math.floor
+    libc.src.math.floorf
+    libc.src.math.floorl
+    libc.src.math.fma
+    libc.src.math.fmaf
+    libc.src.math.fmax
+    libc.src.math.fmaxf
+    libc.src.math.fmaximum
+    libc.src.math.fmaximum_mag
+    libc.src.math.fmaximum_mag_num
+    libc.src.math.fmaximum_mag_numf
+    libc.src.math.fmaximum_mag_numl
+    libc.src.math.fmaximum_magf
+    libc.src.math.fmaximum_magl
+    libc.src.math.fmaximum_num
+    libc.src.math.fmaximum_numf
+    libc.src.math.fmaximum_numl
+    libc.src.math.fmaximumf
+    libc.src.math.fmaximuml
+    libc.src.math.fmaxl
+    libc.src.math.fmin
+    libc.src.math.fminf
+    libc.src.math.fminimum
+    libc.src.math.fminimum_mag
+    libc.src.math.fminimum_mag_num
+    libc.src.math.fminimum_mag_numf
+    libc.src.math.fminimum_mag_numl
+    libc.src.math.fminimum_magf
+    libc.src.math.fminimum_magl
+    libc.src.math.fminimum_num
+    libc.src.math.fminimum_numf
+    libc.src.math.fminimum_numl
+    libc.src.math.fminimumf
+    libc.src.math.fminimuml
+    libc.src.math.fminl
+    libc.src.math.fmod
+    libc.src.math.fmodf
+    libc.src.math.fmodl
+    libc.src.math.fmul
+    libc.src.math.fmull
+    libc.src.math.frexp
+    libc.src.math.frexpf
+    libc.src.math.frexpl
+    libc.src.math.fromfp
+    libc.src.math.fromfpf
+    libc.src.math.fromfpl
+    libc.src.math.fromfpx
+    libc.src.math.fromfpxf
+    libc.src.math.fromfpxl
+    libc.src.math.fsqrt
+    libc.src.math.fsqrtl
+    libc.src.math.fsub
+    libc.src.math.fsubl
+    libc.src.math.getpayload
+    libc.src.math.getpayloadf
+    libc.src.math.getpayloadl
+    libc.src.math.hypot
+    libc.src.math.hypotf
+    libc.src.math.ilogb
+    libc.src.math.ilogbf
+    libc.src.math.ilogbl
+    libc.src.math.isnan
+    libc.src.math.isnanf
+    libc.src.math.isnanl
+    libc.src.math.ldexp
+    libc.src.math.ldexpf
+    libc.src.math.ldexpl
+    libc.src.math.lgammaf
+    libc.src.math.llogb
+    libc.src.math.llogbf
+    libc.src.math.llogbl
+    libc.src.math.llrint
+    libc.src.math.llrintf
+    libc.src.math.llrintl
+    libc.src.math.llround
+    libc.src.math.llroundf
+    libc.src.math.llroundl
+    libc.src.math.log
+    libc.src.math.log10
+    libc.src.math.log10f
+    libc.src.math.log1p
+    libc.src.math.log1pf
+    libc.src.math.log2
+    libc.src.math.log2f
+    libc.src.math.logb
+    libc.src.math.logbf
+    libc.src.math.logbl
+    libc.src.math.logf
+    libc.src.math.lrint
+    libc.src.math.lrintf
+    libc.src.math.lrintl
+    libc.src.math.lround
+    libc.src.math.lroundf
+    libc.src.math.lroundl
+    libc.src.math.modf
+    libc.src.math.modff
+    libc.src.math.modfl
+    libc.src.math.nan
+    libc.src.math.nanf
+    libc.src.math.nanl
+    libc.src.math.nearbyint
+    libc.src.math.nearbyintf
+    libc.src.math.nearbyintl
+    libc.src.math.nextafter
+    libc.src.math.nextafterf
+    libc.src.math.nextafterl
+    libc.src.math.nextdown
+    libc.src.math.nextdownf
+    libc.src.math.nextdownl
+    libc.src.math.nexttoward
+    libc.src.math.nexttowardf
+    libc.src.math.nexttowardl
+    libc.src.math.nextup
+    libc.src.math.nextupf
+    libc.src.math.nextupl
+    libc.src.math.pow
+    libc.src.math.powf
+    libc.src.math.remainder
+    libc.src.math.remainderf
+    libc.src.math.remainderl
+    libc.src.math.remquo
+    libc.src.math.remquof
+    libc.src.math.remquol
+    libc.src.math.rint
+    libc.src.math.rintf
+    libc.src.math.rintl
+    libc.src.math.round
+    libc.src.math.roundeven
+    libc.src.math.roundevenf
+    libc.src.math.roundevenl
+    libc.src.math.roundf
+    libc.src.math.roundl
+    libc.src.math.rsqrtf
+    libc.src.math.scalbln
+    libc.src.math.scalblnf
+    libc.src.math.scalblnl
+    libc.src.math.scalbn
+    libc.src.math.scalbnf
+    libc.src.math.scalbnl
+    libc.src.math.setpayload
+    libc.src.math.setpayloadf
+    libc.src.math.setpayloadl
+    libc.src.math.setpayloadsig
+    libc.src.math.setpayloadsigf
+    libc.src.math.setpayloadsigl
+    libc.src.math.sin
+    libc.src.math.sincos
+    libc.src.math.sincosf
+    libc.src.math.sinf
+    libc.src.math.sinh
+    libc.src.math.sinhf
+    libc.src.math.sinpif
+    libc.src.math.sqrt
+    libc.src.math.sqrtf
+    libc.src.math.sqrtl
+    libc.src.math.tan
+    libc.src.math.tanf
+    libc.src.math.tanh
+    libc.src.math.tanhf
+    libc.src.math.tanpif
+    libc.src.math.totalorder
+    libc.src.math.totalorderf
+    libc.src.math.totalorderl
+    libc.src.math.totalordermag
+    libc.src.math.totalordermagf
+    libc.src.math.totalordermagl
+    libc.src.math.trunc
+    libc.src.math.truncf
+    libc.src.math.truncl
+    libc.src.math.ufromfp
+    libc.src.math.ufromfpf
+    libc.src.math.ufromfpl
+    libc.src.math.ufromfpx
+    libc.src.math.ufromfpxf
+    libc.src.math.ufromfpxl
+
+    # search.h entrypoints
+    libc.src.search.insque
+    libc.src.search.lfind
+    libc.src.search.lsearch
+    libc.src.search.remque
+    libc.src.search.tfind
+    libc.src.search.twalk
+    libc.src.search.twalk_r
+
+    # stdbit.h entrypoints
+    libc.src.stdbit.stdc_bit_ceil_uc
+    libc.src.stdbit.stdc_bit_ceil_ui
+    libc.src.stdbit.stdc_bit_ceil_ul
+    libc.src.stdbit.stdc_bit_ceil_ull
+    libc.src.stdbit.stdc_bit_ceil_us
+    libc.src.stdbit.stdc_bit_floor_uc
+    libc.src.stdbit.stdc_bit_floor_ui
+    libc.src.stdbit.stdc_bit_floor_ul
+    libc.src.stdbit.stdc_bit_floor_ull
+    libc.src.stdbit.stdc_bit_floor_us
+    libc.src.stdbit.stdc_bit_width_uc
+    libc.src.stdbit.stdc_bit_width_ui
+    libc.src.stdbit.stdc_bit_width_ul
+    libc.src.stdbit.stdc_bit_width_ull
+    libc.src.stdbit.stdc_bit_width_us
+    libc.src.stdbit.stdc_count_ones_uc
+    libc.src.stdbit.stdc_count_ones_ui
+    libc.src.stdbit.stdc_count_ones_ul
+    libc.src.stdbit.stdc_count_ones_ull
+    libc.src.stdbit.stdc_count_ones_us
+    libc.src.stdbit.stdc_count_zeros_uc
+    libc.src.stdbit.stdc_count_zeros_ui
+    libc.src.stdbit.stdc_count_zeros_ul
+    libc.src.stdbit.stdc_count_zeros_ull
+    libc.src.stdbit.stdc_count_zeros_us
+    libc.src.stdbit.stdc_first_leading_one_uc
+    libc.src.stdbit.stdc_first_leading_one_ui
+    libc.src.stdbit.stdc_first_leading_one_ul
+    libc.src.stdbit.stdc_first_leading_one_ull
+    libc.src.stdbit.stdc_first_leading_one_us
+    libc.src.stdbit.stdc_first_leading_zero_uc
+    libc.src.stdbit.stdc_first_leading_zero_ui
+    libc.src.stdbit.stdc_first_leading_zero_ul
+    libc.src.stdbit.stdc_first_leading_zero_ull
+    libc.src.stdbit.stdc_first_leading_zero_us
+    libc.src.stdbit.stdc_first_trailing_one_uc
+    libc.src.stdbit.stdc_first_trailing_one_ui
+    libc.src.stdbit.stdc_first_trailing_one_ul
+    libc.src.stdbit.stdc_first_trailing_one_ull
+    libc.src.stdbit.stdc_first_trailing_one_us
+    libc.src.stdbit.stdc_first_trailing_zero_uc
+    libc.src.stdbit.stdc_first_trailing_zero_ui
+    libc.src.stdbit.stdc_first_trailing_zero_ul
+    libc.src.stdbit.stdc_first_trailing_zero_ull
+    libc.src.stdbit.stdc_first_trailing_zero_us
+    libc.src.stdbit.stdc_has_single_bit_uc
+    libc.src.stdbit.stdc_has_single_bit_ui
+    libc.src.stdbit.stdc_has_single_bit_ul
+    libc.src.stdbit.stdc_has_single_bit_ull
+    libc.src.stdbit.stdc_has_single_bit_us
+    libc.src.stdbit.stdc_leading_ones_uc
+    libc.src.stdbit.stdc_leading_ones_ui
+    libc.src.stdbit.stdc_leading_ones_ul
+    libc.src.stdbit.stdc_leading_ones_ull
+    libc.src.stdbit.stdc_leading_ones_us
+    libc.src.stdbit.stdc_leading_zeros_uc
+    libc.src.stdbit.stdc_leading_zeros_ui
+    libc.src.stdbit.stdc_leading_zeros_ul
+    libc.src.stdbit.stdc_leading_zeros_ull
+    libc.src.stdbit.stdc_leading_zeros_us
+    libc.src.stdbit.stdc_trailing_ones_uc
+    libc.src.stdbit.stdc_trailing_ones_ui
+    libc.src.stdbit.stdc_trailing_ones_ul
+    libc.src.stdbit.stdc_trailing_ones_ull
+    libc.src.stdbit.stdc_trailing_ones_us
+    libc.src.stdbit.stdc_trailing_zeros_uc
+    libc.src.stdbit.stdc_trailing_zeros_ui
+    libc.src.stdbit.stdc_trailing_zeros_ul
+    libc.src.stdbit.stdc_trailing_zeros_ull
+    libc.src.stdbit.stdc_trailing_zeros_us
+
+    # stdio.h entrypoints
+    libc.src.stdio.snprintf
+    libc.src.stdio.sprintf
+    libc.src.stdio.vsnprintf
+    libc.src.stdio.vsprintf
+
+    # stdlib.h entrypoints
+    libc.src.stdlib.a64l
+    libc.src.stdlib.abs
+    libc.src.stdlib.atof
+    libc.src.stdlib.atoi
+    libc.src.stdlib.atol
+    libc.src.stdlib.atoll
+    libc.src.stdlib.bsearch
+    libc.src.stdlib.div
+    libc.src.stdlib.labs
+    libc.src.stdlib.ldiv
+    libc.src.stdlib.llabs
+    libc.src.stdlib.lldiv
+    libc.src.stdlib.mblen
+    libc.src.stdlib.mbstowcs
+    libc.src.stdlib.mbtowc
+    libc.src.stdlib.memalignment
+    libc.src.stdlib.qsort
+    libc.src.stdlib.qsort_r
+    libc.src.stdlib.strfromd
+    libc.src.stdlib.strfromf
+    libc.src.stdlib.strfroml
+    libc.src.stdlib.strtod
+    libc.src.stdlib.strtod_l
+    libc.src.stdlib.strtof
+    libc.src.stdlib.strtof_l
+    libc.src.stdlib.strtol
+    libc.src.stdlib.strtol_l
+    libc.src.stdlib.strtold
+    libc.src.stdlib.strtold_l
+    libc.src.stdlib.strtoll
+    libc.src.stdlib.strtoll_l
+    libc.src.stdlib.strtoul
+    libc.src.stdlib.strtoul_l
+    libc.src.stdlib.strtoull
+    libc.src.stdlib.strtoull_l
+    libc.src.stdlib.wcstombs
+    libc.src.stdlib.wctomb
+
+    # string.h entrypoints
+    libc.src.string.memccpy
+    libc.src.string.memchr
+    libc.src.string.memcmp
+    libc.src.string.memcpy
+    libc.src.string.memmem
+    libc.src.string.memmove
+    libc.src.string.mempcpy
+    libc.src.string.memrchr
+    libc.src.string.memset
+    libc.src.string.stpcpy
+    libc.src.string.stpncpy
+    libc.src.string.strcasestr
+    libc.src.string.strcat
+    libc.src.string.strchr
+    libc.src.string.strchrnul
+    libc.src.string.strcmp
+    libc.src.string.strcoll
+    libc.src.string.strcoll_l
+    libc.src.string.strcpy
+    libc.src.string.strcspn
+    libc.src.string.strerror
+    libc.src.string.strerror_r
+    libc.src.string.strlcat
+    libc.src.string.strlcpy
+    libc.src.string.strlen
+    libc.src.string.strncat
+    libc.src.string.strncmp
+    libc.src.string.strncpy
+    libc.src.string.strnlen
+    libc.src.string.strnlen_s
+    libc.src.string.strpbrk
+    libc.src.string.strrchr
+    libc.src.string.strsep
+    libc.src.string.strspn
+    libc.src.string.strstr
+    libc.src.string.strtok
+    libc.src.string.strtok_r
+    libc.src.string.strxfrm
+    libc.src.string.strxfrm_l
+
+    # strings.h entrypoints
+    libc.src.strings.bcmp
+    libc.src.strings.bcopy
+    libc.src.strings.bzero
+    libc.src.strings.ffs
+    libc.src.strings.ffsl
+    libc.src.strings.ffsll
+    libc.src.strings.index
+    libc.src.strings.rindex
+    libc.src.strings.strcasecmp
+    libc.src.strings.strcasecmp_l
+    libc.src.strings.strncasecmp
+    libc.src.strings.strncasecmp_l
+
+    # time.h entrypoints
+    libc.src.time.asctime
+    libc.src.time.asctime_r
+    libc.src.time.difftime
+    libc.src.time.gmtime
+    libc.src.time.gmtime_r
+
+    # wchar.h entrypoints
+    libc.src.wchar.btowc
+    libc.src.wchar.mbrlen
+    libc.src.wchar.mbrtowc
+    libc.src.wchar.mbsinit
+    libc.src.wchar.mbsnrtowcs
+    libc.src.wchar.mbsrtowcs
+    libc.src.wchar.wcpcpy
+    libc.src.wchar.wcpncpy
+    libc.src.wchar.wcrtomb
+    libc.src.wchar.wcscasecmp
+    libc.src.wchar.wcscat
+    libc.src.wchar.wcschr
+    libc.src.wchar.wcscmp
+    libc.src.wchar.wcscoll
+    libc.src.wchar.wcscpy
+    libc.src.wchar.wcscspn
+    libc.src.wchar.wcslcat
+    libc.src.wchar.wcslcpy
+    libc.src.wchar.wcslen
+    libc.src.wchar.wcsncasecmp
+    libc.src.wchar.wcsncat
+    libc.src.wchar.wcsncmp
+    libc.src.wchar.wcsncpy
+    libc.src.wchar.wcsnlen
+    libc.src.wchar.wcsnrtombs
+    libc.src.wchar.wcspbrk
+    libc.src.wchar.wcsrchr
+    libc.src.wchar.wcsrtombs
+    libc.src.wchar.wcsspn
+    libc.src.wchar.wcsstr
+    libc.src.wchar.wcstod
+    libc.src.wchar.wcstof
+    libc.src.wchar.wcstok
+    libc.src.wchar.wcstol
+    libc.src.wchar.wcstold
+    libc.src.wchar.wcstoll
+    libc.src.wchar.wcstoul
+    libc.src.wchar.wcstoull
+    libc.src.wchar.wcsxfrm
+    libc.src.wchar.wctob
+    libc.src.wchar.wmemchr
+    libc.src.wchar.wmemcmp
+    libc.src.wchar.wmemcpy
+    libc.src.wchar.wmemmove
+    libc.src.wchar.wmempcpy
+    libc.src.wchar.wmemset
+
+    # wctype.h entrypoints
+    libc.src.wctype.iswalnum
+    libc.src.wctype.iswalpha
+    libc.src.wctype.iswblank
+    libc.src.wctype.iswcntrl
+    libc.src.wctype.iswctype
+    libc.src.wctype.iswdigit
+    libc.src.wctype.iswgraph
+    libc.src.wctype.iswlower
+    libc.src.wctype.iswprint
+    libc.src.wctype.iswpunct
+    libc.src.wctype.iswspace
+    libc.src.wctype.iswupper
+    libc.src.wctype.iswxdigit
+    libc.src.wctype.towlower
+    libc.src.wctype.towupper
+    libc.src.wctype.wctype
+)
+
+# setjmp.h declares setjmp, longjmp, sigsetjmp and siglongjmp, and nothing
+# defines them: on MSIL triples the compiler intercepts calls to these
+# declarations (contract 5.19.6). They are entry point names for the header
+# generator only: they are not in TARGET_LIBC_ENTRYPOINTS, so no archive and no
+# export list contains them. libc's CMake warns that the aliasees of
+# libc.src.setjmp.setjmp and libc.src.setjmp.longjmp are missing, as expected.
+set(TARGET_LLVMLIBC_ENTRYPOINTS
+    ${TARGET_LIBC_ENTRYPOINTS}
+    libc.src.setjmp.longjmp
+    libc.src.setjmp.setjmp
+    libc.src.setjmp.siglongjmp
+    libc.src.setjmp.sigsetjmp
+)
+
+# Candidates that are not shipped, with the reason:
+# math.h
+#   acosh: no generic implementation upstream (src/math/generic)
+#   asinh: no generic implementation upstream (src/math/generic)
+#   atanh: no generic implementation upstream (src/math/generic)
+#   copysignf80: its parameters and result are the emulated x87
+#     struct fputil::Float80 (16 bytes, 16-aligned, SRET and byval in c.dll),
+#     which matches no C type on msil64 (long double is binary64); no
+#     installed header declares it (math.yaml has no entry), and 5.19.4
+#     and the RuntimeLibcalls contract want no f80 surface
+#   erf: no generic implementation upstream (src/math/generic)
+#   fabsf80: its parameter and result are the emulated x87
+#     struct fputil::Float80 (16 bytes, 16-aligned, SRET and byval in c.dll),
+#     which matches no C type on msil64 (long double is binary64); no
+#     installed header declares it (math.yaml has no entry), and 5.19.4
+#     and the RuntimeLibcalls contract want no f80 surface
+#   iscanonical: a generic implementation exists upstream, but no installed
+#     header declares it (math.yaml has no entry), so no program reaches it
+#     (5.19.1 rule 2); append it once a header declares it
+#   iscanonicalf: a generic implementation exists upstream, but no installed
+#     header declares it (math.yaml has no entry), so no program reaches it
+#     (5.19.1 rule 2); append it once a header declares it
+#   iscanonicall: a generic implementation exists upstream, but no installed
+#     header declares it (math.yaml has no entry), so no program reaches it
+#     (5.19.1 rule 2); append it once a header declares it
+#   issignaling: a generic implementation exists upstream, but no installed
+#     header declares it (math.yaml has no entry), so no program reaches it
+#     (5.19.1 rule 2); append it once a header declares it
+#   issignalingf: a generic implementation exists upstream, but no installed
+#     header declares it (math.yaml has no entry), so no program reaches it
+#     (5.19.1 rule 2); append it once a header declares it
+#   issignalingl: a generic implementation exists upstream, but no installed
+#     header declares it (math.yaml has no entry), so no program reaches it
+#     (5.19.1 rule 2); append it once a header declares it
+#   lgamma: no generic implementation upstream (src/math/generic)
+#   lgamma_r: no generic implementation upstream (src/math/generic)
+#   powi: no generic implementation upstream (src/math/generic)
+#   powif: no generic implementation upstream (src/math/generic)
+#   tgamma: no generic implementation upstream (src/math/generic)
+#   tgammaf: no generic implementation upstream (src/math/generic)
+# search.h
+#   hcreate: heap, and the raw thread_local of HashTable/randomness.h; P-2
+#   hcreate_r: heap, and the raw thread_local of HashTable/randomness.h; P-2
+#   hdestroy: heap, and the raw thread_local of HashTable/randomness.h; P-2
+#   hdestroy_r: heap, and the raw thread_local of HashTable/randomness.h;
+#     P-2
+#   hsearch: heap, and the raw thread_local of HashTable/randomness.h; P-2
+#   hsearch_r: heap, and the raw thread_local of HashTable/randomness.h; P-2
+#   tdelete: needs the heap (malloc/free); P-2
+#   tdestroy: needs the heap (malloc/free); P-2
+#   tsearch: needs the heap (malloc/free); P-2
+# stdlib.h
+#   _Exit: needs internal::exit; P-2
+#   __cxa_thread_atexit_impl: needs threads; P-3
+#   abort: exit path: stdlib/abort_utils.h has no dotnet branch; P-2
+#   aligned_alloc: heap; P-2
+#   at_quick_exit: needs the heap (malloc/free); P-2
+#   atexit: needs the heap (malloc/free); P-2
+#   calloc: heap; P-2
+#   clearenv: an OS alias with no dotnet implementation (environment,
+#     files); P-2 or later
+#   exit: needs internal::exit and the heap; P-2
+#   free: heap; P-2
+#   getenv: needs the environment; P-2
+#   getloadavg: an OS alias with no dotnet implementation (environment,
+#     files); P-2 or later
+#   l64a: no installed header declares it (stdlib.yaml has no entry), so no
+#     program reaches it (5.19.1 rule 2); it also answers wrongly: upstream
+#     l64a.cpp always writes six characters, so l64a(0) gives "......" where
+#     POSIX requires "". Append it once a header declares it and the result is
+#     fixed
+#   malloc: heap; P-2
+#   malloc_usable_size: heap; P-2
+#   mkdtemp: an OS alias with no dotnet implementation (environment, files);
+#     P-2 or later
+#   mkostemp: an OS alias with no dotnet implementation (environment,
+#     files); P-2 or later
+#   mkstemp: an OS alias with no dotnet implementation (environment, files);
+#     P-2 or later
+#   putenv: an OS alias with no dotnet implementation (environment, files);
+#     P-2 or later
+#   quick_exit: needs internal::exit and the heap; P-2
+#   rand: its cpp::Atomic compiles to __atomic_*_8 calls (rand_util.cpp);
+#     P-3
+#   realloc: heap; P-2
+#   realpath: an OS alias with no dotnet implementation (environment,
+#     files); P-2 or later
+#   secure_getenv: an OS alias with no dotnet implementation (environment,
+#     files); P-2 or later
+#   setenv: an OS alias with no dotnet implementation (environment, files);
+#     P-2 or later
+#   srand: its cpp::Atomic compiles to __atomic_*_8 calls (rand_util.cpp);
+#     P-3
+#   system: an OS alias with no dotnet implementation (environment, files);
+#     P-2 or later
+#   unsetenv: an OS alias with no dotnet implementation (environment,
+#     files); P-2 or later
+# string.h
+#   memset_explicit: its asm statement has an operand, a Sema error on the
+#     portable triples (P-1a)
+#   strdup: needs the heap (malloc/free); P-2
+#   strndup: needs the heap (malloc/free); P-2
+#   strsignal: needs signal names; the signal design (brief Q21 (a))
+# time.h
+#   clock: an OS alias with no dotnet implementation (clocks, timers); P-2
+#     or later
+#   clock_getcpuclockid: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   clock_getres: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   clock_gettime: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   clock_settime: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   ctime: answers in UTC with no time-zone layer (brief Q18 (a)); P-2
+#   ctime_r: answers in UTC with no time-zone layer (brief Q18 (a)); P-2
+#   localtime: answers in UTC with no time-zone layer (brief Q18 (a)); P-2
+#   localtime_r: answers in UTC with no time-zone layer (brief Q18 (a)); P-2
+#   mktime: answers in UTC with no time-zone layer (brief Q18 (a)); P-2
+#   nanosleep: an OS alias with no dotnet implementation (clocks, timers);
+#     P-2 or later
+#   strftime: %z and %Z always print +0000 and UTC off Linux (brief Q18
+#     (a)); P-2
+#   strftime_l: %z and %Z always print +0000 and UTC off Linux (brief Q18
+#     (a)); P-2
+#   strptime: upstream stub: always returns a null pointer (5.19.4)
+#   time: needs a clock (CLOCK_REALTIME); P-2
+#   timer_create: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   timer_delete: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   timer_getoverrun: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   timer_gettime: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   timer_settime: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   timespec_get: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   tz_variables: an OS alias with no dotnet implementation (clocks,
+#     timers); P-2 or later
+#   tzset: an OS alias with no dotnet implementation (clocks, timers); P-2
+#     or later
+# wchar.h
+#   fgetwc: needs the File stdio streams and the heap; P-2
+#   fgetws: needs the File stdio streams and the heap; P-2
+#   fputwc: needs the File stdio streams and the heap; P-2
+#   fputws: needs the File stdio streams and the heap; P-2
+#   fwide: a stream function: a FILE exists only with the P-2 streams
+#   getwc: needs the File stdio streams and the heap; P-2
+#   getwchar: needs the File stdio streams; P-2
+#   putwc: needs the File stdio streams and the heap; P-2
+#   putwchar: needs the File stdio streams; P-2
+#   swprintf: upstream stub: sets ENOSYS and always returns -1 (5.19.4)
+#   ungetwc: needs the File stdio streams and the heap; P-2
+#   wcsdup: needs the heap (malloc/free); P-2
+# fenv.h: no fenv function (brief Q20 (a)): with no FEnvImpl for MSIL the dummy
+#   functions would silently succeed and fetestexcept would always answer 0:
+#     feclearexcept fedisableexcept feenableexcept fegetenv fegetexcept
+#     fegetexceptflag fegetround feholdexcept feraiseexcept fesetenv
+#     fesetexcept fesetexceptflag fesetround fetestexcept fetestexceptflag
+#     feupdateenv
+# stdio.h: only the buffer formatters ship; the streams need the File platform
+#   half and the heap; sscanf, vsscanf, asprintf and vasprintf the heap (P-2):
+#     asprintf clearerr clearerr_unlocked fclose fdopen feof feof_unlocked
+#     ferror ferror_unlocked fflush fgetc fgetc_unlocked fgetpos fgets fileno
+#     flockfile fmemopen fopen fopencookie fprintf fputc fputs fread
+#     fread_unlocked freopen fscanf fseek fseeko fsetpos ftell ftello
+#     funlockfile fwrite fwrite_unlocked getc getc_unlocked getchar
+#     getchar_unlocked pclose perror popen printf putc putchar puts remove
+#     rename renameat rewind scanf setbuf setvbuf sscanf stderr stdin stdout
+#     tmpfile tmpnam ungetc vasprintf vfprintf vfscanf vprintf vscanf vsscanf
+# The _Float16, __bf16 and _Float128 variants (complex.h, math.h, stdlib.h):
+#   their closure is not measured and no stage plans them (5.19.4); long
+#   double is not binary128:
+#     acosbf16 acosf16 acoshf16 acospif16 asinbf16 asinf16 asinhf16 asinpif16
+#     atan2f128 atan2f16 atanbf16 atanf16 atanhf16 atanpif16 bf16add bf16addf
+#     bf16addf128 bf16addl bf16div bf16divf bf16divf128 bf16divl bf16fma
+#     bf16fmaf bf16fmaf128 bf16fmal bf16mul bf16mulf bf16mulf128 bf16mull
+#     bf16sub bf16subf bf16subf128 bf16subl canonicalizebf16 canonicalizef128
+#     canonicalizef16 cbrtbf16 cbrtf16 ceilbf16 ceilf128 ceilf16 cimagf128
+#     cimagf16 conjf128 conjf16 copysignbf16 copysignf128 copysignf16 cosf16
+#     coshf16 cospif16 cprojf128 cprojf16 crealf128 crealf16 daddf128 ddivf128
+#     dfmaf128 dmulf128 dsqrtf128 dsubf128 erfcf16 erff16 exp10f16 exp10m1f16
+#     exp2bf16 exp2f16 exp2m1f16 expbf16 expf16 expm1f16 f16add f16addf
+#     f16addf128 f16addl f16div f16divf f16divf128 f16divl f16fma f16fmaf
+#     f16fmaf128 f16fmal f16mul f16mulf f16mulf128 f16mull f16sqrt f16sqrtf
+#     f16sqrtf128 f16sqrtl f16sub f16subf f16subf128 f16subl fabsbf16 fabsf128
+#     fabsf16 faddf128 fdimbf16 fdimf128 fdimf16 fdivf128 ffmaf128 floorbf16
+#     floorf128 floorf16 fmabf16 fmaf16 fmaxbf16 fmaxf128 fmaxf16
+#     fmaximum_mag_numbf16 fmaximum_mag_numf128 fmaximum_mag_numf16
+#     fmaximum_magbf16 fmaximum_magf128 fmaximum_magf16 fmaximum_numbf16
+#     fmaximum_numf128 fmaximum_numf16 fmaximumbf16 fmaximumf128 fmaximumf16
+#     fminbf16 fminf128 fminf16 fminimum_mag_numbf16 fminimum_mag_numf128
+#     fminimum_mag_numf16 fminimum_magbf16 fminimum_magf128 fminimum_magf16
+#     fminimum_numbf16 fminimum_numf128 fminimum_numf16 fminimumbf16
+#     fminimumf128 fminimumf16 fmodbf16 fmodf128 fmodf16 fmulf128 frexpbf16
+#     frexpf128 frexpf16 fromfpbf16 fromfpf128 fromfpf16 fromfpxbf16
+#     fromfpxf128 fromfpxf16 fsqrtf128 fsubf128 getpayloadbf16 getpayloadf128
+#     getpayloadf16 hypotbf16 hypotf16 ilogbbf16 ilogbf128 ilogbf16
+#     iscanonicalbf16 iscanonicalf128 iscanonicalf16 isnanf128 isnanf16
+#     issignalingbf16 issignalingf128 issignalingf16 ldexpbf16 ldexpf128
+#     ldexpf16 lgammaf16 llogbbf16 llogbf128 llogbf16 llrintbf16 llrintf128
+#     llrintf16 llroundbf16 llroundf128 llroundf16 log10f16 log10p1f16 log2f16
+#     log2p1f16 log_bf16 logbbf16 logbf128 logbf16 logf16 lrintbf16 lrintf128
+#     lrintf16 lroundbf16 lroundf128 lroundf16 modfbf16 modff128 modff16
+#     nanbf16 nanf128 nanf16 nearbyintbf16 nearbyintf128 nearbyintf16
+#     nextafterbf16 nextafterf128 nextafterf16 nextdownbf16 nextdownf128
+#     nextdownf16 nexttowardbf16 nexttowardf16 nextupbf16 nextupf128 nextupf16
+#     remainderbf16 remainderf128 remainderf16 remquobf16 remquof128 remquof16
+#     rintbf16 rintf128 rintf16 roundbf16 roundevenbf16 roundevenf128
+#     roundevenf16 roundf128 roundf16 rsqrtf16 scalblnbf16 scalblnf128
+#     scalblnf16 scalbnbf16 scalbnf128 scalbnf16 setpayloadbf16 setpayloadf128
+#     setpayloadf16 setpayloadsigbf16 setpayloadsigf128 setpayloadsigf16
+#     sinf16 sinhf16 sinpif16 sqrtbf16 sqrtf128 sqrtf16 strfromf128 tanbf16
+#     tanf16 tanhf16 tanpif16 totalorderbf16 totalorderf128 totalorderf16
+#     totalordermagbf16 totalordermagf128 totalordermagf16 truncbf16 truncf128
+#     truncf16 ufromfpbf16 ufromfpf128 ufromfpf16 ufromfpxbf16 ufromfpxf128
+#     ufromfpxf16

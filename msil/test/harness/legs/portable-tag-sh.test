@@ -15,7 +15,9 @@
 # naming its setup log; with the non-lit legs, which the stand-in cannot
 # pass, both runs exit 1.
 # (3) With a stand-in python3 first on PATH (Inputs/ci-legs.py python3) that
-# plays build-builtins.py: 'ok' makes --leg portable-smoke a PASS row whose
+# plays build-builtins.py and, from P-1b, the setup's second step
+# build-libc.py ('ok' here; describe-sh.test checks that step): 'ok' makes
+# --leg portable-smoke a PASS row whose
 # setup ran with the build directory and the portable triple and whose one
 # lit invocation passes exactly the paths, params and lit arguments of
 # --describe; 'fail' makes it a FAIL row with exit status 1 and no lit run.
@@ -49,15 +51,15 @@
 # RUN: %{harness_check} lacks %t/rows-exit "^lit-legs\tportable-smoke\t"
 
 # (3)
-# RUN: %python %S/Inputs/ci-legs.py python3 %t/py3 ok > %t/py3.txt
+# RUN: %python %S/Inputs/ci-legs.py python3 %t/py3 ok ok > %t/py3.txt
 # RUN: %python %S/Inputs/ci-legs.py setup %t/b3
 # RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/b3 PATH=%t/py3:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin MSIL_CI_RESULTS=%t/rows-3 -- --leg portable-smoke > %t/3a.log
 # RUN: %{harness_check} contains %t/rows-3 "\Alit-legs\tportable-smoke\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
-# RUN: %{harness_check} contains %t/py3/calls.log "\Aargv: \S*/msil/utils/build/build-builtins\.py --build-dir \S*b3 --triple msil64-unknown-dotnet\n\Z"
+# RUN: %{harness_check} contains %t/py3/calls.log "\Aargv: \S*/msil/utils/build/build-builtins\.py --build-dir \S*b3 --triple msil64-unknown-dotnet\nargv: \S*/msil/utils/build/build-libc\.py --build-dir \S*b3\n\Z"
 # RUN: %{harness_check} contains %t/b3/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: --build-dir \S*b3 --triple msil64-unknown-dotnet$"
 # RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke %t/b3/lit-calls.log > %t/3a-calls.log
 # RUN: %{harness_check} contains %t/3a-calls.log "^legs-check: portable-smoke: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
-# RUN: %python %S/Inputs/ci-legs.py python3 %t/py3-fail fail > %t/py3-fail.txt
+# RUN: %python %S/Inputs/ci-legs.py python3 %t/py3-fail fail ok > %t/py3-fail.txt
 # RUN: %python %S/Inputs/ci-legs.py setup %t/b4
 # RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/b4 PATH=%t/py3-fail:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin MSIL_CI_RESULTS=%t/rows-3b -- --leg portable-smoke > %t/3b.log
 # RUN: %{harness_check} contains %t/rows-3b "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-builtins\.py --triple msil64-unknown-dotnet \(exit 1; \S*b4/lit-results/portable-smoke\.setup\.log\)\n\Z"

@@ -1,0 +1,137 @@
+# &strlen is one address everywhere: taken in two translation units of the program, in a noinline function, in initialized data of the program and of a -shared library, and in that library's code, the pointers compare equal, differ from &strnlen, survive a round trip through c.dll's memmove, and call c.dll's strlen; and with a private C library c.dll that also holds a probe, the addresses that c.dll itself takes (in code, in its initialized data and in a late noinline function) equal the program's and the library's.
+# Plan 5.19.15 ('&strlen equal across the boundary'), Design.md 4.5 (a
+# function's address is one value in every assembly, so C's function
+# pointer equality holds across images), recon portable-libc 4.3 (P-0's
+# run/fpid.c, re-run on msil64; the probe library there was linked into c.dll,
+# here fplib is a -shared assembly linked against c.dll, %{msil_shlibs}).
+# C17 6.5.9p6: two pointers to the same function compare equal. Each failed
+# group sets one bit of the exit status.
+# The second build (P-1b.e's Provides line, 5.19.7 'Function identity':
+# &strlen equal in the program and c.dll) needs c.dll itself to take
+# &strlen. The shipped c.dll exports only the checked-in list, so the test
+# links a private C library named c in %t/privc the way build-libc.py links
+# c.dll (plan 5.19.3: --shared, the checked-in list, --exclude-libs=ALL,
+# version 1.0.0.0, the build tree's libc.a and the portable helper archive,
+# which the driver adds), plus probe.o, whose three functions join the
+# export list: they return &strlen taken in c.dll's code, from c.dll's
+# initialized data and from a late noinline function. A --shared link named
+# c is the C library itself, so msil-ld's T-P11 does not refuse the archive
+# (P-1a.g). The program then links against %t/privc/c.dll (-L%t/privc ahead
+# of the sysroot's directory), every run gets that c.dll beside it, and
+# group 6 (-DPROBE_CDLL) compares the program's own &strlen, its data's, its
+# late one's and fplib's with the probe's, at each level and on each runtime
+# of the leg (.NET 10, .NET 10 with DOTNET_TieredCompilation=0 and the .NET
+# Framework on portable-smoke). Without the build tree's archive (feature
+# msil-portable-libc-archive, 01-libc/lit.local.cfg) those RUN lines are
+# UNSUPPORTED; under msil_require_portable=1 the archive is required.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = fplib=%t/fplib.c
+# REDEFINE: %{msil_srcs} = %t/main.c %t/other.c
+# RUN: %{msil_prog}
+#
+# The private c.dll with the probe.
+# RUN: %if msil-portable-libc-archive %{ mkdir -p %t/privc %}
+# RUN: %if msil-portable-libc-archive %{ %clang_portable %{msil_portable_libc_cflags} -O2 -c %t/probe.c -o %t/privc/probe.o %}
+# RUN: %if msil-portable-libc-archive %{ cat %S/../../../lib/libc/msil64-unknown-dotnet.exports %t/probe.exports > %t/privc/c.exports %}
+# RUN: %if msil-portable-libc-archive %{ %clang_portable -shared -nolibc -Wl,--export-list=%t/privc/c.exports -Wl,--exclude-libs=ALL -Wl,--assembly-version=1.0.0.0 %t/privc/probe.o %{msil_portable_libc_archive} -o %t/privc/c.dll %}
+# REDEFINE: %{msil_copts} = -DPROBE_CDLL
+# REDEFINE: %{msil_libs} = -L%t/privc
+# REDEFINE: %{msil_deps} = %t/privc/c.dll
+# RUN: %if msil-portable-libc-archive %{ %{msil_prog} %}
+#--- fp.h
+#include <stddef.h>
+typedef size_t (*strlen_fn)(const char *);
+strlen_fn lib_strlen_code(void);
+strlen_fn lib_strlen_data(void);
+size_t lib_call(strlen_fn f, const char *s);
+strlen_fn other_strlen_code(void);
+extern strlen_fn other_strlen_data;
+#ifdef PROBE_CDLL
+/* probe.c, linked into the private c.dll. */
+strlen_fn probe_strlen_code(void);
+strlen_fn probe_strlen_data(void);
+strlen_fn probe_strlen_late(void);
+#endif
+#--- probe.exports
+# probe.c's functions, exported by the private c.dll beside the list.
+probe_strlen_code
+probe_strlen_data
+probe_strlen_late
+#--- probe.c
+/* Linked into the private c.dll: &strlen as c.dll itself takes it. */
+#include <string.h>
+typedef size_t (*strlen_fn)(const char *);
+static strlen_fn probe_data = &strlen;
+strlen_fn probe_strlen_code(void) { return &strlen; }
+strlen_fn probe_strlen_data(void) { return probe_data; }
+__attribute__((noinline)) strlen_fn probe_strlen_late(void) { return &strlen; }
+#--- fplib.c
+#include <string.h>
+#include "fp.h"
+#define API __attribute__((visibility("default")))
+static strlen_fn lib_data = &strlen;
+API strlen_fn lib_strlen_code(void) { return &strlen; }
+API strlen_fn lib_strlen_data(void) { return lib_data; }
+API size_t lib_call(strlen_fn f, const char *s) { return f(s); }
+#--- other.c
+#include <string.h>
+#include "fp.h"
+strlen_fn other_strlen_data = strlen;
+strlen_fn other_strlen_code(void) { return strlen; }
+#--- main.c
+#include <string.h>
+#include "fp.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static strlen_fn a(void) { return &strlen; }
+__attribute__((noinline)) static strlen_fn b(void) { return &strlen; }
+static strlen_fn data = &strlen;
+static volatile strlen_fn v_ptr;
+
+int main(void) {
+  strlen_fn mine = a();
+  /* 0: P-0's two program functions. */
+  CHECK(0, mine == b());
+  /* 1: another translation unit, by code and by initialized data. */
+  CHECK(1, mine == other_strlen_code() && mine == other_strlen_data);
+  CHECK(1, mine == data);
+  /* 2: the -shared library, by code and by its initialized data. */
+  CHECK(2, mine == lib_strlen_code() && mine == lib_strlen_data());
+  /* 3: a different function has a different address. */
+  v_ptr = (strlen_fn)0;
+  size_t (*other)(const char *, size_t) = &strnlen;
+  CHECK(3, (void *)mine != (void *)other && mine != v_ptr);
+  /* 4: the pointer's bytes, copied by c.dll's memmove, are the same pointer. */
+  strlen_fn copy = 0;
+  size_t n = sizeof copy;
+  volatile size_t vn = n;
+  memmove(&copy, &mine, vn);
+  CHECK(4, copy == mine);
+  /* 5: calls through each pointer reach c.dll's strlen (P-0's call through
+     the library's pointer), from the program and from the library. */
+  const char *volatile s = "abcd";
+  CHECK(5, lib_strlen_code()(s) == 4 && copy(s) == 4 && other_strlen_data(s) == 4);
+  CHECK(5, lib_call(mine, "hello, world") == 12 && lib_call(data, "") == 0);
+#ifdef PROBE_CDLL
+  /* 6: c.dll's own &strlen (its code, its initialized data, a late noinline
+     function) equals the program's, its data's, its late one's and fplib's;
+     a call through c.dll's pointer reaches strlen. */
+  strlen_fn in_code = probe_strlen_code(), in_data = probe_strlen_data();
+  strlen_fn in_late = probe_strlen_late();
+  CHECK(6, mine == in_code && mine == in_data && mine == in_late);
+  CHECK(6, data == in_code && b() == in_late && other_strlen_data == in_data);
+  CHECK(6, lib_strlen_code() == in_code && lib_strlen_data() == in_data);
+  CHECK(6, in_code(s) == 4 && lib_call(in_late, "xyz") == 3);
+#endif
+  return (int)fails;
+}

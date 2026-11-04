@@ -54,6 +54,23 @@
 # msil_require_portable or msil_require_x86, portable-smoke-wsl with
 # msil_run_netfx=1, $checkMsil without init-msil-portable.c, and net-core's
 # --filter-out without msil/test/Portable.
+# (6) The P-1b setup (plan 5.18.10, P-1b.c): each Portable leg's setup runs
+# 'build-builtins.py --build-dir <build> --triple msil64-unknown-dotnet' and
+# then 'build-libc.py --build-dir <build>' (c.dll, the empty libm.a and the
+# headers in the portable sysroot), both through $MsilPython and logged to
+# <leg>.setup.log, and only then the leg's lit run; -Describe shows neither
+# step (its legs keep exactly name, tag, kind and runs). With the stand-in
+# Python of Inputs/ci-legs.py (MSIL_FAKE_BUILTINS and MSIL_FAKE_LIBC):
+# both stand-ins 'ok' make -Leg portable-smoke and -Leg portable-smoke-wsl
+# PASS rows whose calls come in that order, each with the leg's build
+# directory, and whose one lit invocation passes exactly what -Describe
+# shows. The failure paths: build-libc.py failing (planted: exit 1; the real
+# script on the stand-in build, which has no clang: exit 2, writing nothing
+# under the build) makes the row 'setup failed: build-libc.py (exit N;
+# <setup log>)' with no lit run, and the setup log keeps build-builtins.py's
+# output before build-libc.py's; build-builtins.py failing stops the setup
+# before build-libc.py runs; and the order check rejects synthetic calls in
+# another order or without the build directory.
 # describe-sh.test checks lit-legs.sh --describe.
 # REQUIRES: msil-ci-pwsh
 
@@ -159,3 +176,54 @@
 # RUN: %{harness_check} contains %t/5q.log "^legs-check: error: net8: paths lack clang/test/Preprocessor/init-msil-portable\.c \([$]checkMsil, P-1a\)$" "^legs-check: error: net-core: paths lack clang/test/Preprocessor/init-msil-portable\.c "
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant net-core-portable > %t/5r.log
 # RUN: %{harness_check} contains %t/5r.log "^legs-check: error: net-core: --filter-out no longer matches MSIL :: Portable/00-freestanding/datamodel\.test$"
+
+# (6) The P-1b setup (plan 5.18.10, P-1b.c)
+# DEFINE: %{p1b_order} = "^argv: \S*build-builtins\.py --build-dir \S*b6 --triple msil64-unknown-dotnet\nargv: \S*build-libc\.py --build-dir \S*b6\nargv: \S*llvm-lit\.py "
+# RUN: %{harness_check} lacks %t/describe.json "build-libc" "build-builtins" "setup"
+# RUN: %python %S/Inputs/ci-legs.py python %t/py6 > %t/py6.txt
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b6
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b6 MSIL_PYTHON=%t/py6/python.cmd MSIL_FAKE_BUILTINS=ok MSIL_FAKE_LIBC=ok MSIL_CI_RESULTS=%t/rows-6a -- -Leg portable-smoke > %t/6a.log
+# RUN: %{harness_check} contains %t/rows-6a "\Alit-legs\tportable-smoke\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
+# RUN: %{harness_check} contains %t/py6/calls.log %{p1b_order}
+# RUN: %{harness_check} contains %t/b6/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: --build-dir \S*b6 --triple msil64-unknown-dotnet\nstand-in build-libc\.py: --build-dir \S*b6$"
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke %t/b6/lit-calls.log > %t/6a-calls.log
+# RUN: %{harness_check} contains %t/6a-calls.log "^legs-check: portable-smoke: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/b6/lit-calls.log %t/py6/calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/b6 MSIL_PYTHON=%t/py6/python.cmd MSIL_FAKE_BUILTINS=ok MSIL_FAKE_LIBC=ok MSIL_CI_RESULTS=%t/rows-6b -- -Leg portable-smoke-wsl > %t/6b.log
+# RUN: %{harness_check} contains %t/rows-6b "\Alit-legs\tportable-smoke-wsl\tPASS\t\d+\tpassed 1; lit exit 0\n\Z"
+# RUN: %{harness_check} contains %t/py6/calls.log %{p1b_order}
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json portable-smoke-wsl %t/b6/lit-calls.log > %t/6b-calls.log
+# RUN: %{harness_check} contains %t/6b-calls.log "^legs-check: portable-smoke-wsl: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# The failure paths: a failed build-libc.py (planted, or the real script on
+# the stand-in build, which has no clang) fails the leg without a lit run
+# and keeps build-builtins.py's output in the setup log; a failed
+# build-builtins.py stops the setup before build-libc.py; and the order
+# check rejects calls in the other order or without the build directory.
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b6c
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/b6c MSIL_PYTHON=%t/py6/python.cmd MSIL_FAKE_BUILTINS=ok MSIL_FAKE_LIBC=fail MSIL_CI_RESULTS=%t/rows-6c -- -Leg portable-smoke > %t/6c.log
+# RUN: %{harness_check} contains %t/rows-6c "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-libc\.py \(exit 1; \S*b6c/lit-results/portable-smoke\.setup\.log\)\n\Z"
+# RUN: %{harness_check} contains %t/b6c/lit-results/portable-smoke.setup.log "^stand-in build-builtins\.py: --build-dir \S*b6c --triple msil64-unknown-dotnet\nstand-in build-libc\.py: planted failure$"
+# RUN: %{harness_check} missing %t/b6c/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b6d
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/b6d MSIL_PYTHON=%t/py6/python.cmd MSIL_FAKE_BUILTINS=ok MSIL_FAKE_LIBC=real MSIL_CI_RESULTS=%t/rows-6d -- -Leg portable-smoke > %t/6d.log
+# RUN: %{harness_check} contains %t/rows-6d "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-libc\.py \(exit 2; \S*b6d/lit-results/portable-smoke\.setup\.log\)\n\Z"
+# RUN: %{harness_check} contains %t/b6d/lit-results/portable-smoke.setup.log "^build-libc\.py: error: \S*b6d\Wbin\Wclang\.exe does not exist "
+# RUN: %{harness_check} missing %t/b6d/lit-calls.log
+# RUN: %{harness_check} missing %t/b6d/runtimes
+# RUN: %{harness_check} missing %t/b6d/lib
+# RUN: rm -f %t/py6/calls.log
+# RUN: %python %S/Inputs/ci-legs.py setup %t/b6e
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/b6e MSIL_PYTHON=%t/py6/python.cmd MSIL_FAKE_BUILTINS=fail MSIL_FAKE_LIBC=ok MSIL_CI_RESULTS=%t/rows-6e -- -Leg portable-smoke > %t/6e.log
+# RUN: %{harness_check} contains %t/rows-6e "\Alit-legs\tportable-smoke\tFAIL\t\d+\tsetup failed: build-builtins\.py --triple msil64-unknown-dotnet \(exit 1; \S*b6e/lit-results/portable-smoke\.setup\.log\)\n\Z"
+# RUN: %{harness_check} contains %t/py6/calls.log "^argv: \S*build-builtins\.py --build-dir \S*b6e "
+# RUN: %{harness_check} lacks %t/py6/calls.log "build-libc\.py"
+# RUN: %{harness_check} lacks %t/b6e/lit-results/portable-smoke.setup.log "build-libc"
+# RUN: %{harness_check} missing %t/b6e/lit-calls.log
+# RUN: %{harness_check} write %t/order-1.log "argv: D:/r/msil/utils/build/build-libc.py --build-dir D:/t/b6" "argv: D:/r/msil/utils/build/build-builtins.py --build-dir D:/t/b6 --triple msil64-unknown-dotnet" "argv: D:/t/b6/bin/llvm-lit.py -sv"
+# RUN: %{harness_check} write %t/order-2.log "argv: D:/r/msil/utils/build/build-builtins.py --build-dir D:/t/b6 --triple msil64-unknown-dotnet" "argv: D:/r/msil/utils/build/build-libc.py" "argv: D:/t/b6/bin/llvm-lit.py -sv"
+# RUN: %{harness_check} write %t/order-3.log "argv: D:/r/msil/utils/build/build-builtins.py --build-dir D:/t/b6 --triple msil64-unknown-dotnet" "argv: D:/t/b6/bin/llvm-lit.py -sv" "argv: D:/r/msil/utils/build/build-libc.py --build-dir D:/t/b6"
+# RUN: %{harness_check} write %t/order-ok.log "argv: D:/r/msil/utils/build/build-builtins.py --build-dir D:/t/b6 --triple msil64-unknown-dotnet" "argv: D:/r/msil/utils/build/build-libc.py --build-dir D:/t/b6" "argv: D:/t/b6/bin/llvm-lit.py -sv"
+# RUN: %{harness_check} lacks %t/order-1.log %{p1b_order}
+# RUN: %{harness_check} lacks %t/order-2.log %{p1b_order}
+# RUN: %{harness_check} lacks %t/order-3.log %{p1b_order}
+# RUN: %{harness_check} contains %t/order-ok.log %{p1b_order}

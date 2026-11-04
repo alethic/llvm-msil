@@ -1,0 +1,89 @@
+# Variadic calls across three assemblies: a -shared library calls c.dll's snprintf with mixed argument types, defines its own variadic function that hands its va_list to c.dll's vsnprintf, and formats errno with %m; the program calls the library's variadic function and c.dll's snprintf with a buffer the library owns.
+# Plan 5.19.4 (snprintf and vsnprintf ship at P-1b because M26 precedes it;
+# they need 5.18's msil64 case of M26's ExpandVariadics hook), 5.18.2 PC4-PC5
+# (the portable va_list: a char * over 8-byte slots), 5.19.15 ('snprintf
+# across the boundary (M26)'), recon portable-libc verifier error 1 (the
+# 'snprintf cross-assembly' test stays a real variadic call, not a v* form).
+# fmtlib is a -shared assembly linked against c.dll (%{msil_shlibs}). The
+# expected strings follow C17 7.21.6.1 (and 7.21.6.12 for vsnprintf); %m's
+# text is llvm-libc's table entry for ERANGE
+# (libc/src/__support/StringUtil/tables/stdc_errors.h). Each failed group sets
+# one bit of the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = fmtlib=%t/fmtlib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- fmt.h
+#include <stddef.h>
+int lib_mixed(char *dst, size_t n);
+int lib_format(char *dst, size_t n, const char *f, ...);
+int lib_errno_text(char *dst, size_t n);
+char *lib_buffer(void);
+#--- fmtlib.c
+#include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include "fmt.h"
+#define API __attribute__((visibility("default")))
+static char lib_buf[64];
+static volatile double v_x = -0.125;
+/* A variadic call from the library into c.dll: int, long long, double,
+   char, string, size_t and a pointer-sized unsigned in one call. */
+API int lib_mixed(char *dst, size_t n) {
+  return snprintf(dst, n, "%d %lld %.3f %c %s %zu %lx", -7, 1LL << 40, v_x,
+                  'q', "lib", (size_t)99, 0xfeedUL);
+}
+/* The library's own variadic function, forwarding its va_list. */
+API int lib_format(char *dst, size_t n, const char *f, ...) {
+  va_list ap;
+  va_start(ap, f);
+  int r = vsnprintf(dst, n, f, ap);
+  va_end(ap);
+  return r;
+}
+API int lib_errno_text(char *dst, size_t n) {
+  errno = ERANGE;
+  return snprintf(dst, n, "<%m>");
+}
+API char *lib_buffer(void) { return lib_buf; }
+#--- main.c
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include "fmt.h"
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+int main(void) {
+  char out[80];
+  /* 0: the library's snprintf call with mixed argument types. */
+  const char *want0 = "-7 1099511627776 -0.125 q lib 99 feed";
+  CHECK(0, lib_mixed(out, sizeof out) == (int)strlen(want0) && strcmp(out, want0) == 0);
+  /* 1: the program calls the library's variadic function; the library's
+     va_list reaches c.dll. */
+  const char *want1 = "x|4000000000|1.2e+04|-9000000000";
+  CHECK(1, lib_format(out, sizeof out, "%s|%u|%.1e|%lld", "x", 4000000000u, 12345.0,
+                      -9000000000LL) == (int)strlen(want1));
+  CHECK(1, strcmp(out, want1) == 0);
+  /* 2: truncation through the library's va_list. */
+  CHECK(2, lib_format(out, 6, "%d-%d", 123, 456) == 7 && strcmp(out, "123-4") == 0);
+  /* 3: %m in the library reads the errno that the library set, and the
+     program sees the same errno. */
+  errno = 0;
+  const char *want3 = "<Numerical result out of range>";
+  CHECK(3, lib_errno_text(out, sizeof out) == (int)strlen(want3));
+  CHECK(3, strcmp(out, want3) == 0 && errno == ERANGE);
+  /* 4: the program formats into a buffer the library owns. */
+  char *lb = lib_buffer();
+  CHECK(4, snprintf(lb, 64, "%s:%x", "prog", 0xABCu) == 8 && strcmp(lb, "prog:abc") == 0);
+  return (int)fails;
+}

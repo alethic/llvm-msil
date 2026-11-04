@@ -15,11 +15,11 @@
 ##   --reference is given (the image references mscorlib all the same), with
 ##   '<file>' naming '<built-in mscorlib table>'; the names compare
 ##   case-insensitively, as the .NET host compares them (MSCORLIB.exe is
-##   T-P13 naming 'MSCORLIB'); for a toolchain library assembly, named by
-##   path or found by -l, M22's older error
+##   T-P13 naming 'MSCORLIB'); a toolchain library assembly that has the
+##   output's name, named by path or found by -l, in any case, keeps M22's
+##   error on every triple instead of T-P13 (section 12, P-1a, 5.18.6 PL8 as
+##   built):
 ##     <file>: library assembly '<name>' has the name of the output; the CLR loads one assembly of a name
-##   already refuses the link on every triple, and the plan does not say
-##   which of the two a dotnet link reports, so either is accepted there;
 ## - the assembly name c is reserved for the C library: an output named c
 ##   (or C) that is not --shared is T-P14, with or without -lc,
 ##     the assembly name 'c' is reserved for the C library on msil64-unknown-dotnet: only a --shared link may produce c.dll
@@ -29,7 +29,7 @@
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
-# RUN: mkdir crt withc noc same shared-same lsame refs ref-same ref-upper builtin-same upper host
+# RUN: mkdir crt withc noc same shared-same lsame lib-upper refs ref-same ref-upper builtin-same upper host
 # RUN: yaml2obj %S/Inputs/fakepack/PortableMscorlib.yaml -o refs/mscorlib.dll
 # RUN: llc -filetype=obj cstub.ll -o cstub.o
 # RUN: llc -filetype=obj u.ll -o u.o
@@ -70,12 +70,17 @@
 # BUILTIN-SAME: {{^}}msil-ld: error: output assembly 'mscorlib' has the simple name of the referenced assembly '<built-in mscorlib table>': the .NET host can load one in place of the other{{$}}
 # RUN: not ls builtin-same/mscorlib.exe
 
-## T-P13 or M22's error: a toolchain library assembly.
+## M22's error, not T-P13: a toolchain library assembly.
+# DEFINE: %{same} = %{fc} --check-prefix=SAME --implicit-check-not=error: --implicit-check-not=warning:
 # RUN: msil-ld -shared foo.o -o foo.dll 2>&1 | count 0
-# RUN: not msil-ld prog-foo.o foo.dll -o same/foo.exe 2>&1 | %{fc} --check-prefix=SAME
-# RUN: not msil-ld prog-foo.o -L . -lfoo -o lsame/foo.exe 2>&1 | %{fc} --check-prefix=SAME
-# RUN: not msil-ld -shared lib-foo.o foo.dll -o shared-same/foo.dll 2>&1 | %{fc} --check-prefix=SAME
-# SAME: {{^}}msil-ld: error: {{(output assembly 'foo' has the simple name of the referenced assembly '.*foo\.dll': the \.NET host can load one in place of the other|.*foo\.dll: library assembly 'foo' has the name of the output; the CLR loads one assembly of a name)}}{{$}}
+# RUN: not msil-ld prog-foo.o foo.dll -o same/foo.exe 2>&1 | %{same}
+# RUN: not msil-ld prog-foo.o -L . -lfoo -o lsame/foo.exe 2>&1 | %{same}
+# RUN: not msil-ld -shared lib-foo.o foo.dll -o shared-same/foo.dll 2>&1 | %{same}
+# RUN: not msil-ld prog-foo.o foo.dll -o lib-upper/FOO.exe 2>&1 | %{same}
+# SAME: {{^}}msil-ld: error: {{(.*[/\\])?}}foo.dll: library assembly 'foo' has the name of the output; the CLR loads one assembly of a name{{$}}
+# RUN: not ls same/foo.exe
+# RUN: not ls lsame/foo.exe
+# RUN: not ls lib-upper/FOO.exe
 
 ## T-P14.
 # RUN: not msil-ld ret42.o -o c.exe 2>&1 | %{fc} --check-prefix=RESERVED

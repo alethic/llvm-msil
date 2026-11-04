@@ -25,7 +25,9 @@ Usage:
       link record's segment name) is overwritten in place and nothing moves.
       It forges an object that llc would not write (a '.fini_array' segment,
       a null '.init_array' slot) so that msil-ld's own checks run; more or
-      fewer than one occurrence, or a length change, is an error.
+      fewer than one occurrence, or a length change, is an error. Any other
+      unique byte string of the file can be replaced the same way: the
+      record's triple key (portable-import-module.test).
 
 The rewrites follow the PE/COFF specification's field offsets (COFF header:
 Machine at +0, SizeOfOptionalHeader at +16; optional header: PE32+ ImageBase

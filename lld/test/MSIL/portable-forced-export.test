@@ -1,0 +1,173 @@
+## c.dll's errno provider exported only through --export-list
+## (ImplementationPlan.md 5.19.5, 5.19.7 and 5.18.6 PL7, milestone P-1b;
+## recon p3/portable-libc.md 4.2, defect D1; brief Q17 (a)):
+## - llvm-libc declares __llvm_libc_errno inside its hidden
+##   LIBC_NAMESPACE_DECL (src/__support/libc_errno.h), so every caller's
+##   object references it as a HIDDEN undefined symbol, while the provider
+##   may define it with default visibility (D1's measured overlay) or hidden
+##   (-fvisibility=hidden, P-1b's build). msil-ld merges visibility as ELF
+##   does and keeps the most restrictive one, so without an export list the
+##   default definition is hidden too: a -shared c.dll exports neither the
+##   provider nor the hidden entry point, and a program that calls them
+##   through c.dll has undefined symbols (the same provider linked alone,
+##   with no hidden reference, is exported by the default rule);
+## - c.dll's own link (build-libc.py's, 5.19.3: --shared, the checked-in
+##   export list, --exclude-libs=ALL, --assembly-version=1.0.0.0) forces the
+##   listed names into the export class 'c' however they are declared: the
+##   default-defined and the hidden-defined provider alike, the hidden entry
+##   point strfoo, and nothing else (not the hidden namespaced alias of
+##   strfoo, not the unlisted hidden functions); the list's '#' comment, the
+##   blank line and the blanks around a name are ignored;
+## - the forced names are resolved like -u: from an archive alone (the libc
+##   build's libc.a) they extract exactly the members that define them, so
+##   the member with only unlisted functions stays out of the image, and a
+##   forced export wins over --exclude-libs=ALL;
+## - the output is the C library itself (--shared, assembly name c): its
+##   symbol table records the C runtime identity 'c', its assembly version is
+##   1.0.0.0, it has no ImplMap or ModuleRef row and references only mscorlib
+##   (5.19.7's contents rules);
+## - a program linked with that c.dll calls both names through the export
+##   class [c]c and references assembly c version 1.0.0.0.
+## Inputs/shared/listing.py prints the export class's members.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir noexp alone arch arch-hidden objs prog prog-noexp
+# RUN: llc -filetype=obj user.ll -o user.o
+# RUN: llc -filetype=obj errno.ll -o errno.o
+# RUN: llc -filetype=obj errno-hidden.ll -o errno-hidden.o
+# RUN: llc -filetype=obj other.ll -o other.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llvm-ar rcs libc.a user.o errno.o other.o
+# RUN: llvm-ar rcs libch.a user.o errno-hidden.o other.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{members} = %python %S/Inputs/shared/listing.py members
+# DEFINE: %{only} = --implicit-check-not="'strbar'" --implicit-check-not="'unused_fn'" \
+# DEFINE:   --implicit-check-not=strfoo_at
+
+## The objects: a hidden reference, a default and a hidden definition.
+# RUN: llvm-cil-dump --link-info user.o | FileCheck %s --check-prefix=USER
+# USER-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL HIDDEN UNDEFINED '__llvm_libc_errno'{{$}}
+# USER-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL HIDDEN 'strfoo' method=0x{{[0-9A-F]+}}{{$}}
+# RUN: llvm-cil-dump --link-info errno.o | FileCheck %s --check-prefix=PROV -DVIS=DEFAULT
+# RUN: llvm-cil-dump --link-info errno-hidden.o | FileCheck %s --check-prefix=PROV -DVIS=HIDDEN
+# PROV: {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL [[VIS]] '__llvm_libc_errno' method=0x{{[0-9A-F]+}}{{$}}
+
+## Without the export list: the merged symbol is hidden, nothing is exported.
+# RUN: msil-ld -shared user.o errno.o -o noexp/c.dll 2>&1 | count 0
+# RUN: llvm-cil-dump noexp/c.dll > noexp.txt
+# RUN: %{members} noexp.txt c | FileCheck %s --check-prefix=NONE --implicit-check-not=.method
+# NONE: {{^}}.class 'c' flags=0x{{[0-9A-F]+}} extends [mscorlib]System.Object{{$}}
+# RUN: not msil-ld prog.o noexp/c.dll -o prog-noexp/prog.exe 2>&1 | %{fc} --check-prefix=UNDEF
+# UNDEF-DAG: {{^}}msil-ld: error: undefined symbol: strfoo{{$}}
+# UNDEF-DAG: {{^}}msil-ld: error: undefined symbol: __llvm_libc_errno{{$}}
+## The provider alone, with no hidden reference, is exported by the usual rule.
+# RUN: msil-ld -shared errno.o -o alone/e.dll 2>&1 | count 0
+# RUN: llvm-cil-dump alone/e.dll > alone.txt
+# RUN: %{members} alone.txt e | FileCheck %s --check-prefix=ERRNO
+
+## c.dll's link from the archive, with either provider.
+# DEFINE: %{clink} = msil-ld -shared --export-list=c.exports --exclude-libs=ALL --assembly-version=1.0.0.0
+# RUN: %{clink} libc.a -o arch/c.dll 2>&1 | count 0
+# RUN: %{clink} libch.a -o arch-hidden/c.dll 2>&1 | count 0
+# RUN: llvm-cil-dump arch/c.dll > arch.txt
+# RUN: llvm-cil-dump arch-hidden/c.dll > arch-hidden.txt
+# RUN: %{members} arch.txt c | FileCheck %s --check-prefixes=ERRNO,STRFOO %{only}
+# RUN: %{members} arch-hidden.txt c | FileCheck %s --check-prefixes=ERRNO,STRFOO %{only}
+# ERRNO-DAG:  {{^}}  .method '__llvm_libc_errno' native int() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# STRFOO-DAG: {{^}}  .method 'strfoo' int32(native int) flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+## The member with only unlisted functions was not extracted.
+# RUN: FileCheck %s --check-prefix=IDENT --input-file=arch.txt %{only}
+# RUN: FileCheck %s --check-prefix=IDENT --input-file=arch-hidden.txt %{only}
+# IDENT: {{^}}assembly 'c' ver 1.0.0.0 {{.*$}}
+# RUN: llvm-cil-dump --link-info arch/c.dll | FileCheck %s --check-prefix=CRT
+# RUN: llvm-cil-dump --link-info arch-hidden/c.dll | FileCheck %s --check-prefix=CRT
+# CRT:      {{^}}SymbolTable v{{[0-9.]+}} triple=msil64-unknown-dotnet abi={{[0-9]+}} runtime='c' datamodel=8,8,4,8{{$}}
+# CRT-NEXT: {{^}}ExportClass 'c'{{$}}
+# RUN: llvm-cil-dump --stats-only arch/c.dll | FileCheck %s --check-prefix=STATS \
+# RUN:   --implicit-check-not="# table ImplMap" --implicit-check-not="# table ModuleRef"
+# STATS: {{^}}# table AssemblyRef rows=1 {{.*$}}
+# RUN: FileCheck %s --check-prefix=CORLIB --input-file=arch.txt --implicit-check-not=assemblyref
+# CORLIB: {{^}}assemblyref 'mscorlib' {{.*$}}
+
+## The same link from the objects.
+# RUN: %{clink} user.o errno.o other.o -o objs/c.dll 2>&1 | count 0
+# RUN: llvm-cil-dump objs/c.dll > objs.txt
+# RUN: %{members} objs.txt c | FileCheck %s --check-prefixes=ERRNO,STRFOO %{only}
+
+## A program calls both through c.dll.
+# RUN: msil-ld prog.o arch/c.dll -o prog/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog/prog.exe | FileCheck %s --check-prefix=PROG
+# PROG-DAG: {{^}}assemblyref 'c' ver 1.0.0.0 {{.*$}}
+# PROG-DAG: {{^}}    L{{[0-9]+}}: call int32(native int) [c]c::'strfoo'{{$}}
+# PROG-DAG: {{^}}    L{{[0-9]+}}: call native int() [c]c::'__llvm_libc_errno'{{$}}
+
+#--- c.exports
+# The C library export list.
+
+strfoo
+  __llvm_libc_errno
+
+#--- user.ll
+target triple = "msil64-unknown-dotnet"
+
+; LLVM_LIBC_FUNCTION's shape: the C name, and the namespaced alias.
+@_ZN22__llvm_libc_23_0_0_git9strfoo_atE = hidden alias i32 (ptr), ptr @strfoo
+
+; Declared inside the hidden LIBC_NAMESPACE_DECL.
+declare hidden ptr @__llvm_libc_errno()
+
+define hidden i32 @strfoo(ptr %s) {
+  %e = call ptr @__llvm_libc_errno()
+  store i32 34, ptr %e, align 4
+  %c = load i8, ptr %s, align 1
+  %r = sext i8 %c to i32
+  ret i32 %r
+}
+
+#--- errno.ll
+target triple = "msil64-unknown-dotnet"
+
+@cell = internal global i32 0, align 4
+
+define ptr @__llvm_libc_errno() {
+  ret ptr @cell
+}
+
+#--- errno-hidden.ll
+target triple = "msil64-unknown-dotnet"
+
+@cell = internal global i32 0, align 4
+
+define hidden ptr @__llvm_libc_errno() {
+  ret ptr @cell
+}
+
+#--- other.ll
+target triple = "msil64-unknown-dotnet"
+
+define hidden i32 @unused_fn() {
+  ret i32 9
+}
+
+define hidden i32 @strbar() {
+  ret i32 8
+}
+
+#--- prog.ll
+target triple = "msil64-unknown-dotnet"
+
+declare ptr @__llvm_libc_errno()
+declare i32 @strfoo(ptr)
+
+define i32 @main() {
+  %s = alloca i8, align 1
+  store i8 7, ptr %s, align 1
+  %v = call i32 @strfoo(ptr %s)
+  %e = call ptr @__llvm_libc_errno()
+  %x = load i32, ptr %e, align 4
+  %r = add i32 %v, %x
+  ret i32 %r
+}

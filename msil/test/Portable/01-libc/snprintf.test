@@ -1,0 +1,142 @@
+# c.dll's printf core through snprintf, sprintf, vsnprintf and vsprintf: P-0's formats (%d|%s|%.3f|%x and %e|%g|%.10a|%lld|%llu, %Lf with a binary64 long double, %zu, %-3s, %#o), truncation and the would-be length, flags, widths, precisions and length modifiers, floating-point rounding, infinities and NaNs, %a, %m and %#m with errno, %n, %lc and %ls, a program's va_list handed to vsnprintf and vsprintf, and positional conversions (%2$s %1$s, %1$*2$d, %2$.*1$f) in index mode.
+# Plan 5.19.3 (printf float, index mode, %n, %m and wide enabled), 5.19.4
+# (snprintf, sprintf, vsnprintf and vsprintf ship at P-1b: M26 precedes it),
+# 5.19.15 ('vsnprintf formats (%e, %g, %.10a, %lld, %zu, %m, truncation)'),
+# 5.19.1 rule 4 (OSUtil/io.h's dotnet branch: the printf core builds without
+# an output layer), recon portable-libc 4.3 (P-0's run/prog.c and run/fmt.c,
+# re-run on msil64 through the portable va_list instead of the probe's
+# hand-built SysV one). Expected strings follow C17 7.21.6.1 (each
+# conversion's text; floating results correctly rounded to nearest, ties to
+# even on exactly representable halves; snprintf returns the length it would
+# have written, 7.21.6.5) and llvm-libc's message table for %m (strerror's
+# text, libc/src/__support/StringUtil/tables/posix_errors.h) and its errno
+# name for %#m. Positional conversions are POSIX's (fprintf, 'Conversion
+# specifications': %n$ takes the nth argument, *m$ a width or precision from
+# the mth, an argument may be used more than once, and a format uses either
+# positional or sequential conversions only); 5.19.3's configuration keeps
+# printf's index mode (LIBC_CONF_PRINTF_DISABLE_INDEX_MODE false in
+# libc/config/dotnet/config.json). Each failed group sets one bit of the
+# exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static char buf[512];
+/* snprintf into buf; true when the text and the returned length match. */
+#define FMT(want, ...)                                                         \
+  (snprintf(buf, sizeof buf, __VA_ARGS__) == (int)strlen(want) &&             \
+   strcmp(buf, want) == 0)
+
+/* A program variadic function that hands its va_list to c.dll. */
+static int vfmt(char *dst, size_t n, const char *f, ...) {
+  va_list ap;
+  va_start(ap, f);
+  int r = vsnprintf(dst, n, f, ap);
+  va_end(ap);
+  return r;
+}
+
+/* The same through vsprintf, which has no size. */
+static int vsfmt(char *dst, const char *f, ...) {
+  va_list ap;
+  va_start(ap, f);
+  int r = vsprintf(dst, f, ap);
+  va_end(ap);
+  return r;
+}
+
+static volatile double v_pi = 3.14159, v_third = 1.0 / 3, v_tenth = 0.1;
+/* Opaque operands, so the compiler neither folds nor warns about these calls. */
+static const char *volatile v_trunc = "truncate";
+static volatile size_t v_one = 1;
+
+int main(void) {
+  /* 0: P-0's run/prog.c format. */
+  CHECK(0, FMT("42|str|3.142|0", "%d|%s|%.3f|%x", 42, "str", v_pi, 0));
+
+  /* 1: P-0's run/fmt.c, first line. */
+  CHECK(1, FMT("1.234568e+03|0.000123|0x1.5555555555p-2|-5|18446744073709551615",
+               "%e|%g|%.10a|%lld|%llu", 1234.5678, 0.000123, v_third, -5LL,
+               18446744073709551615ULL));
+
+  /* 2: P-0's run/fmt.c, second line: %Lf takes a long double, binary64 on
+     the portable triples (5.18.2). */
+  CHECK(2, FMT("2.500000|77|x  |0377", "%Lf|%zu|%-3s|%#o", 2.5L, (size_t)77, "x", 255));
+
+  /* 3: truncation returns the full length (P-0's "trun" case), a null buffer
+     of size 0 counts, sprintf returns what it wrote. */
+  char small[5];
+  CHECK(3, snprintf(small, sizeof small, "%s", v_trunc) == 8 && strcmp(small, "trun") == 0);
+  CHECK(3, snprintf(NULL, 0, "%d", -12345) == 6);
+  CHECK(3, snprintf(small, v_one, "%d", 7) == 1 && small[0] == 0);
+  CHECK(3, sprintf(buf, "%s=%d", "n", 300) == 5 && strcmp(buf, "n=300") == 0);
+
+  /* 4: %m is strerror(errno), %#m the errno name (or the number when there
+     is none, 0 printing "0"), %n stores the count so far. */
+  errno = ENOENT;
+  CHECK(4, FMT("[No such file or directory]", "[%m]"));
+  CHECK(4, FMT("ENOENT|ENOENT", "%#m|%#m"));
+  errno = 4242;
+  CHECK(4, FMT("4242", "%#m"));
+  errno = 0;
+  CHECK(4, FMT("Success|0", "%m|%#m"));
+  int count = -1;
+  CHECK(4, FMT("abc", "abc%n", &count) && count == 3);
+
+  /* 5: flags, widths, precisions and length modifiers (C17 7.21.6.1p6-p7). */
+  CHECK(5, FMT("  3.1|42    |+7| 7|-0042", "%5.1f|%-6d|%+d|% d|%05d", v_pi, 42, 7, 7, -42));
+  CHECK(5, FMT("   7|7   |ab", "%*d|%-*d|%.*s", 4, 7, 4, 7, 2, "abcdef"));
+  CHECK(5, FMT("44|4464|-9223372036854775808|-1|-2|Z|%", "%hhd|%hd|%ld|%jd|%td|%c|%%",
+               300, 70000, LONG_MIN, (intmax_t)-1, (ptrdiff_t)-2, 'Z'));
+  CHECK(5, FMT("BEEF|0xbeef|10|4294967295|ffffffffffffffff", "%X|%#x|%o|%u|%llx",
+               0xBEEFu, 0xbeefu, 8u, 4294967295u, ULLONG_MAX));
+
+  /* 6: floating point: exact decimal expansion, ties to even on exact
+     halves, %g's style choice, %a, infinities and NaN, the smallest
+     subnormal. */
+  CHECK(6, FMT("0.10000000000000000555", "%.20f", v_tenth));
+  CHECK(6, FMT("0|2|2|0.2", "%.0f|%.0f|%.0f|%.1f", 0.5, 1.5, 2.5, 0.25));
+  CHECK(6, FMT("-0|100000|1e+06|1.5E-05", "%g|%g|%g|%G", -0.0, 100000.0, 1000000.0, 1.5e-5));
+  CHECK(6, FMT("0x1p+0|-0X1P-1", "%a|%A", 1.0, -0.5));
+  CHECK(6, FMT("inf|-INF|nan|NAN", "%f|%F|%e|%G", INFINITY, -INFINITY, NAN, NAN));
+  CHECK(6, FMT("4.940656e-324|1e+300", "%e|%.0e", 4.9406564584124654e-324, 1e300));
+
+  /* 7: a va_list from the program, wide arguments, a long result. */
+  char out[32];
+  CHECK(7, vfmt(out, sizeof out, "%s-%d-%.2f", "a", 1, 2.5) == 8 && strcmp(out, "a-1-2.50") == 0);
+  CHECK(7, vfmt(out, 4, "%lld", -1234567890123LL) == 14 && strcmp(out, "-12") == 0);
+  CHECK(7, FMT("wide|Z", "%ls|%lc", L"wide", (wint_t)L'Z'));
+  CHECK(7, snprintf(buf, sizeof buf, "%300d", 1) == 300 && buf[0] == ' ' && buf[299] == '1' && buf[300] == 0);
+
+  /* 8: vsprintf with a program va_list; positional conversions through
+     snprintf, vsnprintf and vsprintf. */
+  CHECK(8, vsfmt(out, "%s:%u:%c|%.1f", "vs", 7u, 'k', 0.25) == 10 && strcmp(out, "vs:7:k|0.2") == 0);
+  CHECK(8, vsfmt(out, "%lld%%", -9LL) == 3 && strcmp(out, "-9%") == 0);
+  CHECK(8, FMT("world hello", "%2$s %1$s", "hello", "world"));
+  CHECK(8, FMT("    7|7|7    ", "%1$*2$d|%1$d|%1$-*2$d", 7, 5));
+  CHECK(8, FMT("2.50|-3|2", "%2$.*1$f|%3$d|%1$d", 2, 2.5, -3));
+  CHECK(8, vfmt(out, sizeof out, "%3$d%2$d%1$d", 1, 2, 3) == 3 && strcmp(out, "321") == 0);
+  CHECK(8, vsfmt(out, "%2$s%1$s|%3$lld", "b", "a", -5LL) == 5 && strcmp(out, "ab|-5") == 0);
+  return (int)fails;
+}

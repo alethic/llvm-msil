@@ -18,8 +18,8 @@
 ##   x86_64-unknown-linux-gnu-msil object whose machine alone is rewritten;
 ##   alone, after a valid object, and as an extracted archive member;
 ## - the unmodified portable and host objects link as before.
-## The hex spelling of <machine> is not part of the contract beyond 'the COFF
-## value in hex', so the checks accept leading zeros and either case.
+## <machine> is printed as 0x and uppercase hex without leading zeros (0x14C,
+## 0x8664; section 12, P-1a, T-P12's <machine>), and the checks pin it.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -60,8 +60,8 @@
 # RUN: not msil-ld main-fn.o fn-amd64.o -o x.exe 2>&1 | %{fc} --check-prefix=PORTABLE -DFILE=fn-amd64.o
 # RUN: llvm-ar rc libbadfn.a fn-amd64.o
 # RUN: not msil-ld main-fn.o libbadfn.a -o x.exe 2>&1 | %{fc} --check-prefix=PORTABLE-MEMBER
-# PORTABLE:        {{^}}msil-ld: error: '[[FILE]]' is a PE32 CIL object for machine 0x{{0*}}8664, which msil64-unknown-dotnet does not link (it links PE32 objects for machine 0x{{0*}}{{14c|14C}}){{$}}
-# PORTABLE-MEMBER: {{^}}msil-ld: error: '{{.*}}fn-amd64.o{{.*}}' is a PE32 CIL object for machine 0x{{0*}}8664, which msil64-unknown-dotnet does not link (it links PE32 objects for machine 0x{{0*}}{{14c|14C}}){{$}}
+# PORTABLE:        {{^}}msil-ld: error: '[[FILE]]' is a PE32 CIL object for machine 0x8664, which msil64-unknown-dotnet does not link (it links PE32 objects for machine 0x14C){{$}}
+# PORTABLE-MEMBER: {{^}}msil-ld: error: '{{.*}}fn-amd64.o{{.*}}' is a PE32 CIL object for machine 0x8664, which msil64-unknown-dotnet does not link (it links PE32 objects for machine 0x14C){{$}}
 
 ## A windows-msvc object rewritten to PE32 for I386.
 # RUN: %python %S/Inputs/portable/pe.py to-pe32 wfn.o wfn-i386.o
@@ -70,14 +70,14 @@
 # STILL-WIN: {{^}}LinkInfo v{{[0-9.]+}} triple=x86_64-pc-windows-msvc-msil {{.*$}}
 # RUN: not msil-ld wfn-i386.o -o x.exe 2>&1 | %{fc} --check-prefix=WIN -DFILE=wfn-i386.o
 # RUN: not msil-ld w.o wfn-i386.o -o x.exe 2>&1 | %{fc} --check-prefix=WIN -DFILE=wfn-i386.o
-# WIN: {{^}}msil-ld: error: '[[FILE]]' is a PE32 CIL object for machine 0x{{0*}}{{14c|14C}}, which x86_64-pc-windows-msvc-msil does not link (it links PE32+ objects for machine 0x{{0*}}8664){{$}}
+# WIN: {{^}}msil-ld: error: '[[FILE]]' is a PE32 CIL object for machine 0x14C, which x86_64-pc-windows-msvc-msil does not link (it links PE32+ objects for machine 0x8664){{$}}
 
 ## A linux-gnu object whose machine alone says I386 (still PE32+).
 # RUN: %python %S/Inputs/portable/pe.py set-machine l.o l-i386.o 0x14c
 # RUN: %python %S/Inputs/portable/pe.py info l-i386.o | FileCheck %s --check-prefix=INFO-PLUS-I386
 # INFO-PLUS-I386: {{^}}PE32+ machine=0x014C{{$}}
 # RUN: not msil-ld l-i386.o -o x.exe 2>&1 | %{fc} --check-prefix=LNX -DFILE=l-i386.o
-# LNX: {{^}}msil-ld: error: '[[FILE]]' is a PE32+ CIL object for machine 0x{{0*}}{{14c|14C}}, which x86_64-unknown-linux-gnu-msil does not link (it links PE32+ objects for machine 0x{{0*}}8664){{$}}
+# LNX: {{^}}msil-ld: error: '[[FILE]]' is a PE32+ CIL object for machine 0x14C, which x86_64-unknown-linux-gnu-msil does not link (it links PE32+ objects for machine 0x8664){{$}}
 
 ## The unmodified objects link as before.
 # RUN: msil-ld main-fn.o fn.o -o ok.exe 2>&1 | count 0

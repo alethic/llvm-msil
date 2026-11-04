@@ -1,0 +1,42 @@
+# -static is refused on msil64-unknown-dotnet until P-3 (the driver's T-P9), and the sysroot holds no libc.a, so neither -Wl,-Bstatic -lc nor -l:libc.a finds a static C library.
+# Plan 5.18.4 PV4 and 5.19.8 ('-static before P-3', the first two of its
+# three loud layers; msil-ld's T-P11 for the build tree's archive is
+# libc-static.test): the driver refuses -static on the portable triples with
+# err_drv_msil_portable_static, T-P9, before it runs msil-ld; build-libc.py
+# never installs libc.a into the sysroot, so a static lookup of the C library
+# finds nothing there (5.18.6 PL6: under -Bstatic only lib<name>.a is a
+# candidate, and the sysroot's library directory holds c.dll and the empty
+# libm.a). The program would link and run without the flags.
+# The options reach only the link (%{msil_libs}, after the object); the
+# -Bstatic case ends with -Wl,-Bdynamic, so the driver's own -lc still finds
+# c.dll and only the program's -lc fails. A link that writes
+# --lto-emit-asm text cannot import c.dll (msil_link_output=il), so the two
+# msil-ld cases run only for linked images; T-P9 comes first either way.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+#
+# REDEFINE: %{msil_libs} = -static
+# RUN: %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=TP9 --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: error"
+# TP9:      {{^}}clang: error: '-static' is not supported for 'msil64-unknown-dotnet' yet: the managed C library links only as the shared assembly c.dll{{$}}
+# TP9:      {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#
+# REDEFINE: %{msil_libs} = -Wl,-Bstatic -lc -Wl,-Bdynamic
+# RUN: %if !msil-link-output=il %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=BSTATIC --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: '-static'" --implicit-check-not="msil-ld: error" %}
+# BSTATIC:      {{^}}msil-ld: error: unable to find library -lc{{$}}
+# BSTATIC-NEXT: {{^}}clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation){{$}}
+# BSTATIC:      {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#
+# REDEFINE: %{msil_libs} = -l:libc.a
+# RUN: %if !msil-link-output=il %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=COLON --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: '-static'" --implicit-check-not="msil-ld: error" %}
+# COLON:      {{^}}msil-ld: error: unable to find library -l:libc.a{{$}}
+# COLON-NEXT: {{^}}clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation){{$}}
+# COLON:      {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#--- main.c
+#include <string.h>
+
+static volatile const char *word = "static";
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return strlen((const char *)word) != 6;
+}

@@ -1,0 +1,221 @@
+# The portable C ABI that P-1b freezes for msil64-unknown-dotnet, read from the sysroot's generated headers: every errno number of the extended generic set, WEOF and wint_t, struct tm, jmp_buf, mbstate_t, struct lconv, div_t and its siblings, time_t, struct timespec, clock_t, locale_t and the LC_ values, FILE as an incomplete type, and gmtime's tm_gmtoff and tm_zone.
+# Plan 5.19.5 (errno numbering, frozen at P-1b; brief Q15 (b)), 5.19.6 (the
+# libc items frozen at P-1b and the 5.18 items they cite: wint_t int with
+# WEOF -1 of type int, brief Q5 (b); 5.18.2 PC2), 5.19.1 rule 6 (a frozen
+# item never changes, so this test is never updated to follow a change),
+# brief Q19 (a) (struct tm has tm_gmtoff and tm_zone; gmtime stores 0 and
+# "GMT", as on Linux). The values below are the contract's text, not a run:
+# each errno number is 5.19.5's list (Linux asm-generic's numbers, except
+# EOVERFLOW 35 and EDEADLK 75); the layouts are llvm-libc's type definitions
+# on the LP64 portable data model (5.18.2); the calendar values follow
+# C17 7.27.3.3 (gmtime) and 7.27.3.1 (asctime's exact format) for the given
+# seconds since the epoch. Most checks are _Static_asserts, so a change
+# fails the compile; the program also runs gmtime, gmtime_r, asctime_r and
+# difftime from c.dll, and each failed group sets one bit of the exit status.
+# The upstream merge that changes a number of the generic errno header fails
+# here (plan section 12, 'Upstream conflict surface': EDEADLK, ENOSYS and the
+# 44 added names are pinned one by one). MB_CUR_MAX, 5.19.6's frozen row 4
+# (plan section 12, 'Contract 5.19.6, 5.19.14 and 5.13.5 amended (MB_CUR_MAX
+# as built)'), is pinned by ctype-wchar.test.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#
+# FILE is an incomplete type (5.19.6): its size is not visible to programs.
+# RUN: not %clang_portable %{msil_cflags} -fsyntax-only -DPROBE_FILE_SIZE %t/main.c 2>&1 | FileCheck %s --check-prefix=FILE --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# FILE: main.c:{{[0-9]+}}:{{[0-9]+}}: error: invalid application of 'sizeof' to an incomplete type 'FILE'
+#--- main.c
+#include <errno.h>
+#include <limits.h>
+#include <locale.h>
+#include <setjmp.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <inttypes.h>
+#include <string.h>
+#include <time.h>
+#include <wchar.h>
+#include <wctype.h>
+
+#define SA(c) _Static_assert(c, #c)
+#define SAME(e, T) SA(_Generic((e), T: 1, default: 0))
+
+/* errno: every name of plan 5.19.5, with its number. The 36 names of
+   llvm-libc's generic set keep their numbers. */
+#define E(name, num) SA(name == num); SAME(name, int);
+E(EPERM, 1) E(ENOENT, 2) E(ESRCH, 3) E(EINTR, 4) E(EIO, 5) E(ENXIO, 6)
+E(E2BIG, 7) E(ENOEXEC, 8) E(EBADF, 9) E(ECHILD, 10) E(EAGAIN, 11)
+E(ENOMEM, 12) E(EACCES, 13) E(EFAULT, 14) E(ENOTBLK, 15) E(EBUSY, 16)
+E(EEXIST, 17) E(EXDEV, 18) E(ENODEV, 19) E(ENOTDIR, 20) E(EISDIR, 21)
+E(EINVAL, 22) E(ENFILE, 23) E(EMFILE, 24) E(ENOTTY, 25) E(ETXTBSY, 26)
+E(EFBIG, 27) E(ENOSPC, 28) E(ESPIPE, 29) E(EROFS, 30) E(EMLINK, 31)
+E(EPIPE, 32) E(EDOM, 33) E(ERANGE, 34) E(EOVERFLOW, 35) E(EILSEQ, 84)
+/* The 44 names of posix_errors.h that the generic set lacked, with Linux
+   asm-generic's numbers, except EDEADLK: 75 (Linux's EOVERFLOW number),
+   because the generic EOVERFLOW holds Linux's 35. */
+E(ENAMETOOLONG, 36) E(ENOLCK, 37) E(ENOSYS, 38) E(ENOTEMPTY, 39)
+E(ELOOP, 40) E(ENOMSG, 42) E(EIDRM, 43) E(ENOSTR, 60) E(ENODATA, 61)
+E(ETIME, 62) E(ENOSR, 63) E(ENOLINK, 67) E(EPROTO, 71) E(EMULTIHOP, 72)
+E(EBADMSG, 74) E(EDEADLK, 75) E(ENOTSOCK, 88) E(EDESTADDRREQ, 89)
+E(EMSGSIZE, 90) E(EPROTOTYPE, 91) E(ENOPROTOOPT, 92) E(EPROTONOSUPPORT, 93)
+E(ENOTSUP, 95) E(EAFNOSUPPORT, 97) E(EADDRINUSE, 98) E(EADDRNOTAVAIL, 99)
+E(ENETDOWN, 100) E(ENETUNREACH, 101) E(ENETRESET, 102)
+E(ECONNABORTED, 103) E(ECONNRESET, 104) E(ENOBUFS, 105) E(EISCONN, 106)
+E(ENOTCONN, 107) E(ETIMEDOUT, 110) E(ECONNREFUSED, 111)
+E(EHOSTUNREACH, 113) E(EALREADY, 114) E(EINPROGRESS, 115) E(ESTALE, 116)
+E(EDQUOT, 122) E(ECANCELED, 125) E(EOWNERDEAD, 130) E(ENOTRECOVERABLE, 131)
+/* The two POSIX aliases: 82 names, 80 numbers. */
+E(EWOULDBLOCK, EAGAIN) E(EOPNOTSUPP, ENOTSUP)
+E(EWOULDBLOCK, 11) E(EOPNOTSUPP, 95)
+/* C17 7.5p2: the macros are usable in #if. */
+#if EOVERFLOW != 35 || EDEADLK != 75 || ENOSYS != 38 || EWOULDBLOCK != EAGAIN || EOPNOTSUPP != ENOTSUP
+#error "errno numbering changed"
+#endif
+/* The errno expression is llvm-libc's (*__llvm_libc_errno()), an int lvalue. */
+SAME(errno, int);
+SAME(&errno, int *);
+
+/* wint_t is int and WEOF is -1 of type int (brief Q5 (b); 5.18.2 PC2). */
+SAME((wint_t)0, int);
+SAME(WEOF, int);
+SA(WEOF == -1);
+SA((wint_t)-1 < 0);
+SA(WINT_MIN == INT_MIN && WINT_MAX == INT_MAX);
+SA(sizeof(wint_t) == 4);
+/* wchar_t is 32-bit signed (5.18.2). */
+SAME((wchar_t)0, int);
+SA(WCHAR_MIN == INT_MIN && WCHAR_MAX == INT_MAX);
+
+/* struct tm: llvm-libc's nine ISO fields, then long tm_gmtoff and
+   const char *tm_zone (brief Q19 (a)), 8-aligned: 9 * 4 + 4 padding + 8 + 8. */
+SA(offsetof(struct tm, tm_sec) == 0);
+SA(offsetof(struct tm, tm_min) == 4);
+SA(offsetof(struct tm, tm_hour) == 8);
+SA(offsetof(struct tm, tm_mday) == 12);
+SA(offsetof(struct tm, tm_mon) == 16);
+SA(offsetof(struct tm, tm_year) == 20);
+SA(offsetof(struct tm, tm_wday) == 24);
+SA(offsetof(struct tm, tm_yday) == 28);
+SA(offsetof(struct tm, tm_isdst) == 32);
+SA(offsetof(struct tm, tm_gmtoff) == 40);
+SA(offsetof(struct tm, tm_zone) == 48);
+SA(sizeof(struct tm) == 56 && _Alignof(struct tm) == 8);
+SAME(((struct tm *)0)->tm_gmtoff, long);
+SAME(((struct tm *)0)->tm_zone, const char *);
+
+/* jmp_buf and sigjmp_buf: opaque, 200 bytes, 8-aligned (glibc's size, which
+   holds 5.15.4's prefix at 0-15, the mask flag at 64 and the mask at 72). */
+SA(sizeof(jmp_buf) == 200 && _Alignof(jmp_buf) == 8);
+SA(sizeof(sigjmp_buf) == 200 && _Alignof(sigjmp_buf) == 8);
+/* setjmp.h declares the four functions (never defined: M27 lowers them). */
+SA(__builtin_types_compatible_p(__typeof__(setjmp), int(jmp_buf)));
+SA(__builtin_types_compatible_p(__typeof__(longjmp), void(jmp_buf, int)));
+SA(__builtin_types_compatible_p(__typeof__(sigsetjmp), int(sigjmp_buf, int)));
+SA(__builtin_types_compatible_p(__typeof__(siglongjmp), void(sigjmp_buf, int)));
+
+/* mbstate_t: 8 bytes (a uint32_t and two uint8_t). */
+SA(sizeof(mbstate_t) == 8 && _Alignof(mbstate_t) == 4);
+
+/* div_t, ldiv_t, lldiv_t, imaxdiv_t: llvm-libc's {quot, rem}. */
+SA(sizeof(div_t) == 8 && offsetof(div_t, rem) == 4);
+SA(sizeof(ldiv_t) == 16 && offsetof(ldiv_t, rem) == 8);
+SA(sizeof(lldiv_t) == 16 && offsetof(lldiv_t, rem) == 8);
+SA(sizeof(imaxdiv_t) == 16 && offsetof(imaxdiv_t, rem) == 8);
+SAME(((div_t *)0)->quot, int);
+SAME(((ldiv_t *)0)->quot, long);
+SAME(((lldiv_t *)0)->quot, long long);
+SAME(((imaxdiv_t *)0)->quot, intmax_t);
+SA(sizeof(intmax_t) == 8);
+
+/* time_t is int64_t (time_t_64.h, the wasm-style spelling long long), struct
+   timespec {time_t, int64_t} is 16 bytes, clock_t is llvm-libc's long. */
+SAME((time_t)0, long long);
+SAME((int64_t)0, long long);
+SA(sizeof(struct timespec) == 16 && offsetof(struct timespec, tv_nsec) == 8);
+SAME(((struct timespec *)0)->tv_nsec, long long);
+SAME((clock_t)0, long);
+SA(sizeof(clock_t) == 8);
+
+/* locale_t, the LC_ values and struct lconv: llvm-libc's (localeconv ships):
+   nine char * members, seven char members, int_curr_symbol, seven chars. */
+SA(sizeof(locale_t) == 8);
+SA(LC_CTYPE == 0 && LC_NUMERIC == 1 && LC_TIME == 2 && LC_COLLATE == 3);
+SA(LC_MONETARY == 4 && LC_MESSAGES == 5 && LC_ALL == 6);
+SA(offsetof(struct lconv, decimal_point) == 0);
+SA(offsetof(struct lconv, currency_symbol) == 64);
+SA(offsetof(struct lconv, frac_digits) == 72);
+SA(offsetof(struct lconv, n_sign_posn) == 78);
+SA(offsetof(struct lconv, int_curr_symbol) == 80);
+SA(offsetof(struct lconv, int_frac_digits) == 88);
+SA(offsetof(struct lconv, int_n_sign_posn) == 94);
+SA(sizeof(struct lconv) == 96 && _Alignof(struct lconv) == 8);
+
+/* FILE is incomplete: only pointers to it exist before P-2. */
+SA(sizeof(FILE *) == 8);
+#ifdef PROBE_FILE_SIZE
+unsigned long file_size = sizeof(FILE);
+#endif
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static int tm_is(const struct tm *t, int year, int mon, int mday, int hour,
+                 int min, int sec, int wday, int yday) {
+  return t->tm_year == year && t->tm_mon == mon && t->tm_mday == mday &&
+         t->tm_hour == hour && t->tm_min == min && t->tm_sec == sec &&
+         t->tm_wday == wday && t->tm_yday == yday && t->tm_isdst == 0;
+}
+
+static volatile time_t v_epoch = 0;
+
+int main(void) {
+  /* 0: gmtime of the epoch: Thursday 1970-01-01 00:00:00 UTC, with the
+     zone fields of brief Q19 (a) (offset 0, "GMT", as on Linux). */
+  time_t t = v_epoch;
+  struct tm *g = gmtime(&t);
+  CHECK(0, g && tm_is(g, 70, 0, 1, 0, 0, 0, 4, 0));
+  CHECK(0, g && g->tm_gmtoff == 0 && g->tm_zone && strcmp(g->tm_zone, "GMT") == 0);
+
+  /* 1: gmtime_r of one second before the epoch: Wednesday 1969-12-31
+     23:59:59 (yday 364), into the caller's struct. */
+  struct tm r;
+  memset(&r, 0x5a, sizeof r);
+  t = v_epoch - 1;
+  CHECK(1, gmtime_r(&t, &r) == &r && tm_is(&r, 69, 11, 31, 23, 59, 59, 3, 364));
+  CHECK(1, r.tm_gmtoff == 0 && r.tm_zone && strcmp(r.tm_zone, "GMT") == 0);
+
+  /* 2: a leap day, 951782400 = Tuesday 2000-02-29 00:00:00 (yday 59), and
+     2^31 = Tuesday 2038-01-19 03:14:08 (time_t is 64-bit). */
+  t = v_epoch + 951782400;
+  CHECK(2, gmtime_r(&t, &r) == &r && tm_is(&r, 100, 1, 29, 0, 0, 0, 2, 59));
+  t = v_epoch + 2147483648LL;
+  CHECK(2, gmtime_r(&t, &r) == &r && tm_is(&r, 138, 0, 19, 3, 14, 8, 2, 18));
+
+  /* 3: asctime_r's format is fixed by C17 7.27.3.1. */
+  char buf[64];
+  t = v_epoch;
+  CHECK(3, gmtime_r(&t, &r) == &r);
+  CHECK(3, asctime_r(&r, buf) == buf && strcmp(buf, "Thu Jan  1 00:00:00 1970\n") == 0);
+  t = v_epoch + 951782400;
+  CHECK(3, gmtime_r(&t, &r) == &r);
+  CHECK(3, asctime_r(&r, buf) == buf && strcmp(buf, "Tue Feb 29 00:00:00 2000\n") == 0);
+
+  /* 4: difftime. */
+  CHECK(4, difftime(v_epoch + 10, v_epoch + 3) == 7.0);
+
+  /* 5: errno is one int lvalue (the cell that c.dll exports). */
+  errno = EDEADLK;
+  CHECK(5, errno == 75 && *__llvm_libc_errno() == 75 && &errno == __llvm_libc_errno());
+  errno = 0;
+  return (int)fails;
+}

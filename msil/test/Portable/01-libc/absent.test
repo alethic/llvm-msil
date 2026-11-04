@@ -1,0 +1,342 @@
+# Absent means absent: OS-dependent functions and upstream stubs are not in c.dll at P-1b. Called through the program's own prototypes (malloc, exit, printf, rand, localtime, fetestexcept, strsignal, and the stubs swprintf and strptime) the link fails, each name with N6's class line naming c.dll; called through the sysroot's headers they are undeclared, a compile error, in C (strsignal through <string.h> too) and in C++ (malloc through <stdlib.h>), and <fenv.h> is not installed. Objects the sysroot's headers declare but c.dll does not define (stdin, stdout, stderr, daylight, timezone, tzname, program_invocation_name and program_invocation_short_name) compile and fail at link, each name with no class line yet; so does assert with NDEBUG unset, whose __assert_fail fails at link with N6's class line. The C23 macros iscanonical and issignaling of <math.h> name functions c.dll does not ship, so a use is an undeclared-identifier error; l64a is undeclared in C17 and C23 and, through the program's own prototype, an undefined symbol (as are iscanonical and issignaling); <math.h> has none of the C99 comparison macros (isless, isunordered, ...), so a use is an undeclared-function error.
+# Plan 5.19.1 rule 2 (absent until real: the generated headers declare only
+# shipped entry points, so a use through <stdio.h> or <stdlib.h> is an
+# undeclared-function error in C99, and a use through the program's own
+# prototype is an undefined-symbol link error with N6's class line naming
+# c.dll; no stub stands in), 5.19.4 (malloc and the heap, exit, stdio
+# streams, rand and the localtime family wait for P-2 or P-3; swprintf and
+# strptime are upstream stubs that only fail, so they stay absent),
+# 5.19.15 (the two cases), 5.19.16 (fenv and the signal functions are
+# undeclared: no fenv.h is installed and string.h has no strsignal), brief
+# Q20 (a) and Q21 (a), 5.18.6 PL3 and 5.14.2 (N6: '>>> a C
+# library function that the C library c.dll (msil64-unknown-dotnet) does not
+# provide' when an input named c.dll takes part: here -lc from the sysroot,
+# the driver's default library). The order of the undefined symbols is the
+# linker's, so NAMES finds each one and SEQ checks that every error has the
+# N6 line and a reference line after it. The programs never run. Section
+# 12's row 'Contract 5.19.1 rule 2, 5.19.4 and the P-1b Goal amended
+# (declared-but-absent names and memset_explicit, as built)' pins cases (3)
+# and (5) here.
+# Section 12's row 'Contract 5.19.4 and the P-1b Goal amended (exported but
+# undeclared, as built)' pins cases (7) and (8): iscanonical, issignaling
+# (with their f and l forms) and l64a are no entry points, because no
+# installed header declares them. P-1b records the missing C99 comparison
+# macros of llvm-libc's <math.h> (case (9)) as an upstream gap; the failure
+# is a compile error, so it is loud. A link that writes --lto-emit-asm text
+# cannot import c.dll (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+#
+# (1) The program's own prototypes: a link error per name, with N6.
+# REDEFINE: %{msil_srcs} = %t/own.c
+# RUN: %{msil_prog_fail_O0} > %t/own.O0.log 2>&1
+# RUN: FileCheck %s --check-prefix=NAMES --input-file %t/own.O0.log --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: FileCheck %s --check-prefix=SEQ --input-file %t/own.O0.log --implicit-check-not="undefined symbol"
+# RUN: %{msil_prog_fail_O2} > %t/own.O2.log 2>&1
+# RUN: FileCheck %s --check-prefix=NAMES --input-file %t/own.O2.log --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: FileCheck %s --check-prefix=SEQ --input-file %t/own.O2.log --implicit-check-not="undefined symbol"
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: malloc{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: exit{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: printf{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: rand{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: localtime{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: swprintf{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: strptime{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: fetestexcept{{$}}
+# NAMES-DAG: {{^}}msil-ld: error: undefined symbol: strsignal{{$}}
+# NAMES:     clang: error: msil-ld command failed with exit code 1
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+# SEQ:      {{^}}msil-ld: error: undefined symbol: {{malloc|exit|printf|rand|localtime|swprintf|strptime|fetestexcept|strsignal}}{{$}}
+# SEQ-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# SEQ-NEXT: {{^}}>>> referenced by {{.*}}own.o:(main){{$}}
+#
+# (2) The sysroot's headers declare none of them: undeclared-function
+# errors (C99 removed implicit declarations; clang names the known library
+# functions with their type), before any link. strsignal is one of them
+# through <string.h> (5.19.16: the signal functions are undeclared).
+# REDEFINE: %{msil_srcs} = %t/hdr.c
+# RUN: %{msil_prog_fail_O0} > %t/hdr.log 2>&1
+# RUN: FileCheck %s --check-prefix=HDR --input-file %t/hdr.log --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=msil-ld
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared library function 'malloc' with type
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared library function 'exit' with type
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared library function 'printf' with type
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'rand'; ISO C99 and later do not support implicit function declarations
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'localtime'; ISO C99 and later do not support implicit function declarations
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'swprintf'; ISO C99 and later do not support implicit function declarations
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'strptime'; ISO C99 and later do not support implicit function declarations
+# HDR-DAG: hdr.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'strsignal'; ISO C99 and later do not support implicit function declarations
+# HDR:     msil-prog: error: the compile of {{.*}}hdr.c failed (exit status 1)
+#
+# (3) Objects the sysroot's headers declare that c.dll does not define at
+# P-1b: llvm-libc's header generator emits every 'objects' entry of the
+# headers' YAML (stdio.h's stdin, stdout and stderr, time.h's daylight,
+# timezone and tzname, errno.h's program_invocation_name and
+# program_invocation_short_name) whatever the entry points of the
+# configuration, so a use through the headers compiles and fails at link
+# with an undefined symbol per name (the stdio streams wait for P-2, plan
+# 5.19.4). N6 classifies function names only (TargetLibraryInfo and
+# lld/MSIL/CLibraryNames.def, plan 5.18.6 PL3), so a data symbol gets no
+# class line today: each error is followed directly by its reference line.
+# REDEFINE: %{msil_srcs} = %t/data.c
+# RUN: %{msil_prog_fail_O0} > %t/data.O0.log 2>&1
+# RUN: FileCheck %s --check-prefix=DNAMES --input-file %t/data.O0.log --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: call to undeclared"
+# RUN: FileCheck %s --check-prefix=DSEQ --input-file %t/data.O0.log --implicit-check-not="undefined symbol" --implicit-check-not=">>> a C library"
+# RUN: %{msil_prog_fail_O2} > %t/data.O2.log 2>&1
+# RUN: FileCheck %s --check-prefix=DNAMES --input-file %t/data.O2.log --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: call to undeclared"
+# RUN: FileCheck %s --check-prefix=DSEQ --input-file %t/data.O2.log --implicit-check-not="undefined symbol" --implicit-check-not=">>> a C library"
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: stdin{{$}}
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: stdout{{$}}
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: stderr{{$}}
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: daylight{{$}}
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: timezone{{$}}
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: tzname{{$}}
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: program_invocation_name{{$}}
+# DNAMES-DAG: {{^}}msil-ld: error: undefined symbol: program_invocation_short_name{{$}}
+# DNAMES:     clang: error: msil-ld command failed with exit code 1
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+# DSEQ:      {{^}}msil-ld: error: undefined symbol: {{stdin|stdout|stderr|daylight|timezone|tzname|program_invocation_name|program_invocation_short_name}}{{$}}
+# DSEQ-NEXT: {{^}}>>> referenced by {{.*}}data.o:(main){{$}}
+#
+# (4) C++ through the same headers (the Goal: the undeclared error holds in
+# C99 and C++): <stdlib.h> declares no malloc, and C++ has no implicit
+# declarations at all, so the call is a use of an undeclared identifier.
+# RUN: not %clang_portable %{msil_portable_libc_cflags} -x c++ -std=c++17 -fsyntax-only %t/cxx.cpp > %t/cxx.log 2>&1
+# RUN: FileCheck %s --check-prefix=CXX --input-file %t/cxx.log --implicit-check-not=error: --implicit-check-not=warning: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# CXX: cxx.cpp:{{[0-9]+}}:{{[0-9]+}}: error: use of undeclared identifier 'malloc'{{$}}
+# CXX: {{^}}1 error generated.
+#
+# (5) assert with NDEBUG unset: <assert.h> is installed (for static_assert
+# and NDEBUG) and declares __assert_fail, which c.dll does not define before
+# P-2 (it writes to stderr and aborts, plan 5.19.4), so the program compiles
+# and its link fails with N6's class line naming c.dll.
+# REDEFINE: %{msil_srcs} = %t/assert.c
+# RUN: %{msil_prog_fail_O0} > %t/assert.O0.log 2>&1
+# RUN: FileCheck %s --check-prefix=ASSERT --input-file %t/assert.O0.log --implicit-check-not="undefined symbol" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: call to undeclared"
+# RUN: %{msil_prog_fail_O2} > %t/assert.O2.log 2>&1
+# RUN: FileCheck %s --check-prefix=ASSERT --input-file %t/assert.O2.log --implicit-check-not="undefined symbol" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: call to undeclared"
+# ASSERT:      {{^}}msil-ld: error: undefined symbol: __assert_fail{{$}}
+# ASSERT-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# ASSERT-NEXT: {{^}}>>> referenced by {{.*}}assert.o:(main){{$}}
+# ASSERT:      clang: error: msil-ld command failed with exit code 1
+#
+# (6) <fenv.h> is not installed (brief Q20 (a), 5.19.16: no fenv function
+# ships, so the configuration's headers.txt omits the header): including it
+# is a compile error.
+# REDEFINE: %{msil_srcs} = %t/fenv.c
+# RUN: %{msil_prog_fail_O0} > %t/fenv.log 2>&1
+# RUN: FileCheck %s --check-prefix=FENV --input-file %t/fenv.log --implicit-check-not=error: --implicit-check-not=msil-ld --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# FENV: fenv.c:{{[0-9]+}}:{{[0-9]+}}: fatal error: 'fenv.h' file not found{{$}}
+# FENV: msil-prog: error: the compile of {{.*}}fenv.c failed (exit status 1)
+#
+# (7) iscanonical, issignaling and l64a through the program's own
+# prototypes: c.dll does not export them (section 12, 'exported but
+# undeclared'), so each is an undefined symbol at link. None is a name of
+# llvm-libc's headers' YAML or of TargetLibraryInfo, so N6's class line
+# (lld/MSIL/CLibraryNames.def, plan 5.18.6 PL3) does not apply: each error
+# is followed directly by its reference line, as for the data symbols of
+# case (3).
+# REDEFINE: %{msil_srcs} = %t/gone.c
+# RUN: %{msil_prog_fail_O0} > %t/gone.O0.log 2>&1
+# RUN: FileCheck %s --check-prefix=GNAMES --input-file %t/gone.O0.log --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: call to undeclared"
+# RUN: FileCheck %s --check-prefix=GSEQ --input-file %t/gone.O0.log --implicit-check-not="undefined symbol" --implicit-check-not=">>> a C library"
+# RUN: %{msil_prog_fail_O2} > %t/gone.O2.log 2>&1
+# RUN: FileCheck %s --check-prefix=GNAMES --input-file %t/gone.O2.log --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="error: call to undeclared"
+# RUN: FileCheck %s --check-prefix=GSEQ --input-file %t/gone.O2.log --implicit-check-not="undefined symbol" --implicit-check-not=">>> a C library"
+# GNAMES-DAG: {{^}}msil-ld: error: undefined symbol: iscanonical{{$}}
+# GNAMES-DAG: {{^}}msil-ld: error: undefined symbol: issignaling{{$}}
+# GNAMES-DAG: {{^}}msil-ld: error: undefined symbol: l64a{{$}}
+# GNAMES:     clang: error: msil-ld command failed with exit code 1
+# GSEQ:      {{^}}msil-ld: error: undefined symbol: {{iscanonical|issignaling|l64a}}{{$}}
+# GSEQ-NEXT: {{^}}>>> referenced by {{.*}}gone.o:(main){{$}}
+# GSEQ:      {{^}}msil-ld: error: undefined symbol: {{iscanonical|issignaling|l64a}}{{$}}
+# GSEQ-NEXT: {{^}}>>> referenced by {{.*}}gone.o:(main){{$}}
+# GSEQ:      {{^}}msil-ld: error: undefined symbol: {{iscanonical|issignaling|l64a}}{{$}}
+# GSEQ-NEXT: {{^}}>>> referenced by {{.*}}gone.o:(main){{$}}
+#
+# (8) The same names through the sysroot's headers. <math.h>'s C23 macros
+# iscanonical and issignaling (llvm-libc-macros/math-function-macros.h, as
+# upstream ships it) expand to a _Generic selection of functions that no
+# header declares, so a use is an undeclared-identifier error naming the
+# selection's first function, with a note naming the macro. <stdlib.h>
+# declares no l64a: a call is an undeclared-function error in C17 and a use
+# of an undeclared identifier in C23 (which has no implicit declarations).
+# RUN: not %clang_portable %{msil_portable_libc_cflags} -std=c17 -fsyntax-only %t/canon.c > %t/canon.log 2>&1
+# RUN: FileCheck %s --check-prefix=CANON --input-file %t/canon.log --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# CANON: canon.c:{{[0-9]+}}:{{[0-9]+}}: error: use of undeclared identifier '{{iscanonical[a-z0-9]*}}'{{$}}
+# CANON: note: expanded from macro 'iscanonical'{{$}}
+# CANON: canon.c:{{[0-9]+}}:{{[0-9]+}}: error: use of undeclared identifier '{{issignaling[a-z0-9]*}}'{{$}}
+# CANON: note: expanded from macro 'issignaling'{{$}}
+# CANON: {{^}}2 errors generated.
+# RUN: not %clang_portable %{msil_portable_libc_cflags} -std=c17 -fsyntax-only %t/l64a.c > %t/l64a.c17.log 2>&1
+# RUN: FileCheck %s --check-prefix=L64A17 --input-file %t/l64a.c17.log --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# L64A17: l64a.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'l64a'; ISO C99 and later do not support implicit function declarations
+# L64A17: {{^}}1 error generated.
+# RUN: not %clang_portable %{msil_portable_libc_cflags} -std=c23 -fsyntax-only %t/l64a.c > %t/l64a.c23.log 2>&1
+# RUN: FileCheck %s --check-prefix=L64A23 --input-file %t/l64a.c23.log --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# L64A23: l64a.c:{{[0-9]+}}:{{[0-9]+}}: error: use of undeclared identifier 'l64a'{{$}}
+# L64A23: {{^}}1 error generated.
+#
+# (9) llvm-libc's generated <math.h> (math-function-macros.h) defines none
+# of C17 7.12.14's comparison macros (isgreater, isgreaterequal, isless,
+# islessequal, islessgreater, isunordered), an upstream gap that P-1b
+# records (Status.md) instead of adding an upstream conflict surface: a use
+# is a call to an undeclared function, a compile error in C17.
+# RUN: not %clang_portable %{msil_portable_libc_cflags} -std=c17 -fsyntax-only %t/cmp.c > %t/cmp.log 2>&1
+# RUN: FileCheck %s --check-prefix=CMP --input-file %t/cmp.log --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# CMP: cmp.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'isless'; ISO C99 and later do not support implicit function declarations
+# CMP: cmp.c:{{[0-9]+}}:{{[0-9]+}}: error: call to undeclared function 'isunordered'; ISO C99 and later do not support implicit function declarations
+# CMP: {{^}}2 errors generated.
+#--- own.c
+/* No header: the program declares the functions itself, as C allows. */
+typedef unsigned long size_t;
+typedef long long time_t;
+typedef int wchar_t;
+struct tm;
+void *malloc(size_t size);
+void exit(int status);
+int printf(const char *format, ...);
+int rand(void);
+struct tm *localtime(const time_t *timer);
+int swprintf(wchar_t *s, size_t n, const wchar_t *format, ...);
+char *strptime(const char *s, const char *format, struct tm *tm);
+int fetestexcept(int excepts);
+char *strsignal(int sig);
+
+int main(int argc, char **argv) {
+  (void)argv;
+  if (argc > 100) {
+    time_t t = 0;
+    wchar_t w[4];
+    char *p = malloc(16);
+    printf("%p\n", p);
+    if (localtime(&t) || swprintf(w, 4, L"x") > 0 || strptime("1", "%d", 0))
+      exit(rand());
+    if (fetestexcept(argc) || strsignal(argc))
+      return 1;
+  }
+  return 0;
+}
+#--- hdr.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <wchar.h>
+
+int main(int argc, char **argv) {
+  (void)argv;
+  if (argc > 100) {
+    time_t t = 0;
+    wchar_t w[4];
+    struct tm tmv;
+    char *p = malloc(16);
+    printf("%p\n", p);
+    if (localtime(&t) || swprintf(w, 4, L"x") > 0 || strptime("1", "%d", &tmv))
+      exit(rand());
+    if (strsignal(argc))
+      return 1;
+  }
+  return 0;
+}
+#--- data.c
+#include <errno.h>
+#include <stdio.h>
+#include <time.h>
+
+/* Only the headers declare the objects; a use is a link error. */
+int main(int argc, char **argv) {
+  (void)argv;
+  if (argc > 100) {
+    if (stdin == 0 || stdout == 0 || stderr == 0)
+      return 1;
+    if (daylight || timezone || tzname[0] == 0)
+      return 2;
+    if (program_invocation_name == 0 || program_invocation_short_name == 0)
+      return 3;
+  }
+  return 0;
+}
+#--- cxx.cpp
+// C++ through the sysroot's headers: <stdlib.h> declares no malloc.
+#include <stdlib.h>
+
+int main() {
+  void *p = malloc(4);
+  return p != nullptr;
+}
+#--- assert.c
+/* NDEBUG unset: assert expands to a call of __assert_fail. */
+#undef NDEBUG
+#include <assert.h>
+
+int main(int argc, char **argv) {
+  (void)argv;
+  assert(argc == 1);
+  return 0;
+}
+#--- fenv.c
+#include <fenv.h>
+
+int main(void) { return fetestexcept(FE_ALL_EXCEPT); }
+#--- gone.c
+/* No header: the program declares the functions itself. */
+int iscanonical(double x);
+int issignaling(double x);
+char *l64a(long value);
+
+int main(int argc, char **argv) {
+  (void)argv;
+  if (argc > 100)
+    return iscanonical(1.0) + issignaling(2.0) + (l64a(argc) != 0);
+  return 0;
+}
+#--- canon.c
+#include <math.h>
+
+int f(double d) { return iscanonical(d); }
+int g(double d) { return issignaling(d); }
+#--- l64a.c
+#include <stdlib.h>
+
+int f(long v) { return l64a(v) != 0; }
+#--- cmp.c
+#include <math.h>
+
+int f(double a, double b) { return isless(a, b); }
+int g(double a, double b) { return isunordered(a, b); }

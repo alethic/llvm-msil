@@ -1,0 +1,161 @@
+# The other freestanding families of c.dll: stdbit, complex (by-value _Complex arguments and results across the assembly boundary), the integer stdlib and inttypes functions, a64l, strfromd and strfromf, memalignment, locale objects with the _l functions and a uselocale round trip, search.h's insque, remque, tfind and twalk on an empty tree, and asctime over gmtime's static results.
+# Plan 5.19.4 (stdbit 70, complex 16, stdlib, inttypes, locale's
+# duplocale/freelocale/newlocale/uselocale, search's insque/remque/tfind/
+# twalk, and the pure time functions asctime and gmtime ship at P-1b;
+# tsearch waits for the heap), recon portable-libc verifier (complex and
+# wctype measured to compile, 16 of 16 each). Expected values: C23 7.18 for
+# stdbit (1-based bit positions from the most or least significant end,
+# 0 when there is none); C17 7.3 and Annex G for complex (cabs(3+4i) = 5,
+# carg(-1) = pi and carg(i) = pi/2 correctly rounded, cproj of an infinity is
+# (inf, copysign(0, imag)), conj negates the imaginary part); C17 7.22.6.1
+# and 7.8.2.1 for abs and imaxabs; POSIX for a64l ('.' is 0, '/' is 1, least
+# significant digit first), insque/remque and the locale objects; C23
+# 7.24.2.5 (strfromd's format) and 7.24.3.8 (memalignment: the largest power
+# of two dividing the address, 0 for a null pointer); C17 7.27.3.1 for
+# asctime's format. The uselocale round trip pins POSIX's values: each call
+# returns the locale the thread used before it (LC_GLOBAL_LOCALE before the
+# first switch and after a switch back to it), and uselocale((locale_t)0)
+# only queries; libc/src/locale/uselocale.cpp is the fork's defect fix for
+# llvm-libc's departure (plan 5.19.14).
+# Each failed group sets one bit of the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <complex.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <locale.h>
+#include <math.h>
+#include <search.h>
+#include <stdbit.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static uint64_t b64(double d) {
+  uint64_t u;
+  memcpy(&u, &d, sizeof u);
+  return u;
+}
+
+struct qelem {
+  struct qelem *q_forw, *q_back;
+  int value;
+};
+
+static int calls;
+static void action(const posix_tnode *node, VISIT which, int depth) {
+  (void)node, (void)which, (void)depth;
+  ++calls;
+}
+static int cmp_int(const void *a, const void *b) {
+  return *(const int *)a - *(const int *)b;
+}
+
+static volatile unsigned v_u = 100;
+static volatile double v3 = 3.0, v4 = 4.0, v1 = 1.0, v0 = 0.0;
+
+int main(void) {
+  /* 0: stdbit (C23 7.18). */
+  unsigned u = v_u;
+  CHECK(0, stdc_leading_zeros_ui(1u) == 31 && stdc_trailing_zeros_ull(1ull << 40) == 40);
+  CHECK(0, stdc_count_ones_ul(0xF0F0ul) == 8 && stdc_count_zeros_uc(0x0F) == 4);
+  CHECK(0, stdc_bit_width_ui(255u) == 8 && stdc_bit_floor_ui(u) == 64 && stdc_bit_ceil_ui(u) == 128);
+  CHECK(0, stdc_has_single_bit_us(64) && !stdc_has_single_bit_us(65));
+  CHECK(0, stdc_first_leading_one_uc(0x10) == 4 && stdc_first_trailing_one_ull(0x8) == 4);
+  CHECK(0, stdc_leading_ones_ui(0xF0000000u) == 4 && stdc_first_leading_one_ui(0) == 0);
+
+  /* 1: complex values by value into and out of c.dll. */
+  double complex z = v3 + v4 * I;
+  CHECK(1, cabs(z) == 5.0 && creal(z) == 3.0 && cimag(z) == 4.0);
+  CHECK(1, b64(carg(-v1 + v0 * I)) == 0x400921FB54442D18ull); /* pi */
+  CHECK(1, b64(carg(v0 + v1 * I)) == 0x3FF921FB54442D18ull);  /* pi/2 */
+  double complex c = conj(z);
+  CHECK(1, creal(c) == 3.0 && cimag(c) == -4.0);
+  double complex p = cproj(CMPLX(INFINITY, -2.0));
+  CHECK(1, isinf(creal(p)) && creal(p) > 0 && cimag(p) == 0.0 && signbit(cimag(p)));
+  float complex zf = 3.0f + 4.0f * I;
+  CHECK(1, cabsf(zf) == 5.0f && crealf(zf) == 3.0f && cimagf(conjf(zf)) == -4.0f);
+
+  /* 2: abs and its siblings; a64l. */
+  volatile int m5 = -5;
+  CHECK(2, abs(m5) == 5 && labs(LONG_MIN + 1) == LONG_MAX && llabs(-3LL) == 3);
+  CHECK(2, imaxabs(INTMAX_MIN + 1) == INTMAX_MAX);
+  CHECK(2, a64l("/") == 1 && a64l("./") == 64 && a64l("zz") == 63 + 63 * 64);
+
+  /* 3: strfromd, strfromf; memalignment. */
+  char buf[32];
+  CHECK(3, strfromd(buf, sizeof buf, "%.3f", 2.5) == 5 && strcmp(buf, "2.500") == 0);
+  CHECK(3, strfromf(buf, sizeof buf, "%g", 0.5f) == 3 && strcmp(buf, "0.5") == 0);
+  CHECK(3, strfromd(buf, 3, "%e", 1.0) == 12 && strcmp(buf, "1.") == 0);
+  static _Alignas(64) char aligned[128];
+  CHECK(3, memalignment(aligned) >= 64 && memalignment(aligned + 1) == 1);
+  CHECK(3, memalignment(aligned + 8) == 8 && memalignment(NULL) == 0);
+
+  /* 4: locale objects and the _l functions in the C locale. */
+  locale_t loc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+  CHECK(4, loc != (locale_t)0);
+  if (loc) {
+    locale_t dup = duplocale(loc);
+    CHECK(4, dup != (locale_t)0);
+    char *end;
+    const char *s = "1.5x";
+    CHECK(4, strtod_l(s, &end, loc) == 1.5 && end == s + 3);
+    CHECK(4, strcasecmp_l("ABC", "abc", loc) == 0 && strcoll_l("a", "b", loc) < 0);
+    /* The uselocale round trip (POSIX): each switch returns the locale it
+       replaces, LC_GLOBAL_LOCALE while the thread uses the global one, and
+       the query uselocale((locale_t)0) changes nothing. */
+    CHECK(4, uselocale((locale_t)0) == LC_GLOBAL_LOCALE);
+    CHECK(4, uselocale(loc) == LC_GLOBAL_LOCALE);
+    CHECK(4, uselocale((locale_t)0) == loc && uselocale((locale_t)0) == loc);
+    CHECK(4, strtod(s, &end) == 1.5 && end == s + 3);
+    locale_t now = loc;
+    if (dup) {
+      CHECK(4, uselocale(dup) == loc);
+      CHECK(4, uselocale((locale_t)0) == dup);
+      now = dup;
+    }
+    CHECK(4, uselocale(LC_GLOBAL_LOCALE) == now);
+    CHECK(4, uselocale((locale_t)0) == LC_GLOBAL_LOCALE);
+    CHECK(4, strtol("-42", &end, 10) == -42);
+    if (dup)
+      freelocale(dup);
+    freelocale(loc);
+  }
+
+  /* 5: insque and remque on a doubly linked list. */
+  struct qelem a = {0, 0, 1}, b = {0, 0, 2}, c3 = {0, 0, 3};
+  insque(&a, NULL);
+  insque(&b, &a);
+  insque(&c3, &b);
+  CHECK(5, a.q_forw == &b && b.q_forw == &c3 && c3.q_back == &b && b.q_back == &a);
+  CHECK(5, a.q_back == NULL && c3.q_forw == NULL);
+  remque(&b);
+  CHECK(5, a.q_forw == &c3 && c3.q_back == &a);
+
+  /* 6: tfind and twalk on an empty tree (tsearch needs the heap, P-2). */
+  posix_tnode *root = NULL;
+  int key = 1;
+  CHECK(6, tfind(&key, &root, cmp_int) == NULL);
+  twalk(root, action);
+  CHECK(6, calls == 0);
+
+  /* 7: asctime over gmtime's static result. */
+  time_t t = 86400 * 365;
+  struct tm *g = gmtime(&t);
+  CHECK(7, g && strcmp(asctime(g), "Fri Jan  1 00:00:00 1971\n") == 0);
+  return (int)fails;
+}

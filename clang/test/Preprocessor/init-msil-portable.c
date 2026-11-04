@@ -4,9 +4,11 @@
 // whose predefines are the native triple's, the portable triples have their
 // own TargetInfo, so the lists below are complete: every macro clang defines
 // for the triple is listed in order, except the few that this test does not
-// pin (the clang version macros, __STDC_VERSION__, __SIG_ATOMIC_*,
-// __BITINT_MAXWIDTH__, __GCC_CONSTRUCTIVE_SIZE/__GCC_DESTRUCTIVE_SIZE and the
-// __FLT16_* family).
+// pin (the clang version macros, __STDC_VERSION__, __SIG_ATOMIC_* and
+// __GCC_CONSTRUCTIVE_SIZE/__GCC_DESTRUCTIVE_SIZE). __BITINT_MAXWIDTH__ is
+// 8388608 on both widths (llvm::IntegerType::MAX_INT_BITS, as on x86), and
+// _Float16 exists on both widths, so the __FLT16_* family (IEEE binary16) is
+// listed too; msil64's list is frozen at P-1b's commit (5.18.1 PT10).
 //
 // The data model is LP64 on msil64 and ILP32 on msil32; size_t, ptrdiff_t and
 // intptr_t are 'unsigned long' and 'long' and int64_t and intmax_t are
@@ -89,6 +91,7 @@
 // MSIL64: #define __ATOMIC_RELEASE 3{{$}}
 // MSIL64: #define __ATOMIC_SEQ_CST 5{{$}}
 // MSIL64: #define __BIGGEST_ALIGNMENT__ 16{{$}}
+// MSIL64: #define __BITINT_MAXWIDTH__ 8388608{{$}}
 // MSIL64: #define __BOOL_WIDTH__ 1{{$}}
 // MSIL64: #define __BYTE_ORDER__ __ORDER_LITTLE_ENDIAN__{{$}}
 // MSIL64: #define __CHAR16_TYPE__ unsigned short{{$}}
@@ -122,6 +125,21 @@
 // MSIL64: #define __DBL_NORM_MAX__ 1.7976931348623157e+308{{$}}
 // MSIL64: #define __DECIMAL_DIG__ __LDBL_DECIMAL_DIG__{{$}}
 // MSIL64: #define __FINITE_MATH_ONLY__ 0{{$}}
+// MSIL64: #define __FLT16_DECIMAL_DIG__ 5{{$}}
+// MSIL64: #define __FLT16_DENORM_MIN__ 5.9604644775390625e-8F16{{$}}
+// MSIL64: #define __FLT16_DIG__ 3{{$}}
+// MSIL64: #define __FLT16_EPSILON__ 9.765625e-4F16{{$}}
+// MSIL64: #define __FLT16_HAS_DENORM__ 1{{$}}
+// MSIL64: #define __FLT16_HAS_INFINITY__ 1{{$}}
+// MSIL64: #define __FLT16_HAS_QUIET_NAN__ 1{{$}}
+// MSIL64: #define __FLT16_MANT_DIG__ 11{{$}}
+// MSIL64: #define __FLT16_MAX_10_EXP__ 4{{$}}
+// MSIL64: #define __FLT16_MAX_EXP__ 16{{$}}
+// MSIL64: #define __FLT16_MAX__ 6.5504e+4F16{{$}}
+// MSIL64: #define __FLT16_MIN_10_EXP__ (-4){{$}}
+// MSIL64: #define __FLT16_MIN_EXP__ (-13){{$}}
+// MSIL64: #define __FLT16_MIN__ 6.103515625e-5F16{{$}}
+// MSIL64: #define __FLT16_NORM_MAX__ 6.5504e+4F16{{$}}
 // MSIL64: #define __FLT_DECIMAL_DIG__ 9{{$}}
 // MSIL64: #define __FLT_DENORM_MIN__ 1.40129846e-45F{{$}}
 // MSIL64: #define __FLT_DIG__ 6{{$}}
@@ -441,6 +459,7 @@
 // MSIL32: #define __ATOMIC_RELEASE 3{{$}}
 // MSIL32: #define __ATOMIC_SEQ_CST 5{{$}}
 // MSIL32: #define __BIGGEST_ALIGNMENT__ 8{{$}}
+// MSIL32: #define __BITINT_MAXWIDTH__ 8388608{{$}}
 // MSIL32: #define __BOOL_WIDTH__ 1{{$}}
 // MSIL32: #define __BYTE_ORDER__ __ORDER_LITTLE_ENDIAN__{{$}}
 // MSIL32: #define __CHAR16_TYPE__ unsigned short{{$}}
@@ -474,6 +493,21 @@
 // MSIL32: #define __DBL_NORM_MAX__ 1.7976931348623157e+308{{$}}
 // MSIL32: #define __DECIMAL_DIG__ __LDBL_DECIMAL_DIG__{{$}}
 // MSIL32: #define __FINITE_MATH_ONLY__ 0{{$}}
+// MSIL32: #define __FLT16_DECIMAL_DIG__ 5{{$}}
+// MSIL32: #define __FLT16_DENORM_MIN__ 5.9604644775390625e-8F16{{$}}
+// MSIL32: #define __FLT16_DIG__ 3{{$}}
+// MSIL32: #define __FLT16_EPSILON__ 9.765625e-4F16{{$}}
+// MSIL32: #define __FLT16_HAS_DENORM__ 1{{$}}
+// MSIL32: #define __FLT16_HAS_INFINITY__ 1{{$}}
+// MSIL32: #define __FLT16_HAS_QUIET_NAN__ 1{{$}}
+// MSIL32: #define __FLT16_MANT_DIG__ 11{{$}}
+// MSIL32: #define __FLT16_MAX_10_EXP__ 4{{$}}
+// MSIL32: #define __FLT16_MAX_EXP__ 16{{$}}
+// MSIL32: #define __FLT16_MAX__ 6.5504e+4F16{{$}}
+// MSIL32: #define __FLT16_MIN_10_EXP__ (-4){{$}}
+// MSIL32: #define __FLT16_MIN_EXP__ (-13){{$}}
+// MSIL32: #define __FLT16_MIN__ 6.103515625e-5F16{{$}}
+// MSIL32: #define __FLT16_NORM_MAX__ 6.5504e+4F16{{$}}
 // MSIL32: #define __FLT_DECIMAL_DIG__ 9{{$}}
 // MSIL32: #define __FLT_DENORM_MIN__ 1.40129846e-45F{{$}}
 // MSIL32: #define __FLT_DIG__ 6{{$}}

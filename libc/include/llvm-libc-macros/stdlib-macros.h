@@ -18,8 +18,13 @@
 #define EXIT_FAILURE 1
 
 #ifndef MB_CUR_MAX
+#if defined(__dotnet__)
+// c.dll's C locale stores UTF-8, up to 4 bytes per character (MB_LEN_MAX).
+#define MB_CUR_MAX 4
+#else
 // We only support the "C" locale right now, so this is a constant byte.
 #define MB_CUR_MAX 1
+#endif // __dotnet__
 #endif // MB_CUR_MAX
 
 #define RAND_MAX 2147483647

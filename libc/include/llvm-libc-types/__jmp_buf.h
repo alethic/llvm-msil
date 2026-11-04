@@ -66,6 +66,13 @@ typedef struct {
   // requires the buffer to be 8-byte aligned, hence long long rather than
   // long. That also rounds the size up, leaving one word of tail padding.
   long long opaque[8];
+#elif defined(__msil64__)
+  // setjmp and longjmp are lowered by the compiler, never defined by the
+  // library, so the buffer is opaque: 200 bytes (glibc's size), 8-aligned.
+  // The compiler's 16-byte prefix (magic, site label, status block address)
+  // is at offset 0; offset 64 holds the sigsetjmp mask-saved flag and offset
+  // 72 the saved signal mask.
+  __UINT64_TYPE__ __opaque[25];
 #else
 #error "__jmp_buf not available for your target architecture."
 #endif

@@ -1,0 +1,136 @@
+## T-P2 at the link: explicit import modules on msil64-unknown-dotnet
+## (ImplementationPlan.md 5.18.6 PL4, brief Q3 (a); section 12 row 'P-1b.d
+## extended (P-1a leftover: msil-ld paths without a test)'). The portable
+## target binds no native code, so import_module, which every host MSIL
+## triple turns into a P/Invoke, is refused; the backend reports it for -S
+## text and for the objects llc writes (llvm/test/CodeGen/MSIL/
+## portable-errors.ll), and msil-ld reports it for the inputs llc did not
+## check, with the same text:
+##   '<f>' is declared with import module '<module>', which msil64-unknown-dotnet does not support: the portable target binds no native code
+## - a bitcode input whose declarations carry "msil-import-module" (what
+##   clang -flto writes for import_module), for a function and for an
+##   external variable, with and without an import name, in an executable
+##   link and in a -shared link, with no --target and with
+##   --target=msil64-unknown-dotnet: one T-P2 line per declaration, no other
+##   error and no image;
+## - a CIL object through msil-ld's own check (SymbolTable::bindObjectSymbol):
+##   llc never writes such an msil64 object, so the test forges one from an
+##   x86_64-unknown-linux-gnu-msil object (whose data model, 8,8,4,8, is the
+##   portable one): Inputs/portable/pe.py rewrites its envelope to PE32 for
+##   I386 (to-pe32) and its record's triple key, in place, to
+##   msil64-unknownxxx-dotnet-msil, a spelling of the same length whose key
+##   (architecture, OS, environment; the vendor is ignored) is
+##   msil64-unknown-dotnet. The same forgery of an object without the
+##   attribute links, so the error comes from the import module alone.
+## Objects only otherwise: the portable triples have no LTO legs before P-3
+## (brief Q13 (a)); the bitcode cases pin the link-time check only.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir bc so tgt obj ok
+# RUN: llvm-as fn.ll -o fn.bc
+# RUN: llvm-as var.ll -o var.bc
+# RUN: llvm-as named.ll -o named.bc
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+
+## Bitcode.
+# RUN: not msil-ld fn.bc -o bc/fn.exe 2>&1 | %{fc} --check-prefix=FN
+# RUN: not msil-ld --target=msil64-unknown-dotnet fn.bc -o tgt/fn.exe 2>&1 | %{fc} --check-prefix=FN
+# RUN: not msil-ld -shared fn.bc -o so/fn.dll 2>&1 | %{fc} --check-prefix=FN
+# FN-DAG: {{^}}msil-ld: error: 'native_fn' is declared with import module 'mylib', which msil64-unknown-dotnet does not support: the portable target binds no native code{{$}}
+# RUN: not msil-ld var.bc -o bc/var.exe 2>&1 | %{fc} --check-prefixes=FN,VAR
+# RUN: not msil-ld -shared var.bc -o so/var.dll 2>&1 | %{fc} --check-prefixes=FN,VAR
+# VAR-DAG: {{^}}msil-ld: error: 'native_var' is declared with import module 'datalib', which msil64-unknown-dotnet does not support: the portable target binds no native code{{$}}
+# RUN: not msil-ld named.bc -o bc/named.exe 2>&1 | %{fc} --check-prefix=NAMED
+# NAMED: {{^}}msil-ld: error: 'my_puts' is declared with import module 'custom.dll', which msil64-unknown-dotnet does not support: the portable target binds no native code{{$}}
+# RUN: not ls bc/fn.exe
+# RUN: not ls tgt/fn.exe
+# RUN: not ls so/fn.dll
+# RUN: not ls bc/var.exe
+# RUN: not ls so/var.dll
+# RUN: not ls bc/named.exe
+
+## A CIL object, forged.
+# DEFINE: %{forge} = %python %S/Inputs/portable/pe.py
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil imp.ll -o imp-lnx.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil plain.ll -o plain-lnx.o
+# RUN: llvm-cil-dump --link-info imp-lnx.o | FileCheck %s --check-prefix=HOST-IMPORT
+# HOST-IMPORT: {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL DEFAULT UNDEFINED EXPLICIT_IMPORT 'native_fn'{{$}}
+# RUN: %{forge} to-pe32 imp-lnx.o imp-pe32.o
+# RUN: %{forge} rename-section imp-pe32.o imp-msil64.o x86_64-unknown-linux-gnu-msil msil64-unknownxxx-dotnet-msil
+# RUN: %{forge} to-pe32 plain-lnx.o plain-pe32.o
+# RUN: %{forge} rename-section plain-pe32.o plain-msil64.o x86_64-unknown-linux-gnu-msil msil64-unknownxxx-dotnet-msil
+# RUN: %{forge} info imp-msil64.o | FileCheck %s --check-prefix=PE32
+# PE32: {{^}}PE32 machine=0x014C{{$}}
+# RUN: llvm-cil-dump --link-info imp-msil64.o | FileCheck %s --check-prefix=FORGED
+# FORGED:      {{^}}LinkInfo v{{[0-9.]+}} triple=msil64-unknownxxx-dotnet-msil abi={{[0-9]+}} {{.*}}datamodel=8,8,4,8{{$}}
+# FORGED-NEXT: {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL DEFAULT UNDEFINED EXPLICIT_IMPORT 'native_fn'{{$}}
+# RUN: msil-ld plain-msil64.o -o ok/plain.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers ok/plain.exe | FileCheck %s --check-prefix=PORTABLE-IMAGE
+# PORTABLE-IMAGE: {{^}}Format: PE32 machine=0x014C exe{{$}}
+# RUN: not msil-ld imp-msil64.o -o obj/imp.exe 2>&1 | %{fc} --check-prefix=FN
+# RUN: not msil-ld --target=msil64-unknown-dotnet imp-msil64.o -o obj/imp.exe 2>&1 | %{fc} --check-prefix=FN
+# RUN: not msil-ld -shared imp-msil64.o -o obj/imp.dll 2>&1 | %{fc} --check-prefix=FN
+# RUN: not ls obj/imp.exe
+# RUN: not ls obj/imp.dll
+
+#--- fn.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @native_fn(i32) #0
+
+define i32 @main() {
+  %r = call i32 @native_fn(i32 1)
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-module"="mylib" }
+
+#--- var.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+@native_var = external global i32, align 4 #1
+
+declare i32 @native_fn(i32) #0
+
+define i32 @main() {
+  %r = call i32 @native_fn(i32 1)
+  %v = load i32, ptr @native_var, align 4
+  %s = add i32 %r, %v
+  ret i32 %s
+}
+
+attributes #0 = { "msil-import-module"="mylib" }
+attributes #1 = { "msil-import-module"="datalib" }
+
+#--- named.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+declare i32 @my_puts(ptr) #0
+
+define i32 @main() {
+  %r = call i32 @my_puts(ptr null)
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-module"="custom.dll" "msil-import-name"="custom_puts" }
+
+#--- imp.ll
+declare i32 @native_fn(i32) #0
+
+define i32 @main() {
+  %r = call i32 @native_fn(i32 1)
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-module"="mylib" }
+
+#--- plain.ll
+define i32 @main() {
+  ret i32 42
+}

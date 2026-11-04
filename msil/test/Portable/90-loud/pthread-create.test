@@ -1,0 +1,73 @@
+# Threads are absent from the managed C library until P-3: pthread_create and thrd_create through the program's own prototypes fail to link with N6's line naming c.dll, and <pthread.h> is not in the sysroot.
+# Plan 5.18.6 PL3 (N6: a C library name that no input defines gets the class
+# line '>>> a C library function that the C library c.dll
+# (msil64-unknown-dotnet) does not provide' when an input named c.dll takes
+# part; pthread_create and thrd_create are names of
+# lld/MSIL/CLibraryNames.def, the llvm-libc functions that
+# TargetLibraryInfo lacks), 5.18.9's row 'Threads (pthread_*, thrd_*)' and
+# 5.19.16 (absent until P-3, in both of 5.19.1 rule 2's forms: llvm-libc's
+# generated headers declare only the shipped entry points, so a use through
+# the C library's headers is a compile error, and a use through the
+# program's own prototype is an undefined-symbol link error with N6). The
+# driver's default -lc takes the sysroot's c.dll, so N6 names it:
+#   pthread.c: pthread_create through its own prototype;
+#   thrd.c:    C11's thrd_create through its own prototype;
+#   header.c:  #include <pthread.h>, which the sysroot does not hold.
+# Each link error is one undefined symbol with N6's line and the function
+# that references it, and no other msil-ld error. A link that writes
+# --lto-emit-asm text cannot import c.dll (msil_link_output=il), so the test
+# needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{n6_check} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: error" --implicit-check-not="link the managed C library"
+#
+# REDEFINE: %{msil_srcs} = %t/pthread.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{n6_check} --check-prefixes=PTHREAD,LINK
+# PTHREAD:      {{^}}msil-ld: error: undefined symbol: pthread_create{{$}}
+# PTHREAD-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# PTHREAD-NEXT: {{^}}>>> referenced by {{.*}}pthread.o:(main){{$}}
+#
+# REDEFINE: %{msil_srcs} = %t/thrd.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{n6_check} --check-prefixes=THRD,LINK
+# THRD:      {{^}}msil-ld: error: undefined symbol: thrd_create{{$}}
+# THRD-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# THRD-NEXT: {{^}}>>> referenced by {{.*}}thrd.o:(main){{$}}
+#
+# LINK:      {{^}}clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation){{$}}
+# LINK:      {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#
+# REDEFINE: %{msil_srcs} = %t/header.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{n6_check} --check-prefix=HEADER --implicit-check-not="msil-prog: error: the link"
+# HEADER:      {{^}}{{.*}}header.c:1:10: fatal error: 'pthread.h' file not found{{$}}
+# HEADER:      {{^}}msil-prog: error: the compile of {{.*}}header.c failed (exit status 1){{$}}
+#--- pthread.c
+typedef unsigned long pthread_t;
+int pthread_create(pthread_t *thread, const void *attr,
+                   void *(*start)(void *), void *arg);
+
+static void *worker(void *arg) { return arg; }
+
+int main(void) {
+  pthread_t t;
+  /* Never runs: the link stops. */
+  return pthread_create(&t, 0, worker, 0) != 0;
+}
+#--- thrd.c
+typedef unsigned long thrd_t;
+typedef int (*thrd_start_t)(void *);
+int thrd_create(thrd_t *thread, thrd_start_t start, void *arg);
+
+static int worker(void *arg) { return arg != 0; }
+
+int main(void) {
+  thrd_t t;
+  /* Never runs: the link stops. */
+  return thrd_create(&t, worker, 0) != 0;
+}
+#--- header.c
+#include <pthread.h>
+
+int main(void) {
+  /* Never compiles: the header is absent. */
+  return 0;
+}

@@ -216,12 +216,15 @@
 #                  the later P-steps' directories as they appear) on msil64-unknown-dotnet under
 #                  obj on .NET 10, .NET 10 with DOTNET_TieredCompilation=0 (msil_also_run=10+tc0)
 #                  and the .NET Framework 4.8 (msil_run_netfx=1), msil_require_portable=1 (the
-#                  portable toolchain and helper archive) and msil_require_x86=1 (the 32-bit
+#                  portable toolchain, helper archive and sysroot) and msil_require_x86=1 (the 32-bit
 #                  dotnet.exe with .NET 8 and 10 x86 and the 32-bit Framework, so guard-x86 is
-#                  never silently UNSUPPORTED); no native oracle. Setup, first: 'build-builtins.py
-#                  --build-dir <build> --triple msil64-unknown-dotnet' (stamped: an up-to-date
-#                  archive is not rebuilt); a failed setup fails the row ('setup failed: ...')
-#                  and runs no lit
+#                  never silently UNSUPPORTED); no native oracle. Setup, first, in order (each
+#                  step stamped: an up-to-date product is not rebuilt): 'build-builtins.py
+#                  --build-dir <build> --triple msil64-unknown-dotnet' (the portable helper
+#                  archive, P-1a), then 'build-libc.py --build-dir <build>' (P-1b, plan 5.19.3:
+#                  llvm-libc, c.dll, the empty libm.a and the C headers in the portable sysroot);
+#                  the first step that fails ends the setup and fails the row ('setup failed:
+#                  <script>[ <arguments>] (exit <n>; <log>)'), and no lit runs
 #   portable-smoke-wsl  -Portable, needs -Wsl (P-1a): the same directory on the same triple under
 #                  WSL .NET 10 and, msil_also_run=10+tc0, with DOTNET_TieredCompilation=0 (the
 #                  WSL legs' parameters with msil_triple=msil64-unknown-dotnet in place of the
@@ -408,10 +411,14 @@ $linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 
 $glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { 'C:\llvm-msil-scratch\glibc-sysroot' }
 # Every WSL lit leg: the Linux triple on the private runtime of msil-wsl-dotnet.sh (plan 5.12.8).
 $wslRuntime = @('msil_runner=wsl', $linux, 'msil_wsl_dotnet=private', 'msil_dotnet_runtime=10')
-# The portable legs (plan 5.18.10 PX4; P-1a): the portable triple, and the setup that builds its
-# helper archive (stamped) before their lit runs.
+# The portable legs (plan 5.18.10 PX4): the portable triple, and the setup steps that run before
+# their lit runs, in order and each stamped: the helper archive (P-1a), then llvm-libc, c.dll and
+# the portable sysroot (P-1b, plan 5.19.3).
 $portableTriple = 'msil_triple=msil64-unknown-dotnet'
-$portableSetup = @('msil/utils/build/build-builtins.py', '--triple', 'msil64-unknown-dotnet')
+$portableSetup = @(
+  @{ Script = 'msil/utils/build/build-builtins.py'; Args = @('--triple', 'msil64-unknown-dotnet') }
+  @{ Script = 'msil/utils/build/build-libc.py'; Args = @() }
+)
 # The legs that require the E7 Linux oracle ...
 $e7 = @('msil_native_oracle=required', "msil_linux_sysroot=$($linuxSysroot.Replace('\', '/'))")
 # ... and, where they run hosted tests (msil/test/M3), the glibc sysroot of E7h (plan 5.17.3, 5.17.6).
@@ -454,8 +461,9 @@ function Join-LitFilter([string[]]$Parts) { @($Parts | Where-Object { $_ }) -joi
 # variables and $p3Tests are resolved when the leg runs, so a missing package fails that leg only.
 # A leg of several lit runs has Runs, a list of @{ Paths; Params; Lit }. Tag: '' (the default set),
 # 'Wsl', 'Quick' (only when -Leg names it), 'Full', 'Exit' or 'Portable' (see the header). Setup
-# (the portable legs): a script and its arguments, which $MsilPython runs with '--build-dir
-# <build>' before the leg's lit runs; a failure fails the row and runs no lit.
+# (the portable legs): a list of steps @{ Script; Args }, which $MsilPython runs in order with
+# '--build-dir <build>' and the step's arguments before the leg's lit runs; the first failure ends
+# the setup, fails the row and runs no lit.
 $legs = @(
   @{ Name = 'net8'; Paths = { $checkMsil }; Lit = @($noCorpus)
      Params = { @('msil_pipeline=obj') + $winRun +
@@ -1055,18 +1063,23 @@ function Invoke-ObjTextLeg($l) {
             Detail = "$detail (exit $($codes -join ', '))" }
 }
 
-# A leg's Setup (the portable legs): the script with '--build-dir <build>' and its arguments,
-# logged to <build>/lit-results/<leg>.setup.log. Returns $null when it passed, else the row's
-# detail.
+# A leg's Setup (the portable legs): each step's script with '--build-dir <build>' and its
+# arguments, in order, logged one after the other to <build>/lit-results/<leg>.setup.log. Returns
+# $null when every step passed, else the row's detail, which names the first step that failed.
 function Invoke-LegSetup($l) {
   $log = Join-Path $results "$($l.Name).setup.log"
-  $script = Join-Path $MsilRepo $l.Setup[0]
-  $setupArgs = @('--build-dir', $BuildDir) + @($l.Setup | Select-Object -Skip 1)
-  $what = "$(Split-Path -Leaf $script) $(@($l.Setup | Select-Object -Skip 1) -join ' ')"
-  Write-Host "[msil-ci] leg $($l.Name): setup: $what"
-  & $MsilPython $script @setupArgs 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
-  $rc = $LASTEXITCODE
-  if ($rc -ne 0) { return "setup failed: $what (exit $rc; $($log.Replace('\', '/')))" }
+  Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
+  foreach ($step in @($l.Setup)) {
+    $script = Join-Path $MsilRepo $step.Script
+    $stepArgs = @($step.Args)
+    $setupArgs = @('--build-dir', $BuildDir) + $stepArgs
+    $what = "$(Split-Path -Leaf $script) $($stepArgs -join ' ')".TrimEnd()
+    Write-Host "[msil-ci] leg $($l.Name): setup: $what"
+    & $MsilPython $script @setupArgs 2>&1 | ForEach-Object { "$_" } |
+      Tee-Object -FilePath $log -Append | Out-Host
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) { return "setup failed: $what (exit $rc; $($log.Replace('\', '/')))" }
+  }
   return $null
 }
 
