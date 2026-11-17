@@ -28,7 +28,7 @@ below the directory argument with '.' for the path separators (the stem for a
 .c argument). The defaults are the triple x86_64-pc-windows-msvc-msil, the
 levels O0,O2, clang <build>/bin/clang[.exe], mdcanon and mdump in
 <build>/tools/msil/mdtools (build-mdtools.py builds them; this script does
-not), and the work directory C:\\llvm-msil-scratch\\cli-corpus on Windows
+not), and the work directory <repo>\\..\\llvm-msil-scratch\\cli-corpus on Windows
 ($HOME/llvm-msil-scratch/cli-corpus elsewhere), which must be outside the
 repository. <build> is $MSIL_BUILD_DIR, else <repo>/build. --jobs N runs N
 tools at once (default: the number of CPUs, at most 4).
@@ -479,7 +479,9 @@ class Context:
     @staticmethod
     def _default_work():
         if IS_WINDOWS:
-            return r"C:\llvm-msil-scratch\cli-corpus"
+            return os.path.join(
+                os.path.dirname(REPO), "llvm-msil-scratch", "cli-corpus"
+            )
         return os.path.join(os.path.expanduser("~"), "llvm-msil-scratch", "cli-corpus")
 
     @staticmethod

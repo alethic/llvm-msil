@@ -50,7 +50,7 @@ LF becomes one LF) applies to what is written and, with --check, to the
                start.o <test>.o libm.so.6 libc.so.6 libgcc_s.so.1
            with msil/utils/linux-oracle/start.c (compiled once per run) and
            the libraries of --linux-sysroot (default $MSIL_LINUX_SYSROOT, else
-           C:\\llvm-msil-scratch\\linux-sysroot; msil/utils/make-linux-sysroot.py
+           <repo>\\..\\llvm-msil-scratch\\linux-sysroot; msil/utils/make-linux-sysroot.py
            makes it), run under WSL (--wsl-distro, default Ubuntu) by
            'msil-run.py --native --runner wsl'. On a Linux host, the host's
            clang build with -lm. Writing creates <stem>.linux.expected only
@@ -79,7 +79,7 @@ of lit.cfg.py, where the search stops), and --hosted makes every test named
 on the command line hosted. A hosted test's C flags are --cflags without
 -ffreestanding, the -I directory, and %{msil_hosted_cflags}:
 --sysroot=<glibc sysroot> for a Linux target (--glibc-sysroot, default
-$MSIL_GLIBC_SYSROOT, else C:\\llvm-msil-scratch\\glibc-sysroot on Windows and
+$MSIL_GLIBC_SYSROOT, else <repo>\\..\\llvm-msil-scratch\\glibc-sysroot on Windows and
 none elsewhere, as lit's msil_glibc_sysroot), nothing for a Windows one. It
 takes the hosted oracle, 'msil-prog.py --mode native --hosted' (also for a
 %{msil_c} or %{msil_ll} test, built as a program of one source): the DLL C
@@ -220,7 +220,7 @@ msil-triple-windows, msil-triple-linux and msil-triple=<target>-msil follow
 
 M23 (plan 5.12.3, 5.12.4): REDEFINE: values may use %{msil_corpus}, the
 exit corpus' cache (--corpus-dir: default $MSIL_CORPUS_CACHE, else
-C:\\llvm-msil-scratch\\corpus-cache on Windows and ~/.cache/msil-corpus
+<repo>\\..\\llvm-msil-scratch\\corpus-cache on Windows and ~/.cache/msil-corpus
 elsewhere, as lit's msil_corpus_dir and msil/utils/corpus/fetch.py default
 it), so the programs of msil/test/Programs build natively from the sources
 that fetch.py verified; %{msil_copts} adds compile flags to the native build
@@ -281,6 +281,8 @@ import threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 TEST_ROOT = os.path.join(os.path.dirname(HERE), "test")
+# Scratch space outside the checkout, beside it (no fixed drive or machine path).
+SCRATCH = os.path.join(os.path.dirname(REPO), "llvm-msil-scratch")
 ORACLE_RUN_RE = re.compile(r"RUN:.*%\{msil_(c|ll)(_O[0-3sz])?\}")
 # %{msil_prog} tests, and the composites that need no .expected file.
 PROG_RUN_RE = re.compile(r"RUN:.*%\{msil_prog(_O[0-3sz])?\}")
@@ -312,20 +314,22 @@ DEFAULT_CFLAGS = "-std=gnu17 -ffreestanding -Werror=return-type"
 E7_TARGET = "x86_64-unknown-linux-gnu"
 E7_LIBS = ("libm.so.6", "libc.so.6", "libgcc_s.so.1")
 E7_LIBDIR = ("usr", "lib", "x86_64-linux-gnu")
-DEFAULT_LINUX_SYSROOT = r"C:\llvm-msil-scratch\linux-sysroot"
+DEFAULT_LINUX_SYSROOT = os.path.join(SCRATCH, "linux-sysroot")
 # The native compiler-rt builtins of the hosted Linux oracle (plan 5.17.2,
 # 5.17.3; M25): --linux-rtlib auto's file in the E7 sysroot.
 LINUX_RTLIB_NAME = "libclang_rt.builtins-x86_64.a"
 # The glibc sysroot of the hosted tests (make-glibc-sysroot.sh), as lit's
 # msil_glibc_sysroot defaults it.
-DEFAULT_GLIBC_SYSROOT = r"C:\llvm-msil-scratch\glibc-sysroot" if os.name == "nt" else ""
+DEFAULT_GLIBC_SYSROOT = (
+    os.path.join(SCRATCH, "glibc-sysroot") if os.name == "nt" else ""
+)
 # The line of a hosted directory's lit.local.cfg (plan 5.17.3).
 HOSTED_MARKER = "config.msil_enable_hosted(config)"
 # lit reads no lit.local.cfg in the directory of a suite's configuration.
 SUITE_CONFIGS = ("lit.cfg.py", "lit.site.cfg.py")
 # The exit corpus' cache (plan 5.12.9), as fetch.py and lit default it.
 DEFAULT_CORPUS_CACHE = (
-    r"C:\llvm-msil-scratch\corpus-cache"
+    os.path.join(SCRATCH, "corpus-cache")
     if os.name == "nt"
     else os.path.join(os.path.expanduser("~"), ".cache", "msil-corpus")
 )

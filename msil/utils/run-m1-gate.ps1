@@ -8,12 +8,12 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1                  # everything but the Exit legs
-#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache
+#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache <dir>
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Leg roundtrip
-#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -Portable -CorpusCache C:/llvm-msil-scratch/corpus-cache
+#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -Portable
 #                                                     # Phase 3's post-commit run (plan 5.17.11,
 #                                                     # with -Portable from P-1a: 5.18.10 PX4)
-#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache -Exit
+#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -Exit
 #                                                     # the Phase 3 exit gate's run (M35)
 #
 # Steps (the Windows job of .github/workflows/msil-ci.yml runs the same scripts in the same order,
@@ -31,7 +31,7 @@
 #        runtimes of the WSL legs into $HOME/.dotnet-msil; the first run downloads them),
 #        linux-sysroot (msil/utils/make-linux-sysroot.py copies the E7 Linux oracle's
 #        libraries out of WSL into $env:MSIL_LINUX_SYSROOT, else
-#        C:\llvm-msil-scratch\linux-sysroot, and, since M25 with --builtins --clang
+#        <repo>\..\llvm-msil-scratch\linux-sysroot, and, since M25 with --builtins --clang
 #        <build>\bin\clang.exe (plan 5.17.5), builds there the native compiler-rt archive that
 #        hosted mode's E7h oracle links, usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a
 #        (lit's msil_linux_rtlib=auto), through build-builtins.py --native-oracle with this
@@ -39,7 +39,7 @@
 #        archive whose stamp is current, and the stamp records clang's hash, so a build that
 #        changes clang rebuilds it) and glibc-sysroot (M15: msil/utils/make-glibc-sysroot.sh
 #        inside WSL builds the glibc sysroot of the hosted leg and of hosted mode's E7h oracle
-#        into $env:MSIL_GLIBC_SYSROOT, else C:\llvm-msil-scratch\glibc-sysroot; it downloads only
+#        into $env:MSIL_GLIBC_SYSROOT, else <repo>\..\llvm-msil-scratch\glibc-sysroot; it downloads only
 #        missing packages). Seconds once done, a rebuilt archive included (165 members, 3 s on
 #        this host); no root, no system setting.
 #   5. corpus (M23, plan 5.12.9; a phase-exit row): python msil/utils/corpus/fetch.py --cache
@@ -47,7 +47,7 @@
 #        --skip; it writes the stamp that lit's corpus legs read), row corpus/check; with
 #        -FetchCorpus first fetch.py --cache <-CorpusCache> (the download the user approved on
 #        2026-10-21: only entries the cache lacks, every hash verified), row corpus/fetch.
-#        -CorpusCache defaults to $env:MSIL_CORPUS_CACHE, else C:\llvm-msil-scratch\corpus-cache,
+#        -CorpusCache defaults to $env:MSIL_CORPUS_CACHE, else <repo>\..\llvm-msil-scratch\corpus-cache,
 #        and is exported to the legs as MSIL_CORPUS_CACHE; MSIL_CORPUS_SKIP is removed from the
 #        legs' environment, so the phase gate runs every entry and a local opt-out never reaches
 #        it (since M24 the CI runs every entry too: R23, plan 5.17.17, empties msil-ci.yml's
@@ -80,7 +80,7 @@
 #        after those.
 #   7. determinism (M23, plan 5.7.12 and section 12 'Cross-host determinism'; a phase-exit row):
 #        msil/utils/ci/det-manifest.py build twice, from the work directories
-#        C:\llvm-msil-scratch\gates\det\a and ...\b, of every C file of msil/test/M1 with
+#        <repo>\..\llvm-msil-scratch\gates\det\a and ...\b, of every C file of msil/test/M1 with
 #        clang -c for both x86_64 MSIL triples at -O0 and -O2 and an llvm-ar archive per triple
 #        and level, then det-manifest.py compare (the CI's determinism job compares the two CI
 #        hosts' manifests instead; 1 and 0.5 min in M23's gate runs).                  (~1 min)
@@ -152,7 +152,7 @@ param(
   [switch]$Portable,              # the Portable legs (plan 5.18.10 PX4; P-1a)
   [string[]]$Leg = @(),
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
-  [string]$CorpusCache = '',      # default: $env:MSIL_CORPUS_CACHE, else C:\llvm-msil-scratch\corpus-cache
+  [string]$CorpusCache = '',      # default: $env:MSIL_CORPUS_CACHE, else <repo>\..\llvm-msil-scratch\corpus-cache
   [switch]$FetchCorpus
 )
 $ErrorActionPreference = 'Stop'
@@ -165,15 +165,15 @@ $ci = Join-Path $PSScriptRoot 'ci'
 # passes none).
 $wslDistro = 'Ubuntu'
 # The E7 Linux oracle's sysroot, as lit-legs.ps1 and lit.cfg.py default it.
-$linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 'C:\llvm-msil-scratch\linux-sysroot' }
+$linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { Join-Path $MsilScratch 'linux-sysroot' }
 # The hosted leg's glibc sysroot (make-glibc-sysroot.sh), as lit-legs.ps1 defaults it.
-$glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { 'C:\llvm-msil-scratch\glibc-sysroot' }
+$glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { Join-Path $MsilScratch 'glibc-sysroot' }
 
 # The exit corpus' cache (plan 5.12.9): the legs read it through MSIL_CORPUS_CACHE, and the phase
 # gate runs every entry, so MSIL_CORPUS_SKIP (a local opt-out; the CI's value is empty since M24,
 # R23) is cleared.
 if (-not $CorpusCache) {
-  $CorpusCache = if ($env:MSIL_CORPUS_CACHE) { $env:MSIL_CORPUS_CACHE } else { 'C:\llvm-msil-scratch\corpus-cache' }
+  $CorpusCache = if ($env:MSIL_CORPUS_CACHE) { $env:MSIL_CORPUS_CACHE } else { Join-Path $MsilScratch 'corpus-cache' }
 }
 $CorpusCache = [System.IO.Path]::GetFullPath($CorpusCache)
 $env:MSIL_CORPUS_CACHE = $CorpusCache
@@ -181,7 +181,7 @@ Remove-Item Env:MSIL_CORPUS_SKIP -ErrorAction SilentlyContinue
 # The work directories of the determinism row (det-manifest.py build refuses one inside the
 # repository, and empties only one it made, marked, or one that holds only <triple>/
 # directories, as these do after earlier runs).
-$detRoot = 'C:\llvm-msil-scratch\gates\det'
+$detRoot = Join-Path $MsilScratch 'gates\det'
 
 $resultsFile = Join-Path ([System.IO.Path]::GetTempPath()) "msil-m1-gate-$PID.tsv"
 Set-Content -LiteralPath $resultsFile -Value @() -Encoding utf8

@@ -67,7 +67,7 @@ trees it lists. A run that fails removes the stamp. --list prints the entries
 and touches no cache. --self-test runs offline in a temporary directory.
 
 The cache is --cache DIR, else $MSIL_CORPUS_CACHE, else
-C:\\llvm-msil-scratch\\corpus-cache on Windows and $HOME/.cache/msil-corpus
+<repo>\\..\\llvm-msil-scratch\\corpus-cache on Windows and $HOME/.cache/msil-corpus
 elsewhere.
 
 Exit status: 0 on success, 1 when a check, a hash or a download failed (the
@@ -100,7 +100,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 MANIFEST = os.path.join(HERE, "manifest.json")
 IS_WINDOWS = os.name == "nt"
-DEFAULT_WINDOWS_CACHE = r"C:\llvm-msil-scratch\corpus-cache"
+DEFAULT_WINDOWS_CACHE = os.path.join(
+    os.path.dirname(REPO), "llvm-msil-scratch", "corpus-cache"
+)
 DEFAULT_POSIX_CACHE = os.path.join("~", ".cache", "msil-corpus")
 STAMP = "msil-corpus.stamp"
 LOCK = "msil-corpus.lock"

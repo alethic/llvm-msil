@@ -188,6 +188,13 @@ config.test_format = lit.formats.ShTest()
 config.suffixes = [".c", ".ll", ".test"]
 config.excludes = ["Inputs", "CMakeLists.txt", "README.md"]
 config.test_source_root = os.path.dirname(__file__)
+# Scratch space outside the checkout, beside it (<repo>/../llvm-msil-scratch):
+# the home of the Windows defaults of the sysroots and the corpus cache below
+# and of the harness's fetched toolchain; never a fixed drive or machine path.
+config.msil_scratch = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(config.test_source_root))),
+    "llvm-msil-scratch",
+)
 config.test_exec_root = os.path.join(config.msil_obj_root, "test")
 # %{msil_c} expands to other substitutions, which expand again.
 config.recursiveExpansionLimit = 10
@@ -899,8 +906,8 @@ def nuget_roots():
             os.path.join(home, ".nuget", "packages"),
         ]
         if dotnet:
-            # dotnet itself resolves the configured folder (D:/packages/NuGet
-            # on the development host); this config never reads NuGet.Config.
+            # dotnet itself resolves the configured folder (whatever
+            # NuGet.Config sets); this config never reads NuGet.Config.
             # The probe cache keeps the answer while the host, $NUGET_PACKAGES
             # and the folder itself stay.
             def folder(text):
@@ -1887,7 +1894,7 @@ if native_rtlib:
 # --param msil_linux_sysroot=DIR (plan 5.12.2, 5.12.8): the Linux libraries
 # of the E7 oracle (and, from M15, msil-ld's --sysroot for Linux links), in
 # the layout of msil/utils/make-linux-sysroot.py. Default $MSIL_LINUX_SYSROOT,
-# else C:\llvm-msil-scratch\linux-sysroot on Windows when it exists, else '/'
+# else <repo>\..\llvm-msil-scratch\linux-sysroot on Windows when it exists, else '/'
 # on Linux; an empty value disables it. An explicit value (parameter or
 # variable) without libc.so.6 and libm.so.6 is a configuration error, so a
 # leg that names the sysroot cannot quietly lose its oracle. Feature
@@ -1902,7 +1909,9 @@ if linux_sysroot is None and "MSIL_LINUX_SYSROOT" in os.environ:
     linux_sysroot = os.environ["MSIL_LINUX_SYSROOT"]
     sysroot_explicit = True
 if linux_sysroot is None:
-    default_sysroot = r"C:\llvm-msil-scratch\linux-sysroot" if is_windows else "/"
+    default_sysroot = (
+        os.path.join(config.msil_scratch, "linux-sysroot") if is_windows else "/"
+    )
     linux_sysroot = default_sysroot if os.path.isdir(default_sysroot) else ""
 linux_libdir = None
 if linux_sysroot:
@@ -1948,7 +1957,7 @@ else:
 # makes it, for the optional hosted compile-only tests of
 # msil/test/M2/09-hosted (feature msil-glibc-sysroot, substitution
 # %{msil_glibc_sysroot}). Default $MSIL_GLIBC_SYSROOT, else
-# C:\llvm-msil-scratch\glibc-sysroot on Windows when it holds
+# <repo>\..\llvm-msil-scratch\glibc-sysroot on Windows when it holds
 # usr/include/stdio.h; an empty value disables it. An explicit value
 # (parameter or variable) without usr/include/stdio.h is a configuration
 # error, so the hosted leg, which names the sysroot, cannot pass by skipping.
@@ -1961,7 +1970,9 @@ if glibc_sysroot is None and "MSIL_GLIBC_SYSROOT" in os.environ:
     glibc_sysroot = os.environ["MSIL_GLIBC_SYSROOT"]
     glibc_explicit = True
 if glibc_sysroot is None:
-    default_glibc = r"C:\llvm-msil-scratch\glibc-sysroot" if is_windows else ""
+    default_glibc = (
+        os.path.join(config.msil_scratch, "glibc-sysroot") if is_windows else ""
+    )
     glibc_sysroot = (
         default_glibc
         if default_glibc and os.path.isfile(os.path.join(default_glibc, *GLIBC_STDIO))
@@ -2846,7 +2857,7 @@ note(
 # <sha256 of manifest.json's bytes>, "trees": {<name>: <tree_sha256>}}.
 # --param msil_corpus_dir=DIR (plan 5.12.2) names the cache: default
 # $MSIL_CORPUS_CACHE, else fetch.py's default cache
-# (C:\llvm-msil-scratch\corpus-cache on Windows, ~/.cache/msil-corpus
+# (<repo>\..\llvm-msil-scratch\corpus-cache on Windows, ~/.cache/msil-corpus
 # elsewhere); an empty value disables the corpus. Feature msil-corpus only
 # when the stamp matches the checked-in manifest (its sha256), and
 # msil-corpus-<name> only for each tree the stamp lists with the manifest's
@@ -2870,7 +2881,7 @@ for _name in params.get("msil_corpus_skip", "").split(","):
 corpus_dir_param = params.get("msil_corpus_dir")
 if corpus_dir_param is None:
     corpus_dir_param = os.environ.get("MSIL_CORPUS_CACHE") or (
-        r"C:\llvm-msil-scratch\corpus-cache"
+        os.path.join(config.msil_scratch, "corpus-cache")
         if is_windows
         else os.path.join(home, ".cache", "msil-corpus")
     )

@@ -9,9 +9,9 @@
 #   bash msil/utils/make-glibc-sysroot.sh DIR
 #
 # Run inside WSL (Ubuntu) or on any Debian-based Linux; the development host
-# makes C:\llvm-msil-scratch\glibc-sysroot with
+# makes <repository>\..\llvm-msil-scratch\glibc-sysroot with
 #   wsl -d Ubuntu --cd <repository> --exec bash msil/utils/make-glibc-sysroot.sh \
-#     /mnt/c/llvm-msil-scratch/glibc-sysroot
+#     ../llvm-msil-scratch/glibc-sysroot
 # (plan 5.12.8 and step G0 of every gate from M15; lit's msil_glibc_sysroot,
 # Q16). The recipe is that of recon p2/driver-toolchain section 5.1
 # (scripts/mk-sysroot.sh):

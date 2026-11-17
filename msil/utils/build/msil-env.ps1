@@ -24,6 +24,8 @@
 # Globals for the other scripts and for interactive use:
 #   $MsilRepo     repository root (three levels above this script: msil\utils\build)
 #   $MsilBuild    build directory: $env:MSIL_BUILD_DIR if set, else <repo>\build
+#   $MsilScratch  scratch space outside the checkout, beside it: <repo>\..\llvm-msil-scratch
+#                 (the default home of the scripts' sysroots, caches and work directories)
 #   $MsilPython   Python 3, always with forward slashes: $env:MSIL_PYTHON if set, else the
 #                 host's pythoncore-3.14 (falling back to python.exe on PATH)
 #   $MsilVsRoot   the Visual Studio root above ('' when a trusted environment names none and
@@ -103,6 +105,9 @@ if (-not (Test-MsilX64DevEnv)) {
 $global:MsilRepo    = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 $global:MsilBuild   = if ($env:MSIL_BUILD_DIR) { [System.IO.Path]::GetFullPath($env:MSIL_BUILD_DIR) }
                       else { Join-Path $global:MsilRepo 'build' }
+# Outside the checkout (some tools refuse work directories inside the repository) and beside it,
+# so no default names a fixed drive or machine path.
+$global:MsilScratch = Join-Path (Split-Path $global:MsilRepo -Parent) 'llvm-msil-scratch'
 # Forward slashes on purpose: CMake pastes this into lit.site.cfg.py string literals, where
 # "C:\Users\..." is a SyntaxError (\U escape). Verified the hard way.
 $script:MsilPy = if ($env:MSIL_PYTHON) { $env:MSIL_PYTHON }

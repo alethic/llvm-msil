@@ -53,7 +53,7 @@
 #             lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp (the list
 #             is COMPILE_FILES of check-upstream-hooks.py, read with --list-compile), in a
 #             private build tree (-HooksBuildDir, else $env:MSIL_HOOKS_BUILD_DIR, else
-#             C:\llvm-msil-hooks-build; projects clang and lldb, target ARM): cmake when the tree
+#             <repo>\..\llvm-msil-hooks-build; projects clang and lldb, target ARM): cmake when the tree
 #             has no build.ninja, then ninja the ARMAsmParser.cpp object (which also generates the
 #             ARM .inc files), then msil-syntax.ps1 /Zs of both files with -Werror=switch on every
 #             run. The leg holds the tree's exclusive build lock and runs cmake and ninja itself
@@ -87,7 +87,7 @@
 [CmdletBinding()]
 param(
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
-  [string]$HooksBuildDir = '',    # default: $env:MSIL_HOOKS_BUILD_DIR, else C:\llvm-msil-hooks-build
+  [string]$HooksBuildDir = '',    # default: $env:MSIL_HOOKS_BUILD_DIR, else <repo>\..\llvm-msil-hooks-build
   [string[]]$Leg = @(),           # run only these legs: manifest, pins, lit, gtest, compile
   [switch]$NoManifest,
   [switch]$NoCompile,
@@ -101,7 +101,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $BuildDir) { $BuildDir = $MsilBuild }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 if (-not $HooksBuildDir) {
-  $HooksBuildDir = if ($env:MSIL_HOOKS_BUILD_DIR) { $env:MSIL_HOOKS_BUILD_DIR } else { 'C:\llvm-msil-hooks-build' }
+  $HooksBuildDir = if ($env:MSIL_HOOKS_BUILD_DIR) { $env:MSIL_HOOKS_BUILD_DIR }
+                   else { Join-Path (Split-Path $MsilRepo -Parent) 'llvm-msil-hooks-build' }
 }
 $HooksBuildDir = [System.IO.Path]::GetFullPath($HooksBuildDir).TrimEnd('\')
 

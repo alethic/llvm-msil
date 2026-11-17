@@ -38,7 +38,7 @@ test's invocation, is recorded as 'load_percent'.
 
 It writes <build>/lit-results/calibration-<label>.json, or --out FILE (whose
 missing parent directories it creates; gates write under
-C:\\llvm-msil-scratch\\milestones\\M<n>\\ before any other step has made the
+<repo>\\..\\llvm-msil-scratch\\milestones\\M<n>\\ before any other step has made the
 directory), with 'seconds', 'quiet_seconds', 'factor', 'test_cpu_seconds' (the
 measurement), 'load_percent' and the inputs, and prints
 

@@ -53,7 +53,7 @@ package index and extracted without root (dpkg-deb -x) into
 libc6-dev and linux-libc-dev; libstdc++ 14 through --gcc-install-dir). Its
 compiler runs with LD_LIBRARY_PATH on the packages' own libraries, so it
 needs no package of the host. <toolchain> is --toolchain, else
-$MSIL_LINUX_CLANG18, else C:\\llvm-msil-scratch\\linux-clang18 on Windows and
+$MSIL_LINUX_CLANG18, else <repo>\\..\\llvm-msil-scratch\\linux-clang18 on Windows and
 $HOME/llvm-msil-scratch/linux-clang18 elsewhere; it lies outside the
 repository. <toolchain>/linux-syntax-check.stamp (JSON) records the packages
 and versions once the extracted compiler has run; a stamp with another
@@ -197,7 +197,11 @@ def default_toolchain():
     if os.environ.get("MSIL_LINUX_CLANG18"):
         return os.environ["MSIL_LINUX_CLANG18"]
     if os.name == "nt":
-        return "C:/llvm-msil-scratch/linux-clang18"
+        # Beside the checkout: <repo>/../llvm-msil-scratch/linux-clang18.
+        here = os.path.dirname(os.path.abspath(__file__))  # <repo>/msil/utils/ci
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(here)))
+        tc = os.path.join(os.path.dirname(repo), "llvm-msil-scratch", "linux-clang18")
+        return tc.replace("\\", "/")
     return os.path.join(os.path.expanduser("~"), "llvm-msil-scratch", "linux-clang18")
 
 

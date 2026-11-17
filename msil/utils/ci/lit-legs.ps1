@@ -168,7 +168,7 @@
 #   hosted         -Wsl, optional (plan Q16, 5.12.11): msil/test/M2/09-hosted, the hosted
 #                  compile-only tests (glibc headers and libc.so, UCRT headers), with
 #                  msil_glibc_sysroot given: $env:MSIL_GLIBC_SYSROOT, else
-#                  C:\llvm-msil-scratch\glibc-sysroot, which msil/utils/make-glibc-sysroot.sh
+#                  <repo>\..\llvm-msil-scratch\glibc-sysroot, which msil/utils/make-glibc-sysroot.sh
 #                  builds inside WSL (step G0 of the gates from M15), so a missing sysroot is a
 #                  configuration error, never a leg of UNSUPPORTED tests; the CI never runs it
 #   net-core       -Quick, step G3 of the standard milestone gate (M24; plan 5.17.6, 5.17.7): the
@@ -248,7 +248,7 @@
 # The corpus legs (programs, programs-lto, ctest, det and their -Wsl twins) need the exit corpus
 # of msil/utils/corpus/manifest.json, which msil/utils/corpus/fetch.py downloads into a cache
 # outside the repository: they pass msil_corpus_dir=$env:MSIL_CORPUS_CACHE (when it is set; else
-# lit's default, C:\llvm-msil-scratch\corpus-cache), msil_corpus_skip=$env:MSIL_CORPUS_SKIP and
+# lit's default, <repo>\..\llvm-msil-scratch\corpus-cache), msil_corpus_skip=$env:MSIL_CORPUS_SKIP and
 # msil_require_corpus=1, so a missing or stale cache is a configuration error and an entry left out
 # on purpose is UNSUPPORTED with a note. msil-ci.yml sets MSIL_CORPUS_SKIP to '' since M24 (R23,
 # plan 5.17.17: the CI fetches and runs every entry; M23's CI left out coremark and c-testsuite,
@@ -261,7 +261,7 @@
 # Q39), so a missing private runtime is a configuration error, never a run on the distribution's
 # own dotnet. The WSL legs that run programs also require the E7 Linux oracle
 # (msil_native_oracle=required), which, like expected-linux, needs the sysroot of
-# msil/utils/make-linux-sysroot.py ($env:MSIL_LINUX_SYSROOT, else C:\llvm-msil-scratch\linux-sysroot,
+# msil/utils/make-linux-sysroot.py ($env:MSIL_LINUX_SYSROOT, else <repo>\..\llvm-msil-scratch\linux-sysroot,
 # passed as msil_linux_sysroot) and an ld.lld (the tree's); the ones that run msil/test/M3
 # (wsl-net10, lto-wsl, ctest-wsl, wsl-p3; $e7h below) also pass the glibc sysroot of
 # make-glibc-sysroot.sh as msil_glibc_sysroot, the headers and the E7h oracle of hosted mode (plan
@@ -407,10 +407,10 @@ $netCoreOut = 'MSIL :: (Programs|harness|M3|Portable)/|spill-limits'
 $linux = 'msil_triple=x86_64-unknown-linux-gnu-msil'
 # The E7 Linux oracle's sysroot (msil/utils/make-linux-sysroot.py), defaulted as lit.cfg.py and
 # run-m1-gate.ps1's host-setup step default it.
-$linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 'C:\llvm-msil-scratch\linux-sysroot' }
+$linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { Join-Path $MsilScratch 'linux-sysroot' }
 # The glibc sysroot of hosted mode and of the hosted leg (msil/utils/make-glibc-sysroot.sh),
 # defaulted as lit.cfg.py defaults it on Windows.
-$glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { 'C:\llvm-msil-scratch\glibc-sysroot' }
+$glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { Join-Path $MsilScratch 'glibc-sysroot' }
 # Every WSL lit leg: the Linux triple on the private runtime of msil-wsl-dotnet.sh (plan 5.12.8).
 $wslRuntime = @('msil_runner=wsl', $linux, 'msil_wsl_dotnet=private', 'msil_dotnet_runtime=10')
 # The portable legs (plan 5.18.10 PX4): the portable triple, and the setup steps that run before

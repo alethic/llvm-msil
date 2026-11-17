@@ -358,9 +358,9 @@ python D:/llvm-msil/msil/utils/build/build-builtins.py --triple msil64-unknown-d
 python D:/llvm-msil/msil/utils/build/build-libc.py --jobs 4
 python D:/llvm-msil/msil/utils/build/build-libc.py --check
 python D:/llvm-msil/msil/utils/build/build-libc.py --check-exports
-python D:/llvm-msil/msil/utils/build/build-libc.py --check-reproducible C:/llvm-msil-scratch/libc-repro
-git show HEAD:msil/lib/libc/msil64-unknown-dotnet.exports > C:/llvm-msil-scratch/exports-old.txt
-python D:/llvm-msil/msil/utils/build/build-libc.py --check-append-only C:/llvm-msil-scratch/exports-old.txt msil/lib/libc/msil64-unknown-dotnet.exports
+python D:/llvm-msil/msil/utils/build/build-libc.py --check-reproducible ../llvm-msil-scratch/libc-repro
+git show HEAD:msil/lib/libc/msil64-unknown-dotnet.exports > ../llvm-msil-scratch/exports-old.txt
+python D:/llvm-msil/msil/utils/build/build-libc.py --check-append-only ../llvm-msil-scratch/exports-old.txt msil/lib/libc/msil64-unknown-dotnet.exports
 ```
 
 After changing `libc/config/dotnet/msil64/entrypoints.txt` (a later libc step appends entry
@@ -389,10 +389,10 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv -
 ```
 
 The execution tests read the exit corpus from a cache outside the repository; fetch it once
-(`python msil/utils/corpus/fetch.py`, into `C:\llvm-msil-scratch\corpus-cache` unless
+(`python msil/utils/corpus/fetch.py`, into `<repo>\..\llvm-msil-scratch\corpus-cache` unless
 `MSIL_CORPUS_CACHE` names another) before running `msil/test/Programs` with `msil-lit.ps1`
 (GettingStarted.md section 7, "The exit corpus"). The hosted tests (M15) run with `msil-lit.ps1 -LitArgs:"-sv --param
-msil_glibc_sysroot=C:/llvm-msil-scratch/glibc-sysroot" msil/test/M2/09-hosted` (the colon after
+msil_glibc_sysroot=$PWD/../llvm-msil-scratch/glibc-sysroot" msil/test/M2/09-hosted` (the colon after
 `-LitArgs`, because the value holds a drive path; see `msil/test/README.md`), or as the `hosted`
 leg of `msil/utils/ci/lit-legs.ps1`. Since M25 the tests that call runtime helpers
 (`msil/test/M3/03-helpers`) need current helper archives (`build-builtins.py`, above), and a
@@ -484,7 +484,7 @@ The compile leg of `msil/utils/ci/upstream-hooks.ps1` (plan M11; llvm/docs/MSIL/
 section 7) compiles two hooked upstream files that the main build never compiles,
 `llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp` and
 `lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp`, in a build tree of its
-own: `-HooksBuildDir`, else `$env:MSIL_HOOKS_BUILD_DIR`, else `C:\llvm-msil-hooks-build`
+own: `-HooksBuildDir`, else `$env:MSIL_HOOKS_BUILD_DIR`, else `<repo>\..\llvm-msil-hooks-build`
 (projects clang and lldb, the ARM target only, no tests, no optional lldb dependency, the
 compilers and job limits of `msil-configure.ps1`).
 
@@ -507,7 +507,7 @@ compilers and job limits of `msil-configure.ps1`).
 To check one of the two files by hand against the tree:
 
 ```powershell
-pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -BuildDir C:/llvm-msil-hooks-build -ExtraFlags /clang:-Werror=switch llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -BuildDir ../llvm-msil-hooks-build -ExtraFlags /clang:-Werror=switch llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp
 ```
 
 ## Plan checks

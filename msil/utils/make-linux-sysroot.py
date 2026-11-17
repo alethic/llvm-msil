@@ -32,7 +32,7 @@ resolved (every file is a regular copy), the files are read inside WSL
 ('wsl.exe -d NAME'; on a Linux host from the local file system, where NAME is
 not used) and verified against their SHA-256, and only files whose contents
 changed are written, so a second run changes nothing. DIR defaults to
-$MSIL_LINUX_SYSROOT, else C:\\llvm-msil-scratch\\linux-sysroot on Windows (lit's
+$MSIL_LINUX_SYSROOT, else <repo>\\..\\llvm-msil-scratch\\linux-sysroot on Windows (lit's
 default --param msil_linux_sysroot); a directory inside the repository is
 refused (nothing downloaded or generated is committed, plan 5.6.1). Callers in
 Git Bash set MSYS_NO_PATHCONV=1 when they pass Linux paths to other tools.
@@ -76,7 +76,9 @@ BUILD_BUILTINS = os.path.join(HERE, "build", "build-builtins.py")
 # The native compiler-rt builtins archive of the hosted Linux oracle, as
 # build-builtins.py --native-oracle names it (plan 5.17.2).
 NATIVE_RTLIB = "libclang_rt.builtins-x86_64.a"
-DEFAULT_WINDOWS_DIR = r"C:\llvm-msil-scratch\linux-sysroot"
+DEFAULT_WINDOWS_DIR = os.path.join(
+    os.path.dirname(REPO), "llvm-msil-scratch", "linux-sysroot"
+)
 LIBDIR = "usr/lib/x86_64-linux-gnu"
 LIBRARIES = ("libc.so.6", "libm.so.6", "libgcc_s.so.1", "ld-linux-x86-64.so.2")
 LOADER = "ld-linux-x86-64.so.2"
