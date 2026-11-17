@@ -10874,6 +10874,63 @@ def warn_msil_scanf_long_double : Warning<
   "the 'L' length modifier makes the C library store a %0-byte native "
   "'long double' into an 8-byte 'double' on this MSIL target">,
   InGroup<Format>, DefaultError;
+// Managed calls from C and C++: msil_method and msil_catch.
+def err_msil_method_not_declaration : Error<
+  "'msil_method' is only allowed on a function declaration without a body">;
+def err_msil_attr_invalid_arg : Error<
+  "%select{'msil_method' type|'msil_method' member|'msil_method' signature|"
+  "'msil_catch' type|'msil_method' assembly}0 '%1' is not valid: %2">;
+def err_msil_method_conversion : Error<
+  "%select{parameter %1|the 'this' handle|the result}0 of %2 has C type %3, "
+  "which cannot carry CIL type '%4'">;
+def err_msil_method_arity : Error<
+  "%0 has %1 parameter%s1; 'msil_method' needs %2 (%3)">;
+def err_msil_catch_without_method : Error<
+  "'msil_catch' needs 'msil_method' on the same declaration">;
+def err_msil_catch_error_param : Error<
+  "the last parameter of %0 has C type %1; 'msil_catch' needs a trailing "
+  "'int *' parameter">;
+def err_msil_method_incompatible : Error<
+  "'msil_method' cannot be combined with '%0'">;
+def err_msil_catch_incompatible : Error<
+  "'msil_catch' cannot be combined with '%0'">;
+def err_msil_method_ctor_args : Error<
+  "%select{global |}2%select{constructor|destructor}0 %1 takes arguments, "
+  "which %select{MSIL|msil64-unknown-dotnet}2 does not pass">;
+def err_msil_catch_type_refused : Error<
+  "catching '%0' in 'msil_catch' is not supported for MSIL">;
+def err_msil_method_not_prototyped : Error<
+  "'msil_method' is only allowed on a prototyped, non-variadic function other "
+  "than 'main'">;
+def err_msil_method_builtin : Error<
+  "'msil_method' is not allowed on %0, which clang treats as a builtin "
+  "function">;
+def err_msil_method_cxx : Error<
+  "'msil_method' on a C++ %select{member function|function template|"
+  "constexpr function|consteval function|"
+  "replaceable global allocation function|"
+  "replaceable global deallocation function}0 is not supported for MSIL yet">;
+def err_msil_attr_not_first_decl : Error<
+  "'%select{msil_method|msil_catch}0' must appear on the first declaration of "
+  "%1">;
+def err_msil_attr_differs : Error<
+  "'%select{msil_method|msil_catch}0' on this declaration of %1 differs from "
+  "its first declaration">;
+def note_msil_first_declared : Note<"first declared here">;
+def err_msil_catch_code_range : Error<
+  "'msil_catch' code %0 is not in the range 1 to 2147483647">;
+def err_msil_catch_duplicate : Error<"'msil_catch' lists '%0' twice">;
+def err_msil_reserved_asm_label : Error<
+  "asm label '%0' is reserved for the MSIL toolchain (a managed-call "
+  "%select{stub|forwarder}1)">;
+def err_msil_method_symbol_clash : Error<
+  "managed calls %0 and %1 share the symbol '%2' but differ in their "
+  "%select{'msil_method' or 'msil_catch' arguments|function types|"
+  "'dllexport', 'constructor' or 'destructor' attributes}3">;
+def err_msil_method_forwarder_clash : Error<
+  "'%select{dllexport|constructor|destructor}0' on managed call %1 needs the "
+  "forwarder symbol '%2', which another declaration in this translation unit "
+  "already uses">;
 def warn_format_bool_as_character : Warning<
   "using '%0' format specifier, but argument has boolean value">,
   InGroup<Format>;

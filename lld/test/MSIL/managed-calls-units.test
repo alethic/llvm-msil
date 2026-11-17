@@ -1,0 +1,1281 @@
+## T-M17 between the translation units that still declare a managed call, in
+## every link mode (ImplementationPlan.md 5.20.4 MR4 and 5.20.3 T-M17 as
+## amended in section 12: a unit counts when its compiled code still declares
+## the managed call; milestone MC-1). A CIL object declares an external
+## managed call by its stub '__msil_mc.<symbol>', and a bitcode input by the
+## declaration '__msil_mc.<symbol>' that its symbol table lists; an
+## !msil.managed.calls entry whose declaration the unit's own optimizer
+## deleted does not count. msil-ld compares every external managed call that
+## two or more units declare, forwarded or not: in object and mixed links by
+## the units' stubs, then by their forwarders; between bitcode inputs by their
+## entries and declarations, which must make equal stubs as in an object link,
+## before LTO in every LTO mode (one module included), and two different
+## entries of one name inside one input too. It reports
+##   'managed call '<f>' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units'
+## once per name, then writes no output and runs no LTO, and slot P0 does not
+## compare the entries of the modules that msil-ld's LTO compiles, so no LTO
+## partition or ThinLTO module repeats the line. Inside one input, where
+## msil-ld sees one declaration of a name, msil-ld also gives the line
+## before LTO, once, for a direct call that the declaration's stub does not
+## serve (one with another function type, or with a signext or zeroext of
+## its own that would change the stub), as slot P0 gives it for clang -c and
+## llc. The members are FakeWidgets.il's (managed-calls.test), on
+## x86_64-pc-windows-msvc-msil; the last four items also, or only, use
+## msil64-unknown-dotnet, as each says. Every link that fails counts its
+## error lines.
+## - s1.ll binds f to Contoso.Widget::Guarded(int32), and g calls it; s2.ll
+##   binds f to Contoso.Point::Twice(int32), and k calls it only through
+##   h(x, 0), whose call is dead once h is inlined: the IR at -O0, which keeps
+##   the call; s2dead.ll is that unit at -O2, whose optimizer deleted the call
+##   and f's declaration but kept the entry; sm.ll's main calls g and k. s1
+##   with s2 fails with the line, naming f, as CIL objects in both input
+##   orders, in mixed links with either unit as the object in both orders, in
+##   full LTO in both orders, as ThinLTO modules (opt -module-summary; sm's
+##   module imports g and k) in both orders, under --lto-partitions=2 and =3,
+##   and under --lto-emit-asm in both orders. The object and mixed links used
+##   to link, each unit calling its own member. s1 with s2dead links in each
+##   of those modes without a diagnostic, and the image or text has one
+##   binding of f, Guarded; the LTO links used to fail with the line, once
+##   per partition, and from the ThinLTO module of main, which imported k and
+##   with it s2dead's entry.
+## - Without ThinLTO imports (s1ni.ll, s2ni.ll, s2nidead.ll and smni.ll: as
+##   above, with g and k noinline, so ThinLTO imports neither into main's
+##   module): the -O0 pair fails with the line as CIL objects, as ThinLTO
+##   modules in both orders and in full LTO, and the -O2 pair (s2nidead.ll)
+##   links in each. The -O0 objects used to link, and full LTO used to refuse
+##   the -O2 pair while ThinLTO linked it.
+## - One input that holds two entries of f (m12.ll, the llvm-link of s1.ll
+##   and s2.ll: one declaration, s1.ll's, and both entries; m12dead.ll, the
+##   llvm-link of s1.ll and s2dead.ll): msil-ld compares the entries inside
+##   the input, by name, so an entry counts while its input declares the call,
+##   even when the unit it came from no longer did (s2dead.ll's entry beside
+##   s1.ll's live call). Beside sm.ll, each fails with the line once in full
+##   LTO in both orders, as ThinLTO modules in both orders, under
+##   --lto-partitions=2 and =3, and under --lto-emit-asm. The ThinLTO links
+##   used to print the line twice (from both modules) and the partitioned
+##   links once per partition.
+## - C++ (t1.ll, t2.ll, tm.ll): a header's inline function twice() calls f,
+##   and a macro picks the member, Contoso.Widget::Guarded in t1.cpp and
+##   Contoso.Point::Twice in t2.cpp; g and k call twice() and f. The line
+##   names the mangled symbol, '?f@@YAHH@Z', as CIL objects in both orders,
+##   in mixed links in both orders, in full LTO and as ThinLTO modules. The
+##   objects and mixed links used to link with both stubs, the COMDAT
+##   twice() of the first object calling its own unit's member for both units.
+## - The other managed-call errors print one line in a link whose LTO
+##   compiles more than one module: under --lto-partitions=2, and as ThinLTO
+##   modules in both orders, where main's module imports the function that
+##   holds the use. T-M10,
+##   'taking the address of the managed-call function '<f>' is not supported for MSIL yet',
+##   for one holding function (hold.ll passes f to a callback; hmain.ll
+##   passes hkeep.ll's keep, which stores it): msil-ld reports it before
+##   LTO's optimizer (managed-calls-address.test), so the line names the
+##   input and the function whose code there holds the use, hold.ll's input
+##   and hold, in each of those links, before main inlines or imports hold.
+##   T-M17 for one direct call of f with another function type (cast.ll:
+##   long long through a cast of int f(int)), which msil-ld reports before
+##   LTO too (managed-calls-address.test), and slot P0's invalid-attributes
+##   error,
+##   'managed call '<f>' has invalid "msil-managed-*" attributes: parameter <i>: conversion '<c>' does not fit the .NET type '<T>' and the IR type '<ty>'',
+##   for one declaration (bad.ll: an i64 for Guarded's int32). The ThinLTO
+##   links used to print each line twice (from both modules), and the
+##   partitioned link the invalid-attributes line once per partition. The
+##   T-M10 line used to come from slot P0 in LTO's code generation, as
+##   '<unknown>:0:0: in function <h> <type>: taking the address ...', and
+##   named main, which inlines hold, in the partitioned link; the T-M17
+##   line came from slot P0 too.
+## - A narrow result's signext against its zeroext: the stub converts the
+##   member's result as the declaration extends it, conv.i1 or conv.u1
+##   (conv.i2 or conv.u2), so the two units make different stubs. o8rs.ll
+##   and o8.ll bind f to Contoso.Widget::Octet(uint8) as signed char
+##   f(unsigned char) and as unsigned char f(unsigned char), as clang declares
+##   them for msil64-unknown-dotnet: the result signext and zeroext, the
+##   parameter zeroext in both; l16rs.ll and l16.ll bind f to
+##   Contoso.Widget::Letter(char) with a signext and a zeroext i16 result
+##   (the C types that carry CIL 'char', char16_t and a 16-bit wchar_t, are
+##   never signext, so l16rs.ll is hand-written); use_a and use_b call f,
+##   and nmain.ll's main calls both. Each unit is one body after the head of
+##   msil64-unknown-dotnet (net.head) or of x86_64-pc-windows-msvc-msil
+##   (win.head, where clang gives char and short neither attribute; the IR
+##   behaves the same), and on each triple each pair fails with the line as
+##   CIL objects in both orders, in mixed links with either unit as the
+##   object in both orders, in full LTO, under --lto-partitions=2, as ThinLTO
+##   modules and under --lto-emit-asm, each in both orders. The LTO links
+##   used to link silently, both callers calling one of the two stubs: in
+##   full LTO, under --lto-partitions=2 and under --lto-emit-asm the first
+##   unit's, so the output depended on the input order.
+## - A narrow 'val' parameter's signext against its zeroext (o8ps.ll,
+##   unsigned char f(signed char) for Octet, with o8.ll): the call truncates
+##   the stub's int32 argument to the member's uint8 (ECMA-335 III.1.6), so
+##   the two units make equal stubs, and on each triple the pair links
+##   without a diagnostic as CIL objects, in those mixed links, in full LTO,
+##   under --lto-partitions=2, as ThinLTO modules and under --lto-emit-asm,
+##   each in both orders, and the first stub of each image or text calls
+##   Octet and ends with conv.u1.
+## - One input that holds both units of a pair, as llvm-link merges them:
+##   the first unit's declaration with its attributes, each unit's call with
+##   its own, and both units' entries, which are equal. msil-ld gives the
+##   line before LTO, as slot P0 gives it for clang -c and llc, for a direct
+##   call with the declaration's function type whose own signext or zeroext,
+##   which the declaration does not have there, would change the
+##   declaration's stub (ImplementationPlan.md section 12, 2026-11-11), the
+##   calls in available_externally functions aside. o8m.ll (o8rs.ll and
+##   o8.ll: the result signext in the declaration and zeroext in use_b's
+##   call) and l16m.ll (l16.ll and l16rs.ll: zeroext in the declaration and
+##   signext in use_a's call) each fail beside nmain.ll on each triple, with
+##   the line once, in full LTO and as ThinLTO modules in both orders, under
+##   --lto-partitions=2 and under --lto-emit-asm, and write no output; they
+##   used to link without a diagnostic, both callers calling the
+##   declaration's stub (conv.i1 for o8m.ll's use_b, conv.u2 for l16m.ll's
+##   use_a). e8m.ll merges e8s.ll and e8.ll, which bind f to
+##   Contoso.Widget::SetMode(valuetype Contoso.Mode), an int32-backed enum,
+##   as void f(signed char) and as void f(unsigned char), as clang declares
+##   them for msil64-unknown-dotnet: an 'enum' parameter's IL type in the
+##   stub follows its zeroext, int8 or uint8, so the two units make
+##   different stubs, and on msil64-unknown-dotnet they fail with the line
+##   as separate inputs in every mode of the result pairs. With --reference,
+##   e8m.ll fails on each triple with the line alone, in full LTO and under
+##   --lto-emit-asm, before LTO, so neither link's checks of the stub's
+##   types run; both links used to fail with T-M7 instead,
+##   'managed call 'f': parameter 1 passes 8 bits for 'Contoso.Mode', which is not an enum of that width'.
+## - One input whose calls differ from the declaration only where the stub
+##   does not change links on each triple without a diagnostic, in those LTO
+##   modes, with one stub: o8pm.ll (o8ps.ll and o8.ll: the 'val' parameter
+##   signext in the declaration and zeroext in use_b's call), whose stub
+##   calls Octet and ends with conv.u1, and b8m.ll (b8rs.ll and b8.ll bind f
+##   to Contoso.Widget::Check(bool) as signed char f(unsigned char) and as
+##   unsigned char f(unsigned char): the stub makes a 'bool' result 0 or 1
+##   whatever its extension, so the two units make equal stubs, and on
+##   msil64-unknown-dotnet they link as separate inputs as the 'val'
+##   parameter pair does), whose stub calls Check and ends with ldc.i4.0 and
+##   cgt.un.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+## A failed link's error lines (err.txt), counted, then each pinned whole.
+# DEFINE: %{one} = grep error: err.txt | count 1 && %{err} --input-file=err.txt
+## A linked image whose one binding of f is Guarded.
+# DEFINE: %{guarded} = FileCheck %s --check-prefix=GUARDED --implicit-check-not=Twice
+
+# TM17:    {{^}}msil-ld: error: managed call 'f' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units{{$}}
+# GUARDED: {{^  }}.method '__msil_mc.f' int32(int32) {{.+$}}
+# GUARDED: {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Widget::'Guarded'{{$}}
+
+## The units as CIL objects, bitcode and ThinLTO modules.
+# RUN: llc -filetype=obj s1.ll -o s1.o && llvm-as s1.ll -o s1.bc && opt -module-summary s1.ll -o s1.thin.bc
+# RUN: llc -filetype=obj s2.ll -o s2.o && llvm-as s2.ll -o s2.bc && opt -module-summary s2.ll -o s2.thin.bc
+# RUN: llc -filetype=obj s2dead.ll -o s2dead.o && llvm-as s2dead.ll -o s2dead.bc && \
+# RUN:   opt -module-summary s2dead.ll -o s2dead.thin.bc
+# RUN: llc -filetype=obj sm.ll -o sm.o && llvm-as sm.ll -o sm.bc && opt -module-summary sm.ll -o sm.thin.bc
+
+## The call present: one line in every mode, and no output.
+# RUN: not msil-ld s1.o s2.o sm.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s2.o s1.o sm.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s1.o s2.bc sm.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s2.bc sm.bc s1.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s2.o s1.bc sm.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s1.bc sm.bc s2.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s1.bc s2.bc sm.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s2.bc s1.bc sm.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s1.thin.bc s2.thin.bc sm.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld sm.thin.bc s2.thin.bc s1.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld s1.bc s2.bc sm.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld s1.bc s2.bc sm.bc --lto-partitions=3 --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm s1.bc s2.bc sm.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm s2.bc s1.bc sm.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+## The call deleted, its entry left: every mode links, with one binding.
+# RUN: mkdir dead
+# RUN: msil-ld s1.o s2dead.o sm.o --reference=refs -o dead/o1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/o1.exe | %{guarded}
+# RUN: msil-ld s2dead.o s1.o sm.o --reference=refs -o dead/o2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/o2.exe | %{guarded}
+# RUN: msil-ld s1.o s2dead.bc sm.bc --reference=refs -o dead/m1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/m1.exe | %{guarded}
+# RUN: msil-ld s2dead.bc sm.bc s1.o --reference=refs -o dead/m2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/m2.exe | %{guarded}
+# RUN: msil-ld s2dead.o s1.bc sm.bc --reference=refs -o dead/m3.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/m3.exe | %{guarded}
+# RUN: msil-ld s1.bc sm.bc s2dead.o --reference=refs -o dead/m4.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/m4.exe | %{guarded}
+# RUN: msil-ld s1.bc s2dead.bc sm.bc --reference=refs -o dead/l1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/l1.exe | %{guarded}
+# RUN: msil-ld s2dead.bc s1.bc sm.bc --reference=refs -o dead/l2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/l2.exe | %{guarded}
+# RUN: msil-ld s1.thin.bc s2dead.thin.bc sm.thin.bc --reference=refs -o dead/t1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/t1.exe | %{guarded}
+# RUN: msil-ld sm.thin.bc s2dead.thin.bc s1.thin.bc --reference=refs -o dead/t2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/t2.exe | %{guarded}
+# RUN: msil-ld s1.bc s2dead.bc sm.bc --lto-partitions=2 --reference=refs -o dead/p2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/p2.exe | %{guarded}
+# RUN: msil-ld s1.bc s2dead.bc sm.bc --lto-partitions=3 --reference=refs -o dead/p3.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dead/p3.exe | %{guarded}
+# RUN: msil-ld --lto-emit-asm s1.bc s2dead.bc sm.bc -o dead/a1.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEAD-TEXT --implicit-check-not=Twice --input-file=dead/a1.il
+# RUN: msil-ld --lto-emit-asm s2dead.bc s1.bc sm.bc -o dead/a2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEAD-TEXT --implicit-check-not=Twice --input-file=dead/a2.il
+# DEAD-TEXT: {{^}}.method assembly static int32 '__msil_mc.f'(int32) cil managed{{$}}
+# DEAD-TEXT: {{^ +}}call int32 [mscorlib]Contoso.Widget::Guarded(int32){{$}}
+
+## Without ThinLTO imports: the -O0 pair fails, the -O2 pair links.
+# RUN: llc -filetype=obj s1ni.ll -o s1ni.o && llvm-as s1ni.ll -o s1ni.bc && \
+# RUN:   opt -module-summary s1ni.ll -o s1ni.thin.bc
+# RUN: llc -filetype=obj s2ni.ll -o s2ni.o && llvm-as s2ni.ll -o s2ni.bc && \
+# RUN:   opt -module-summary s2ni.ll -o s2ni.thin.bc
+# RUN: llc -filetype=obj s2nidead.ll -o s2nidead.o && llvm-as s2nidead.ll -o s2nidead.bc && \
+# RUN:   opt -module-summary s2nidead.ll -o s2nidead.thin.bc
+# RUN: llc -filetype=obj smni.ll -o smni.o && llvm-as smni.ll -o smni.bc && \
+# RUN:   opt -module-summary smni.ll -o smni.thin.bc
+# RUN: not msil-ld s1ni.o s2ni.o smni.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld s1ni.thin.bc s2ni.thin.bc smni.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld smni.thin.bc s2ni.thin.bc s1ni.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld s1ni.bc s2ni.bc smni.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not ls x.exe
+# RUN: mkdir noimport
+# RUN: msil-ld s1ni.o s2nidead.o smni.o --reference=refs -o noimport/o.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noimport/o.exe | %{guarded}
+# RUN: msil-ld s1ni.thin.bc s2nidead.thin.bc smni.thin.bc --reference=refs -o noimport/t1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noimport/t1.exe | %{guarded}
+# RUN: msil-ld smni.thin.bc s2nidead.thin.bc s1ni.thin.bc --reference=refs -o noimport/t2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noimport/t2.exe | %{guarded}
+# RUN: msil-ld s1ni.bc s2nidead.bc smni.bc --reference=refs -o noimport/l.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noimport/l.exe | %{guarded}
+
+## Two entries of f inside one input: one line in every LTO mode.
+# RUN: llvm-as m12.ll -o m12.bc && opt -module-summary m12.ll -o m12.thin.bc
+# RUN: llvm-as m12dead.ll -o m12dead.bc && opt -module-summary m12dead.ll -o m12dead.thin.bc
+# DEFINE: %{m} =
+# DEFINE: %{merged} = not msil-ld %{m}.bc sm.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld sm.bc %{m}.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{m}.thin.bc sm.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld sm.thin.bc %{m}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{m}.bc sm.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{m}.bc sm.bc --lto-partitions=3 --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld --lto-emit-asm %{m}.bc sm.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17 && \
+# DEFINE:   not ls x.exe && not ls x.il
+# REDEFINE: %{m} = m12
+# RUN: %{merged}
+# REDEFINE: %{m} = m12dead
+# RUN: %{merged}
+
+## C++: the mangled name, as objects too.
+# RUN: llc -filetype=obj t1.ll -o t1.o && llvm-as t1.ll -o t1.bc && opt -module-summary t1.ll -o t1.thin.bc
+# RUN: llc -filetype=obj t2.ll -o t2.o && llvm-as t2.ll -o t2.bc && opt -module-summary t2.ll -o t2.thin.bc
+# RUN: llc -filetype=obj tm.ll -o tm.o && llvm-as tm.ll -o tm.bc && opt -module-summary tm.ll -o tm.thin.bc
+# RUN: not msil-ld t1.o t2.o tm.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17CXX
+# RUN: not msil-ld t2.o t1.o tm.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17CXX
+# RUN: not msil-ld t1.o t2.bc tm.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17CXX
+# RUN: not msil-ld t2.bc tm.bc t1.o --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17CXX
+# RUN: not msil-ld t1.bc t2.bc tm.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17CXX
+# RUN: not msil-ld t1.thin.bc t2.thin.bc tm.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17CXX
+# RUN: not ls x.exe
+# TM17CXX: {{^}}msil-ld: error: managed call '?f@@YAHH@Z' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units{{$}}
+
+## The other errors: one line under partitions and with ThinLTO imports.
+# RUN: llvm-as hold.ll -o hold.bc && opt -module-summary hold.ll -o hold.thin.bc
+# RUN: llvm-as hmain.ll -o hmain.bc && opt -module-summary hmain.ll -o hmain.thin.bc
+# RUN: llvm-as hkeep.ll -o hkeep.bc && opt -module-summary hkeep.ll -o hkeep.thin.bc
+# RUN: not msil-ld hold.bc hmain.bc hkeep.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10 -DIN=hold.bc
+# RUN: not msil-ld hold.thin.bc hmain.thin.bc hkeep.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10 -DIN=hold.thin.bc
+# RUN: not msil-ld hmain.thin.bc hold.thin.bc hkeep.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10 -DIN=hold.thin.bc
+## msil-ld checks the bitcode inputs before LTO's optimizer, so the line
+## names hold.ll's input (IN) and the function whose code there holds the
+## use, hold, before main inlines it (the partitioned link) or imports it
+## (the ThinLTO links).
+# TM10: {{^}}msil-ld: error: [[IN]]: function @hold: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# RUN: llvm-as cast.ll -o cast.bc && opt -module-summary cast.ll -o cast.thin.bc
+# RUN: llvm-as castmain.ll -o castmain.bc && opt -module-summary castmain.ll -o castmain.thin.bc
+# RUN: not msil-ld cast.bc castmain.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld cast.thin.bc castmain.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld castmain.thin.bc cast.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: llvm-as bad.ll -o bad.bc && opt -module-summary bad.ll -o bad.thin.bc
+# RUN: llvm-as badmain.ll -o badmain.bc && opt -module-summary badmain.ll -o badmain.thin.bc
+# RUN: not msil-ld bad.bc badmain.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=INVALID
+# RUN: not msil-ld bad.thin.bc badmain.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=INVALID
+# RUN: not msil-ld badmain.thin.bc bad.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=INVALID
+# RUN: not ls x.exe
+# INVALID: {{^}}msil-ld: error: managed call 'wide' has invalid "msil-managed-*" attributes: parameter 1: conversion 'val' does not fit the .NET type 'int32' and the IR type 'i64'{{$}}
+
+## A narrow result's or parameter's extension, on both triples. The units of
+## the triple %{tr} are in the directory %{tr}, each body after the triple's
+## head, as a CIL object, bitcode and a ThinLTO module; %{a} and %{b} name a
+## pair, whose units are %{ua} and %{ub}, and %{um} is the triple's main.
+# DEFINE: %{tr} =
+# DEFINE: %{a} =
+# DEFINE: %{b} =
+# DEFINE: %{ua} = %{tr}/%{a}
+# DEFINE: %{ub} = %{tr}/%{b}
+# DEFINE: %{um} = %{tr}/nmain
+# DEFINE: %{main} = mkdir %{tr} && cat %{tr}.head nmain.ll > %{um}.ll && \
+# DEFINE:   llc -filetype=obj %{um}.ll -o %{um}.o && llvm-as %{um}.ll -o %{um}.bc && \
+# DEFINE:   opt -module-summary %{um}.ll -o %{um}.thin.bc
+# DEFINE: %{pair} = cat %{tr}.head %{a}.ll > %{ua}.ll && cat %{tr}.head %{b}.ll > %{ub}.ll && \
+# DEFINE:   llc -filetype=obj %{ua}.ll -o %{ua}.o && llvm-as %{ua}.ll -o %{ua}.bc && \
+# DEFINE:   opt -module-summary %{ua}.ll -o %{ua}.thin.bc && llc -filetype=obj %{ub}.ll -o %{ub}.o && \
+# DEFINE:   llvm-as %{ub}.ll -o %{ub}.bc && opt -module-summary %{ub}.ll -o %{ub}.thin.bc
+## Units that make different stubs, as CIL objects and in mixed links (either
+## unit the object), in both orders: the line once, and no output.
+# DEFINE: %{differ-obj} = \
+# DEFINE:   not msil-ld %{ua}.o %{ub}.o %{um}.o --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ub}.o %{ua}.o %{um}.o --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ua}.o %{ub}.bc %{um}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ub}.bc %{um}.bc %{ua}.o --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ub}.o %{ua}.bc %{um}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ua}.bc %{um}.bc %{ub}.o --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not ls x.exe
+## The same units in full LTO, under --lto-partitions=2, as ThinLTO modules
+## and under --lto-emit-asm, in both orders: the line once, and no output.
+# DEFINE: %{differ-lto} = \
+# DEFINE:   not msil-ld %{ua}.bc %{ub}.bc %{um}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ub}.bc %{ua}.bc %{um}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ua}.bc %{ub}.bc %{um}.bc --lto-partitions=2 --reference=refs -o x.exe \
+# DEFINE:     2> err.txt && %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ub}.bc %{ua}.bc %{um}.bc --lto-partitions=2 --reference=refs -o x.exe \
+# DEFINE:     2> err.txt && %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ua}.thin.bc %{ub}.thin.bc %{um}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ub}.thin.bc %{ua}.thin.bc %{um}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld --lto-emit-asm %{ua}.bc %{ub}.bc %{um}.bc -o x.il 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld --lto-emit-asm %{ub}.bc %{ua}.bc %{um}.bc -o x.il 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not ls x.exe && not ls x.il
+## Units that make equal stubs link in each of those modes, in both orders,
+## without a diagnostic, and the first stub of each image or text calls the
+## member and converts its result as %{stub}-IMAGE and %{stub}-TEXT pin it:
+## OCTET, Octet and then conv.u1; BOOL, Check and then ldc.i4.0 and cgt.un.
+# DEFINE: %{stub} = OCTET
+# DEFINE: %{image} = FileCheck %s --check-prefix=%{stub}-IMAGE
+# DEFINE: %{agree} = \
+# DEFINE:   msil-ld %{ua}.o %{ub}.o %{um}.o --reference=refs -o %{tr}/ok1.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok1.exe | %{image} && \
+# DEFINE:   msil-ld %{ub}.o %{ua}.o %{um}.o --reference=refs -o %{tr}/ok2.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok2.exe | %{image} && \
+# DEFINE:   msil-ld %{ua}.o %{ub}.bc %{um}.bc --reference=refs -o %{tr}/ok3.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok3.exe | %{image} && \
+# DEFINE:   msil-ld %{ub}.bc %{um}.bc %{ua}.o --reference=refs -o %{tr}/ok4.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok4.exe | %{image} && \
+# DEFINE:   msil-ld %{ub}.o %{ua}.bc %{um}.bc --reference=refs -o %{tr}/ok5.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok5.exe | %{image} && \
+# DEFINE:   msil-ld %{ua}.bc %{um}.bc %{ub}.o --reference=refs -o %{tr}/ok6.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok6.exe | %{image} && \
+# DEFINE:   msil-ld %{ua}.bc %{ub}.bc %{um}.bc --reference=refs -o %{tr}/ok7.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok7.exe | %{image} && \
+# DEFINE:   msil-ld %{ub}.bc %{ua}.bc %{um}.bc --reference=refs -o %{tr}/ok8.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok8.exe | %{image} && \
+# DEFINE:   msil-ld %{ua}.bc %{ub}.bc %{um}.bc --lto-partitions=2 --reference=refs -o %{tr}/ok9.exe 2>&1 | \
+# DEFINE:     count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok9.exe | %{image} && \
+# DEFINE:   msil-ld %{ub}.bc %{ua}.bc %{um}.bc --lto-partitions=2 --reference=refs -o %{tr}/ok10.exe 2>&1 | \
+# DEFINE:     count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok10.exe | %{image} && \
+# DEFINE:   msil-ld %{ua}.thin.bc %{ub}.thin.bc %{um}.thin.bc --reference=refs -o %{tr}/ok11.exe 2>&1 | \
+# DEFINE:     count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok11.exe | %{image} && \
+# DEFINE:   msil-ld %{ub}.thin.bc %{ua}.thin.bc %{um}.thin.bc --reference=refs -o %{tr}/ok12.exe 2>&1 | \
+# DEFINE:     count 0 && \
+# DEFINE:   llvm-cil-dump %{tr}/ok12.exe | %{image} && \
+# DEFINE:   msil-ld --lto-emit-asm %{ua}.bc %{ub}.bc %{um}.bc -o %{tr}/ok13.il 2>&1 | count 0 && \
+# DEFINE:   FileCheck %s --check-prefix=%{stub}-TEXT --input-file=%{tr}/ok13.il && \
+# DEFINE:   msil-ld --lto-emit-asm %{ub}.bc %{ua}.bc %{um}.bc -o %{tr}/ok14.il 2>&1 | count 0 && \
+# DEFINE:   FileCheck %s --check-prefix=%{stub}-TEXT --input-file=%{tr}/ok14.il
+# OCTET-IMAGE:      {{^    L[0-9]+: }}call uint8(uint8) [FakeWidgets]Contoso.Widget::'Octet'{{$}}
+# OCTET-IMAGE-NEXT: {{^    L[0-9]+: }}conv.u1{{$}}
+# OCTET-TEXT:       {{^ +}}call uint8 [mscorlib]Contoso.Widget::Octet(uint8){{$}}
+# OCTET-TEXT-NEXT:  {{^ +}}conv.u1{{$}}
+# BOOL-IMAGE:       {{^    L[0-9]+: }}call bool(bool) [FakeWidgets]Contoso.Widget::'Check'{{$}}
+# BOOL-IMAGE-NEXT:  {{^    L[0-9]+: }}ldc.i4.0{{$}}
+# BOOL-IMAGE-NEXT:  {{^    L[0-9]+: }}cgt.un{{$}}
+# BOOL-TEXT:        {{^ +}}call bool [mscorlib]Contoso.Widget::Check(bool){{$}}
+# BOOL-TEXT-NEXT:   {{^ +}}ldc.i4.0{{$}}
+# BOOL-TEXT-NEXT:   {{^ +}}cgt.un{{$}}
+
+## One input that holds a pair as llvm-link merges it: %{a}.ll after the
+## triple's head, as bitcode and a ThinLTO module (%{ua}), beside the
+## triple's main.
+# DEFINE: %{unit} = cat %{tr}.head %{a}.ll > %{ua}.ll && llvm-as %{ua}.ll -o %{ua}.bc && \
+# DEFINE:   opt -module-summary %{ua}.ll -o %{ua}.thin.bc
+## msil-ld refuses it before LTO, in full LTO and as ThinLTO modules in both
+## orders, under --lto-partitions=2 and under --lto-emit-asm: the line once,
+## and no output.
+# DEFINE: %{merged-differ} = \
+# DEFINE:   not msil-ld %{ua}.bc %{um}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{um}.bc %{ua}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ua}.thin.bc %{um}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{um}.thin.bc %{ua}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld %{ua}.bc %{um}.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld --lto-emit-asm %{ua}.bc %{um}.bc -o x.il 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not ls x.exe && not ls x.il
+## With --reference, in full LTO and under --lto-emit-asm: the line alone,
+## before LTO and its checks of the stub's types, and no output.
+# DEFINE: %{merged-refs} = \
+# DEFINE:   not msil-ld %{ua}.bc %{um}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld --lto-emit-asm %{ua}.bc %{um}.bc --reference=refs -o x.il 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not ls x.exe && not ls x.il
+## It links in each of those modes without a diagnostic, and the stub calls
+## the member and converts its result as %{stub} pins it.
+# DEFINE: %{merged-agree} = \
+# DEFINE:   msil-ld %{ua}.bc %{um}.bc --reference=refs -o %{ua}-1.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{ua}-1.exe | %{image} && \
+# DEFINE:   msil-ld %{um}.bc %{ua}.bc --reference=refs -o %{ua}-2.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{ua}-2.exe | %{image} && \
+# DEFINE:   msil-ld %{ua}.thin.bc %{um}.thin.bc --reference=refs -o %{ua}-3.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{ua}-3.exe | %{image} && \
+# DEFINE:   msil-ld %{um}.thin.bc %{ua}.thin.bc --reference=refs -o %{ua}-4.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{ua}-4.exe | %{image} && \
+# DEFINE:   msil-ld %{ua}.bc %{um}.bc --lto-partitions=2 --reference=refs -o %{ua}-5.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{ua}-5.exe | %{image} && \
+# DEFINE:   msil-ld --lto-emit-asm %{ua}.bc %{um}.bc -o %{ua}-6.il 2>&1 | count 0 && \
+# DEFINE:   FileCheck %s --check-prefix=%{stub}-TEXT --input-file=%{ua}-6.il
+
+## On each triple: the result pairs as CIL objects and in mixed links, and the
+## parameter pair in every mode.
+# REDEFINE: %{tr} = win
+# RUN: %{main}
+# REDEFINE: %{a} = o8rs
+# REDEFINE: %{b} = o8
+# RUN: %{pair}
+# RUN: %{differ-obj}
+# REDEFINE: %{a} = l16rs
+# REDEFINE: %{b} = l16
+# RUN: %{pair}
+# RUN: %{differ-obj}
+# REDEFINE: %{a} = o8ps
+# REDEFINE: %{b} = o8
+# RUN: %{pair}
+# RUN: %{agree}
+# REDEFINE: %{tr} = net
+# RUN: %{main}
+# REDEFINE: %{a} = o8rs
+# REDEFINE: %{b} = o8
+# RUN: %{pair}
+# RUN: %{differ-obj}
+# REDEFINE: %{a} = l16rs
+# REDEFINE: %{b} = l16
+# RUN: %{pair}
+# RUN: %{differ-obj}
+# REDEFINE: %{a} = o8ps
+# REDEFINE: %{b} = o8
+# RUN: %{pair}
+# RUN: %{agree}
+
+## The result pairs in every LTO mode, as in the object and mixed links.
+# REDEFINE: %{tr} = win
+# REDEFINE: %{a} = o8rs
+# REDEFINE: %{b} = o8
+# RUN: %{differ-lto}
+# REDEFINE: %{a} = l16rs
+# REDEFINE: %{b} = l16
+# RUN: %{differ-lto}
+# REDEFINE: %{tr} = net
+# REDEFINE: %{a} = o8rs
+# REDEFINE: %{b} = o8
+# RUN: %{differ-lto}
+# REDEFINE: %{a} = l16rs
+# REDEFINE: %{b} = l16
+# RUN: %{differ-lto}
+
+## On msil64-unknown-dotnet, the units of e8m and b8m as separate inputs:
+## e8s and e8 fail in every mode, as the result pairs do, and b8rs and b8
+## link in every mode, as the parameter pair does.
+# REDEFINE: %{tr} = net
+# REDEFINE: %{a} = e8s
+# REDEFINE: %{b} = e8
+# RUN: %{pair}
+# RUN: %{differ-obj}
+# RUN: %{differ-lto}
+# REDEFINE: %{stub} = BOOL
+# REDEFINE: %{a} = b8rs
+# REDEFINE: %{b} = b8
+# RUN: %{pair}
+# RUN: %{agree}
+
+## On each triple, the merged inputs: b8m and o8pm link; o8m and l16m fail in
+## every LTO mode, and e8m with references.
+# REDEFINE: %{tr} = win
+# REDEFINE: %{a} = b8m
+# RUN: %{unit}
+# RUN: %{merged-agree}
+# REDEFINE: %{stub} = OCTET
+# REDEFINE: %{a} = o8pm
+# RUN: %{unit}
+# RUN: %{merged-agree}
+# REDEFINE: %{tr} = net
+# REDEFINE: %{stub} = BOOL
+# REDEFINE: %{a} = b8m
+# RUN: %{unit}
+# RUN: %{merged-agree}
+# REDEFINE: %{stub} = OCTET
+# REDEFINE: %{a} = o8pm
+# RUN: %{unit}
+# RUN: %{merged-agree}
+# REDEFINE: %{tr} = win
+# REDEFINE: %{a} = o8m
+# RUN: %{unit}
+# RUN: %{merged-differ}
+# REDEFINE: %{a} = l16m
+# RUN: %{unit}
+# RUN: %{merged-differ}
+# REDEFINE: %{a} = e8m
+# RUN: %{unit}
+# RUN: %{merged-refs}
+# REDEFINE: %{tr} = net
+# REDEFINE: %{a} = o8m
+# RUN: %{unit}
+# RUN: %{merged-differ}
+# REDEFINE: %{a} = l16m
+# RUN: %{unit}
+# RUN: %{merged-differ}
+# REDEFINE: %{a} = e8m
+# RUN: %{unit}
+# RUN: %{merged-refs}
+
+#--- s1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int g(int x) { return f(x); }
+define i32 @g(i32 noundef %x) {
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- s2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Point", "Twice",
+;; "int32(int32)"))); static int h(int x, int y) { return y ? f(x) : 0; }
+;; int k(int x) { return h(x, 0); }, at -O0: h keeps its call of f.
+define i32 @k(i32 noundef %x) {
+  %r = call i32 @h(i32 noundef %x, i32 noundef 0)
+  ret i32 %r
+}
+
+define internal i32 @h(i32 noundef %x, i32 noundef %y) {
+entry:
+  %c = icmp ne i32 %y, 0
+  br i1 %c, label %call, label %done
+
+call:
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  br label %done
+
+done:
+  %v = phi i32 [ %r, %call ], [ 0, %entry ]
+  ret i32 %v
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- s2dead.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; s2.ll at -O2: the optimizer inlined h(x, 0) into k, deleted the dead call
+;; of f and then f's declaration, and kept the entry.
+define i32 @k(i32 noundef %x) {
+  ret i32 0
+}
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- sm.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int g(int), k(int);
+;; int main(void) { return 100 + g(-3) * 10 + k(-4); }
+declare i32 @g(i32 noundef)
+declare i32 @k(i32 noundef)
+
+define i32 @main() {
+  %a = call i32 @g(i32 noundef -3)
+  %b = call i32 @k(i32 noundef -4)
+  %m = mul i32 %a, 10
+  %s = add i32 %m, 100
+  %t = add i32 %s, %b
+  ret i32 %t
+}
+#--- s1ni.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; s1.ll with __attribute__((noinline)) int g(int x) { return f(x); }
+define i32 @g(i32 noundef %x) #1 {
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #1 = { noinline }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- s2ni.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; s2.ll with __attribute__((noinline)) int k(int x) { return h(x, 0) + x * x; },
+;; at -O0
+define i32 @k(i32 noundef %x) #1 {
+  %h = call i32 @h(i32 noundef %x, i32 noundef 0)
+  %sq = mul i32 %x, %x
+  %r = add i32 %h, %sq
+  ret i32 %r
+}
+
+define internal i32 @h(i32 noundef %x, i32 noundef %y) {
+entry:
+  %c = icmp ne i32 %y, 0
+  br i1 %c, label %call, label %done
+
+call:
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  br label %done
+
+done:
+  %v = phi i32 [ %r, %call ], [ 0, %entry ]
+  ret i32 %v
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #1 = { noinline }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- s2nidead.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; s2ni.ll at -O2: k keeps x * x; the call of f and f's declaration are
+;; gone, and the entry is left.
+define i32 @k(i32 noundef %x) #1 {
+  %sq = mul i32 %x, %x
+  ret i32 %sq
+}
+
+attributes #1 = { noinline }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- smni.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int g(int), k(int);
+;; int main(void) { return 100 + g(-3) * 10 + k(-4) - 16; }
+declare i32 @g(i32 noundef)
+declare i32 @k(i32 noundef)
+
+define i32 @main() {
+  %a = call i32 @g(i32 noundef -3)
+  %b = call i32 @k(i32 noundef -4)
+  %m = mul i32 %a, 10
+  %s = add i32 %m, 84
+  %t = add i32 %s, %b
+  ret i32 %t
+}
+#--- m12.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; llvm-link s1.ll s2.ll: one declaration of f (s1.ll's) and both entries.
+define i32 @g(i32 noundef %x) {
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+define i32 @k(i32 noundef %x) {
+  %r = call i32 @h(i32 noundef %x, i32 noundef 0)
+  ret i32 %r
+}
+
+define internal i32 @h(i32 noundef %x, i32 noundef %y) {
+entry:
+  %c = icmp ne i32 %y, 0
+  br i1 %c, label %call, label %done
+
+call:
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  br label %done
+
+done:
+  %v = phi i32 [ %r, %call ], [ 0, %entry ]
+  ret i32 %v
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0, !1}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+!1 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- m12dead.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; llvm-link s1.ll s2dead.ll: s1.ll's declaration and call of f, and
+;; s2dead.ll's leftover entry beside s1.ll's.
+define i32 @g(i32 noundef %x) {
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+define i32 @k(i32 noundef %x) {
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0, !1}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+!1 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- t1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$"?twice@@YAHH@Z" = comdat any
+
+;; C++, with a header h.h that both units include:
+;;   #ifndef TYPE
+;;   #define TYPE "Contoso.Widget"
+;;   #define MEMBER "Guarded"
+;;   #endif
+;;   int f(int) __attribute__((msil_method(TYPE, MEMBER, "int32(int32)")));
+;;   inline int twice(int x) { return f(x) * 2; }
+;; t1.cpp: #include "h.h", then int g(int x) { return twice(x) + f(x); }
+define i32 @"?g@@YAHH@Z"(i32 noundef %x) {
+  %t = call i32 @"?twice@@YAHH@Z"(i32 noundef %x)
+  %f = call i32 @"__msil_mc.?f@@YAHH@Z"(i32 noundef %x)
+  %r = add i32 %t, %f
+  ret i32 %r
+}
+
+define linkonce_odr i32 @"?twice@@YAHH@Z"(i32 noundef %x) comdat {
+  %f = call i32 @"__msil_mc.?f@@YAHH@Z"(i32 noundef %x)
+  %r = mul i32 %f, 2
+  ret i32 %r
+}
+
+declare i32 @"__msil_mc.?f@@YAHH@Z"(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.?f@@YAHH@Z", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- t2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$"?twice@@YAHH@Z" = comdat any
+
+;; t2.cpp: #define TYPE "Contoso.Point" and #define MEMBER "Twice", then
+;; #include "h.h" and int k(int x) { return twice(x) + f(x); }
+define i32 @"?k@@YAHH@Z"(i32 noundef %x) {
+  %t = call i32 @"?twice@@YAHH@Z"(i32 noundef %x)
+  %f = call i32 @"__msil_mc.?f@@YAHH@Z"(i32 noundef %x)
+  %r = add i32 %t, %f
+  ret i32 %r
+}
+
+define linkonce_odr i32 @"?twice@@YAHH@Z"(i32 noundef %x) comdat {
+  %f = call i32 @"__msil_mc.?f@@YAHH@Z"(i32 noundef %x)
+  %r = mul i32 %f, 2
+  ret i32 %r
+}
+
+declare i32 @"__msil_mc.?f@@YAHH@Z"(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.?f@@YAHH@Z", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- tm.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; tm.cpp: int g(int); int k(int);
+;; int main() { return 100 + g(-3) * 10 + k(-4); }
+declare i32 @"?g@@YAHH@Z"(i32 noundef)
+declare i32 @"?k@@YAHH@Z"(i32 noundef)
+
+define i32 @main() {
+  %a = call i32 @"?g@@YAHH@Z"(i32 noundef -3)
+  %b = call i32 @"?k@@YAHH@Z"(i32 noundef -4)
+  %m = mul i32 %a, 10
+  %s = add i32 %m, 100
+  %t = add i32 %s, %b
+  ret i32 %t
+}
+#--- hold.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); void hold(void (*use)(int (*)(int))) { use(f); }
+define void @hold(ptr noundef %use) {
+  call void %use(ptr noundef @__msil_mc.f)
+  ret void
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- hmain.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; void hold(void (*)(int (*)(int))); void keep(int (*)(int));
+;; int main(void) { hold(keep); return 0; }
+declare void @hold(ptr noundef)
+declare void @keep(ptr noundef)
+
+define i32 @main() {
+  call void @hold(ptr noundef @keep)
+  ret i32 0
+}
+#--- hkeep.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@kept = global ptr null
+
+;; int (*volatile kept)(int);
+;; __attribute__((noinline)) void keep(int (*p)(int)) { kept = p; }
+define void @keep(ptr noundef %p) #0 {
+  store volatile ptr %p, ptr @kept
+  ret void
+}
+
+attributes #0 = { noinline }
+#--- cast.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); long long viacast(long long x) {
+;; return ((long long (*)(long long))f)(x); }: a direct call of f with
+;; another function type
+define i64 @viacast(i64 noundef %x) {
+  %r = call i64 @__msil_mc.f(i64 noundef %x)
+  ret i64 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- castmain.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; long long viacast(long long); int main(void) { return (int)viacast(-3); }
+declare i64 @viacast(i64 noundef)
+
+define i32 @main() {
+  %r = call i64 @viacast(i64 noundef -3)
+  %t = trunc i64 %r to i32
+  ret i32 %t
+}
+#--- bad.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; An i64 for Contoso.Widget::Guarded's int32, which clang's Sema never
+;; gives (hand-written IR): long long wide(long long) with the arguments
+;; "Contoso.Widget", "Guarded", "int32(int32)";
+;; long long viabad(long long x) { return wide(x); }
+define i64 @viabad(i64 noundef %x) {
+  %r = call i64 @__msil_mc.wide(i64 noundef %x)
+  ret i64 %r
+}
+
+declare i64 @__msil_mc.wide(i64 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wide", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- badmain.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; long long viabad(long long); int main(void) { return (int)viabad(-3); }
+declare i64 @viabad(i64 noundef)
+
+define i32 @main() {
+  %r = call i64 @viabad(i64 noundef -3)
+  %t = trunc i64 %r to i32
+  ret i32 %t
+}
+#--- win.head
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+#--- net.head
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+#--- o8rs.ll
+
+;; signed char f(unsigned char) __attribute__((msil_method("Contoso.Widget",
+;; "Octet", "uint8(uint8)"))); int use_a(int x) { return f(x); }: the
+;; result signext
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call signext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = sext i8 %r to i32
+  ret i32 %v
+}
+
+declare signext i8 @__msil_mc.f(i8 noundef zeroext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Octet" "msil-managed-sig"="uint8(uint8)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Octet", !"uint8(uint8)", !"", !"val;val", !""}
+#--- o8.ll
+
+;; unsigned char f(unsigned char) __attribute__((msil_method(
+;; "Contoso.Widget", "Octet", "uint8(uint8)")));
+;; int use_b(int x) { return f(x); }: the result and the parameter zeroext
+define i32 @use_b(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call zeroext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = zext i8 %r to i32
+  ret i32 %v
+}
+
+declare zeroext i8 @__msil_mc.f(i8 noundef zeroext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Octet" "msil-managed-sig"="uint8(uint8)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Octet", !"uint8(uint8)", !"", !"val;val", !""}
+#--- o8ps.ll
+
+;; unsigned char f(signed char) __attribute__((msil_method(
+;; "Contoso.Widget", "Octet", "uint8(uint8)")));
+;; int use_a(int x) { return f(x); }: the parameter signext
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call zeroext i8 @__msil_mc.f(i8 noundef signext %b)
+  %v = zext i8 %r to i32
+  ret i32 %v
+}
+
+declare zeroext i8 @__msil_mc.f(i8 noundef signext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Octet" "msil-managed-sig"="uint8(uint8)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Octet", !"uint8(uint8)", !"", !"val;val", !""}
+#--- l16rs.ll
+
+;; Contoso.Widget::Letter(char) as f with a signext i16 result, which clang
+;; never declares (a char16_t result is zeroext):
+;; int use_a(int x) { return f(x); }
+define i32 @use_a(i32 noundef %x) {
+  %c = trunc i32 %x to i16
+  %r = call signext i16 @__msil_mc.f(i16 noundef zeroext %c)
+  %v = sext i16 %r to i32
+  ret i32 %v
+}
+
+declare signext i16 @__msil_mc.f(i16 noundef zeroext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Letter" "msil-managed-sig"="char(char)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Letter", !"char(char)", !"", !"val;val", !""}
+#--- l16.ll
+
+;; char16_t f(char16_t) __attribute__((msil_method("Contoso.Widget",
+;; "Letter", "char(char)"))); int use_b(int x) { return f(x); }: the result
+;; and the parameter zeroext
+define i32 @use_b(i32 noundef %x) {
+  %c = trunc i32 %x to i16
+  %r = call zeroext i16 @__msil_mc.f(i16 noundef zeroext %c)
+  %v = zext i16 %r to i32
+  ret i32 %v
+}
+
+declare zeroext i16 @__msil_mc.f(i16 noundef zeroext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Letter" "msil-managed-sig"="char(char)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Letter", !"char(char)", !"", !"val;val", !""}
+#--- e8s.ll
+
+;; void f(signed char) __attribute__((msil_method("Contoso.Widget",
+;; "SetMode", "void(valuetype Contoso.Mode)")));
+;; int use_a(int x) { f(x); return x; }: the parameter signext
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  call void @__msil_mc.f(i8 noundef signext %b)
+  ret i32 %x
+}
+
+declare void @__msil_mc.f(i8 noundef signext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetMode" "msil-managed-sig"="void(valuetype Contoso.Mode)" "msil-managed-conv"="enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"SetMode", !"void(valuetype Contoso.Mode)", !"", !"enum;void", !""}
+#--- e8.ll
+
+;; void f(unsigned char) __attribute__((msil_method("Contoso.Widget",
+;; "SetMode", "void(valuetype Contoso.Mode)")));
+;; int use_b(int x) { f(x); return x; }: the parameter zeroext
+define i32 @use_b(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  call void @__msil_mc.f(i8 noundef zeroext %b)
+  ret i32 %x
+}
+
+declare void @__msil_mc.f(i8 noundef zeroext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetMode" "msil-managed-sig"="void(valuetype Contoso.Mode)" "msil-managed-conv"="enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"SetMode", !"void(valuetype Contoso.Mode)", !"", !"enum;void", !""}
+#--- b8rs.ll
+
+;; signed char f(unsigned char) __attribute__((msil_method("Contoso.Widget",
+;; "Check", "bool(bool)"))); int use_a(int x) { return f(x); }: the result
+;; signext
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call signext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = sext i8 %r to i32
+  ret i32 %v
+}
+
+declare signext i8 @__msil_mc.f(i8 noundef zeroext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Check" "msil-managed-sig"="bool(bool)" "msil-managed-conv"="bool;bool" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Check", !"bool(bool)", !"", !"bool;bool", !""}
+#--- b8.ll
+
+;; unsigned char f(unsigned char) __attribute__((msil_method(
+;; "Contoso.Widget", "Check", "bool(bool)")));
+;; int use_b(int x) { return f(x); }: the result zeroext
+define i32 @use_b(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call zeroext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = zext i8 %r to i32
+  ret i32 %v
+}
+
+declare zeroext i8 @__msil_mc.f(i8 noundef zeroext) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Check" "msil-managed-sig"="bool(bool)" "msil-managed-conv"="bool;bool" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Check", !"bool(bool)", !"", !"bool;bool", !""}
+#--- o8m.ll
+
+;; llvm-link o8rs.ll o8.ll: one declaration of f, o8rs.ll's, whose result
+;; is signext; use_a's call signext and use_b's call zeroext; both units'
+;; entries, which are equal
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call signext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = sext i8 %r to i32
+  ret i32 %v
+}
+
+declare signext i8 @__msil_mc.f(i8 noundef zeroext) #0
+
+define i32 @use_b(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call zeroext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = zext i8 %r to i32
+  ret i32 %v
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Octet" "msil-managed-sig"="uint8(uint8)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0, !0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Octet", !"uint8(uint8)", !"", !"val;val", !""}
+#--- l16m.ll
+
+;; llvm-link l16.ll l16rs.ll: one declaration of f, l16.ll's, whose result
+;; is zeroext; use_b's call zeroext and use_a's call signext; both units'
+;; entries, which are equal
+define i32 @use_b(i32 noundef %x) {
+  %c = trunc i32 %x to i16
+  %r = call zeroext i16 @__msil_mc.f(i16 noundef zeroext %c)
+  %v = zext i16 %r to i32
+  ret i32 %v
+}
+
+declare zeroext i16 @__msil_mc.f(i16 noundef zeroext) #0
+
+define i32 @use_a(i32 noundef %x) {
+  %c = trunc i32 %x to i16
+  %r = call signext i16 @__msil_mc.f(i16 noundef zeroext %c)
+  %v = sext i16 %r to i32
+  ret i32 %v
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Letter" "msil-managed-sig"="char(char)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0, !0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Letter", !"char(char)", !"", !"val;val", !""}
+#--- e8m.ll
+
+;; llvm-link e8s.ll e8.ll: one declaration of f, e8s.ll's, whose parameter
+;; is signext; use_a's call passes a signext argument and use_b's a zeroext
+;; one; both units' entries, which are equal
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  call void @__msil_mc.f(i8 noundef signext %b)
+  ret i32 %x
+}
+
+declare void @__msil_mc.f(i8 noundef signext) #0
+
+define i32 @use_b(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  call void @__msil_mc.f(i8 noundef zeroext %b)
+  ret i32 %x
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetMode" "msil-managed-sig"="void(valuetype Contoso.Mode)" "msil-managed-conv"="enum;void" }
+
+!msil.managed.calls = !{!0, !0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"SetMode", !"void(valuetype Contoso.Mode)", !"", !"enum;void", !""}
+#--- o8pm.ll
+
+;; llvm-link o8ps.ll o8.ll: one declaration of f, o8ps.ll's, whose
+;; parameter is signext; use_a's call passes a signext argument and use_b's
+;; a zeroext one; both units' entries, which are equal
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call zeroext i8 @__msil_mc.f(i8 noundef signext %b)
+  %v = zext i8 %r to i32
+  ret i32 %v
+}
+
+declare zeroext i8 @__msil_mc.f(i8 noundef signext) #0
+
+define i32 @use_b(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call zeroext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = zext i8 %r to i32
+  ret i32 %v
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Octet" "msil-managed-sig"="uint8(uint8)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0, !0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Octet", !"uint8(uint8)", !"", !"val;val", !""}
+#--- b8m.ll
+
+;; llvm-link b8rs.ll b8.ll: one declaration of f, b8rs.ll's, whose result
+;; is signext; use_a's call signext and use_b's call zeroext; both units'
+;; entries, which are equal
+define i32 @use_a(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call signext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = sext i8 %r to i32
+  ret i32 %v
+}
+
+declare signext i8 @__msil_mc.f(i8 noundef zeroext) #0
+
+define i32 @use_b(i32 noundef %x) {
+  %b = trunc i32 %x to i8
+  %r = call zeroext i8 @__msil_mc.f(i8 noundef zeroext %b)
+  %v = zext i8 %r to i32
+  ret i32 %v
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Check" "msil-managed-sig"="bool(bool)" "msil-managed-conv"="bool;bool" }
+
+!msil.managed.calls = !{!0, !0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Check", !"bool(bool)", !"", !"bool;bool", !""}
+#--- nmain.ll
+
+;; int use_a(int), use_b(int);
+;; int main(void) { return use_a(200) + use_b(200); }
+declare i32 @use_a(i32 noundef)
+declare i32 @use_b(i32 noundef)
+
+define i32 @main() {
+  %a = call i32 @use_a(i32 noundef 200)
+  %b = call i32 @use_b(i32 noundef 200)
+  %s = add i32 %a, %b
+  ret i32 %s
+}

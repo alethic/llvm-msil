@@ -1,0 +1,62 @@
+# A constructor managed call with internal linkage in two translation units: a.c and b.c each declare '__attribute__((constructor)) static void blank_line(void)' bound to System.Console::WriteLine(), so the program prints two blank lines before main, one for each unit.
+# Plan 5.20.4 as amended for MC-1 (MC-1 leftover audit, defect D6, and the
+# user's pick 'Build them now' in the chat, 2026-11-05): for a managed call
+# with constructor, clang's CodeGen defines the forwarder
+# '__msil_mc_ctor.<symbol>', which calls the stub, and registers it in
+# llvm.global_ctors. For a declaration with internal linkage (a C 'static'
+# declaration, the row '5.20.3 amended (... internal linkage ...)') the
+# forwarder is internal and its entry has no key, so each unit keeps its
+# own and it runs once per unit, as a C 'static' constructor does
+# (ctor-once.test has the external form, once per program). The two
+# declarations here are equal, so they share one IR name (5.20.4 (IR name,
+# MR4) as amended again: the name hashes the operands and the function
+# type) and full LTO merges the declarations, never the two internal
+# forwarders or their entries. Before the fix the attribute had no effect,
+# and the program printed no blank line. The blank lines are
+# Console.WriteLine()'s Environment.NewLine (CR LF on Windows, which the
+# transcript newline rule folds to LF). Console is no built-in table type,
+# so the program links against the .NET Framework 4.8 implementation
+# assemblies (%{msil_refs_netfx}); the image runs on the Framework, .NET 10
+# and WSL .NET 10, through objects and LTO. Each managed declaration sits
+# under '#if defined(__MSIL__)' with a C fallback in '#else' (a 'static' C
+# constructor that prints an empty line with puts), and the native oracle
+# builds the fallbacks, so the expected file is update-expected.py's (plan
+# 5.20.11 MT3, 5.17.4). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+/* a.c: its own static constructor managed call blank_line. */
+#include <stdio.h>
+
+#if defined(__MSIL__)
+__attribute__((constructor))
+__attribute__((msil_method("System.Console", "WriteLine", "void()")))
+static void blank_line(void);
+#else
+__attribute__((constructor)) static void blank_line(void) { puts(""); }
+#endif
+
+int a_answer(void) { return 42; }
+#--- b.c
+/* b.c: a static constructor managed call of the same name, and main. */
+#include <stdio.h>
+
+#if defined(__MSIL__)
+__attribute__((constructor))
+__attribute__((msil_method("System.Console", "WriteLine", "void()")))
+static void blank_line(void);
+#else
+__attribute__((constructor)) static void blank_line(void) { puts(""); }
+#endif
+
+int a_answer(void);
+
+int main(void) {
+  printf("main: two blank lines above, one from each unit's static "
+         "constructor managed call blank_line; a_answer() %d\n",
+         a_answer());
+  return 0;
+}

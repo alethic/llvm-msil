@@ -1,0 +1,106 @@
+# Static .NET members called from C through the built-in table, with no reference assemblies: Buffer::MemoryCopy copies overlapping bytes forward and backward, Marshal::AllocHGlobal gives writable memory, BitConverter::GetBytes(int32) and Environment::GetCommandLineArgs() give array handles that are freed exactly once through GCHandle::Free.
+# Plan 5.20.2 (msil_method on a function declaration), 5.20.3 MS5 (the
+# rows 'val' for 'T*' from any object pointer, for int64 from a 64-bit
+# integer, for 'native int' from size_t and into an object pointer; 'obj'
+# for an array result into a handle type; 'this-gch' for GCHandle::Free),
+# 5.20.5 ML2 (2) ('call' for a static method), 5.20.7 MK1 (without
+# references only the built-in table binds: Buffer::MemoryCopy,
+# Marshal::AllocHGlobal and Environment::GetCommandLineArgs are Phase 1's
+# rows, BitConverter::GetBytes(int32) is P-1a's, GCHandle::Free MC-1's;
+# no Math member, whose rows are M33's), 5.20.9 MH2 (every reference-typed
+# result is a new handle that the caller frees once). Buffer.MemoryCopy
+# copies as memmove does (plan D15), so each managed declaration sits under
+# '#if defined(__MSIL__)' with a C fallback in '#else' (memmove, malloc, and
+# for the handles a malloc'd stand-in and free), and the native oracle
+# builds the fallbacks (plan 5.20.11 MT3): the transcript prints only what
+# both builds show alike. Marshal::FreeHGlobal is no table entry, so the
+# AllocHGlobal block is never freed (the process ends; the fallback leaks
+# its malloc alike). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#if defined(__MSIL__)
+__attribute__((msil_method("System.Buffer", "MemoryCopy",
+                           "void(void*, void*, int64, int64)")))
+void copy_bytes(const void *src, void *dst, long long dst_size,
+                long long count);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "AllocHGlobal", "native int(native int)")))
+void *alloc_hglobal(size_t size);
+
+__attribute__((msil_method("System.BitConverter", "GetBytes",
+                           "uint8[](int32)")))
+mc_handle int_bytes(int value);
+
+__attribute__((msil_method("System.Environment", "GetCommandLineArgs",
+                           "string[]()")))
+mc_handle command_line_args(void);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+#else
+struct mc_object {
+  unsigned char bytes[4];
+};
+static void copy_bytes(const void *src, void *dst, long long dst_size,
+                       long long count) {
+  (void)dst_size;
+  memmove(dst, src, (size_t)count);
+}
+static void *alloc_hglobal(size_t size) { return malloc(size); }
+static mc_handle int_bytes(int value) {
+  mc_handle h = malloc(sizeof *h);
+  memcpy(h->bytes, &value, sizeof value);
+  return h;
+}
+static mc_handle command_line_args(void) { return malloc(sizeof(struct mc_object)); }
+static void handle_free(mc_handle handle) { free(handle); }
+#endif
+
+int main(void) {
+  char buf[16];
+
+  /* Overlapping copies, forward and backward (memmove's result). */
+  memcpy(buf, "0123456789", 11);
+  copy_bytes(buf, buf + 2, 8, 6);
+  printf("MemoryCopy forward over an overlap: %s\n", buf);
+  memcpy(buf, "0123456789", 11);
+  copy_bytes(buf + 3, buf, 10, 7);
+  printf("MemoryCopy backward over an overlap: %s\n", buf);
+  copy_bytes(buf, buf + 5, 5, 0);
+  printf("MemoryCopy of 0 bytes: %s\n", buf);
+
+  /* A block from AllocHGlobal is writable and readable. */
+  unsigned char *block = alloc_hglobal(64);
+  printf("AllocHGlobal(64) is not null: %d\n", block != NULL);
+  unsigned sum = 0;
+  if (block) {
+    for (int i = 0; i < 64; ++i)
+      block[i] = (unsigned char)(3 * i + 1);
+    for (int i = 0; i < 64; ++i)
+      sum += block[i];
+  }
+  printf("sum of the 64 bytes written: %u\n", sum);
+
+  /* Array results are handles: distinct, nonzero, each freed once. */
+  mc_handle a = int_bytes(0x01020304);
+  mc_handle b = int_bytes(-1);
+  printf("GetBytes handles: nonzero %d, distinct %d\n", a != 0 && b != 0,
+         a != b);
+  mc_handle args = command_line_args();
+  printf("GetCommandLineArgs handle is nonzero: %d\n", args != 0);
+  handle_free(a);
+  handle_free(b);
+  handle_free(args);
+  puts("freed three handles");
+  return 0;
+}

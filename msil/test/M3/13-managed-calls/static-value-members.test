@@ -1,0 +1,114 @@
+# Static members of value types named with a TYPE spelled 'valuetype T': DateTime::get_Now (a static method whose DateTime result is a boxed handle, whose Year the program reads through 'this-val') and TimeSpan::Zero (a static field read as a boxed handle, whose Ticks are 0); and the mirror, DateTime::get_Now with TYPE spelled 'System.DateTime' without the prefix; with references every form links and runs, and each handle is freed once.
+# Plan 5.20.2 MA1 and 5.20.7 MK3 as amended for MC-1 (the MC-1 leftover
+# audit's item 'MK3 check everywhere': with references msil-ld checks every
+# 'valuetype' spelling against the TypeDef, T-M16): an object gives a
+# static method or static field whose TYPE is 'valuetype T' (T neither a
+# primitive with a one-byte signature form nor GCHandle) a MemberRef whose
+# parent is the TypeSpec 'valuetype T', so msil-ld sees the spelling and
+# checks that T is a value type, and the image's MemberRef has T's TypeRef
+# as its parent, as Roslyn writes it. A static member of a TYPE without the
+# prefix keeps a TypeRef parent in the object, which says nothing of the
+# kind, so the mirror (System.DateTime, a value type, without 'valuetype')
+# links and runs: no stub IL depends on a static member's parent kind.
+# Without references a 'valuetype' TYPE other than GCHandle is T-M8 (MK2, MK3),
+# and with references a class spelled 'valuetype' is T-M16 (the lld tests,
+# plan 5.20.11 MT3). The results are value types other than
+# enums, so each is a boxed handle ('boxed', 5.20.3 MS5) that the program
+# frees once through GCHandle::Free ('this-gch', 5.20.9 MH2), and get_Year
+# and get_Ticks read the boxed copies ('this-val'). DateTime.Now is the
+# local time, so the program prints only that its Year is plausible (2000
+# to 2999) and that both spellings give the same Year (a run that spans New
+# Year's midnight would differ); TimeSpan.Zero has 0 ticks. DateTime and
+# TimeSpan are no built-in table types, so the program links against the
+# .NET Framework 4.8 implementation assemblies (%{msil_refs_netfx}); the
+# image runs on the Framework, .NET 10 and WSL .NET 10, through objects and
+# LTO. Each managed declaration sits under '#if defined(__MSIL__)' with a C
+# fallback in '#else' (the year of localtime(time(NULL)) and a TimeSpan of
+# 0 ticks), and the native oracle builds the fallbacks, so the expected file
+# is update-expected.py's (plan 5.20.11 MT3, 5.17.4). Plan 5.17.13 (MC-1,
+# M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+
+#if defined(__MSIL__)
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define DT "valuetype System.DateTime"
+#define TS "valuetype System.TimeSpan"
+
+/* A static method of a value type, with the prefix: a TypeSpec parent in
+   the object, a TypeRef parent in the image. */
+__attribute__((msil_method(DT, "get_Now", "valuetype System.DateTime()")))
+mc_handle date_now(void);
+
+/* The mirror: the same member with TYPE spelled without the prefix. */
+__attribute__((msil_method("System.DateTime", "get_Now",
+                           "valuetype System.DateTime()")))
+mc_handle date_now_no_prefix(void);
+
+/* A static field of a value type, with the prefix. */
+__attribute__((msil_method(TS, "Zero", "field valuetype System.TimeSpan")))
+mc_handle span_zero(void);
+
+__attribute__((msil_method(DT, "get_Year", "instance int32()")))
+int date_year(mc_handle date);
+
+__attribute__((msil_method(TS, "get_Ticks", "instance int64()")))
+long long span_ticks(mc_handle span);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+static int now_year(void) {
+  mc_handle d = date_now();
+  int year = date_year(d);
+  handle_free(d);
+  return year;
+}
+
+static int now_year_no_prefix(void) {
+  mc_handle d = date_now_no_prefix();
+  int year = date_year(d);
+  handle_free(d);
+  return year;
+}
+
+static long long zero_ticks(void) {
+  mc_handle s = span_zero();
+  long long ticks = span_ticks(s);
+  handle_free(s);
+  return ticks;
+}
+#else
+#include <time.h>
+
+static int now_year(void) {
+  time_t t = time(NULL);
+  return localtime(&t)->tm_year + 1900;
+}
+
+static int now_year_no_prefix(void) { return now_year(); }
+
+static long long zero_ticks(void) { return 0; }
+#endif
+
+static int plausible(int year) { return year >= 2000 && year <= 2999; }
+
+int main(void) {
+  int year = now_year();
+  printf("DateTime.Now (valuetype System.DateTime): Year plausible %d\n",
+         plausible(year));
+  int year2 = now_year_no_prefix();
+  printf("DateTime.Now (System.DateTime, no prefix): Year plausible %d, "
+         "the same Year %d\n",
+         plausible(year2), year2 == year);
+  printf("TimeSpan.Zero (valuetype System.TimeSpan): Ticks %lld\n",
+         zero_ticks());
+  return 0;
+}

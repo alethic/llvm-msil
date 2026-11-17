@@ -1,0 +1,480 @@
+## The run-time checks of whole-program text under --lto-emit-asm
+## (ImplementationPlan.md 5.20.6 MW2 and MW3 as amended in section 12;
+## milestone MC-1). Without --reference, msil-ld binds nothing in its text
+## and makes none of 5.20.7's link checks, so three wrong declarations would
+## run with a wrong result: a value type named as a reference type for a
+## 'this-obj' instance member or a constructor, a reference type named
+## 'valuetype' for a 'this-val' one or a constructor (T-M16 in a link with
+## references), and an integer for a 'valuetype' that is not an enum of that
+## width, as an 'enum' parameter or result (T-M7). Whole-program text (this
+## text, clang -S and llc) makes them fail when the program runs, before the
+## member access or right after a constructor's newobj, and a right
+## declaration runs as before; objects and images do not change.
+## - The kind check: a 'this-obj' stub casts the handle's target to TYPE as a
+##   TypeSpec of the declared kind, 'castclass class [mscorlib]T', and a
+##   'this-val' stub's access unboxes 'valuetype [mscorlib]V', for methods
+##   and fields alike; a constructor's stub casts the new object of a class,
+##   'castclass class [mscorlib]T' right after the newobj, and boxes that of
+##   a value type as 'box valuetype [mscorlib]V' (its 'boxed' result's box;
+##   another result, as GCHandle's, gets 'dup', that box and 'pop' after the
+##   newobj); the runtime's type loader refuses a TypeSpec of the wrong kind
+##   when it compiles the stub. The check adds no local and no label, and
+##   only its 'dup' form takes a stack slot more. TYPE System.String keeps
+##   its TypeRef ('castclass [mscorlib]System.String'), as System.Object and
+##   the primitive value types do.
+## - The enum check: for each 'enum' parameter, then an 'enum' result, the
+##   stub's body starts with C#'s typeof(E).IsEnum ('ldtoken [mscorlib]E',
+##   System.Type::GetTypeFromHandle and System.Type::get_IsEnum()) and with
+##   'sizeof' compared with the C integer's bytes ('ldc.i4.<w>'), and the
+##   stub declares no local for it (no second '.locals' line); a type that
+##   is not an enum of that width throws System.InvalidProgramException with
+##   T-M7's text,
+##   'managed call '<f>': parameter <i> passes <n> bits for '<E>', which is not an enum of that width'
+##   or 'managed call '<f>': the result has <n> bits for '<E>', which is not an enum of that width'.
+##   The check takes the stub's first two labels, and the stub's own labels
+##   move up by two; .maxstack is at least 2. A primitive E (System.Int32)
+##   gets no label: the stub throws.
+## wrong.ll declares sum_obj ('this-obj' Sum() on the struct Contoso.Point),
+## size_val ('this-val' get_Size() on the class Contoso.Widget), place_int
+## and origin_int (an int for the struct Contoso.Point as Place()'s parameter
+## and as Origin()'s result), set_wide32 (an int for the int64-backed enum
+## Contoso.WideMode), point_new_obj (Contoso.Point's constructor, its TYPE
+## written as a class) and widget_new_val (Contoso.Widget's, written
+## 'valuetype'); right.ll declares size_obj and sum_val (the right kinds),
+## serial_obj and x_val (instance fields through 'this-obj' and 'this-val'),
+## set_mode and get_mode (an int for the int32-backed Contoso.Mode), tune
+## (Contoso.Widget::Tune(SmallMode) through a 'this' handle with an unsigned
+## char: both checks in one stub), and widget_new and point_new (the two
+## constructors of the right kinds, with an 'obj' and a 'boxed' result);
+## keep.ll declares str_len (System.String's get_Length()) and abs_i32
+## ('valuetype System.Int32' as an 'enum' parameter). The bodies are clang
+## -O2 -flto's IR (Inputs/fakepack's members, managed-calls.test) after the
+## head of x86_64-pc-windows-msvc-msil and of msil64-unknown-dotnet, whose
+## stubs print the same. Each text is pinned without references, is the
+## same with --reference, and ilasm assembles it.
+## With --reference, wrong.ll's image link and --lto-emit-asm still fail with
+## T-M16 and T-M7 (sorted), and right.ll's image keeps its TypeRefs and has
+## no check.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs none withrefs
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+
+## The texts without references on the triple %{tr}; an enum check, pinned
+## once below, for F (E, the member M) in the text %{il}.
+# DEFINE: %{tr} =
+# DEFINE: %{il} =
+# DEFINE: %{enum} = FileCheck %s --check-prefix=ENUM --input-file=none/%{il}-%{tr}.il
+# DEFINE: %{text} = cat %{tr}.head wrong.ll > wrong-%{tr}.ll && cat %{tr}.head right.ll > right-%{tr}.ll && \
+# DEFINE:   cat %{tr}.head keep.ll > keep-%{tr}.ll && llvm-as wrong-%{tr}.ll -o wrong-%{tr}.bc && \
+# DEFINE:   llvm-as right-%{tr}.ll -o right-%{tr}.bc && llvm-as keep-%{tr}.ll -o keep-%{tr}.bc && \
+# DEFINE:   msil-ld --lto-emit-asm wrong-%{tr}.bc -o none/wrong-%{tr}.il 2>&1 | count 0 && \
+# DEFINE:   msil-ld --lto-emit-asm right-%{tr}.bc -o none/right-%{tr}.il 2>&1 | count 0 && \
+# DEFINE:   msil-ld --lto-emit-asm keep-%{tr}.bc -o none/keep-%{tr}.il 2>&1 | count 0 && \
+# DEFINE:   FileCheck %s --check-prefix=WRONG --input-file=none/wrong-%{tr}.il && \
+# DEFINE:   FileCheck %s --check-prefix=RIGHT --input-file=none/right-%{tr}.il && \
+# DEFINE:   FileCheck %s --check-prefix=KEEP --input-file=none/keep-%{tr}.il
+# DEFINE: %{wrong-enums} = \
+# DEFINE:   %{enum} --check-prefix=PARAM -DF=place_int -DE=Contoso.Point -DM=Place && \
+# DEFINE:   %{enum} --check-prefix=RESULT -DF=origin_int -DE=Contoso.Point -DM=Origin && \
+# DEFINE:   %{enum} --check-prefix=PARAM -DF=set_wide32 -DE=Contoso.WideMode -DM=SetWide
+# DEFINE: %{right-enums} = \
+# DEFINE:   %{enum} --check-prefix=PARAM -DF=set_mode -DE=Contoso.Mode -DM=SetMode && \
+# DEFINE:   %{enum} --check-prefix=RESULT -DF=get_mode -DE=Contoso.Mode -DM=GetMode
+# REDEFINE: %{tr} = win
+# RUN: %{text}
+# REDEFINE: %{il} = wrong
+# RUN: %{wrong-enums}
+# REDEFINE: %{il} = right
+# RUN: %{right-enums}
+# REDEFINE: %{tr} = net
+# RUN: %{text}
+# REDEFINE: %{il} = wrong
+# RUN: %{wrong-enums}
+# REDEFINE: %{il} = right
+# RUN: %{right-enums}
+# RUN: %if ilasm %{ %ilasm-verify -output=wrong-text.dll none/wrong-win.il %}
+# RUN: %if ilasm %{ %ilasm-verify -output=right-text.dll none/right-win.il %}
+# RUN: %if ilasm %{ %ilasm-verify -output=keep-text.dll none/keep-win.il %}
+
+## With --reference: the same text, and the link checks as before.
+# RUN: msil-ld --lto-emit-asm right-win.bc --reference=refs -o withrefs/right-win.il 2>&1 | count 0
+# RUN: diff none/right-win.il withrefs/right-win.il
+# RUN: not msil-ld wrong-win.bc --reference=refs -o x.exe 2> err.txt
+# RUN: grep error: err.txt | count 7
+# RUN: sort err.txt | %{err} --check-prefix=LINK
+# RUN: not msil-ld --lto-emit-asm wrong-win.bc --reference=refs -o x.il 2> err.txt
+# RUN: grep error: err.txt | count 7
+# RUN: sort err.txt | %{err} --check-prefix=LINK
+# RUN: not ls x.exe
+# RUN: not ls x.il
+# RUN: msil-ld right-win.bc --reference=refs -o right.exe 2>&1 | count 0
+# RUN: llvm-cil-dump right.exe | FileCheck %s --check-prefix=IMAGE --implicit-check-not=InvalidProgramException \
+# RUN:   --implicit-check-not=ldtoken --implicit-check-not=get_IsEnum --implicit-check-not=sizeof
+
+## wrong.ll's kind checks, in its order.
+# WRONG-LABEL: {{^}}.method assembly static int32 '__msil_mc.sum_obj'(native int) cil managed{{$}}
+# WRONG:       {{^ +}}.maxstack 1{{$}}
+# WRONG-NEXT:  {{^ +}}ldarg.0{{$}}
+# WRONG:       {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# WRONG-NEXT:  {{^ +}}castclass class [mscorlib]Contoso.Point{{$}}
+# WRONG-NEXT:  {{^}}@MC{{[0-9]+}}_1:{{$}}
+# WRONG-NEXT:  {{^ +}}callvirt instance int32 [mscorlib]Contoso.Point::Sum(){{$}}
+# WRONG-NEXT:  {{^ +}}ret{{$}}
+# WRONG-LABEL: {{^}}.method assembly static int32 '__msil_mc.size_val'(native int) cil managed{{$}}
+# WRONG:       {{^ +}}.maxstack 1{{$}}
+# WRONG-NEXT:  {{^ +}}ldarg.0{{$}}
+# WRONG:       {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# WRONG-NEXT:  {{^}}@MC{{[0-9]+}}_1:{{$}}
+# WRONG-NEXT:  {{^ +}}unbox valuetype [mscorlib]Contoso.Widget{{$}}
+# WRONG-NEXT:  {{^ +}}call instance int32 [mscorlib]Contoso.Widget::get_Size(){{$}}
+# WRONG-NEXT:  {{^ +}}ret{{$}}
+# WRONG-LABEL: {{^}}.method assembly static native int '__msil_mc.point_new_obj'(int32, int32) cil managed{{$}}
+# WRONG:       {{^ +}}.maxstack 2{{$}}
+# WRONG:       {{^ +}}newobj instance void [mscorlib]Contoso.Point::.ctor(int32, int32){{$}}
+# WRONG-NEXT:  {{^ +}}castclass class [mscorlib]Contoso.Point{{$}}
+# WRONG-NEXT:  {{^ +}}dup{{$}}
+# WRONG-LABEL: {{^}}.method assembly static native int '__msil_mc.widget_new_val'(native int, int32) cil managed{{$}}
+# WRONG:       {{^ +}}newobj instance void [mscorlib]Contoso.Widget::.ctor(string, int32){{$}}
+# WRONG-NEXT:  {{^ +}}box valuetype [mscorlib]Contoso.Widget{{$}}
+# WRONG-NEXT:  {{^ +}}call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle [mscorlib]System.Runtime.InteropServices.GCHandle::Alloc(object){{$}}
+
+## right.ll's stubs in its order: tune (the enum check first, on labels 0
+## and 1, with no local, then the handle with the kind check, on labels 2
+## and 3), then the kind checks of methods, fields and constructors.
+# RIGHT-LABEL: {{^}}.method assembly static void '__msil_mc.tune'(native int, int8) cil managed{{$}}
+# RIGHT:       {{^ +}}.maxstack 2{{$}}
+# RIGHT-NEXT:  {{^ +}}ldtoken [mscorlib]Contoso.SmallMode{{$}}
+# RIGHT-NEXT:  {{^ +}}call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle(valuetype [mscorlib]System.RuntimeTypeHandle){{$}}
+# RIGHT-NEXT:  {{^ +}}callvirt instance bool [mscorlib]System.Type::get_IsEnum(){{$}}
+# RIGHT-NEXT:  {{^ +}}brfalse.s @MC[[T:[0-9]+]]_0{{$}}
+# RIGHT-NEXT:  {{^ +}}sizeof [mscorlib]Contoso.SmallMode{{$}}
+# RIGHT-NEXT:  {{^ +}}ldc.i4.1{{$}}
+# RIGHT-NEXT:  {{^ +}}beq.s @MC[[T]]_1{{$}}
+# RIGHT-NEXT:  {{^}}@MC[[T]]_0:{{$}}
+# RIGHT-NEXT:  {{^ +}}ldstr "managed call 'tune': parameter 1 passes 8 bits for 'Contoso.SmallMode', which is not an enum of that width"{{$}}
+# RIGHT-NEXT:  {{^ +}}newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string){{$}}
+# RIGHT-NEXT:  {{^ +}}throw{{$}}
+# RIGHT-NEXT:  {{^}}@MC[[T]]_1:{{$}}
+# RIGHT-NEXT:  {{^ +}}ldarg.0{{$}}
+# RIGHT-NEXT:  {{^ +}}brtrue.s @MC[[T]]_2{{$}}
+# RIGHT-NEXT:  {{^ +}}ldnull{{$}}
+# RIGHT-NEXT:  {{^ +}}br.s @MC[[T]]_3{{$}}
+# RIGHT-NEXT:  {{^}}@MC[[T]]_2:{{$}}
+# RIGHT-NEXT:  {{^ +}}ldarg.0{{$}}
+# RIGHT-NEXT:  {{^ +}}call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle [mscorlib]System.Runtime.InteropServices.GCHandle::FromIntPtr(native int){{$}}
+# RIGHT-NEXT:  {{^ +}}box [mscorlib]System.Runtime.InteropServices.GCHandle{{$}}
+# RIGHT-NEXT:  {{^ +}}unbox [mscorlib]System.Runtime.InteropServices.GCHandle{{$}}
+# RIGHT-NEXT:  {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# RIGHT-NEXT:  {{^ +}}castclass class [mscorlib]Contoso.Widget{{$}}
+# RIGHT-NEXT:  {{^}}@MC[[T]]_3:{{$}}
+# RIGHT-NEXT:  {{^ +}}ldarg.1{{$}}
+# RIGHT-NEXT:  {{^ +}}callvirt instance void [mscorlib]Contoso.Widget::Tune(valuetype [mscorlib]Contoso.SmallMode){{$}}
+# RIGHT-NEXT:  {{^ +}}ret{{$}}
+# RIGHT-LABEL: {{^}}.method assembly static int32 '__msil_mc.size_obj'(native int) cil managed{{$}}
+# RIGHT:       {{^ +}}.maxstack 1{{$}}
+# RIGHT-NEXT:  {{^ +}}ldarg.0{{$}}
+# RIGHT:       {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# RIGHT-NEXT:  {{^ +}}castclass class [mscorlib]Contoso.Widget{{$}}
+# RIGHT-NEXT:  {{^}}@MC{{[0-9]+}}_1:{{$}}
+# RIGHT-NEXT:  {{^ +}}callvirt instance int32 [mscorlib]Contoso.Widget::get_Size(){{$}}
+# RIGHT-NEXT:  {{^ +}}ret{{$}}
+# RIGHT-LABEL: {{^}}.method assembly static int32 '__msil_mc.sum_val'(native int) cil managed{{$}}
+# RIGHT:       {{^ +}}.maxstack 1{{$}}
+# RIGHT-NEXT:  {{^ +}}ldarg.0{{$}}
+# RIGHT:       {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# RIGHT-NEXT:  {{^}}@MC{{[0-9]+}}_1:{{$}}
+# RIGHT-NEXT:  {{^ +}}unbox valuetype [mscorlib]Contoso.Point{{$}}
+# RIGHT-NEXT:  {{^ +}}call instance int32 [mscorlib]Contoso.Point::Sum(){{$}}
+# RIGHT-NEXT:  {{^ +}}ret{{$}}
+# RIGHT-LABEL: {{^}}.method assembly static native int '__msil_mc.serial_obj'(native int) cil managed{{$}}
+# RIGHT:       {{^ +}}.maxstack 1{{$}}
+# RIGHT-NEXT:  {{^ +}}ldarg.0{{$}}
+# RIGHT:       {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# RIGHT-NEXT:  {{^ +}}castclass class [mscorlib]Contoso.Widget{{$}}
+# RIGHT-NEXT:  {{^}}@MC{{[0-9]+}}_1:{{$}}
+# RIGHT-NEXT:  {{^ +}}ldfld int64 [mscorlib]Contoso.Widget::Serial{{$}}
+# RIGHT-NEXT:  {{^ +}}conv.i{{$}}
+# RIGHT-NEXT:  {{^ +}}ret{{$}}
+# RIGHT-LABEL: {{^}}.method assembly static int32 '__msil_mc.x_val'(native int) cil managed{{$}}
+# RIGHT:       {{^ +}}.maxstack 1{{$}}
+# RIGHT-NEXT:  {{^ +}}ldarg.0{{$}}
+# RIGHT:       {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# RIGHT-NEXT:  {{^}}@MC{{[0-9]+}}_1:{{$}}
+# RIGHT-NEXT:  {{^ +}}unbox valuetype [mscorlib]Contoso.Point{{$}}
+# RIGHT-NEXT:  {{^ +}}ldfld int32 [mscorlib]Contoso.Point::X{{$}}
+# RIGHT-NEXT:  {{^ +}}ret{{$}}
+# RIGHT-LABEL: {{^}}.method assembly static native int '__msil_mc.widget_new'(native int, int32) cil managed{{$}}
+# RIGHT:       {{^ +}}newobj instance void [mscorlib]Contoso.Widget::.ctor(string, int32){{$}}
+# RIGHT-NEXT:  {{^ +}}castclass class [mscorlib]Contoso.Widget{{$}}
+# RIGHT-NEXT:  {{^ +}}dup{{$}}
+# RIGHT-LABEL: {{^}}.method assembly static native int '__msil_mc.point_new'(int32, int32) cil managed{{$}}
+# RIGHT:       {{^ +}}.maxstack 2{{$}}
+# RIGHT:       {{^ +}}newobj instance void [mscorlib]Contoso.Point::.ctor(int32, int32){{$}}
+# RIGHT-NEXT:  {{^ +}}box valuetype [mscorlib]Contoso.Point{{$}}
+# RIGHT-NEXT:  {{^ +}}call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle [mscorlib]System.Runtime.InteropServices.GCHandle::Alloc(object){{$}}
+
+## System.String keeps its TypeRef; a primitive E makes the stub throw.
+# KEEP-LABEL: {{^}}.method assembly static int32 '__msil_mc.str_len'(native int) cil managed{{$}}
+# KEEP:       {{^ +}}call instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# KEEP-NEXT:  {{^ +}}castclass [mscorlib]System.String{{$}}
+# KEEP-NEXT:  {{^}}@MC{{[0-9]+}}_1:{{$}}
+# KEEP-NEXT:  {{^ +}}callvirt instance int32 [mscorlib]System.String::get_Length(){{$}}
+# KEEP-LABEL: {{^}}.method assembly static int32 '__msil_mc.abs_i32'(int32) cil managed{{$}}
+# KEEP:       {{^ +}}.maxstack 1{{$}}
+# KEEP-NEXT:  {{^ +}}ldstr "managed call 'abs_i32': parameter 1 passes 32 bits for 'System.Int32', which is not an enum of that width"{{$}}
+# KEEP-NEXT:  {{^ +}}newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string){{$}}
+# KEEP-NEXT:  {{^ +}}throw{{$}}
+# KEEP-NEXT:  {{^ +}}ldarg.0{{$}}
+# KEEP-NEXT:  {{^ +}}call int32 [mscorlib]Contoso.Widget::Guarded(valuetype [mscorlib]System.Int32){{$}}
+# KEEP-NEXT:  {{^ +}}ret{{$}}
+
+## The enum check of F's 'enum' parameter (PARAM) or result (RESULT), an
+## int (4 bytes, 32 bits) for the type E of the member Contoso.Widget::M.
+# PARAM:       {{^}}.method assembly static void '__msil_mc.[[F]]'(int32) cil managed{{$}}
+# RESULT:      {{^}}.method assembly static int32 '__msil_mc.[[F]]'() cil managed{{$}}
+# ENUM:        {{^ +}}.maxstack 2{{$}}
+# ENUM-NEXT:   {{^ +}}ldtoken [mscorlib][[E]]{{$}}
+# ENUM-NEXT:   {{^ +}}call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle(valuetype [mscorlib]System.RuntimeTypeHandle){{$}}
+# ENUM-NEXT:   {{^ +}}callvirt instance bool [mscorlib]System.Type::get_IsEnum(){{$}}
+# ENUM-NEXT:   {{^ +}}brfalse.s @MC[[L:[0-9]+]]_0{{$}}
+# ENUM-NEXT:   {{^ +}}sizeof [mscorlib][[E]]{{$}}
+# ENUM-NEXT:   {{^ +}}ldc.i4.4{{$}}
+# ENUM-NEXT:   {{^ +}}beq.s @MC[[L]]_1{{$}}
+# ENUM-NEXT:   {{^}}@MC[[L]]_0:{{$}}
+# PARAM-NEXT:  {{^ +}}ldstr "managed call '[[F]]': parameter 1 passes 32 bits for '[[E]]', which is not an enum of that width"{{$}}
+# RESULT-NEXT: {{^ +}}ldstr "managed call '[[F]]': the result has 32 bits for '[[E]]', which is not an enum of that width"{{$}}
+# ENUM-NEXT:   {{^ +}}newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string){{$}}
+# ENUM-NEXT:   {{^ +}}throw{{$}}
+# ENUM-NEXT:   {{^}}@MC[[L]]_1:{{$}}
+# PARAM-NEXT:  {{^ +}}ldarg.0{{$}}
+# PARAM-NEXT:  {{^ +}}call void [mscorlib]Contoso.Widget::[[M]](valuetype [mscorlib][[E]]){{$}}
+# RESULT-NEXT: {{^ +}}call valuetype [mscorlib][[E]] [mscorlib]Contoso.Widget::[[M]](){{$}}
+# ENUM-NEXT:   {{^ +}}ret{{$}}
+
+## msil-ld's link checks of wrong.ll, sorted.
+# LINK:      {{^}}msil-ld: error: managed call 'origin_int': the result has 32 bits for 'Contoso.Point', which is not an enum of that width{{$}}
+# LINK-NEXT: {{^}}msil-ld: error: managed call 'place_int': parameter 1 passes 32 bits for 'Contoso.Point', which is not an enum of that width{{$}}
+# LINK-NEXT: {{^}}msil-ld: error: managed call 'point_new_obj': 'Contoso.Point' is a value type, but the declaration uses it as a reference type{{$}}
+# LINK-NEXT: {{^}}msil-ld: error: managed call 'set_wide32': parameter 1 passes 32 bits for 'Contoso.WideMode', which is not an enum of that width{{$}}
+# LINK-NEXT: {{^}}msil-ld: error: managed call 'size_val': 'Contoso.Widget' is a reference type, but the declaration uses it as a value type{{$}}
+# LINK-NEXT: {{^}}msil-ld: error: managed call 'sum_obj': 'Contoso.Point' is a value type, but the declaration uses it as a reference type{{$}}
+# LINK-NEXT: {{^}}msil-ld: error: managed call 'widget_new_val': 'Contoso.Widget' is a reference type, but the declaration uses it as a value type{{$}}
+
+## right.ll's image, in its method order (by name): TypeRefs, no check.
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.get_mode' int32() {{.+$}}
+# IMAGE-NEXT:  {{^    .maxstack 1$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}call valuetype [FakeWidgets]Contoso.Mode() [FakeWidgets]Contoso.Widget::'GetMode'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.point_new' native int(int32, int32) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}newobj instance void(int32, int32) [FakeWidgets]Contoso.Point::'.ctor'{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}box [FakeWidgets]Contoso.Point{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.serial_obj' native int(native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}ldfld int64 [FakeWidgets]Contoso.Widget::'Serial'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.set_mode' void(int32) {{.+$}}
+# IMAGE-NEXT:  {{^    .maxstack 1$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}ldarg.0{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}call void(valuetype [FakeWidgets]Contoso.Mode) [FakeWidgets]Contoso.Widget::'SetMode'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.size_obj' int32(native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}callvirt instance int32() [FakeWidgets]Contoso.Widget::'get_Size'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.sum_val' int32(native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}unbox [FakeWidgets]Contoso.Point{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}call instance int32() [FakeWidgets]Contoso.Point::'Sum'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.tune' void(native int, int8) {{.+$}}
+# IMAGE-NEXT:  {{^    .maxstack 2$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}ldarg.0{{$}}
+# IMAGE:       {{^    L[0-9]+: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}ldarg.1{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}callvirt instance void(valuetype [FakeWidgets]Contoso.SmallMode) [FakeWidgets]Contoso.Widget::'Tune'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.widget_new' native int(native int, int32) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}newobj instance void(string, int32) [FakeWidgets]Contoso.Widget::'.ctor'{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}dup{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.x_val' int32(native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}unbox [FakeWidgets]Contoso.Point{{$}}
+# IMAGE-NEXT:  {{^    L[0-9]+: }}ldfld int32 [FakeWidgets]Contoso.Point::'X'{{$}}
+# IMAGE-LABEL: {{^  }}.method 'main' int32() {{.+$}}
+
+#--- wrong.ll
+;; typedef struct dn_object *dn_handle;
+;; int sum_obj(dn_handle) __attribute__((msil_method("Contoso.Point", "Sum", "instance int32()")));
+;; int size_val(dn_handle) __attribute__((msil_method("valuetype Contoso.Widget", "get_Size", "instance int32()")));
+;; void place_int(int) __attribute__((msil_method("Contoso.Widget", "Place", "void(valuetype Contoso.Point)")));
+;; int origin_int(void) __attribute__((msil_method("Contoso.Widget", "Origin", "valuetype Contoso.Point()")));
+;; void set_wide32(int) __attribute__((msil_method("Contoso.Widget", "SetWide", "void(valuetype Contoso.WideMode)")));
+;; dn_handle point_new_obj(int, int) __attribute__((msil_method("Contoso.Point", ".ctor", "instance void(int32, int32)")));
+;; dn_handle widget_new_val(const char *, int) __attribute__((msil_method("valuetype Contoso.Widget", ".ctor",
+;;                                                                        "instance void(string, int32)")));
+;; int main(void) {
+;;   return sum_obj(0) + size_val(0) + origin_int() + (place_int(1), 0) + (set_wide32(2), 0) +
+;;          (point_new_obj(1, 2) != 0) + (widget_new_val(0, 3) != 0);
+;; }
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @__msil_mc.sum_obj(ptr noundef null) #0
+  %call1 = tail call i32 @__msil_mc.size_val(ptr noundef null) #0
+  %add = add i32 %call1, %call
+  %call2 = tail call i32 @__msil_mc.origin_int() #0
+  %add3 = add i32 %add, %call2
+  tail call void @__msil_mc.place_int(i32 noundef 1) #0
+  tail call void @__msil_mc.set_wide32(i32 noundef 2) #0
+  %call6 = tail call ptr @__msil_mc.point_new_obj(i32 noundef 1, i32 noundef 2) #0
+  %cmp = icmp ne ptr %call6, null
+  %conv = zext i1 %cmp to i32
+  %add7 = add i32 %add3, %conv
+  %call8 = tail call ptr @__msil_mc.widget_new_val(ptr noundef null, i32 noundef 3) #0
+  %cmp9 = icmp ne ptr %call8, null
+  %conv10 = zext i1 %cmp9 to i32
+  %add11 = add i32 %add7, %conv10
+  ret i32 %add11
+}
+
+declare i32 @__msil_mc.sum_obj(ptr noundef) local_unnamed_addr #1
+
+declare i32 @__msil_mc.size_val(ptr noundef) local_unnamed_addr #2
+
+declare i32 @__msil_mc.origin_int() local_unnamed_addr #3
+
+declare void @__msil_mc.place_int(i32 noundef) local_unnamed_addr #4
+
+declare void @__msil_mc.set_wide32(i32 noundef) local_unnamed_addr #5
+
+declare ptr @__msil_mc.point_new_obj(i32 noundef, i32 noundef) local_unnamed_addr #6
+
+declare ptr @__msil_mc.widget_new_val(ptr noundef, i32 noundef) local_unnamed_addr #7
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="this-obj;val" "msil-managed-member"="Sum" "msil-managed-sig"="instance int32()" "msil-managed-type"="Contoso.Point" }
+attributes #2 = { "msil-managed-conv"="this-val;val" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-type"="valuetype Contoso.Widget" }
+attributes #3 = { "msil-managed-conv"=";enum" "msil-managed-member"="Origin" "msil-managed-sig"="valuetype Contoso.Point()" "msil-managed-type"="Contoso.Widget" }
+attributes #4 = { "msil-managed-conv"="enum;void" "msil-managed-member"="Place" "msil-managed-sig"="void(valuetype Contoso.Point)" "msil-managed-type"="Contoso.Widget" }
+attributes #5 = { "msil-managed-conv"="enum;void" "msil-managed-member"="SetWide" "msil-managed-sig"="void(valuetype Contoso.WideMode)" "msil-managed-type"="Contoso.Widget" }
+attributes #6 = { "msil-managed-conv"="val,val;obj" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32, int32)" "msil-managed-type"="Contoso.Point" }
+attributes #7 = { "msil-managed-conv"="utf8,val;boxed" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-type"="valuetype Contoso.Widget" }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6}
+!0 = !{!"__msil_mc.sum_obj", !"Contoso.Point", !"Sum", !"instance int32()", !"", !"this-obj;val", !""}
+!1 = !{!"__msil_mc.size_val", !"valuetype Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-val;val", !""}
+!2 = !{!"__msil_mc.origin_int", !"Contoso.Widget", !"Origin", !"valuetype Contoso.Point()", !"", !";enum", !""}
+!3 = !{!"__msil_mc.place_int", !"Contoso.Widget", !"Place", !"void(valuetype Contoso.Point)", !"", !"enum;void", !""}
+!4 = !{!"__msil_mc.set_wide32", !"Contoso.Widget", !"SetWide", !"void(valuetype Contoso.WideMode)", !"", !"enum;void", !""}
+!5 = !{!"__msil_mc.point_new_obj", !"Contoso.Point", !".ctor", !"instance void(int32, int32)", !"", !"val,val;obj", !""}
+!6 = !{!"__msil_mc.widget_new_val", !"valuetype Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"utf8,val;boxed", !""}
+#--- right.ll
+;; typedef struct dn_object *dn_handle;
+;; int size_obj(dn_handle) __attribute__((msil_method("Contoso.Widget", "get_Size", "instance int32()")));
+;; int sum_val(dn_handle) __attribute__((msil_method("valuetype Contoso.Point", "Sum", "instance int32()")));
+;; long long serial_obj(dn_handle) __attribute__((msil_method("Contoso.Widget", "Serial", "instance field int64")));
+;; int x_val(dn_handle) __attribute__((msil_method("valuetype Contoso.Point", "X", "instance field int32")));
+;; void set_mode(int) __attribute__((msil_method("Contoso.Widget", "SetMode", "void(valuetype Contoso.Mode)")));
+;; int get_mode(void) __attribute__((msil_method("Contoso.Widget", "GetMode", "valuetype Contoso.Mode()")));
+;; void tune(dn_handle, unsigned char) __attribute__((msil_method("Contoso.Widget", "Tune",
+;;                                                                "instance void(valuetype Contoso.SmallMode)")));
+;; dn_handle widget_new(const char *, int) __attribute__((msil_method("Contoso.Widget", ".ctor",
+;;                                                                    "instance void(string, int32)")));
+;; dn_handle point_new(int, int) __attribute__((msil_method("valuetype Contoso.Point", ".ctor", "instance void(int32, int32)")));
+;; int main(void) {
+;;   set_mode(1);
+;;   tune(0, 1);
+;;   return size_obj(0) + sum_val(0) + (int)serial_obj(0) + x_val(0) + get_mode() +
+;;          (widget_new(0, 4) != 0) + (point_new(5, 6) != 0);
+;; }
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  tail call void @__msil_mc.set_mode(i32 noundef 1) #0
+  tail call void @__msil_mc.tune(ptr noundef null, i8 noundef 1) #0
+  %call = tail call i32 @__msil_mc.size_obj(ptr noundef null) #0
+  %call1 = tail call i32 @__msil_mc.sum_val(ptr noundef null) #0
+  %add = add i32 %call1, %call
+  %call2 = tail call i64 @__msil_mc.serial_obj(ptr noundef null) #0
+  %conv = trunc i64 %call2 to i32
+  %add3 = add i32 %add, %conv
+  %call4 = tail call i32 @__msil_mc.x_val(ptr noundef null) #0
+  %add5 = add i32 %add3, %call4
+  %call6 = tail call i32 @__msil_mc.get_mode() #0
+  %add7 = add i32 %add5, %call6
+  %call8 = tail call ptr @__msil_mc.widget_new(ptr noundef null, i32 noundef 4) #0
+  %cmp = icmp ne ptr %call8, null
+  %conv9 = zext i1 %cmp to i32
+  %add10 = add i32 %add7, %conv9
+  %call11 = tail call ptr @__msil_mc.point_new(i32 noundef 5, i32 noundef 6) #0
+  %cmp12 = icmp ne ptr %call11, null
+  %conv13 = zext i1 %cmp12 to i32
+  %add14 = add i32 %add10, %conv13
+  ret i32 %add14
+}
+
+declare void @__msil_mc.set_mode(i32 noundef) local_unnamed_addr #1
+
+declare void @__msil_mc.tune(ptr noundef, i8 noundef) local_unnamed_addr #2
+
+declare i32 @__msil_mc.size_obj(ptr noundef) local_unnamed_addr #3
+
+declare i32 @__msil_mc.sum_val(ptr noundef) local_unnamed_addr #4
+
+declare i64 @__msil_mc.serial_obj(ptr noundef) local_unnamed_addr #5
+
+declare i32 @__msil_mc.x_val(ptr noundef) local_unnamed_addr #6
+
+declare i32 @__msil_mc.get_mode() local_unnamed_addr #7
+
+declare ptr @__msil_mc.widget_new(ptr noundef, i32 noundef) local_unnamed_addr #8
+
+declare ptr @__msil_mc.point_new(i32 noundef, i32 noundef) local_unnamed_addr #9
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="enum;void" "msil-managed-member"="SetMode" "msil-managed-sig"="void(valuetype Contoso.Mode)" "msil-managed-type"="Contoso.Widget" }
+attributes #2 = { "msil-managed-conv"="this-obj,enum;void" "msil-managed-member"="Tune" "msil-managed-sig"="instance void(valuetype Contoso.SmallMode)" "msil-managed-type"="Contoso.Widget" }
+attributes #3 = { "msil-managed-conv"="this-obj;val" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-type"="Contoso.Widget" }
+attributes #4 = { "msil-managed-conv"="this-val;val" "msil-managed-member"="Sum" "msil-managed-sig"="instance int32()" "msil-managed-type"="valuetype Contoso.Point" }
+attributes #5 = { "msil-managed-conv"="this-obj;val" "msil-managed-member"="Serial" "msil-managed-sig"="instance field int64" "msil-managed-type"="Contoso.Widget" }
+attributes #6 = { "msil-managed-conv"="this-val;val" "msil-managed-member"="X" "msil-managed-sig"="instance field int32" "msil-managed-type"="valuetype Contoso.Point" }
+attributes #7 = { "msil-managed-conv"=";enum" "msil-managed-member"="GetMode" "msil-managed-sig"="valuetype Contoso.Mode()" "msil-managed-type"="Contoso.Widget" }
+attributes #8 = { "msil-managed-conv"="utf8,val;obj" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-type"="Contoso.Widget" }
+attributes #9 = { "msil-managed-conv"="val,val;boxed" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32, int32)" "msil-managed-type"="valuetype Contoso.Point" }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
+!0 = !{!"__msil_mc.set_mode", !"Contoso.Widget", !"SetMode", !"void(valuetype Contoso.Mode)", !"", !"enum;void", !""}
+!1 = !{!"__msil_mc.tune", !"Contoso.Widget", !"Tune", !"instance void(valuetype Contoso.SmallMode)", !"", !"this-obj,enum;void", !""}
+!2 = !{!"__msil_mc.size_obj", !"Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-obj;val", !""}
+!3 = !{!"__msil_mc.sum_val", !"valuetype Contoso.Point", !"Sum", !"instance int32()", !"", !"this-val;val", !""}
+!4 = !{!"__msil_mc.serial_obj", !"Contoso.Widget", !"Serial", !"instance field int64", !"", !"this-obj;val", !""}
+!5 = !{!"__msil_mc.x_val", !"valuetype Contoso.Point", !"X", !"instance field int32", !"", !"this-val;val", !""}
+!6 = !{!"__msil_mc.get_mode", !"Contoso.Widget", !"GetMode", !"valuetype Contoso.Mode()", !"", !";enum", !""}
+!7 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"utf8,val;obj", !""}
+!8 = !{!"__msil_mc.point_new", !"valuetype Contoso.Point", !".ctor", !"instance void(int32, int32)", !"", !"val,val;boxed", !""}
+#--- keep.ll
+;; typedef struct dn_object *dn_handle;
+;; int str_len(dn_handle) __attribute__((msil_method("System.String", "get_Length", "instance int32()")));
+;; int abs_i32(int) __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(valuetype System.Int32)")));
+;; int main(void) { return str_len(0) + abs_i32(-3); }
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @__msil_mc.str_len(ptr noundef null) #0
+  %call1 = tail call i32 @__msil_mc.abs_i32(i32 noundef -3) #0
+  %add = add i32 %call1, %call
+  ret i32 %add
+}
+
+declare i32 @__msil_mc.str_len(ptr noundef) local_unnamed_addr #1
+
+declare i32 @__msil_mc.abs_i32(i32 noundef) local_unnamed_addr #2
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="this-obj;val" "msil-managed-member"="get_Length" "msil-managed-sig"="instance int32()" "msil-managed-type"="System.String" }
+attributes #2 = { "msil-managed-conv"="enum;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(valuetype System.Int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0, !1}
+!0 = !{!"__msil_mc.str_len", !"System.String", !"get_Length", !"instance int32()", !"", !"this-obj;val", !""}
+!1 = !{!"__msil_mc.abs_i32", !"Contoso.Widget", !"Guarded", !"int32(valuetype System.Int32)", !"", !"enum;val", !""}
+#--- win.head
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+#--- net.head
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"

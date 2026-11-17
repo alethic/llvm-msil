@@ -1,0 +1,158 @@
+# Members called through an interface TYPE: ICollection::get_Count on an int32[] handle, IEnumerable::GetEnumerator with IEnumerator::MoveNext and get_Current walking the array, ICloneable::Clone of the array, IComparable::CompareTo on string handles, IDisposable::Dispose on a MemoryStream (Stream::get_CanRead before and after), and an array handle passed to an interface-typed parameter (ArrayList's ICollection .ctor); every handle is freed exactly once.
+# Plan 5.20.3 MS5: 'this-obj' for the 'this' of a reference type is
+# handle to object, castclass T, callvirt, and an interface is a reference
+# type, so the stub casts the handle to the interface and the runtime
+# dispatches the call to the object's implementation; 'obj' for a 'class T'
+# parameter and result with T an interface (castclass to the interface, a
+# new handle for the IEnumerator result); 5.20.2 MA1 (TYPE names the
+# interface as a class, no 'valuetype' prefix), 5.20.5 ML2 (2) (callvirt for
+# an instance method of a reference type), 5.20.7 MK3 (with references,
+# msil-ld checks the interface as a reference type), 5.20.9 MH2. None of
+# these members is a built-in table entry, so the program links against the
+# .NET Framework 4.8 implementation assemblies (%{msil_refs_netfx}); the
+# image runs on the Framework, .NET 10 and WSL .NET 10. The values are
+# .NET's and the same on every runtime: an array's ICollection.Count is its
+# length, its enumerator yields the elements in order, Clone gives a new
+# array with the same elements, String.CompareTo("apple", "banana") is
+# negative under every culture, a disposed MemoryStream cannot be read.
+# The members have no C library equivalent, so the expected file is
+# hand-written for both OSes (plan 5.20.11 MT3, 5.17.4 as amended for
+# MC-1). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define COLLECTIONS "System.Collections."
+
+__attribute__((msil_method("int32[]", ".ctor", "instance void(int32)")))
+mc_handle new_ints(int length);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal", "Copy",
+                           "void(native int, int32[], int32, int32)")))
+void ints_in(const int *source, mc_handle array, int start, int length);
+
+__attribute__((msil_method("System.Array", "get_Length", "instance int32()")))
+int array_length(mc_handle array);
+
+/* Interface members. */
+__attribute__((msil_method(COLLECTIONS "ICollection", "get_Count",
+                           "instance int32()")))
+int collection_count(mc_handle collection);
+
+__attribute__((msil_method(COLLECTIONS "IEnumerable", "GetEnumerator",
+                           "instance class " COLLECTIONS "IEnumerator()")))
+mc_handle get_enumerator(mc_handle enumerable);
+
+__attribute__((msil_method(COLLECTIONS "IEnumerator", "MoveNext",
+                           "instance bool()")))
+_Bool enumerator_move_next(mc_handle enumerator);
+
+__attribute__((msil_method(COLLECTIONS "IEnumerator", "get_Current",
+                           "instance object()")))
+mc_handle enumerator_current(mc_handle enumerator);
+
+__attribute__((msil_method("System.ICloneable", "Clone",
+                           "instance object()")))
+mc_handle clone(mc_handle cloneable);
+
+__attribute__((msil_method("System.IComparable", "CompareTo",
+                           "instance int32(object)")))
+int compare_to(mc_handle comparable, mc_handle other);
+
+__attribute__((msil_method("System.IDisposable", "Dispose",
+                           "instance void()")))
+void dispose(mc_handle disposable);
+
+/* An interface-typed parameter. */
+__attribute__((msil_method(COLLECTIONS "ArrayList", ".ctor",
+                           "instance void(class " COLLECTIONS "ICollection)")))
+mc_handle new_array_list(mc_handle collection);
+
+__attribute__((msil_method(COLLECTIONS "ArrayList", "get_Count",
+                           "instance int32()")))
+int array_list_count(mc_handle list);
+
+/* Helpers. */
+__attribute__((msil_method("System.IO.MemoryStream", ".ctor",
+                           "instance void()")))
+mc_handle new_memory_stream(void);
+
+__attribute__((msil_method("System.IO.Stream", "get_CanRead",
+                           "instance bool()")))
+_Bool stream_can_read(mc_handle stream);
+
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+mc_handle concat(const char *a, const char *b);
+
+__attribute__((msil_method("System.Convert", "ToInt32", "int32(object)")))
+int to_int32(mc_handle boxed);
+
+__attribute__((msil_method("System.Object", "ReferenceEquals",
+                           "bool(object, object)")))
+_Bool same_object(mc_handle a, mc_handle b);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+static int frees;
+static void release(mc_handle h) {
+  handle_free(h);
+  ++frees;
+}
+
+int main(void) {
+  static const int values[3] = {10, -20, 30};
+  mc_handle seven = new_ints(7);
+  printf("ICollection.Count of int32[7]: %d\n", collection_count(seven));
+
+  mc_handle ints = new_ints(3);
+  ints_in(values, ints, 0, 3);
+  mc_handle it = get_enumerator(ints);
+  printf("IEnumerator handle nonzero: %d\nelements:", it != 0);
+  while (enumerator_move_next(it)) {
+    mc_handle boxed = enumerator_current(it);
+    printf(" %d", to_int32(boxed));
+    release(boxed);
+  }
+  printf("\nMoveNext after the end: %d\n", enumerator_move_next(it));
+
+  mc_handle copy = clone(ints);
+  printf("ICloneable.Clone: a new array %d, Length %d, ICollection.Count %d\n",
+         !same_object(copy, ints), array_length(copy),
+         collection_count(copy));
+
+  mc_handle list = new_array_list(ints);
+  printf("ArrayList(ICollection) Count: %d\n", array_list_count(list));
+
+  mc_handle apple = concat("app", "le"), banana = concat("ban", "ana");
+  printf("IComparable.CompareTo: apple < banana %d, banana > apple %d, "
+         "apple == apple %d\n",
+         compare_to(apple, banana) < 0, compare_to(banana, apple) > 0,
+         compare_to(apple, apple) == 0);
+
+  mc_handle ms = new_memory_stream();
+  printf("MemoryStream CanRead before IDisposable.Dispose: %d\n",
+         stream_can_read(ms));
+  dispose(ms);
+  printf("CanRead after: %d\n", stream_can_read(ms));
+
+  release(ms);
+  release(banana);
+  release(apple);
+  release(list);
+  release(copy);
+  release(it);
+  release(ints);
+  release(seven);
+  printf("handles freed: %d\n", frees);
+  return 0;
+}

@@ -1,0 +1,491 @@
+# clang -S text and msil-ld --lto-emit-asm text without references of right declarations of every row that whole-program text checks when it runs: 'this-val' DateTime getters, 'this-obj' getters (StringBuilder::get_Length, Type::get_StructLayoutAttribute, Stream::get_CanRead of a MemoryStream before and after it is disposed), 'this-obj' members of interfaces (ICollection::get_Count of an ArrayList that ArrayList::Add filled, IDisposable::Dispose of the MemoryStream), instance fields through 'this-val' (a FILETIME's dwLowDateTime) and 'this-obj' handles (StructLayoutAttribute's CharSet, an 'enum' value), constructors of value types (DateTime's, and HandleRef's .ctor(object, native int), a delegate constructor's parameters) and of classes (StringBuilder's, ArrayList's, MemoryStream's, and FileStream's in a stub with msil_catch), 'enum' results (DateTime::get_DayOfWeek, get_Kind), an 'enum' parameter (DateTime::SpecifyKind's DateTimeKind) and two in a stub with msil_catch (FileStream's constructor on a missing file); and the rows that keep no check (a 'this-val' Int64, a 'this-obj' String, a 'this-gch' Free); the TEXT lines pin the checks in both texts, the images verify, and the program prints the same on every runtime as before the checks.
+# Plan 5.20.6 MW2 as amended for MC-1 (whole-program text checks the
+# declaration when it runs; text-value-type-as-reference.test,
+# text-reference-type-as-value.test, text-enum-param.test and
+# text-enum-result.test are the wrong declarations): the castclass of a
+# 'this-obj' stub's handle, the unbox of a 'this-val' stub's object and the
+# instruction after a constructor's newobj name TYPE as a TypeSpec of the
+# declared kind ('castclass class [mscorlib]T' for a class or an interface,
+# 'unbox valuetype [mscorlib]V'; after the newobj, 'castclass class
+# [mscorlib]T' for a class and, for a value type's 'boxed' result, 'box
+# valuetype [mscorlib]V' in place of the box's TypeRef), which the type
+# loader accepts when the kind is right; and the stub of each 'enum'
+# parameter and 'enum' result tests, at the very start of its body and
+# before the .try of msil_catch, that E is an enum (typeof(E).IsEnum:
+# ldtoken E, Type::GetTypeFromHandle, Type::get_IsEnum) of the C integer's
+# size (sizeof E), with no local; the checks take the stub's first label
+# numbers, and its other labels move up by two per check. TYPE
+# System.String or System.Object as a class and a primitive value type
+# (System.Int64 here) as a value type, in a 'this-obj', 'this-val' or
+# constructor stub, 'this-gch', static members and the conversions' own
+# castclass, unbox.any and box (a method's 'boxed' result's box among them)
+# keep their TypeRef: their kinds are fixed or already in the signature. A
+# constructor's TYPE is in no signature (a MemberRef's signature leaves out
+# its owner's kind), hence its TypeSpec. A right declaration runs exactly
+# as without the checks. The program needs no reference: the text names
+# [mscorlib], which the .NET Framework and .NET (through its facade)
+# resolve. At -O0 and -O2: clang -S, and clang -flto -c
+# with an --lto-emit-asm link that passes no reference (%{msil_ref_flags} is
+# empty whatever the leg); the TEXT lines check both texts (the stubs'
+# function numbers differ, so their labels are matched as patterns); each
+# text is assembled by %ilasm -exe, verified (ILVerify and, on Windows,
+# PEVerify, with no new message), force-JITted (jitall) and run on the
+# configured runtime and, by %{msil_also_run_check}, on each runtime of the
+# leg's msil_also_run, and with msil_run_netfx on the .NET Framework 4.8;
+# every transcript matches the CHECK lines. 2024-05-06 is a Monday
+# (DayOfWeek 1), DateTimeKind.Utc is 1, FileStream's FileNotFoundException
+# for a file that does not exist maps to its code 2, a default FILETIME's
+# fields are 0, and the StructLayoutAttribute of ComTypes.FILETIME has
+# CharSet Ansi (2), as conversions.test measured. No composite builds this
+# test, so no equivalence oracle compares the text with an object link. Plan
+# 5.17.13 (MC-1, M3/13-managed-calls).
+# REDEFINE: %{msil_ref_flags} =
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/O0 %t/O2
+# DEFINE: %{tc_level} = O0
+# DEFINE: %{tc_form} = text
+# DEFINE: %{tc_image} = %t/%{tc_level}/%{tc_form}
+# REDEFINE: %{msil_also_run_image} = %{tc_image}.exe
+# DEFINE: %{tc_text} = \
+# DEFINE:   FileCheck %s --check-prefix=TEXT \
+# DEFINE:     --implicit-check-not="unbox [mscorlib]System.DateTime" \
+# DEFINE:     --implicit-check-not="castclass [mscorlib]System.Text.StringBuilder"
+# DEFINE: %{tc_build} = \
+# DEFINE:   %clang_msil %{msil_cflags} -%{tc_level} -S %t/main.c -o %t/%{tc_level}/text.il \
+# DEFINE:   && %{tc_text} --input-file=%t/%{tc_level}/text.il \
+# DEFINE:   && %ilasm -exe -output=%t/%{tc_level}/text.exe %t/%{tc_level}/text.il \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{tc_level} -flto -c %t/main.c -o %t/%{tc_level}/main.o \
+# DEFINE:   && %clang_msil -%{tc_level} %{msil_ldflags} -Wl,--lto-emit-asm %t/%{tc_level}/main.o -o %t/%{tc_level}/lto.il \
+# DEFINE:   && %{tc_text} --input-file=%t/%{tc_level}/lto.il \
+# DEFINE:   && %ilasm -exe -output=%t/%{tc_level}/lto.exe %t/%{tc_level}/lto.il
+# DEFINE: %{tc_run} = \
+# DEFINE:   %msil_verify %{tc_image}.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %{tc_image}.exe %} \
+# DEFINE:   && %msil_exec --out %{tc_image}.out %{tc_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tc_image}.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{tc_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --out %{tc_image}.netfx.out %{tc_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tc_image}.netfx.out --match-full-lines %s
+# RUN: %{tc_build}
+# RUN: %{tc_run}
+# RUN: %if msil-run-netfx %{ %{tc_netfx} %}
+# REDEFINE: %{tc_form} = lto
+# RUN: %{tc_run}
+# RUN: %if msil-run-netfx %{ %{tc_netfx} %}
+# REDEFINE: %{tc_level} = O2
+# REDEFINE: %{tc_form} = text
+# RUN: %{tc_build}
+# RUN: %{tc_run}
+# RUN: %if msil-run-netfx %{ %{tc_netfx} %}
+# REDEFINE: %{tc_form} = lto
+# RUN: %{tc_run}
+# RUN: %if msil-run-netfx %{ %{tc_netfx} %}
+# The checks in both texts, stub by stub in the order the texts print them.
+# A value type's constructor: the box of its 'boxed' result names DateTime
+# as a value type.
+# TEXT-LABEL: .method assembly static native int '__msil_mc.new_date'(int32, int32, int32) cil managed
+# TEXT:       newobj instance void [mscorlib]System.DateTime::.ctor(int32, int32, int32)
+# TEXT-NEXT:  box valuetype [mscorlib]System.DateTime
+# TEXT-NEXT:  call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle [mscorlib]System.Runtime.InteropServices.GCHandle::Alloc(object)
+# A 'this-val' getter: the unbox names DateTime as a value type, and the
+# stub has no local.
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.date_year'(native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       unbox valuetype [mscorlib]System.DateTime
+# TEXT-NEXT:  call instance int32 [mscorlib]System.DateTime::get_Year()
+# An 'enum' result (32 bits, an int) and a 'this-val' getter: the test of
+# DayOfWeek first, typeof(DayOfWeek).IsEnum and then its size, with no
+# local and the labels _0 and _1, then the stub as before with its labels
+# moved up by two.
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.date_day_of_week'(native int) cil managed
+# TEXT:       .maxstack {{[2-9]}}
+# TEXT-NEXT:  ldtoken [mscorlib]System.DayOfWeek
+# TEXT-NEXT:  call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle(valuetype [mscorlib]System.RuntimeTypeHandle)
+# TEXT-NEXT:  callvirt instance bool [mscorlib]System.Type::get_IsEnum()
+# TEXT-NEXT:  brfalse.s @MC[[F:[0-9]+]]_0
+# TEXT-NEXT:  sizeof [mscorlib]System.DayOfWeek
+# TEXT-NEXT:  ldc.i4.4
+# TEXT-NEXT:  beq.s @MC[[F]]_1
+# TEXT-NEXT:  @MC[[F]]_0:
+# TEXT-NEXT:  ldstr "managed call 'date_day_of_week': the result has 32 bits for 'System.DayOfWeek', which is not an enum of that width"
+# TEXT-NEXT:  newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string)
+# TEXT-NEXT:  throw
+# TEXT-NEXT:  @MC[[F]]_1:
+# TEXT-NEXT:  ldarg.0
+# TEXT-NEXT:  brtrue.s @MC[[F]]_2
+# TEXT:       unbox valuetype [mscorlib]System.DateTime
+# TEXT-NEXT:  call instance valuetype [mscorlib]System.DayOfWeek [mscorlib]System.DateTime::get_DayOfWeek()
+# An 'enum' parameter (CIL parameter 2, 32 bits); the 'boxed' DateTime
+# argument's unbox.any keeps its TypeRef.
+# TEXT-LABEL: .method assembly static native int '__msil_mc.date_specify_kind'(native int, int32) cil managed
+# TEXT:       .maxstack {{[2-9]}}
+# TEXT-NEXT:  ldtoken [mscorlib]System.DateTimeKind
+# TEXT-NEXT:  call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle(valuetype [mscorlib]System.RuntimeTypeHandle)
+# TEXT-NEXT:  callvirt instance bool [mscorlib]System.Type::get_IsEnum()
+# TEXT-NEXT:  brfalse.s @MC[[F:[0-9]+]]_0
+# TEXT-NEXT:  sizeof [mscorlib]System.DateTimeKind
+# TEXT-NEXT:  ldc.i4.4
+# TEXT-NEXT:  beq.s @MC[[F]]_1
+# TEXT-NEXT:  @MC[[F]]_0:
+# TEXT-NEXT:  ldstr "managed call 'date_specify_kind': parameter 2 passes 32 bits for 'System.DateTimeKind', which is not an enum of that width"
+# TEXT-NEXT:  newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string)
+# TEXT-NEXT:  throw
+# TEXT-NEXT:  @MC[[F]]_1:
+# TEXT:       unbox.any [mscorlib]System.DateTime
+# TEXT-NEXT:  ldarg.1
+# TEXT-NEXT:  call valuetype [mscorlib]System.DateTime [mscorlib]System.DateTime::SpecifyKind(valuetype [mscorlib]System.DateTime, valuetype [mscorlib]System.DateTimeKind)
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.date_kind'(native int) cil managed
+# TEXT:       .maxstack {{[2-9]}}
+# TEXT-NEXT:  ldtoken [mscorlib]System.DateTimeKind
+# TEXT:       ldstr "managed call 'date_kind': the result has 32 bits for 'System.DateTimeKind', which is not an enum of that width"
+# TEXT:       unbox valuetype [mscorlib]System.DateTime
+# TEXT-NEXT:  call instance valuetype [mscorlib]System.DateTimeKind [mscorlib]System.DateTime::get_Kind()
+# A class's constructor: a castclass right after its newobj names
+# StringBuilder as a class (the 'utf8' conversion's own UTF8Encoding newobj
+# before it keeps its TypeRef and gets none).
+# TEXT-LABEL: .method assembly static native int '__msil_mc.new_builder'(native int) cil managed
+# TEXT:       newobj instance void [mscorlib]System.Text.UTF8Encoding::.ctor(bool, bool)
+# TEXT-NEXT:  ldarg.0
+# TEXT:       newobj instance void [mscorlib]System.Text.StringBuilder::.ctor(string)
+# TEXT-NEXT:  castclass class [mscorlib]System.Text.StringBuilder
+# TEXT-NEXT:  dup
+# A 'this-obj' getter: the castclass names StringBuilder as a class, and
+# the stub has no local.
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.builder_length'(native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       castclass class [mscorlib]System.Text.StringBuilder
+# TEXT-NEXT:  @MC{{[0-9]+}}_1:
+# TEXT-NEXT:  callvirt instance int32 [mscorlib]System.Text.StringBuilder::get_Length()
+# Two 'enum' parameters in a stub with msil_catch: the stub's one .locals
+# directive holds only its own locals (the UTF-8 length, the code and the
+# result), both tests come before the .try, and the .try's first label is
+# _4; inside the .try a castclass right after FileStream's newobj names it
+# as a class.
+# TEXT-LABEL: .method assembly static native int '__msil_mc.open_file'(native int, int32, int32, native int) cil managed
+# TEXT:       .locals (int32, int32, native int)
+# TEXT-NEXT:  ldtoken [mscorlib]System.IO.FileMode
+# TEXT-NEXT:  call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle(valuetype [mscorlib]System.RuntimeTypeHandle)
+# TEXT-NEXT:  callvirt instance bool [mscorlib]System.Type::get_IsEnum()
+# TEXT-NEXT:  brfalse.s @MC[[F:[0-9]+]]_0
+# TEXT-NEXT:  sizeof [mscorlib]System.IO.FileMode
+# TEXT-NEXT:  ldc.i4.4
+# TEXT-NEXT:  beq.s @MC[[F]]_1
+# TEXT-NEXT:  @MC[[F]]_0:
+# TEXT-NEXT:  ldstr "managed call 'open_file': parameter 2 passes 32 bits for 'System.IO.FileMode', which is not an enum of that width"
+# TEXT-NEXT:  newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string)
+# TEXT-NEXT:  throw
+# TEXT-NEXT:  @MC[[F]]_1:
+# TEXT-NEXT:  ldtoken [mscorlib]System.IO.FileAccess
+# TEXT-NEXT:  call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle(valuetype [mscorlib]System.RuntimeTypeHandle)
+# TEXT-NEXT:  callvirt instance bool [mscorlib]System.Type::get_IsEnum()
+# TEXT-NEXT:  brfalse.s @MC[[F]]_2
+# TEXT-NEXT:  sizeof [mscorlib]System.IO.FileAccess
+# TEXT-NEXT:  ldc.i4.4
+# TEXT-NEXT:  beq.s @MC[[F]]_3
+# TEXT-NEXT:  @MC[[F]]_2:
+# TEXT-NEXT:  ldstr "managed call 'open_file': parameter 3 passes 32 bits for 'System.IO.FileAccess', which is not an enum of that width"
+# TEXT-NEXT:  newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string)
+# TEXT-NEXT:  throw
+# TEXT-NEXT:  @MC[[F]]_3:
+# TEXT-NEXT:  .try {
+# TEXT-NEXT:  @MC[[F]]_4:
+# TEXT:       newobj instance void [mscorlib]System.IO.FileStream::.ctor(string, valuetype [mscorlib]System.IO.FileMode, valuetype [mscorlib]System.IO.FileAccess)
+# TEXT-NEXT:  castclass class [mscorlib]System.IO.FileStream
+# TEXT-NEXT:  dup
+# TEXT:       } filter {
+# The rows that keep their TypeRef and get no local: a 'this-val' primitive
+# value type, a 'this-obj' System.String and 'this-gch'.
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.long_compare'(native int, native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       unbox [mscorlib]System.Int64
+# TEXT-NEXT:  ldarg.1
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.string_length'(native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       castclass [mscorlib]System.String
+# TEXT-NEXT:  @MC{{[0-9]+}}_1:
+# Instance fields: the ldfld of a 'this-val' handle after an unbox that
+# names FILETIME as a value type, and that of a 'this-obj' handle after a
+# castclass that names StructLayoutAttribute as a class, behind the test of
+# the field's 'enum' value (CharSet, 32 bits).
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.filetime_low'(native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       unbox valuetype [mscorlib]System.Runtime.InteropServices.ComTypes.FILETIME
+# TEXT-NEXT:  ldfld int32 [mscorlib]System.Runtime.InteropServices.ComTypes.FILETIME::dwLowDateTime
+# TEXT-LABEL: .method assembly static native int '__msil_mc.type_layout'(native int) cil managed
+# TEXT:       castclass class [mscorlib]System.Type
+# TEXT-NEXT:  @MC{{[0-9]+}}_1:
+# TEXT-NEXT:  callvirt instance class [mscorlib]System.Runtime.InteropServices.StructLayoutAttribute [mscorlib]System.Type::get_StructLayoutAttribute()
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.layout_charset'(native int) cil managed
+# TEXT:       .maxstack {{[2-9]}}
+# TEXT-NEXT:  ldtoken [mscorlib]System.Runtime.InteropServices.CharSet
+# TEXT-NEXT:  call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle(valuetype [mscorlib]System.RuntimeTypeHandle)
+# TEXT-NEXT:  callvirt instance bool [mscorlib]System.Type::get_IsEnum()
+# TEXT-NEXT:  brfalse.s @MC[[F:[0-9]+]]_0
+# TEXT-NEXT:  sizeof [mscorlib]System.Runtime.InteropServices.CharSet
+# TEXT-NEXT:  ldc.i4.4
+# TEXT-NEXT:  beq.s @MC[[F]]_1
+# TEXT-NEXT:  @MC[[F]]_0:
+# TEXT-NEXT:  ldstr "managed call 'layout_charset': the result has 32 bits for 'System.Runtime.InteropServices.CharSet', which is not an enum of that width"
+# TEXT-NEXT:  newobj instance void [mscorlib]System.InvalidProgramException::.ctor(string)
+# TEXT-NEXT:  throw
+# TEXT-NEXT:  @MC[[F]]_1:
+# TEXT:       castclass class [mscorlib]System.Runtime.InteropServices.StructLayoutAttribute
+# TEXT-NEXT:  @MC[[F]]_3:
+# TEXT-NEXT:  ldfld valuetype [mscorlib]System.Runtime.InteropServices.CharSet [mscorlib]System.Runtime.InteropServices.StructLayoutAttribute::CharSet
+# Classes' constructors without parameters, and 'this-obj' members of
+# interfaces: a castclass right after ArrayList's and MemoryStream's newobj
+# names them as classes, and the castclass of the 'this' handle names
+# ICollection and IDisposable as a class too (the TypeSpec's 'class' stands
+# for every reference type); the interface stubs have no local.
+# TEXT-LABEL: .method assembly static native int '__msil_mc.new_list'() cil managed
+# TEXT:       newobj instance void [mscorlib]System.Collections.ArrayList::.ctor()
+# TEXT-NEXT:  castclass class [mscorlib]System.Collections.ArrayList
+# TEXT-NEXT:  dup
+# TEXT-LABEL: .method assembly static int32 '__msil_mc.collection_count'(native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       castclass class [mscorlib]System.Collections.ICollection
+# TEXT-NEXT:  @MC{{[0-9]+}}_1:
+# TEXT-NEXT:  callvirt instance int32 [mscorlib]System.Collections.ICollection::get_Count()
+# TEXT-LABEL: .method assembly static native int '__msil_mc.new_stream'() cil managed
+# TEXT:       newobj instance void [mscorlib]System.IO.MemoryStream::.ctor()
+# TEXT-NEXT:  castclass class [mscorlib]System.IO.MemoryStream
+# TEXT-NEXT:  dup
+# TEXT-LABEL: .method assembly static void '__msil_mc.dispose'(native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       castclass class [mscorlib]System.IDisposable
+# TEXT-NEXT:  @MC{{[0-9]+}}_1:
+# TEXT-NEXT:  callvirt instance void [mscorlib]System.IDisposable::Dispose()
+# A value type's constructor whose parameters are a delegate constructor's
+# (an object and a native int): the box of its 'boxed' result names
+# HandleRef as a value type.
+# TEXT-LABEL: .method assembly static native int '__msil_mc.new_handle_ref'(native int, native int) cil managed
+# TEXT:       newobj instance void [mscorlib]System.Runtime.InteropServices.HandleRef::.ctor(object, native int)
+# TEXT-NEXT:  box valuetype [mscorlib]System.Runtime.InteropServices.HandleRef
+# TEXT-NEXT:  call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle [mscorlib]System.Runtime.InteropServices.GCHandle::Alloc(object)
+# TEXT-LABEL: .method assembly static void '__msil_mc.handle_free'(native int) cil managed
+# TEXT-NOT:   .locals
+# TEXT:       unbox [mscorlib]System.Runtime.InteropServices.GCHandle
+# TEXT-NEXT:  call instance void [mscorlib]System.Runtime.InteropServices.GCHandle::Free()
+# Every run's transcript.
+# CHECK:      year 2024
+# CHECK-NEXT: day of week 1
+# CHECK-NEXT: kind 1
+# CHECK-NEXT: length 5
+# CHECK-NEXT: missing file handle 0
+# CHECK-NEXT: missing file err 2
+# CHECK-NEXT: 0L compared with 5 -1
+# CHECK-NEXT: string length 5
+# CHECK-NEXT: FILETIME dwLowDateTime 0
+# CHECK-NEXT: FILETIME layout CharSet 2
+# CHECK-NEXT: list count 2
+# CHECK-NEXT: stream readable 1
+# CHECK-NEXT: disposed stream readable 0
+# CHECK-NEXT: HandleRef handle 4660
+# CHECK-NEXT: handles freed: 12
+# CHECK-NEXT: [exit 0]
+#--- main.c
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* 'this-val': DateTime is a value type, and TYPE says so. */
+__attribute__((msil_method("valuetype System.DateTime", ".ctor",
+                           "instance void(int32, int32, int32)")))
+mc_handle new_date(int year, int month, int day);
+
+__attribute__((msil_method("valuetype System.DateTime", "get_Year",
+                           "instance int32()")))
+int date_year(mc_handle date);
+
+/* An 'enum' result: System.DayOfWeek is an int32 enum, read as an int. */
+__attribute__((msil_method("valuetype System.DateTime", "get_DayOfWeek",
+                           "instance valuetype System.DayOfWeek()")))
+int date_day_of_week(mc_handle date);
+
+/* An 'enum' parameter: System.DateTimeKind is an int32 enum, passed as an
+   int (the DateTime is the 'boxed' row). */
+__attribute__((msil_method("valuetype System.DateTime", "SpecifyKind",
+                           "valuetype System.DateTime(valuetype "
+                           "System.DateTime, valuetype System.DateTimeKind)")))
+mc_handle date_specify_kind(mc_handle date, int kind);
+
+__attribute__((msil_method("valuetype System.DateTime", "get_Kind",
+                           "instance valuetype System.DateTimeKind()")))
+int date_kind(mc_handle date);
+
+/* 'this-obj': StringBuilder is a reference type, and TYPE says so. */
+__attribute__((msil_method("System.Text.StringBuilder", ".ctor",
+                           "instance void(string)")))
+mc_handle new_builder(const char *text);
+
+__attribute__((msil_method("System.Text.StringBuilder", "get_Length",
+                           "instance int32()")))
+int builder_length(mc_handle builder);
+
+/* 'enum' parameters in a stub with msil_catch: FileMode and FileAccess are
+   int32 enums passed as ints, and the filter maps the exception. */
+__attribute__((msil_method("System.IO.FileStream", ".ctor",
+                           "instance void(string, valuetype "
+                           "System.IO.FileMode, valuetype System.IO.FileAccess)"),
+               msil_catch("System.IO.FileNotFoundException", 2)))
+mc_handle open_file(const char *path, int mode, int access, int *err);
+
+/* TYPEs whose kind is fixed: the primitive value type System.Int64
+   ('this-val') and System.String ('this-obj'). */
+__attribute__((msil_method("System.Type", "GetType",
+                           "class System.Type(string)")))
+mc_handle type_named(const char *name);
+
+__attribute__((msil_method("System.Activator", "CreateInstance",
+                           "object(class System.Type)")))
+mc_handle create_instance(mc_handle type);
+
+__attribute__((msil_method("valuetype System.Int64", "CompareTo",
+                           "instance int32(int64)")))
+int long_compare(mc_handle boxed, long long other);
+
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+mc_handle concat(const char *a, const char *b);
+
+__attribute__((msil_method("System.String", "get_Length", "instance int32()")))
+int string_length(mc_handle s);
+
+/* Instance fields: 'this-val' (a FILETIME's dwLowDateTime) and 'this-obj'
+   with an 'enum' result (StructLayoutAttribute's CharSet, an int32 enum,
+   read as an int), from Type::get_StructLayoutAttribute ('this-obj'). */
+#define FILETIME "valuetype System.Runtime.InteropServices.ComTypes.FILETIME"
+#define LAYOUT "System.Runtime.InteropServices.StructLayoutAttribute"
+
+__attribute__((msil_method(FILETIME, "dwLowDateTime", "instance field int32")))
+int filetime_low(mc_handle filetime);
+
+__attribute__((msil_method("System.Type", "get_StructLayoutAttribute",
+                           "instance class " LAYOUT "()")))
+mc_handle type_layout(mc_handle type);
+
+__attribute__((msil_method(LAYOUT, "CharSet",
+                           "instance field valuetype "
+                           "System.Runtime.InteropServices.CharSet")))
+int layout_charset(mc_handle layout);
+
+/* 'this-obj' with interfaces, reference types like classes:
+   ICollection::get_Count on an ArrayList and IDisposable::Dispose on a
+   MemoryStream, whose CanRead (Stream::get_CanRead, 'this-obj') turns false
+   when it is disposed; both come from classes' constructors ('obj'). */
+__attribute__((msil_method("System.Collections.ArrayList", ".ctor",
+                           "instance void()")))
+mc_handle new_list(void);
+
+__attribute__((msil_method("System.Collections.ArrayList", "Add",
+                           "instance int32(object)")))
+int list_add(mc_handle list, mc_handle item);
+
+__attribute__((msil_method("System.Collections.ICollection", "get_Count",
+                           "instance int32()")))
+int collection_count(mc_handle collection);
+
+__attribute__((msil_method("System.IO.MemoryStream", ".ctor",
+                           "instance void()")))
+mc_handle new_stream(void);
+
+__attribute__((msil_method("System.IO.Stream", "get_CanRead",
+                           "instance bool()")))
+int stream_can_read(mc_handle stream);
+
+__attribute__((msil_method("System.IDisposable", "Dispose", "instance void()")))
+void dispose(mc_handle disposable);
+
+/* A value type's constructor whose parameters are a delegate constructor's,
+   an object and a native int: HandleRef, which TYPE names a value type. */
+#define HANDLE_REF "valuetype System.Runtime.InteropServices.HandleRef"
+
+__attribute__((msil_method(HANDLE_REF, ".ctor",
+                           "instance void(object, native int)")))
+mc_handle new_handle_ref(mc_handle wrapper, void *handle);
+
+__attribute__((msil_method(HANDLE_REF, "get_Handle", "instance native int()")))
+void *handle_ref_handle(mc_handle ref);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+/* Prints "<what> <v>". */
+static void say(const char *what, long long v) {
+  char digits[24];
+  int n = 0;
+  unsigned long long u =
+      v < 0 ? 0 - (unsigned long long)v : (unsigned long long)v;
+  while (*what)
+    putchar(*what++);
+  putchar(' ');
+  if (v < 0)
+    putchar('-');
+  do {
+    digits[n++] = (char)('0' + u % 10);
+    u /= 10;
+  } while (u);
+  while (n)
+    putchar(digits[--n]);
+  putchar('\n');
+}
+
+int main(void) {
+  mc_handle date = new_date(2024, 5, 6); /* a Monday */
+  say("year", date_year(date));
+  say("day of week", date_day_of_week(date));
+  mc_handle utc = date_specify_kind(date, 1); /* DateTimeKind.Utc */
+  say("kind", date_kind(utc));
+  mc_handle builder = new_builder("hello");
+  say("length", builder_length(builder));
+  int err = 0;
+  /* FileMode.Open (3) and FileAccess.Read (1) of a file that does not
+     exist: no handle, and the code of FileNotFoundException. */
+  mc_handle file = open_file("no-such-file.txt", 3, 1, &err);
+  say("missing file handle", file != 0);
+  say("missing file err", err);
+  /* A boxed 0L from Activator::CreateInstance(typeof(long)). */
+  mc_handle type = type_named("System.Int64");
+  mc_handle zero = create_instance(type);
+  say("0L compared with 5", long_compare(zero, 5));
+  mc_handle text = concat("hel", "lo");
+  say("string length", string_length(text));
+  /* A default (zeroed) FILETIME, and the StructLayoutAttribute of its type:
+     CharSet.Ansi (2). */
+  mc_handle filetime_type =
+      type_named("System.Runtime.InteropServices.ComTypes.FILETIME");
+  mc_handle filetime = create_instance(filetime_type);
+  say("FILETIME dwLowDateTime", filetime_low(filetime));
+  mc_handle layout = type_layout(filetime_type);
+  say("FILETIME layout CharSet", layout_charset(layout));
+  /* An ArrayList that holds the String and the StringBuilder. */
+  mc_handle list = new_list();
+  list_add(list, text);
+  list_add(list, builder);
+  say("list count", collection_count(list));
+  mc_handle stream = new_stream();
+  say("stream readable", stream_can_read(stream));
+  dispose(stream);
+  say("disposed stream readable", stream_can_read(stream));
+  /* A HandleRef of the stream and the address 0x1234. */
+  mc_handle ref = new_handle_ref(stream, (void *)0x1234);
+  say("HandleRef handle", (__INTPTR_TYPE__)handle_ref_handle(ref));
+  handle_free(ref);
+  handle_free(stream);
+  handle_free(list);
+  handle_free(layout);
+  handle_free(filetime);
+  handle_free(filetime_type);
+  handle_free(text);
+  handle_free(zero);
+  handle_free(type);
+  handle_free(builder);
+  handle_free(utc);
+  handle_free(date);
+  puts("handles freed: 12");
+  return 0;
+}

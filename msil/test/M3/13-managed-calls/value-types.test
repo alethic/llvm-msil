@@ -1,0 +1,114 @@
+# Value types as opaque boxed handles: DateTime's constructors (newobj, then box) give handles, instance getters run on the boxed copy through a 'this' handle (get_Ticks, get_Year, get_Day, get_Hour), an instance method returns a new DateTime and Subtract a TimeSpan as boxed result handles, DateTime::Compare takes two boxed handles as value-type arguments, and every handle is freed exactly once.
+# Plan 5.20.3 MS5 and its rules (decision brief answers Q25 (a): value types
+# other than enums and GCHandle are opaque boxed handles; the rows 'boxed'
+# for a value-type parameter, handle to object then unbox.any V, and for a
+# value-type result, box V then a new handle; 'this-val' for the 'this' of
+# a value type, handle to object, unbox V and call; a value-type .ctor is
+# newobj, then box), 5.20.2 MA1 (the 'valuetype' prefix of TYPE is
+# required), 5.20.5 ML2 (2), 5.20.7 MK3 (with references, msil-ld checks
+# that the 'valuetype' uses name value types), 5.20.9 MH2. The program links
+# against the .NET Framework 4.8 implementation assemblies
+# (%{msil_refs_netfx}: mscorlib.dll and System.dll), because DateTime and
+# TimeSpan are no built-in table types; the image runs on the Framework,
+# .NET 10 and WSL .NET 10 (portable-mc1 3.3). The values are .NET's: a
+# DateTime counts 100-nanosecond ticks from 0001-01-01, so 2000-01-01 is
+# 630822816000000000, one day is 864000000000 ticks, 2000-01-01 plus 1.5
+# days is 630824112000000000 (day 2, hour 12) and the difference of the two
+# is 1296000000000 ticks, 36 hours (measured on Framework 4.8.1, .NET 10 and
+# WSL .NET 10). The members have no C library equivalent, so the expected
+# file is hand-written for both OSes (plan 5.20.11 MT3, 5.17.4 as amended
+# for MC-1). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define DT "valuetype System.DateTime"
+#define TS "valuetype System.TimeSpan"
+
+__attribute__((msil_method(DT, ".ctor", "instance void(int32, int32, int32)")))
+mc_handle new_date(int year, int month, int day);
+
+__attribute__((msil_method(DT, ".ctor", "instance void(int64)")))
+mc_handle new_date_from_ticks(long long ticks);
+
+__attribute__((msil_method(DT, "get_Ticks", "instance int64()")))
+long long date_ticks(mc_handle date);
+
+__attribute__((msil_method(DT, "get_Year", "instance int32()")))
+int date_year(mc_handle date);
+
+__attribute__((msil_method(DT, "get_Day", "instance int32()")))
+int date_day(mc_handle date);
+
+__attribute__((msil_method(DT, "get_Hour", "instance int32()")))
+int date_hour(mc_handle date);
+
+__attribute__((msil_method(DT, "AddDays",
+                           "instance valuetype System.DateTime(float64)")))
+mc_handle date_add_days(mc_handle date, double days);
+
+__attribute__((msil_method(DT, "Subtract",
+                           "instance valuetype System.TimeSpan(valuetype "
+                           "System.DateTime)")))
+mc_handle date_subtract(mc_handle date, mc_handle other);
+
+__attribute__((msil_method(DT, "Compare",
+                           "int32(valuetype System.DateTime, valuetype "
+                           "System.DateTime)")))
+int date_compare(mc_handle a, mc_handle b);
+
+__attribute__((msil_method(TS, "get_Ticks", "instance int64()")))
+long long span_ticks(mc_handle span);
+
+__attribute__((msil_method(TS, "get_TotalHours", "instance float64()")))
+double span_total_hours(mc_handle span);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+int main(void) {
+  mc_handle d = new_date(2000, 1, 1);
+  printf("DateTime(2000, 1, 1): handle nonzero %d\n", d != 0);
+  printf("Ticks: %lld\n", date_ticks(d));
+  printf("Year: %d, Day: %d, Hour: %d\n", date_year(d), date_day(d),
+         date_hour(d));
+
+  /* A value-type result is a new boxed handle; the original is unchanged. */
+  mc_handle later = date_add_days(d, 1.5);
+  printf("AddDays(1.5): handle nonzero %d, differs %d\n", later != 0,
+         later != d);
+  printf("Ticks: %lld, Day: %d, Hour: %d\n", date_ticks(later),
+         date_day(later), date_hour(later));
+  printf("the original's Ticks: %lld\n", date_ticks(d));
+
+  /* Value-type arguments from boxed handles. */
+  printf("Compare(later, d): %d, Compare(d, later): %d, Compare(d, d): %d\n",
+         date_compare(later, d), date_compare(d, later), date_compare(d, d));
+  mc_handle span = date_subtract(later, d);
+  printf("Subtract: TimeSpan Ticks %lld, TotalHours times 10: %lld\n",
+         span_ticks(span), (long long)(span_total_hours(span) * 10));
+
+  /* The int64 constructor, and the minimum. */
+  mc_handle same = new_date_from_ticks(630822816000000000LL);
+  printf("DateTime(630822816000000000): Year %d, Compare with d %d\n",
+         date_year(same), date_compare(same, d));
+  mc_handle zero = new_date_from_ticks(0);
+  printf("DateTime(0): Year %d, Ticks %lld\n", date_year(zero),
+         date_ticks(zero));
+
+  handle_free(zero);
+  handle_free(same);
+  handle_free(span);
+  handle_free(later);
+  handle_free(d);
+  puts("freed five handles");
+  return 0;
+}

@@ -1,0 +1,127 @@
+# msil_catch on msil64-unknown-dotnet: an invalid UTF-8 argument of a managed call that lists System.Text.DecoderFallbackException returns the zero value and stores the portable C library's EILSEQ through the trailing int *; an invalid UTF-32 (wchar_t) argument does the same; entries are tested in the order written, and entries whose types do not match are passed over; a call that succeeds leaves the error code alone; the same call without msil_catch lets the DecoderFallbackException escape loudly.
+# Plan 5.20.8 (MX2: with msil_catch the whole stub body, argument
+# conversions included, is one .try with a filter that tests isinst for
+# each entry in order, stores the first match's code and, in the handler,
+# stores it through the trailing int * and returns the zero value of the C
+# return type; on success *err is not written; MX1: without msil_catch
+# every exception escapes as an ordinary .NET exception; MX4: an exception
+# thrown inside the conversions is mappable like one from the member),
+# 5.20.10 S1 and S3 (the UTF-8 and UTF-32 decoders throw
+# DecoderFallbackException on invalid input: an invalid byte, a truncated
+# sequence, an overlong form, an encoded surrogate, a surrogate code point,
+# a value above U+10FFFF; measured with UTF8Encoding(false, true) and
+# UTF32Encoding(false, false, true) on Framework 4.8.1, .NET 10 and WSL
+# .NET 10), 5.20.7 MK1 and MK4 (without references a catch type binds only
+# as a table type: DecoderFallbackException is MC-1's row,
+# EntryPointNotFoundException and PlatformNotSupportedException are the
+# table's other exception types), 5.19.5 (EILSEQ is c.dll's errno number,
+# 84, from the sysroot's <errno.h>). The member is
+# Marshal::StringToHGlobalUni(string), a table entry; its results are never
+# freed (Marshal::FreeHGlobal is no table entry; the process ends). wchar_t
+# is 32 bits on the portable triples, so a wchar_t string is the UTF-32
+# form (5.20.11 MT1).
+# Each failed check sets one bit of the exit status, and a failed check
+# returns before the loud call.
+# The loud call (plan 5.17.4): the transcript is hand-written for both OSes,
+# the status line '[unhandled exception:
+# System.Text.DecoderFallbackException]'. A portable program has no output
+# channel before P-2, so the LOUD line matches the toolchain's entry point
+# '<msil>Main' in the stack trace of the runtime's report, never the
+# runtime's wording: .NET prints the frame as '<msil>Main(String[])' and
+# the Framework as '<msil>Main(String[] )', so the pattern stops at the
+# parenthesis.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: <msil>Main(
+#--- main.c
+#include <errno.h>
+#include <stddef.h>
+#include <uchar.h>
+
+#define MARSHAL "System.Runtime.InteropServices.Marshal"
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)"),
+               msil_catch("System.Text.DecoderFallbackException", EILSEQ)))
+char16_t *utf16_of_utf8(const char *s, int *err);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)"),
+               msil_catch("System.Text.DecoderFallbackException", EILSEQ)))
+char16_t *utf16_of_wide(const wchar_t *s, int *err);
+
+/* The first two entries name table exception types that a decoding
+   failure is not an instance of. */
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)"),
+               msil_catch("System.EntryPointNotFoundException", 1),
+               msil_catch("System.PlatformNotSupportedException", 2),
+               msil_catch("System.Text.DecoderFallbackException", 3)))
+char16_t *utf16_of_utf8_third(const char *s, int *err);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *utf16_of_utf8_unchecked(const char *s);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+/* An invalid sequence: the result is the zero value (a null pointer) and
+   the code is stored. */
+static int maps(const char *s) {
+  int err = -1;
+  char16_t *p = utf16_of_utf8(s, &err);
+  return p == NULL && err == EILSEQ;
+}
+
+static int maps_wide(const wchar_t *s) {
+  int err = -1;
+  char16_t *p = utf16_of_wide(s, &err);
+  return p == NULL && err == EILSEQ;
+}
+
+int main(void) {
+  /* 0: success leaves the code alone. */
+  int err = -1;
+  char16_t *p = utf16_of_utf8("ok", &err);
+  CHECK(0, err == -1 && p != NULL);
+  CHECK(0, p != NULL && p[0] == 'o' && p[1] == 'k' && p[2] == 0);
+  static const wchar_t wide_ok[] = {0x1D11E, 0};
+  err = -1;
+  p = utf16_of_wide(wide_ok, &err);
+  CHECK(0, err == -1 && p != NULL);
+  CHECK(0, p != NULL && p[0] == 0xD834 && p[1] == 0xDD1E && p[2] == 0);
+
+  /* 1: invalid UTF-8: an invalid byte, a truncated sequence, an overlong
+     form, an encoded surrogate. */
+  CHECK(1, maps("\xff"));
+  CHECK(1, maps("ab\xc3"));
+  CHECK(1, maps("\xc0\x80"));
+  CHECK(1, maps("\xed\xa0\x80"));
+
+  /* 2: invalid UTF-32: a surrogate code point, a value above U+10FFFF. */
+  static const wchar_t surrogate[] = {'a', 0xD800, 0};
+  static const wchar_t too_big[] = {0x110000, 0};
+  CHECK(2, maps_wide(surrogate));
+  CHECK(2, maps_wide(too_big));
+
+  /* 3: the entries are tested in order; only the third matches. */
+  err = -1;
+  p = utf16_of_utf8_third("\xfe", &err);
+  CHECK(3, p == NULL && err == 3);
+
+  /* 4: the code is c.dll's EILSEQ (5.19.5). */
+  CHECK(4, EILSEQ == 84);
+  if (fails)
+    return (int)fails;
+
+  /* The loud call: no msil_catch, so the decoding failure escapes. */
+  utf16_of_utf8_unchecked("\xfe");
+  return 64; /* never reached */
+}

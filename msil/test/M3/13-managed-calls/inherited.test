@@ -1,0 +1,248 @@
+# Members that a value type only inherits: instance methods through a 'this-val' handle (ComTypes.FILETIME declares no methods, so GetHashCode, Equals and ToString are System.ValueType's overrides of System.Object's virtual methods and GetType is System.Object's non-virtual method), each called on a boxed FILETIME from Activator::CreateInstance and Marshal::PtrToStructure, with Guid's own GetHashCode and ToString (declared members) as the control; and static methods, called on their declaring type: System.Enum::GetNames through the enum DayOfWeek, with TYPE 'valuetype System.DayOfWeek' and 'System.DayOfWeek', and System.Object::ReferenceEquals through 'valuetype System.Guid'; the image must pass ILVerify and PEVerify; every handle is freed exactly once.
+# Plan 5.20.3 MS5, 5.20.5 ML2 (2) and 5.20.7 MK2 as amended for MC-1
+# (section 12 row '5.20.3 MS5, 5.20.5 ML2 (2) and 5.20.7 MK2 amended
+# again'): the 'this-val' row is handle to object, then 'unbox V' (a managed
+# pointer into the boxed copy), and the member access depends on the
+# declaring type of the member msil-ld binds. A member V declares
+# (Guid::GetHashCode, Guid::ToString) is 'call V::M' on the managed pointer.
+# A member V only inherits is 'constrained. V' then 'callvirt' of a
+# MemberRef whose parent is the declaring type D (System.ValueType for
+# GetHashCode, Equals and ToString, System.Object for GetType), as C#
+# emits it. These are the only forms that run correctly and pass the
+# verifiers on Framework 4.8 and .NET 10 (ECMA-335 III.2.1), so the test
+# requires ILVerify and PEVerify (msil-ilverify, msil-peverify): the
+# image's verify step runs both and fails on any disallowed verifier error
+# (CallVirtOnValueType, StackUnexpected, ThisMismatch, 'Callvirt on a value
+# type method', 'Call to base type of valuetype'). With clang -c the
+# backend writes 'constrained. V' + 'callvirt V::M' and msil-ld rewrites
+# the site after binding; under msil_pipeline=lto msil-ld's link hooks
+# give the backend the declaring type ("msil-managed-decl") and it writes
+# the final form directly; both images must verify and print the same.
+# GetType is non-virtual: through V it would throw MissingMethodException,
+# so it is called through System.Object, and its result is compared with
+# the type name (Type::get_FullName) and with Type::GetType's object
+# (Object::ReferenceEquals: one RuntimeType per type).
+# A static method that V only inherits is called on its declaring type D
+# too, in objects and LTO: msil-ld's binder finds the member through V's
+# base chain, and the image calls it as 'call D::M', through a MemberRef
+# whose parent is D, as C# emits it; through a MemberRef whose parent is V
+# it throws MissingMethodException (measured on Framework 4.8, .NET 10 and
+# WSL .NET 10). With clang -c the site names V, and msil-ld gives it D's
+# MemberRef after binding; under msil_pipeline=lto msil-ld's link hooks
+# give the backend D ("msil-managed-decl") and it writes 'call D::M'
+# directly. The program calls System.Enum::GetNames(class System.Type)
+# through the enum DayOfWeek with TYPE spelled 'valuetype
+# System.DayOfWeek' (in the object a TypeSpec parent, whose spelling
+# msil-ld checks, 5.20.7 MK3) and 'System.DayOfWeek' (a TypeRef parent,
+# which says nothing of the kind), each on the object that
+# Type::GetType("System.DayOfWeek") returns, and prints each names array's
+# length (System.Array::get_Length): 7. It calls
+# System.Object::ReferenceEquals(object, object) through 'valuetype
+# System.Guid' on two handles of the one RuntimeType of DayOfWeek (1) and
+# on that type and a names array (0), with ReferenceEquals called on
+# System.Object itself (above) as the control. Also 5.20.2 MA1 (the
+# 'valuetype' prefix, which msil-ld checks against the TypeDef, 5.20.7
+# MK3), 5.20.7 (msil-ld finds an inherited member through the base chain),
+# MS5's 'obj' rows for the object parameters of Equals and ReferenceEquals,
+# the System.Type parameter of GetNames and the string, string[] and
+# System.Type results, 'this-obj' for Type::get_FullName and
+# Array::get_Length, 'utf8' for Guid's string constructor and 'boxed' for a
+# value-type .ctor (newobj, then box), and 5.20.9 MH2. None of these
+# members is a built-in table entry, so the program links against the .NET
+# Framework 4.8 implementation assemblies (%{msil_refs_netfx}: mscorlib.dll
+# and System.dll); the image runs on the Framework, .NET 10 and WSL .NET 10.
+# The values the program prints are the same on every runtime: a struct
+# without its own ToString prints its full type name, ValueType::Equals
+# compares the fields, equal values have equal hashes, the hash of
+# Guid.Empty is 0 and DayOfWeek has seven names (measured on Framework
+# 4.8.1 and .NET 10). The hash of a nonzero FILETIME or Guid differs
+# between the runtimes, so the program only checks that it is stable. The
+# members have no C library equivalent, so the expected file is
+# hand-written for both OSes (plan 5.20.11 MT3, 5.17.4 as amended for
+# MC-1). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx, msil-ilverify, msil-peverify
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <uchar.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define FILETIME "valuetype System.Runtime.InteropServices.ComTypes.FILETIME"
+#define GUID "valuetype System.Guid"
+
+__attribute__((msil_method("System.Type", "GetType",
+                           "class System.Type(string)")))
+mc_handle type_get(const char *name);
+
+__attribute__((msil_method("System.Activator", "CreateInstance",
+                           "object(class System.Type)")))
+mc_handle create_instance(mc_handle type);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "PtrToStructure",
+                           "object(native int, class System.Type)")))
+mc_handle ptr_to_structure(const void *p, mc_handle type);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_to_utf16(mc_handle s);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "FreeHGlobal", "void(native int)")))
+void free_hglobal(void *p);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+/* Inherited from System.ValueType. */
+__attribute__((msil_method(FILETIME, "GetHashCode", "instance int32()")))
+int filetime_hash(mc_handle ft);
+
+__attribute__((msil_method(FILETIME, "Equals", "instance bool(object)")))
+_Bool filetime_equals(mc_handle ft, mc_handle other);
+
+__attribute__((msil_method(FILETIME, "ToString", "instance string()")))
+mc_handle filetime_to_string(mc_handle ft);
+
+/* Inherited from System.Object, and not virtual. */
+__attribute__((msil_method(FILETIME, "GetType", "instance class System.Type()")))
+mc_handle filetime_get_type(mc_handle ft);
+
+__attribute__((msil_method("System.Type", "get_FullName", "instance string()")))
+mc_handle type_full_name(mc_handle type);
+
+__attribute__((msil_method("System.Object", "ReferenceEquals",
+                           "bool(object, object)")))
+_Bool same_object(mc_handle a, mc_handle b);
+
+/* Declared by System.Guid: the control. */
+__attribute__((msil_method(GUID, ".ctor", "instance void(string)")))
+mc_handle new_guid(const char *text);
+
+__attribute__((msil_method(GUID, "GetHashCode", "instance int32()")))
+int guid_hash(mc_handle guid);
+
+__attribute__((msil_method(GUID, "ToString", "instance string()")))
+mc_handle guid_to_string(mc_handle guid);
+
+/* Static methods that a value type only inherits: System.Enum's, through
+   the enum DayOfWeek with and without the prefix, and System.Object's,
+   through Guid. */
+__attribute__((msil_method("valuetype System.DayOfWeek", "GetNames",
+                           "string[](class System.Type)")))
+mc_handle day_names(mc_handle enum_type);
+
+__attribute__((msil_method("System.DayOfWeek", "GetNames",
+                           "string[](class System.Type)")))
+mc_handle day_names_no_prefix(mc_handle enum_type);
+
+__attribute__((msil_method(GUID, "ReferenceEquals", "bool(object, object)")))
+_Bool guid_same_object(mc_handle a, mc_handle b);
+
+__attribute__((msil_method("System.Array", "get_Length", "instance int32()")))
+int array_length(mc_handle array);
+
+static int frees;
+static void release(mc_handle h) {
+  handle_free(h);
+  ++frees;
+}
+
+/* Whether a string handle holds the ASCII text 'want'; frees the handle. */
+static int string_is(mc_handle s, const char *want) {
+  char16_t *p = string_to_utf16(s);
+  int same = p != 0;
+  size_t i = 0;
+  for (; same && want[i]; ++i)
+    same = p[i] == (char16_t)(unsigned char)want[i];
+  same = same && p[i] == 0;
+  free_hglobal(p);
+  release(s);
+  return same;
+}
+
+#define FILETIME_NAME "System.Runtime.InteropServices.ComTypes.FILETIME"
+#define GUID_TEXT "00112233-4455-6677-8899-aabbccddeeff"
+
+int main(void) {
+  mc_handle ft_type = type_get(FILETIME_NAME);
+  mc_handle a = create_instance(ft_type);
+  mc_handle b = create_instance(ft_type);
+  static const uint32_t words[2] = {0x89abcdefu, 0x01234567u};
+  mc_handle c = ptr_to_structure(words, ft_type);
+  printf("three boxed FILETIMEs: nonzero %d, distinct %d\n",
+         a != 0 && b != 0 && c != 0, a != b && b != c && a != c);
+
+  /* ValueType::GetHashCode. */
+  int ha = filetime_hash(a);
+  printf("GetHashCode: stable %d, equal for equal values %d, stable for the "
+         "nonzero one %d\n",
+         filetime_hash(a) == ha, filetime_hash(b) == ha,
+         filetime_hash(c) == filetime_hash(c));
+
+  /* ValueType::Equals(object). */
+  printf("Equals: a with b %d, a with itself %d, a with c %d, c with a %d\n",
+         filetime_equals(a, b), filetime_equals(a, a), filetime_equals(a, c),
+         filetime_equals(c, a));
+
+  /* ValueType::ToString: the full type name, for zero and nonzero fields. */
+  printf("ToString is the type name: %d and %d\n",
+         string_is(filetime_to_string(a), FILETIME_NAME),
+         string_is(filetime_to_string(c), FILETIME_NAME));
+
+  /* Object::GetType: FILETIME's System.Type, the object Type::GetType gave. */
+  mc_handle tc = filetime_get_type(c);
+  printf("GetType: handle nonzero %d, FullName is the type name %d, the same "
+         "object as Type::GetType's %d\n",
+         tc != 0, string_is(type_full_name(tc), FILETIME_NAME),
+         same_object(tc, ft_type));
+  release(tc);
+
+  /* The control: members that Guid declares. */
+  mc_handle guid_type = type_get("System.Guid");
+  mc_handle empty = create_instance(guid_type);
+  printf("Guid.Empty: GetHashCode %d, ToString is zeros %d\n",
+         guid_hash(empty),
+         string_is(guid_to_string(empty),
+                   "00000000-0000-0000-0000-000000000000"));
+  mc_handle g = new_guid(GUID_TEXT);
+  printf("Guid(\"%s\"): handle nonzero %d, GetHashCode stable %d, "
+         "ToString round trip %d\n",
+         GUID_TEXT, g != 0, guid_hash(g) == guid_hash(g),
+         string_is(guid_to_string(g), GUID_TEXT));
+
+  /* Static methods that DayOfWeek and Guid only inherit. */
+  mc_handle day_type = type_get("System.DayOfWeek");
+  mc_handle names = day_names(day_type);
+  mc_handle names_no_prefix = day_names_no_prefix(day_type);
+  printf("Enum::GetNames through DayOfWeek: %d names, and %d without the "
+         "prefix\n",
+         array_length(names), array_length(names_no_prefix));
+  mc_handle day_type_again = type_get("System.DayOfWeek");
+  printf("Object::ReferenceEquals through Guid: two handles of one object %d "
+         "(distinct handles %d), two objects %d\n",
+         guid_same_object(day_type, day_type_again),
+         day_type != day_type_again, guid_same_object(day_type, names));
+  release(day_type_again);
+  release(names_no_prefix);
+  release(names);
+  release(day_type);
+
+  release(g);
+  release(empty);
+  release(guid_type);
+  release(c);
+  release(b);
+  release(a);
+  release(ft_type);
+  printf("handles freed: %d\n", frees);
+  return 0;
+}

@@ -1,0 +1,845 @@
+## Managed calls through msil-ld (ImplementationPlan.md 5.20, milestone
+## MC-1): binding (5.20.7 MK1), the objects' stubs (5.20.6 MW1) and the
+## stub-internal rows of 5.20.13. calls.ll is the IR clang writes for one
+## managed-call declaration of each form of 5.20.2 MA1-MA3 (5.20.4 MR1, MR2,
+## MR4: a declaration '__msil_mc.<symbol>' with the msil-managed-* attributes
+## and an operand of !msil.managed.calls), with a main that calls each one:
+## a static method over every listing primitive, float32/float64, unmanaged
+## pointers, object/string/class/array parameters and a string result, a
+## constructor with a UTF-8 string, UTF-16 and UTF-32 strings, bool in and
+## out, char, a value type in and out by boxed handle, enums over int32,
+## int64 and uint8 (signed char for the uint8 one: only the width is
+## checked), enums after a plain parameter and after a 'this' handle,
+## GCHandle in and out, a virtual property getter (callvirt), an instance
+## method (callvirt), a value-type constructor (newobj, then box), a
+## value-type instance method (through unbox; see the access forms below)
+## and the methods a value type inherits from System.ValueType and
+## System.Object (GetHashCode(), GetType()), a static field (ldsfld),
+## instance fields of a class and of a value type (ldfld), arrays of a
+## primitive and of a class (newarr), a nested type's constructor and a
+## nested type in a signature, msil_catch with a derived type before its
+## base and a BCL exception, and an ASSEMBLY argument. The members are
+## Inputs/fakepack/FakeWidgets.il's, over the core library FakeRuntime.il.
+## llc compiles calls.ll for x86_64-pc-windows-msvc-msil,
+## x86_64-unknown-linux-gnu-msil and msil64-unknown-dotnet.
+## - MW1 as amended in section 12 (2026-11-04): a stub is an internal
+##   method of the object and, as 5.8.5 C3 requires of every MethodDef with
+##   a body, a LOCAL FUNCTION symbol of the object's link-info symbols:
+##   --link-info prints one defined 'FUNCTION LOCAL' symbol
+##   '__msil_mc.<symbol>' per stub (the SYMTAB checks), no GLOBAL
+##   or WEAK '__msil_mc' symbol (a stub is never exported, imported or bound
+##   late), and 'main' is a defined global symbol.
+## - With --reference (MK1), each object links without a diagnostic; every
+##   member access is a MemberRef of [FakeWidgets] with the signature the
+##   declaration wrote (the end-to-end agreement of the signature parser of
+##   llvm/include/llvm/CLI/ManagedSignature.h with msil-ld's binder), each
+##   type token of a conversion (castclass, box, unbox, unbox.any, isinst,
+##   newarr) names its type there, the stub with msil_catch has one filter
+##   clause, and 5.20.13's stub-internal members (GCHandle's Alloc,
+##   ToIntPtr, FromIntPtr and get_Target, UTF8Encoding's and
+##   UTF32Encoding's constructors, Encoding::GetString(uint8*, int32) and
+##   String::.ctor(char*)) bind to [FakeRuntime]. Each stub is a method
+##   '__msil_mc.<symbol>'. ASSEMBLY (MA4) names the scope of text output
+##   only: no 'ContosoText' reaches the image. The images refer to
+##   FakeRuntime and FakeWidgets only, never to mscorlib or [msil.bcl].
+## - The access of a 'this-val' or 'this-gch' instance method (5.20.3 MS5,
+##   5.20.5 ML2 (2) and 5.20.7 MK2 as amended in section 12, 2026-11-04, by
+##   the row that supersedes the 'constrained. V' + 'callvirt' row): llc
+##   writes the placeholder 'constrained. V' then 'callvirt V::M', and
+##   msil-ld rewrites that site in place after binding (the ACCESS and
+##   TACCESS checks, ordered, on the linked images). For a member V declares
+##   (Contoso.Point::Sum(); without references the 'this-gch' table row
+##   GCHandle::Free()), the 6 bytes of the prefix become 6 'nop's and
+##   'callvirt' becomes 'call V::M'. For a member V only inherits
+##   (System.ValueType::GetHashCode(), and the non-virtual
+##   System.Object::GetType(); the binder's base-chain search finds them in
+##   FakeRuntime.il), the prefix stays and the MemberRef's parent becomes
+##   the declaring type D: 'constrained. V' then 'callvirt [FakeRuntime]D::M'.
+##   No linked image keeps 'constrained. V' + 'callvirt V::M'.
+##   managed-calls-lto.test has the final forms that LTO code generation
+##   writes directly, managed-calls-checks.test MK2's refusal of an access
+##   in none of the three shapes.
+## - Without references only the built-in table binds (MK1): table.ll's
+##   calls, every member a table row after MC-1's block
+##   (Environment::GetCommandLineArgs(), Marshal::StringToHGlobalUni(string)
+##   from UTF-8, UTF-16 and UTF-32, GCHandle::Free() through a 'this'
+##   GCHandle, BitConverter::GetBytes(int32), the EntryPointNotFoundException
+##   constructor with msil_catch of DecoderFallbackException,
+##   Exception::get_HResult() through a 'this' handle,
+##   Buffer::MemoryCopy(void*, void*, int64, int64) and
+##   Marshal::AllocHGlobal(native int)), link without a diagnostic and refer
+##   to [mscorlib] only.
+## - An interface (Contoso.IWidget, FakeWidgets.il): iface.ll's 'this-obj'
+##   call of the interface method Score() links with --reference without a
+##   diagnostic, and its stub casts the handle's target to the interface
+##   ('castclass [FakeWidgets]Contoso.IWidget') and calls it with
+##   'callvirt'; iface-val.ll declares the interface as 'valuetype
+##   Contoso.IWidget' ('this-val') and gets T-M16 (an interface is a
+##   reference type, 5.20.7 MK3).
+## - A wrong return type is the binder's error with its overload list
+##   (5.11.9): bad-ret.ll asks for int32 Measure(), FakeWidgets defines
+##   int64 Measure().
+## - Without references, a member outside the table is 5.11.7's
+##   '.NET member '<member>' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>'
+##   (nomember.ll: System.Environment::Exit(int32), a member of a table
+##   type), and so is a type outside the table, whether it is the type of
+##   the member (notype.ll: Contoso.Widget) or an msil_catch type
+##   (nocatch.ll: System.IO.IOException).
+## - A -shared library whose exported function makes a managed call exports
+##   that function and not the stub: no '__msil_mc' name in its symbol
+##   table or among the members of its export class, on
+##   x86_64-unknown-linux-gnu-msil and msil64-unknown-dotnet, and on
+##   msil64-unknown-dotnet also for bitcode through LTO (net.head).
+## - MR2 (reason 4, 5.20.4): mr2a.ll declares f with msil_method and
+##   defines g, which calls it; mr2b.ll declares a plain 'int f(int)' and
+##   main calls f and g. The stub is '__msil_mc.f', never 'f', so the plain
+##   declaration stays undefined: 'undefined symbol: f', referenced by
+##   mr2b.o's main, on a host triple and on msil64-unknown-dotnet
+##   (managed-calls-lto.test has the bitcode form).
+## managed-calls-checks.test has msil-ld's checks of 5.20.7 (T-M7, T-M8,
+## T-M9, T-M16, T-M18, T-M23), managed-calls-lto.test the LTO forms (MK5,
+## MW3, T-M17) and the same checks in LTO links,
+## managed-calls-forwarders.test the exported and start-up managed calls
+## (T-M17's second form, T-M21, T-M23's forwarder form),
+## managed-calls-units.test T-M17 between the units that still declare a
+## managed call, in every link mode, managed-calls-address.test T-M10 and a
+## unit's own T-M17 in LTO links, before LTO's optimizer,
+## managed-calls-text-checks.test the run-time checks of --lto-emit-asm
+## text, managed-calls-late.test the archive members that LTO's code
+## generation extracts, managed-calls-assembly.test ASSEMBLY, and
+## managed-calls-inherited.test the static methods that a struct or an enum
+## only inherits.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+
+## MW1, then the links with references, on each triple.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil calls.ll -o win.o
+# RUN: llvm-cil-dump --link-info win.o > win.sym
+# RUN: FileCheck %s %{crash} --check-prefix=SYMTAB --input-file=win.sym
+# RUN: FileCheck %s --check-prefix=SYMHDR --input-file=win.sym \
+# RUN:   --implicit-check-not="{{(GLOBAL|WEAK) .*__msil_mc}}"
+# RUN: msil-ld win.o --reference=refs -o win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win.exe > win.txt
+# RUN: FileCheck %s --check-prefixes=BIND,STUBS --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=ACCESS --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=REFS --input-file=win.txt --implicit-check-not=assemblyref \
+# RUN:   --implicit-check-not=mscorlib --implicit-check-not=msil.bcl --implicit-check-not=ContosoText
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil calls.ll -o lnx.o
+# RUN: llvm-cil-dump --link-info lnx.o > lnx.sym
+# RUN: FileCheck %s %{crash} --check-prefix=SYMTAB --input-file=lnx.sym
+# RUN: FileCheck %s --check-prefix=SYMHDR --input-file=lnx.sym \
+# RUN:   --implicit-check-not="{{(GLOBAL|WEAK) .*__msil_mc}}"
+# RUN: msil-ld lnx.o --reference=refs -o lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx.exe > lnx.txt
+# RUN: FileCheck %s --check-prefixes=BIND,STUBS --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefix=ACCESS --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefix=REFS --input-file=lnx.txt --implicit-check-not=assemblyref \
+# RUN:   --implicit-check-not=mscorlib --implicit-check-not=msil.bcl --implicit-check-not=ContosoText
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet calls.ll -o net.o
+# RUN: llvm-cil-dump --link-info net.o > net.sym
+# RUN: FileCheck %s %{crash} --check-prefix=SYMTAB --input-file=net.sym
+# RUN: FileCheck %s --check-prefix=SYMHDR --input-file=net.sym \
+# RUN:   --implicit-check-not="{{(GLOBAL|WEAK) .*__msil_mc}}"
+# RUN: msil-ld net.o --reference=refs -o net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump net.exe > net.txt
+# RUN: FileCheck %s --check-prefixes=BIND,STUBS --input-file=net.txt
+# RUN: FileCheck %s --check-prefix=ACCESS --input-file=net.txt
+# RUN: FileCheck %s --check-prefix=REFS --input-file=net.txt --implicit-check-not=assemblyref \
+# RUN:   --implicit-check-not=mscorlib --implicit-check-not=msil.bcl --implicit-check-not=ContosoText
+
+## The header line only: the implicit check-not then covers every symbol line.
+# SYMHDR: {{^}}LinkInfo v1.0 {{.+$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL DEFAULT 'main' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.prims' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.mix' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.ptrs' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.describe' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_new' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.length16' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.length32' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.check' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.letter' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.wrap' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.origin' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.set_mode' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.set_wide' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.set_small' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.set_modes' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.tune' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.pin' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.keep' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_size' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_resize' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.point_new' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.point_sum' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_count' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_serial' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.point_x' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.new_bytes' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.new_widgets' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.inner_new' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.inner_depth' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.guarded' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.measure' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.point_hash' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.point_type' method=0x{{[0-9A-F]+}}{{$}}
+
+# BIND-DAG: {{^    L[0-9]+: }}call void(bool, char, int8, uint8, int16, uint16, int32, uint32, int64, uint64, float32, float64, native int, native uint) [FakeWidgets]Contoso.Widget::'Prims'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call float64(float32, float64) [FakeWidgets]Contoso.Widget::'Mix'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call void*(uint8*, void*, int32*) [FakeWidgets]Contoso.Widget::'Ptrs'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call string(object, string, class [FakeWidgets]Contoso.Widget, int32[], string[]) [FakeWidgets]Contoso.Widget::'Describe'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void(string, int32) [FakeWidgets]Contoso.Widget::'.ctor'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call int32(string) [FakeWidgets]Contoso.Widget::'Length'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call bool(bool) [FakeWidgets]Contoso.Widget::'Check'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call char(char) [FakeWidgets]Contoso.Widget::'Letter'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call object(valuetype [FakeWidgets]Contoso.Point) [FakeWidgets]Contoso.Widget::'Wrap'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call valuetype [FakeWidgets]Contoso.Point() [FakeWidgets]Contoso.Widget::'Origin'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call void(valuetype [FakeWidgets]Contoso.Mode) [FakeWidgets]Contoso.Widget::'SetMode'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call void(valuetype [FakeWidgets]Contoso.WideMode) [FakeWidgets]Contoso.Widget::'SetWide'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call void(valuetype [FakeWidgets]Contoso.SmallMode) [FakeWidgets]Contoso.Widget::'SetSmall'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call void(int32, valuetype [FakeWidgets]Contoso.Mode, valuetype [FakeWidgets]Contoso.WideMode) [FakeWidgets]Contoso.Widget::'SetModes'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance void(valuetype [FakeWidgets]Contoso.SmallMode) [FakeWidgets]Contoso.Widget::'Tune'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call void(valuetype [FakeRuntime]System.Runtime.InteropServices.GCHandle) [FakeWidgets]Contoso.Widget::'Pin'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call valuetype [FakeRuntime]System.Runtime.InteropServices.GCHandle(object) [FakeWidgets]Contoso.Widget::'Keep'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance int32() [FakeWidgets]Contoso.Widget::'get_Size'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance void(int32) [FakeWidgets]Contoso.Widget::'Resize'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void(int32, int32) [FakeWidgets]Contoso.Point::'.ctor'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call instance int32() [FakeWidgets]Contoso.Point::'Sum'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}ldsfld int32 [FakeWidgets]Contoso.Widget::'Count'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}ldfld int64 [FakeWidgets]Contoso.Widget::'Serial'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}ldfld int32 [FakeWidgets]Contoso.Point::'X'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newarr {{(uint8|\[FakeRuntime\]System\.Byte)}}{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newarr [FakeWidgets]Contoso.Widget{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void() [FakeWidgets]Contoso.Outer/Inner::'.ctor'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call int32(class [FakeWidgets]Contoso.Outer/Inner) [FakeWidgets]Contoso.Outer/Inner::'Depth'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Widget::'Guarded'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call int64() [FakeWidgets]Contoso.Widget::'Measure'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}castclass {{(string|\[FakeRuntime\]System\.String)}}{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}castclass int32[]{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}castclass string[]{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}castclass [FakeWidgets]Contoso.Outer/Inner{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}box [FakeWidgets]Contoso.Point{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}unbox [FakeWidgets]Contoso.Point{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}unbox.any [FakeWidgets]Contoso.Point{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}isinst [FakeWidgets]Contoso.BrokenWidgetException{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}isinst [FakeWidgets]Contoso.WidgetException{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}isinst [FakeRuntime]System.Text.DecoderFallbackException{{$}}
+# BIND-DAG: {{^    }}.try L{{[0-9]+}} to L{{[0-9]+}} filter L{{[0-9]+}} handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}box [FakeRuntime]System.Runtime.InteropServices.GCHandle{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}unbox [FakeRuntime]System.Runtime.InteropServices.GCHandle{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call valuetype [FakeRuntime]System.Runtime.InteropServices.GCHandle(object) [FakeRuntime]System.Runtime.InteropServices.GCHandle::'Alloc'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call native int(valuetype [FakeRuntime]System.Runtime.InteropServices.GCHandle) [FakeRuntime]System.Runtime.InteropServices.GCHandle::'ToIntPtr'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call valuetype [FakeRuntime]System.Runtime.InteropServices.GCHandle(native int) [FakeRuntime]System.Runtime.InteropServices.GCHandle::'FromIntPtr'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call instance object() [FakeRuntime]System.Runtime.InteropServices.GCHandle::'get_Target'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void(bool, bool) [FakeRuntime]System.Text.UTF8Encoding::'.ctor'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void(bool, bool, bool) [FakeRuntime]System.Text.UTF32Encoding::'.ctor'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance string(uint8*, int32) [FakeRuntime]System.Text.Encoding::'GetString'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void(char*) [FakeRuntime]System.String::'.ctor'{{$}}
+
+# STUBS-DAG: {{^  }}.method '__msil_mc.prims' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.mix' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.ptrs' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.describe' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.widget_new' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.length16' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.length32' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.check' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.letter' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.wrap' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.origin' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.set_mode' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.set_wide' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.set_small' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.set_modes' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.tune' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.pin' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.keep' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.widget_size' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.widget_resize' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.point_new' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.point_sum' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.widget_count' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.widget_serial' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.point_x' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.new_bytes' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.new_widgets' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.inner_new' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.inner_depth' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.guarded' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.measure' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.point_hash' {{.+$}}
+# STUBS-DAG: {{^  }}.method '__msil_mc.point_type' {{.+$}}
+
+## The access sites, in the images' method order (by name). The 'unbox' of
+## Contoso.Point follows the GCHandle's unbox and get_Target.
+# ACCESS-LABEL: {{^  }}.method '__msil_mc.point_hash' {{.+$}}
+# ACCESS:       {{^    L[0-9]+: }}unbox [FakeWidgets]Contoso.Point{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}constrained. [FakeWidgets]Contoso.Point{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}callvirt instance int32() [FakeRuntime]System.ValueType::'GetHashCode'{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}ret{{$}}
+# ACCESS-LABEL: {{^  }}.method '__msil_mc.point_sum' {{.+$}}
+# ACCESS:       {{^    L[0-9]+: }}unbox [FakeWidgets]Contoso.Point{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}call instance int32() [FakeWidgets]Contoso.Point::'Sum'{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}ret{{$}}
+# ACCESS-LABEL: {{^  }}.method '__msil_mc.point_type' {{.+$}}
+# ACCESS:       {{^    L[0-9]+: }}unbox [FakeWidgets]Contoso.Point{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}constrained. [FakeWidgets]Contoso.Point{{$}}
+# ACCESS-NEXT:  {{^    L[0-9]+: }}callvirt instance class [FakeRuntime]System.Type() [FakeRuntime]System.Object::'GetType'{{$}}
+# ACCESS-LABEL: {{^  }}.method '__msil_mc.point_x' {{.+$}}
+
+# REFS:      {{^}}assemblyref 'FakeRuntime' ver 8.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# REFS-NEXT: {{^}}assemblyref 'FakeWidgets' ver 1.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+
+## The built-in table, without references.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil table.ll -o twin.o
+# RUN: msil-ld twin.o -o twin.exe 2>&1 | count 0
+# RUN: llvm-cil-dump twin.exe > twin.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=twin.txt
+# RUN: FileCheck %s --check-prefix=TACCESS --input-file=twin.txt
+# RUN: FileCheck %s --check-prefix=TREFS --input-file=twin.txt --implicit-check-not=assemblyref \
+# RUN:   --implicit-check-not=msil.bcl --implicit-check-not=Fake
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil table.ll -o tlnx.o
+# RUN: msil-ld tlnx.o -o tlnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump tlnx.exe > tlnx.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=tlnx.txt
+# RUN: FileCheck %s --check-prefix=TACCESS --input-file=tlnx.txt
+# RUN: FileCheck %s --check-prefix=TREFS --input-file=tlnx.txt --implicit-check-not=assemblyref \
+# RUN:   --implicit-check-not=msil.bcl --implicit-check-not=Fake
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet table.ll -o tnet.o
+# RUN: msil-ld tnet.o -o tnet.exe 2>&1 | count 0
+# RUN: llvm-cil-dump tnet.exe > tnet.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=tnet.txt
+# RUN: FileCheck %s --check-prefix=TACCESS --input-file=tnet.txt
+# RUN: FileCheck %s --check-prefix=TREFS --input-file=tnet.txt --implicit-check-not=assemblyref \
+# RUN:   --implicit-check-not=msil.bcl --implicit-check-not=Fake
+
+# TABLE-DAG: {{^    L[0-9]+: }}call string[]() [mscorlib]System.Environment::'GetCommandLineArgs'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call native int(string) [mscorlib]System.Runtime.InteropServices.Marshal::'StringToHGlobalUni'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call instance void() [mscorlib]System.Runtime.InteropServices.GCHandle::'Free'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call uint8[](int32) [mscorlib]System.BitConverter::'GetBytes'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}newobj instance void(string) [mscorlib]System.EntryPointNotFoundException::'.ctor'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}callvirt instance int32() [mscorlib]System.Exception::'get_HResult'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call void(void*, void*, int64, int64) [mscorlib]System.Buffer::'MemoryCopy'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call native int(native int) [mscorlib]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}castclass [mscorlib]System.Exception{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}isinst [mscorlib]System.Text.DecoderFallbackException{{$}}
+# TABLE-DAG: {{^    }}.try L{{[0-9]+}} to L{{[0-9]+}} filter L{{[0-9]+}} handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle(object) [mscorlib]System.Runtime.InteropServices.GCHandle::'Alloc'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call native int(valuetype [mscorlib]System.Runtime.InteropServices.GCHandle) [mscorlib]System.Runtime.InteropServices.GCHandle::'ToIntPtr'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle(native int) [mscorlib]System.Runtime.InteropServices.GCHandle::'FromIntPtr'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call instance object() [mscorlib]System.Runtime.InteropServices.GCHandle::'get_Target'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}newobj instance void(bool, bool) [mscorlib]System.Text.UTF8Encoding::'.ctor'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}newobj instance void(bool, bool, bool) [mscorlib]System.Text.UTF32Encoding::'.ctor'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}callvirt instance string(uint8*, int32) [mscorlib]System.Text.Encoding::'GetString'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}newobj instance void(char*) [mscorlib]System.String::'.ctor'{{$}}
+
+## GCHandle declares Free(): 6 'nop's, then 'call', without references too.
+# TACCESS-LABEL: {{^  }}.method '__msil_mc.dn_free' void(native int) {{.+$}}
+# TACCESS:       {{^    L[0-9]+: }}unbox [mscorlib]System.Runtime.InteropServices.GCHandle{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}nop{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}call instance void() [mscorlib]System.Runtime.InteropServices.GCHandle::'Free'{{$}}
+# TACCESS-NEXT:  {{^    L[0-9]+: }}ret{{$}}
+
+# TREFS: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+
+## An interface: a 'this-obj' call links; 'valuetype' of it is T-M16.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil iface.ll -o iface.o
+# RUN: msil-ld iface.o --reference=refs -o iface.exe 2>&1 | count 0
+# RUN: llvm-cil-dump iface.exe | FileCheck %s --check-prefix=IFACE
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet iface.ll -o iface-net.o
+# RUN: msil-ld iface-net.o --reference=refs -o iface-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump iface-net.exe | FileCheck %s --check-prefix=IFACE
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil iface-val.ll -o iface-val.o
+# RUN: not msil-ld iface-val.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=IFACE-VAL
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet iface-val.ll -o iface-val-net.o
+# RUN: not msil-ld iface-val-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=IFACE-VAL
+# RUN: not ls x.exe
+# IFACE-LABEL: {{^  }}.method '__msil_mc.widget_score' int32(native int) {{.+$}}
+# IFACE:       {{^    L[0-9]+: }}call instance object() [FakeRuntime]System.Runtime.InteropServices.GCHandle::'get_Target'{{$}}
+# IFACE-NEXT:  {{^    L[0-9]+: }}castclass [FakeWidgets]Contoso.IWidget{{$}}
+# IFACE-NEXT:  {{^    L[0-9]+: }}callvirt instance int32() [FakeWidgets]Contoso.IWidget::'Score'{{$}}
+# IFACE-VAL: {{^}}msil-ld: error: managed call 'score_val': 'Contoso.IWidget' is a reference type, but the declaration uses it as a value type{{$}}
+
+## A wrong return type: the overload list.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil bad-ret.ll -o bad-ret.o
+# RUN: not msil-ld bad-ret.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=BAD-RET
+# RUN: not ls x.exe
+# BAD-RET: {{^}}msil-ld: error: undefined .NET member 'int32 Contoso.Widget::Measure()' (requested by bad-ret.o); 'Contoso.Widget' is defined in FakeWidgets 1.0.0.0 [null] (refs{{[/\\]}}FakeWidgets.dll) but has no such member; overloads present: int64 Measure(){{$}}
+
+## Without references: a member and types outside the table.
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet nomember.ll -o nomember.o
+# RUN: not msil-ld nomember.o -o x.exe 2>&1 | %{err} --check-prefix=NOT-IN-TABLE \
+# RUN:   "-DX=void System.Environment::Exit(int32)"
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet notype.ll -o notype.o
+# RUN: not msil-ld notype.o -o x.exe 2>&1 | %{err} --check-prefix=NOT-IN-TABLE \
+# RUN:   "-DX=Contoso.Widget"
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet nocatch.ll -o nocatch.o
+# RUN: not msil-ld nocatch.o -o x.exe 2>&1 | %{err} --check-prefix=NOT-IN-TABLE \
+# RUN:   "-DX=System.IO.IOException"
+# RUN: not ls x.exe
+# NOT-IN-TABLE: {{^}}msil-ld: error: .NET member '[[X]]' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+
+## A -shared library: the exported function, not the stub, on a host
+## triple and on msil64-unknown-dotnet (an object, and bitcode through LTO).
+## Each library is written as lib.dll (msil64-unknown-dotnet's in lib-net/
+## and lib-lto/), so its export class is 'lib'.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil lib.ll -o lib.o
+# RUN: msil-ld -shared lib.o --reference=refs -o lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info lib.dll | FileCheck %s %{crash} --check-prefix=LIB-SYMTAB \
+# RUN:   -DTRIPLE=x86_64-unknown-linux-gnu-msil --implicit-check-not=__msil_mc
+# RUN: llvm-cil-dump lib.dll > lib.txt
+# RUN: %python %S/Inputs/shared/listing.py members lib.txt lib | FileCheck %s --check-prefix=LIB-EXPORTS \
+# RUN:   --implicit-check-not=__msil_mc
+# RUN: FileCheck %s --check-prefix=LIB-STUB --input-file=lib.txt
+# RUN: mkdir lib-net lib-lto
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet lib.ll -o lib-net/lib.o
+# RUN: msil-ld -shared lib-net/lib.o --reference=refs -o lib-net/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info lib-net/lib.dll | FileCheck %s %{crash} --check-prefix=LIB-SYMTAB \
+# RUN:   -DTRIPLE=msil64-unknown-dotnet --implicit-check-not=__msil_mc
+# RUN: llvm-cil-dump lib-net/lib.dll > lib-net/lib.txt
+# RUN: %python %S/Inputs/shared/listing.py members lib-net/lib.txt lib | FileCheck %s --check-prefix=LIB-EXPORTS \
+# RUN:   --implicit-check-not=__msil_mc
+# RUN: FileCheck %s --check-prefix=LIB-STUB --input-file=lib-net/lib.txt
+# RUN: cat net.head lib.ll > lib-lto/lib.ll
+# RUN: llvm-as lib-lto/lib.ll -o lib-lto/lib.bc
+# RUN: msil-ld -shared lib-lto/lib.bc --reference=refs -o lib-lto/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info lib-lto/lib.dll | FileCheck %s %{crash} --check-prefix=LIB-SYMTAB \
+# RUN:   -DTRIPLE=msil64-unknown-dotnet --implicit-check-not=__msil_mc
+# RUN: llvm-cil-dump lib-lto/lib.dll > lib-lto/lib.txt
+# RUN: %python %S/Inputs/shared/listing.py members lib-lto/lib.txt lib | FileCheck %s --check-prefix=LIB-EXPORTS \
+# RUN:   --implicit-check-not=__msil_mc
+# RUN: FileCheck %s --check-prefix=LIB-STUB --input-file=lib-lto/lib.txt
+
+# LIB-SYMTAB:  {{^}}SymbolTable v1.0 triple=[[TRIPLE]] {{.+$}}
+# LIB-EXPORTS: {{^}}.class 'lib' flags={{.+$}}
+# LIB-EXPORTS: {{^  }}.method 'lib_count' int32() {{.+$}}
+# LIB-STUB:    {{^    L[0-9]+: }}ldsfld int32 [FakeWidgets]Contoso.Widget::'Count'{{$}}
+
+## MR2 (reason 4): a plain declaration of the same name in another unit.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil mr2a.ll -o mr2a.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil mr2b.ll -o mr2b.o
+# RUN: not msil-ld mr2a.o mr2b.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=MR2R4
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet mr2a.ll -o mr2a.o
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet mr2b.ll -o mr2b.o
+# RUN: not msil-ld mr2a.o mr2b.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=MR2R4
+# RUN: not ls x.exe
+# MR2R4:      {{^}}msil-ld: error: undefined symbol: f{{$}}
+# MR2R4-NEXT: {{^}}>>> referenced by mr2b.o:(main){{$}}
+
+#--- calls.ll
+;; void prims(int, char16_t, int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t,
+;;            int64_t, uint64_t, float, double, intptr_t, uintptr_t);
+;; every listing primitive (bool from an int)
+declare void @__msil_mc.prims(i32, i16, i8, i8, i16, i16, i32, i32, i64, i64, float, double, i64, i64) #0
+
+;; double mix(float, double);
+declare double @__msil_mc.mix(float, double) #1
+
+;; void *ptrs(unsigned char *, void *, int *); unmanaged pointers
+declare ptr @__msil_mc.ptrs(ptr, ptr, ptr) #2
+
+;; dn_handle describe(dn_handle, dn_handle, dn_handle, dn_handle, dn_handle);
+;; object, string, class, arrays: handles in and out
+declare ptr @__msil_mc.describe(ptr, ptr, ptr, ptr, ptr) #3
+
+;; dn_handle widget_new(const char *, int); a constructor, a UTF-8 string
+declare ptr @__msil_mc.widget_new(ptr, i32) #4
+
+;; int length16(const char16_t *); a UTF-16 string
+declare i32 @__msil_mc.length16(ptr) #5
+
+;; int length32(const char32_t *); a UTF-32 string
+declare i32 @__msil_mc.length32(ptr) #6
+
+;; int check(int); bool in and out
+declare i32 @__msil_mc.check(i32) #7
+
+;; char16_t letter(char16_t);
+declare i16 @__msil_mc.letter(i16) #8
+
+;; dn_handle wrap(dn_handle); a value type in by a boxed handle
+declare ptr @__msil_mc.wrap(ptr) #9
+
+;; dn_handle origin(void); a value-type result, boxed
+declare ptr @__msil_mc.origin() #10
+
+;; void set_mode(int); an enum over int32
+declare void @__msil_mc.set_mode(i32) #11
+
+;; void set_wide(long long); an enum over int64
+declare void @__msil_mc.set_wide(i64) #12
+
+;; void set_small(signed char); an enum over uint8 (signedness is not checked)
+declare void @__msil_mc.set_small(i8) #13
+
+;; void set_modes(int, int, long long); the second and third CIL parameters are enums
+declare void @__msil_mc.set_modes(i32, i32, i64) #14
+
+;; void tune(dn_handle, unsigned char); an enum after the 'this' handle
+declare void @__msil_mc.tune(ptr, i8) #15
+
+;; void pin(dn_handle); a GCHandle is the handle itself
+declare void @__msil_mc.pin(ptr) #16
+
+;; dn_handle keep(dn_handle); a GCHandle result
+declare ptr @__msil_mc.keep(ptr) #17
+
+;; int widget_size(dn_handle); a virtual property getter: callvirt
+declare i32 @__msil_mc.widget_size(ptr) #18
+
+;; void widget_resize(dn_handle, int); an instance method
+declare void @__msil_mc.widget_resize(ptr, i32) #19
+
+;; dn_handle point_new(int, int); a value-type constructor: newobj, then box
+declare ptr @__msil_mc.point_new(i32, i32) #20
+
+;; int point_sum(dn_handle); an instance method of a value type
+declare i32 @__msil_mc.point_sum(ptr) #21
+
+;; int widget_count(void); a static field: ldsfld
+declare i32 @__msil_mc.widget_count() #22
+
+;; long long widget_serial(dn_handle); an instance field: ldfld
+declare i64 @__msil_mc.widget_serial(ptr) #23
+
+;; int point_x(dn_handle); an instance field of a value type
+declare i32 @__msil_mc.point_x(ptr) #24
+
+;; dn_handle new_bytes(int); an array of a primitive: newarr
+declare ptr @__msil_mc.new_bytes(i32) #25
+
+;; dn_handle new_widgets(int); an array of a class: newarr
+declare ptr @__msil_mc.new_widgets(i32) #26
+
+;; dn_handle inner_new(void); a nested type's constructor
+declare ptr @__msil_mc.inner_new() #27
+
+;; int inner_depth(dn_handle); a nested type in a signature
+declare i32 @__msil_mc.inner_depth(ptr) #28
+
+;; int guarded(int, int *); msil_catch: a derived type before its base, and a
+;; BCL exception
+declare i32 @__msil_mc.guarded(i32, ptr) #29
+
+;; long long measure(void); ASSEMBLY names the scope of standalone text only
+declare i64 @__msil_mc.measure() #30
+
+;; int point_hash(dn_handle); Contoso.Point inherits GetHashCode() from
+;; System.ValueType
+declare i32 @__msil_mc.point_hash(ptr) #31
+
+;; dn_handle point_type(dn_handle); Contoso.Point inherits the non-virtual
+;; GetType() from System.Object
+declare ptr @__msil_mc.point_type(ptr) #32
+
+define i32 @main() {
+  call void @__msil_mc.prims(i32 1, i16 65, i8 -1, i8 255, i16 -2, i16 2, i32 3, i32 4, i64 5, i64 6, float 1.5, double 2.5, i64 7, i64 8)
+  %r0 = call double @__msil_mc.mix(float 1.0, double 2.0)
+  %r1 = call ptr @__msil_mc.ptrs(ptr null, ptr null, ptr null)
+  %r2 = call ptr @__msil_mc.describe(ptr null, ptr null, ptr null, ptr null, ptr null)
+  %r3 = call ptr @__msil_mc.widget_new(ptr null, i32 3)
+  %r4 = call i32 @__msil_mc.length16(ptr null)
+  %r5 = call i32 @__msil_mc.length32(ptr null)
+  %r6 = call i32 @__msil_mc.check(i32 2)
+  %r7 = call i16 @__msil_mc.letter(i16 66)
+  %r8 = call ptr @__msil_mc.wrap(ptr null)
+  %r9 = call ptr @__msil_mc.origin()
+  call void @__msil_mc.set_mode(i32 1)
+  call void @__msil_mc.set_wide(i64 4294967296)
+  call void @__msil_mc.set_small(i8 1)
+  call void @__msil_mc.set_modes(i32 0, i32 1, i64 2)
+  call void @__msil_mc.tune(ptr null, i8 1)
+  call void @__msil_mc.pin(ptr null)
+  %r10 = call ptr @__msil_mc.keep(ptr null)
+  %r11 = call i32 @__msil_mc.widget_size(ptr null)
+  call void @__msil_mc.widget_resize(ptr null, i32 4)
+  %r12 = call ptr @__msil_mc.point_new(i32 1, i32 2)
+  %r13 = call i32 @__msil_mc.point_sum(ptr null)
+  %r14 = call i32 @__msil_mc.widget_count()
+  %r15 = call i64 @__msil_mc.widget_serial(ptr null)
+  %r16 = call i32 @__msil_mc.point_x(ptr null)
+  %r17 = call ptr @__msil_mc.new_bytes(i32 16)
+  %r18 = call ptr @__msil_mc.new_widgets(i32 2)
+  %r19 = call ptr @__msil_mc.inner_new()
+  %r20 = call i32 @__msil_mc.inner_depth(ptr null)
+  %r21 = call i32 @__msil_mc.guarded(i32 9, ptr null)
+  %r22 = call i64 @__msil_mc.measure()
+  %r23 = call i32 @__msil_mc.point_hash(ptr null)
+  %r24 = call ptr @__msil_mc.point_type(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Prims" "msil-managed-sig"="void(bool, char, int8, uint8, int16, uint16, int32, uint32, int64, uint64, float32, float64, native int, native uint)" "msil-managed-conv"="bool,val,val,val,val,val,val,val,val,val,val,val,val,val;void" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Mix" "msil-managed-sig"="float64(float32, float64)" "msil-managed-conv"="val,val;val" }
+attributes #2 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Ptrs" "msil-managed-sig"="void*(uint8*, void*, int32*)" "msil-managed-conv"="val,val,val;val" }
+attributes #3 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Describe" "msil-managed-sig"="string(object, string, class Contoso.Widget, int32[], string[])" "msil-managed-conv"="obj,obj,obj,obj,obj;obj" }
+attributes #4 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="utf8,val;obj" }
+attributes #5 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Length" "msil-managed-sig"="int32(string)" "msil-managed-conv"="utf16;val" }
+attributes #6 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Length" "msil-managed-sig"="int32(string)" "msil-managed-conv"="utf32;val" }
+attributes #7 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Check" "msil-managed-sig"="bool(bool)" "msil-managed-conv"="bool;bool" }
+attributes #8 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Letter" "msil-managed-sig"="char(char)" "msil-managed-conv"="val;val" }
+attributes #9 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Wrap" "msil-managed-sig"="object(valuetype Contoso.Point)" "msil-managed-conv"="boxed;obj" }
+attributes #10 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Origin" "msil-managed-sig"="valuetype Contoso.Point()" "msil-managed-conv"=";boxed" }
+attributes #11 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetMode" "msil-managed-sig"="void(valuetype Contoso.Mode)" "msil-managed-conv"="enum;void" }
+attributes #12 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetWide" "msil-managed-sig"="void(valuetype Contoso.WideMode)" "msil-managed-conv"="enum;void" }
+attributes #13 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetSmall" "msil-managed-sig"="void(valuetype Contoso.SmallMode)" "msil-managed-conv"="enum;void" }
+attributes #14 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetModes" "msil-managed-sig"="void(int32, valuetype Contoso.Mode, valuetype Contoso.WideMode)" "msil-managed-conv"="val,enum,enum;void" }
+attributes #15 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Tune" "msil-managed-sig"="instance void(valuetype Contoso.SmallMode)" "msil-managed-conv"="this-obj,enum;void" }
+attributes #16 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Pin" "msil-managed-sig"="void(valuetype System.Runtime.InteropServices.GCHandle)" "msil-managed-conv"="gch;void" }
+attributes #17 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Keep" "msil-managed-sig"="valuetype System.Runtime.InteropServices.GCHandle(object)" "msil-managed-conv"="obj;gch" }
+attributes #18 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-obj;val" }
+attributes #19 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Resize" "msil-managed-sig"="instance void(int32)" "msil-managed-conv"="this-obj,val;void" }
+attributes #20 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32, int32)" "msil-managed-conv"="val,val;boxed" }
+attributes #21 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="Sum" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-val;val" }
+attributes #22 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Count" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+attributes #23 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Serial" "msil-managed-sig"="instance field int64" "msil-managed-conv"="this-obj;val" }
+attributes #24 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="X" "msil-managed-sig"="instance field int32" "msil-managed-conv"="this-val;val" }
+attributes #25 = { "msil-managed-type"="uint8[]" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32)" "msil-managed-conv"="val;obj" }
+attributes #26 = { "msil-managed-type"="class Contoso.Widget[]" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32)" "msil-managed-conv"="val;obj" }
+attributes #27 = { "msil-managed-type"="Contoso.Outer/Inner" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void()" "msil-managed-conv"=";obj" }
+attributes #28 = { "msil-managed-type"="Contoso.Outer/Inner" "msil-managed-member"="Depth" "msil-managed-sig"="int32(class Contoso.Outer/Inner)" "msil-managed-conv"="obj;val" }
+attributes #29 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val,err;val" "msil-managed-catch"="Contoso.BrokenWidgetException=7;Contoso.WidgetException=5;System.Text.DecoderFallbackException=84" }
+attributes #30 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Measure" "msil-managed-sig"="int64()" "msil-managed-asm"="ContosoText" "msil-managed-conv"=";val" }
+attributes #31 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="GetHashCode" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-val;val" }
+attributes #32 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="GetType" "msil-managed-sig"="instance class System.Type()" "msil-managed-conv"="this-val;obj" }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6, !7, !8, !9, !10, !11, !12, !13, !14, !15, !16, !17, !18, !19, !20, !21, !22, !23, !24, !25, !26, !27, !28, !29, !30, !31, !32}
+!0 = !{!"__msil_mc.prims", !"Contoso.Widget", !"Prims", !"void(bool, char, int8, uint8, int16, uint16, int32, uint32, int64, uint64, float32, float64, native int, native uint)", !"", !"bool,val,val,val,val,val,val,val,val,val,val,val,val,val;void", !""}
+!1 = !{!"__msil_mc.mix", !"Contoso.Widget", !"Mix", !"float64(float32, float64)", !"", !"val,val;val", !""}
+!2 = !{!"__msil_mc.ptrs", !"Contoso.Widget", !"Ptrs", !"void*(uint8*, void*, int32*)", !"", !"val,val,val;val", !""}
+!3 = !{!"__msil_mc.describe", !"Contoso.Widget", !"Describe", !"string(object, string, class Contoso.Widget, int32[], string[])", !"", !"obj,obj,obj,obj,obj;obj", !""}
+!4 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"utf8,val;obj", !""}
+!5 = !{!"__msil_mc.length16", !"Contoso.Widget", !"Length", !"int32(string)", !"", !"utf16;val", !""}
+!6 = !{!"__msil_mc.length32", !"Contoso.Widget", !"Length", !"int32(string)", !"", !"utf32;val", !""}
+!7 = !{!"__msil_mc.check", !"Contoso.Widget", !"Check", !"bool(bool)", !"", !"bool;bool", !""}
+!8 = !{!"__msil_mc.letter", !"Contoso.Widget", !"Letter", !"char(char)", !"", !"val;val", !""}
+!9 = !{!"__msil_mc.wrap", !"Contoso.Widget", !"Wrap", !"object(valuetype Contoso.Point)", !"", !"boxed;obj", !""}
+!10 = !{!"__msil_mc.origin", !"Contoso.Widget", !"Origin", !"valuetype Contoso.Point()", !"", !";boxed", !""}
+!11 = !{!"__msil_mc.set_mode", !"Contoso.Widget", !"SetMode", !"void(valuetype Contoso.Mode)", !"", !"enum;void", !""}
+!12 = !{!"__msil_mc.set_wide", !"Contoso.Widget", !"SetWide", !"void(valuetype Contoso.WideMode)", !"", !"enum;void", !""}
+!13 = !{!"__msil_mc.set_small", !"Contoso.Widget", !"SetSmall", !"void(valuetype Contoso.SmallMode)", !"", !"enum;void", !""}
+!14 = !{!"__msil_mc.set_modes", !"Contoso.Widget", !"SetModes", !"void(int32, valuetype Contoso.Mode, valuetype Contoso.WideMode)", !"", !"val,enum,enum;void", !""}
+!15 = !{!"__msil_mc.tune", !"Contoso.Widget", !"Tune", !"instance void(valuetype Contoso.SmallMode)", !"", !"this-obj,enum;void", !""}
+!16 = !{!"__msil_mc.pin", !"Contoso.Widget", !"Pin", !"void(valuetype System.Runtime.InteropServices.GCHandle)", !"", !"gch;void", !""}
+!17 = !{!"__msil_mc.keep", !"Contoso.Widget", !"Keep", !"valuetype System.Runtime.InteropServices.GCHandle(object)", !"", !"obj;gch", !""}
+!18 = !{!"__msil_mc.widget_size", !"Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-obj;val", !""}
+!19 = !{!"__msil_mc.widget_resize", !"Contoso.Widget", !"Resize", !"instance void(int32)", !"", !"this-obj,val;void", !""}
+!20 = !{!"__msil_mc.point_new", !"valuetype Contoso.Point", !".ctor", !"instance void(int32, int32)", !"", !"val,val;boxed", !""}
+!21 = !{!"__msil_mc.point_sum", !"valuetype Contoso.Point", !"Sum", !"instance int32()", !"", !"this-val;val", !""}
+!22 = !{!"__msil_mc.widget_count", !"Contoso.Widget", !"Count", !"field int32", !"", !";val", !""}
+!23 = !{!"__msil_mc.widget_serial", !"Contoso.Widget", !"Serial", !"instance field int64", !"", !"this-obj;val", !""}
+!24 = !{!"__msil_mc.point_x", !"valuetype Contoso.Point", !"X", !"instance field int32", !"", !"this-val;val", !""}
+!25 = !{!"__msil_mc.new_bytes", !"uint8[]", !".ctor", !"instance void(int32)", !"", !"val;obj", !""}
+!26 = !{!"__msil_mc.new_widgets", !"class Contoso.Widget[]", !".ctor", !"instance void(int32)", !"", !"val;obj", !""}
+!27 = !{!"__msil_mc.inner_new", !"Contoso.Outer/Inner", !".ctor", !"instance void()", !"", !";obj", !""}
+!28 = !{!"__msil_mc.inner_depth", !"Contoso.Outer/Inner", !"Depth", !"int32(class Contoso.Outer/Inner)", !"", !"obj;val", !""}
+!29 = !{!"__msil_mc.guarded", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val,err;val", !"Contoso.BrokenWidgetException=7;Contoso.WidgetException=5;System.Text.DecoderFallbackException=84"}
+!30 = !{!"__msil_mc.measure", !"Contoso.Widget", !"Measure", !"int64()", !"ContosoText", !";val", !""}
+!31 = !{!"__msil_mc.point_hash", !"valuetype Contoso.Point", !"GetHashCode", !"instance int32()", !"", !"this-val;val", !""}
+!32 = !{!"__msil_mc.point_type", !"valuetype Contoso.Point", !"GetType", !"instance class System.Type()", !"", !"this-val;obj", !""}
+#--- table.ll
+;; dn_handle args(void); a string[] result
+declare ptr @__msil_mc.args() #0
+
+;; intptr_t uni8(const char *); UTF-8
+declare i64 @__msil_mc.uni8(ptr) #1
+
+;; intptr_t uni16(const char16_t *); UTF-16
+declare i64 @__msil_mc.uni16(ptr) #2
+
+;; intptr_t uni32(const char32_t *); UTF-32
+declare i64 @__msil_mc.uni32(ptr) #3
+
+;; void dn_free(dn_handle); 5.20.9 MH2
+declare void @__msil_mc.dn_free(ptr) #4
+
+;; dn_handle bytes(int); a uint8[] result
+declare ptr @__msil_mc.bytes(i32) #5
+
+;; dn_handle epnf(const char *, int *); a constructor, a table exception in msil_catch
+declare ptr @__msil_mc.epnf(ptr, ptr) #6
+
+;; int hresult(dn_handle); a 'this' handle of a reference type
+declare i32 @__msil_mc.hresult(ptr) #7
+
+;; void copy(void *, void *, long long, long long);
+declare void @__msil_mc.copy(ptr, ptr, i64, i64) #8
+
+;; intptr_t alloc(intptr_t);
+declare i64 @__msil_mc.alloc(i64) #9
+
+define i32 @main() {
+  %r0 = call ptr @__msil_mc.args()
+  %r1 = call i64 @__msil_mc.uni8(ptr null)
+  %r2 = call i64 @__msil_mc.uni16(ptr null)
+  %r3 = call i64 @__msil_mc.uni32(ptr null)
+  call void @__msil_mc.dn_free(ptr null)
+  %r4 = call ptr @__msil_mc.bytes(i32 7)
+  %r5 = call ptr @__msil_mc.epnf(ptr null, ptr null)
+  %r6 = call i32 @__msil_mc.hresult(ptr null)
+  call void @__msil_mc.copy(ptr null, ptr null, i64 0, i64 0)
+  %r7 = call i64 @__msil_mc.alloc(i64 16)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="System.Environment" "msil-managed-member"="GetCommandLineArgs" "msil-managed-sig"="string[]()" "msil-managed-conv"=";obj" }
+attributes #1 = { "msil-managed-type"="System.Runtime.InteropServices.Marshal" "msil-managed-member"="StringToHGlobalUni" "msil-managed-sig"="native int(string)" "msil-managed-conv"="utf8;val" }
+attributes #2 = { "msil-managed-type"="System.Runtime.InteropServices.Marshal" "msil-managed-member"="StringToHGlobalUni" "msil-managed-sig"="native int(string)" "msil-managed-conv"="utf16;val" }
+attributes #3 = { "msil-managed-type"="System.Runtime.InteropServices.Marshal" "msil-managed-member"="StringToHGlobalUni" "msil-managed-sig"="native int(string)" "msil-managed-conv"="utf32;val" }
+attributes #4 = { "msil-managed-type"="valuetype System.Runtime.InteropServices.GCHandle" "msil-managed-member"="Free" "msil-managed-sig"="instance void()" "msil-managed-conv"="this-gch;void" }
+attributes #5 = { "msil-managed-type"="System.BitConverter" "msil-managed-member"="GetBytes" "msil-managed-sig"="uint8[](int32)" "msil-managed-conv"="val;obj" }
+attributes #6 = { "msil-managed-type"="System.EntryPointNotFoundException" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string)" "msil-managed-conv"="utf8,err;obj" "msil-managed-catch"="System.Text.DecoderFallbackException=84" }
+attributes #7 = { "msil-managed-type"="System.Exception" "msil-managed-member"="get_HResult" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-obj;val" }
+attributes #8 = { "msil-managed-type"="System.Buffer" "msil-managed-member"="MemoryCopy" "msil-managed-sig"="void(void*, void*, int64, int64)" "msil-managed-conv"="val,val,val,val;void" }
+attributes #9 = { "msil-managed-type"="System.Runtime.InteropServices.Marshal" "msil-managed-member"="AllocHGlobal" "msil-managed-sig"="native int(native int)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6, !7, !8, !9}
+!0 = !{!"__msil_mc.args", !"System.Environment", !"GetCommandLineArgs", !"string[]()", !"", !";obj", !""}
+!1 = !{!"__msil_mc.uni8", !"System.Runtime.InteropServices.Marshal", !"StringToHGlobalUni", !"native int(string)", !"", !"utf8;val", !""}
+!2 = !{!"__msil_mc.uni16", !"System.Runtime.InteropServices.Marshal", !"StringToHGlobalUni", !"native int(string)", !"", !"utf16;val", !""}
+!3 = !{!"__msil_mc.uni32", !"System.Runtime.InteropServices.Marshal", !"StringToHGlobalUni", !"native int(string)", !"", !"utf32;val", !""}
+!4 = !{!"__msil_mc.dn_free", !"valuetype System.Runtime.InteropServices.GCHandle", !"Free", !"instance void()", !"", !"this-gch;void", !""}
+!5 = !{!"__msil_mc.bytes", !"System.BitConverter", !"GetBytes", !"uint8[](int32)", !"", !"val;obj", !""}
+!6 = !{!"__msil_mc.epnf", !"System.EntryPointNotFoundException", !".ctor", !"instance void(string)", !"", !"utf8,err;obj", !"System.Text.DecoderFallbackException=84"}
+!7 = !{!"__msil_mc.hresult", !"System.Exception", !"get_HResult", !"instance int32()", !"", !"this-obj;val", !""}
+!8 = !{!"__msil_mc.copy", !"System.Buffer", !"MemoryCopy", !"void(void*, void*, int64, int64)", !"", !"val,val,val,val;void", !""}
+!9 = !{!"__msil_mc.alloc", !"System.Runtime.InteropServices.Marshal", !"AllocHGlobal", !"native int(native int)", !"", !"val;val", !""}
+#--- bad-ret.ll
+;; int measure(void); FakeWidgets defines int64 Measure()
+declare i32 @__msil_mc.measure() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.measure()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Measure" "msil-managed-sig"="int32()" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.measure", !"Contoso.Widget", !"Measure", !"int32()", !"", !";val", !""}
+#--- nomember.ll
+;; void env_exit(int); not a table member
+declare void @__msil_mc.env_exit(i32) #0
+
+define i32 @main() {
+  call void @__msil_mc.env_exit(i32 3)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="System.Environment" "msil-managed-member"="Exit" "msil-managed-sig"="void(int32)" "msil-managed-conv"="val;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.env_exit", !"System.Environment", !"Exit", !"void(int32)", !"", !"val;void", !""}
+#--- notype.ll
+;; int widget_count(void); a static field: ldsfld
+declare i32 @__msil_mc.widget_count() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.widget_count()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Count" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_count", !"Contoso.Widget", !"Count", !"field int32", !"", !";val", !""}
+#--- nocatch.ll
+;; dn_handle args(int *); System.IO.IOException is not a table type
+declare ptr @__msil_mc.args(ptr) #0
+
+define i32 @main() {
+  %r0 = call ptr @__msil_mc.args(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="System.Environment" "msil-managed-member"="GetCommandLineArgs" "msil-managed-sig"="string[]()" "msil-managed-conv"="err;obj" "msil-managed-catch"="System.IO.IOException=5" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.args", !"System.Environment", !"GetCommandLineArgs", !"string[]()", !"", !"err;obj", !"System.IO.IOException=5"}
+#--- iface.ll
+;; int widget_score(dn_handle); an interface method through a 'this' handle:
+;; castclass to the interface, then callvirt
+declare i32 @__msil_mc.widget_score(ptr) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.widget_score(ptr null)
+  ret i32 %r0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.IWidget" "msil-managed-member"="Score" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-obj;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_score", !"Contoso.IWidget", !"Score", !"instance int32()", !"", !"this-obj;val", !""}
+#--- iface-val.ll
+;; int score_val(dn_handle); the interface declared as a value type
+declare i32 @__msil_mc.score_val(ptr) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.score_val(ptr null)
+  ret i32 %r0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.IWidget" "msil-managed-member"="Score" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.score_val", !"valuetype Contoso.IWidget", !"Score", !"instance int32()", !"", !"this-val;val", !""}
+#--- lib.ll
+;; int widget_count(void); a static field: ldsfld
+declare i32 @__msil_mc.widget_count() #0
+
+define i32 @lib_count() {
+  %r0 = call i32 @__msil_mc.widget_count()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Count" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_count", !"Contoso.Widget", !"Count", !"field int32", !"", !";val", !""}
+#--- net.head
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+#--- mr2a.ll
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int g(int x) { return f(x); }
+declare i32 @__msil_mc.f(i32) #0
+
+define i32 @g(i32 %x) {
+  %r = call i32 @__msil_mc.f(i32 %x)
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- mr2b.ll
+;; int f(int); int g(int); int main(void) { return f(1) + g(2); }
+declare i32 @f(i32)
+declare i32 @g(i32)
+
+define i32 @main() {
+  %a = call i32 @f(i32 1)
+  %b = call i32 @g(i32 2)
+  %s = add i32 %a, %b
+  ret i32 %s
+}

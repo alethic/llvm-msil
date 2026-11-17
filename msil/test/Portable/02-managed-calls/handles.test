@@ -1,0 +1,100 @@
+# Object handles on msil64-unknown-dotnet: a constructor gives a handle, a property getter of the base class reads it through the 'this' handle, GCHandle's get_Target gives a second handle to the same object, and each handle is freed exactly once; then a handle of the wrong type (the string[] of Environment.GetCommandLineArgs) passed as the 'this' of Exception::get_HResult fails castclass loudly with System.InvalidCastException.
+# Plan 5.20.9 (MH1: a handle is the IntPtr of a Normal GCHandle; MH2: every
+# reference-typed result is a new strong handle that the caller frees once
+# through a managed call of GCHandle::Free, whose 'this-gch' conversion is
+# the identity on the C value; MH4: a handle of the wrong type fails
+# castclass with InvalidCastException), 5.20.3 MS5 (the rows 'obj' for a
+# class result, 'this-obj' for the 'this' of a reference type: handle to
+# object, castclass, callvirt; 'this-gch'), 5.20.5 ML2 (2) (newobj for
+# .ctor, callvirt for an instance method of a reference type), 5.20.8 MX1
+# and MX4 (an exception thrown inside the conversions escapes as an
+# ordinary unhandled .NET exception when the declaration lists none). Every
+# member is a built-in table entry (no --reference before P-2):
+# EntryPointNotFoundException::.ctor(string) (Phase 2), M27's
+# Exception::get_HResult(), MC-1's GCHandle rows, and
+# Environment::GetCommandLineArgs() (Phase 1). The HResult of an
+# EntryPointNotFoundException is COR_E_ENTRYPOINTNOTFOUND, 0x80131523, on the
+# .NET Framework and on .NET (measured on Framework 4.8.1, .NET 10 and WSL
+# .NET 10). Each failed check sets one bit of the exit status, and a failed
+# check returns before the loud call, so the transcript then shows the bits
+# instead of the exception.
+# The loud call (plan 5.17.4): the transcript is hand-written for both OSes,
+# the status line '[unhandled exception: System.InvalidCastException]' that
+# msil-run.py derives from the runtime's report. A portable program has no
+# output channel before P-2, so it cannot write a message of its own; the
+# LOUD line matches the toolchain's entry point '<msil>Main' in the stack
+# trace of the runtime's report (the exception left main and the program
+# with its stack trace, plan 5.20.8 MX1), never the runtime's wording:
+# .NET prints the frame as '<msil>Main(String[])' and the Framework as
+# '<msil>Main(String[] )', so the pattern stops at the parenthesis.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: <msil>Main(
+#--- main.c
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+mc_handle new_entry_point_not_found(const char *message);
+
+__attribute__((msil_method("System.Exception", "get_HResult",
+                           "instance int32()")))
+int exception_hresult(mc_handle exception);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "get_Target", "instance object()")))
+mc_handle handle_target(mc_handle handle);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+__attribute__((msil_method("System.Environment", "GetCommandLineArgs",
+                           "string[]()")))
+mc_handle command_line_args(void);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+#define COR_E_ENTRYPOINTNOTFOUND 0x80131523u
+
+int main(void) {
+  /* 0: newobj gives a handle; the getter reads the object through it. */
+  mc_handle e = new_entry_point_not_found("handles: a managed exception");
+  CHECK(0, e != 0);
+  CHECK(0, (unsigned)exception_hresult(e) == COR_E_ENTRYPOINTNOTFOUND);
+
+  /* 1: get_Target gives a new handle to the same object. */
+  mc_handle t = handle_target(e);
+  CHECK(1, t != 0 && t != e);
+  CHECK(1, (unsigned)exception_hresult(t) == COR_E_ENTRYPOINTNOTFOUND);
+  handle_free(t);
+
+  /* 2: a second object has its own handle; the first stays valid. */
+  mc_handle e2 = new_entry_point_not_found("handles: another one");
+  CHECK(2, e2 != 0 && e2 != e);
+  handle_free(e2);
+  CHECK(2, (unsigned)exception_hresult(e) == COR_E_ENTRYPOINTNOTFOUND);
+  handle_free(e);
+
+  /* 3: a string[] result is a handle as well. */
+  mc_handle args = command_line_args();
+  CHECK(3, args != 0);
+  if (fails)
+    return (int)fails;
+
+  /* The loud call: a string[] is not a System.Exception, so the stub's
+     castclass throws InvalidCastException, which escapes. */
+  exception_hresult(args);
+  return 64; /* never reached */
+}

@@ -1,0 +1,157 @@
+# clang -S text and msil-ld --lto-emit-asm text without references of managed calls that read a 'valuetype' result as a C integer of a width it is not an enum of: the struct System.TimeSpan as a 64-bit integer (TimeSpan::FromTicks) and the int32 enum System.DayOfWeek as a 64-bit integer (DateTime::get_DayOfWeek): each stub throws InvalidProgramException with T-M7's result text before the member is called, on every runtime.
+# Plan 5.20.6 MW2 as amended for MC-1 (whole-program text checks the
+# declaration when it runs) and 5.20.3's T-M7 as amended for MC-1 (its
+# result form, the section 12 row '5.20.7 MK2 and T-M7 amended'): standalone
+# text (clang -S, llc) and msil-ld's --lto-emit-asm text bind nothing, so no
+# link compares an 'enum' result with E's TypeDef (5.20.7 MK2 refuses these
+# declarations in an object link and in an --lto-emit-asm link with
+# references); instead, at the very start of its body, after the tests of
+# its 'enum' parameters, the stub tests the result's E: E must be an enum
+# (typeof(E).IsEnum: ldtoken E, Type::GetTypeFromHandle and
+# Type::get_IsEnum, with no local) and sizeof E must be the C result's
+# size, or the stub throws System.InvalidProgramException with
+# msil-ld's text, "managed call '<f>': the result has <n> bits for '<E>',
+# which is not an enum of that width". Plan 5.17.4's rule on loud
+# failures: a declaration error that no tool can see fails loudly. Without
+# the test the struct gave -5 on the .NET Framework 4.8 by accident, threw
+# InvalidProgramException without a message on .NET 8 and .NET 10, and
+# returned garbage with no error on .NET 10 with DOTNET_TieredCompilation=0,
+# while the wrong width ran on every runtime. At -O0 and -O2, for each
+# program: clang -S, and clang -flto -c with an --lto-emit-asm link that
+# passes no reference (%{msil_ref_flags} is empty whatever the leg), each
+# text assembled by %ilasm -exe; each image runs on the configured runtime
+# and on it again with DOTNET_TieredCompilation=0 (the optimizing JIT), is
+# force-JITted (jitall compiles the stubs: their checks are ordinary code)
+# and runs on each runtime of the leg's msil_also_run by
+# %{msil_also_run_check}, and with msil_run_netfx on the .NET Framework 4.8.
+# The images are not verified: the stub still returns the member's E as the
+# integer, which ILVerify and PEVerify report for the struct. The transcript
+# is the status line alone: the programs print nothing before the call, and
+# an unhandled exception loses the C library's buffered stdout. The STRUCT
+# and WIDTH lines match the stub's own message in the runtime's report on
+# stderr (the msil_also_run runs check the transcript only). No composite
+# builds this test, so no equivalence oracle compares the text with an
+# object link. Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REDEFINE: %{msil_ref_flags} =
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{er_prog} = struct
+# DEFINE: %{er_loud} = STRUCT
+# DEFINE: %{er_level} = O0
+# DEFINE: %{er_dir} = %t/%{er_prog}-%{er_level}
+# DEFINE: %{er_form} = text
+# DEFINE: %{er_image} = %{er_dir}/%{er_form}
+# REDEFINE: %{msil_also_run_image} = %{er_image}.exe
+# DEFINE: %{er_build} = \
+# DEFINE:   mkdir -p %{er_dir} \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{er_level} -S %t/%{er_prog}.c -o %{er_dir}/text.il \
+# DEFINE:   && %ilasm -exe -output=%{er_dir}/text.exe %{er_dir}/text.il \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{er_level} -flto -c %t/%{er_prog}.c -o %{er_dir}/main.o \
+# DEFINE:   && %clang_msil -%{er_level} %{msil_ldflags} -Wl,--lto-emit-asm %{er_dir}/main.o -o %{er_dir}/lto.il \
+# DEFINE:   && %ilasm -exe -output=%{er_dir}/lto.exe %{er_dir}/lto.il
+# DEFINE: %{er_run} = \
+# DEFINE:   %msil_exec --stderr-out %{er_image}.err --out %{er_image}.out %{er_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{er_image}.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{er_image}.err --check-prefix=%{er_loud} %s \
+# DEFINE:   && %msil_exec --env DOTNET_TieredCompilation=0 --stderr-out %{er_image}.tc0.err --out %{er_image}.tc0.out %{er_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{er_image}.tc0.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{er_image}.tc0.err --check-prefix=%{er_loud} %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{er_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --stderr-out %{er_image}.netfx.err --out %{er_image}.netfx.out %{er_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{er_image}.netfx.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{er_image}.netfx.err --check-prefix=%{er_loud} %s
+# RUN: %{er_build}
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# REDEFINE: %{er_form} = lto
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# REDEFINE: %{er_level} = O2
+# REDEFINE: %{er_form} = text
+# RUN: %{er_build}
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# REDEFINE: %{er_form} = lto
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# REDEFINE: %{er_prog} = width
+# REDEFINE: %{er_loud} = WIDTH
+# REDEFINE: %{er_level} = O0
+# REDEFINE: %{er_form} = text
+# RUN: %{er_build}
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# REDEFINE: %{er_form} = lto
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# REDEFINE: %{er_level} = O2
+# REDEFINE: %{er_form} = text
+# RUN: %{er_build}
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# REDEFINE: %{er_form} = lto
+# RUN: %{er_run}
+# RUN: %if msil-run-netfx %{ %{er_netfx} %}
+# Every run's transcript: the status line alone.
+# CHECK-NOT: {{.}}
+# CHECK:     [unhandled exception: System.InvalidProgramException]
+# The stub's message, in the runtime's report on stderr.
+# STRUCT:    {{^Unhandled [Ee]xception[.:] }}System.InvalidProgramException: managed call 'span_from_ticks': the result has 64 bits for 'System.TimeSpan', which is not an enum of that width{{$}}
+# WIDTH:     {{^Unhandled [Ee]xception[.:] }}System.InvalidProgramException: managed call 'date_day_of_week': the result has 64 bits for 'System.DayOfWeek', which is not an enum of that width{{$}}
+#--- say.h
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* Prints "<what> <v>": reached only without the checks. */
+static void say(const char *what, long long v) {
+  char digits[24];
+  int n = 0;
+  unsigned long long u =
+      v < 0 ? 0 - (unsigned long long)v : (unsigned long long)v;
+  while (*what)
+    putchar(*what++);
+  putchar(' ');
+  if (v < 0)
+    putchar('-');
+  do {
+    digits[n++] = (char)('0' + u % 10);
+    u /= 10;
+  } while (u);
+  while (n)
+    putchar(digits[--n]);
+  putchar('\n');
+}
+#--- struct.c
+#include "say.h"
+
+/* Wrong: System.TimeSpan is a struct, not an enum, read as a 64-bit
+   integer. */
+__attribute__((msil_method("valuetype System.TimeSpan", "FromTicks",
+                           "valuetype System.TimeSpan(int64)")))
+long long span_from_ticks(long long ticks);
+
+int main(void) {
+  say("span ticks", span_from_ticks(-5));
+  return 1;
+}
+#--- width.c
+#include "say.h"
+
+__attribute__((msil_method("valuetype System.DateTime", ".ctor",
+                           "instance void(int32, int32, int32)")))
+mc_handle new_date(int year, int month, int day);
+
+/* Wrong: System.DayOfWeek is an int32 enum, read as a 64-bit integer. */
+__attribute__((msil_method("valuetype System.DateTime", "get_DayOfWeek",
+                           "instance valuetype System.DayOfWeek()")))
+long long date_day_of_week(mc_handle date);
+
+int main(void) {
+  /* 2024-05-06 is a Monday (1). */
+  say("day of week", date_day_of_week(new_date(2024, 5, 6)));
+  return 1;
+}

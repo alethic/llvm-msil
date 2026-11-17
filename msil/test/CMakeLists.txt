@@ -121,6 +121,10 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-shared.c
     # The format checker's 'L' length modifier on MSIL triples (M26).
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-long-double-format.c
+    # The Sema checks of msil_method and msil_catch, managed calls from C and C++ (MC-1, plan
+    # 5.20.11 MT3); their CodeGen test is in clang/test/CodeGen/MSIL.
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/attr-msil-method.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/SemaCXX/attr-msil-method.cpp
     )
 endif()
 # ExpandVariadics with the MSIL ABIs (M26): opt's test of the upstream pass.

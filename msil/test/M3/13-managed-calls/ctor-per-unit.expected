@@ -1,0 +1,4 @@
+
+
+main: two blank lines above, one from each unit's static constructor managed call blank_line; a_answer() 42
+[exit 0]

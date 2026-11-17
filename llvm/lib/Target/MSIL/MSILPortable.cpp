@@ -43,12 +43,17 @@ static constexpr StringLiteral ImportModuleAttr = "msil-import-module";
 static constexpr StringLiteral ImportNameAttr = "msil-import-name";
 
 /// T-P2 for the declaration \p GV, imported from \p Module, named by its C
-/// name (a declaration with an import attribute always has one).
-static void reportImport(const GlobalValue &GV, StringRef Module) {
+/// name (a declaration with an import attribute always has one). A
+/// declaration with an import name and no import module (import_name alone)
+/// gets the same text naming the import name \p Name instead: it is an
+/// explicit import too, and its name would otherwise be dropped.
+static void reportImport(const GlobalValue &GV, StringRef Module,
+                         StringRef Name) {
   GV.getContext().emitError(
       "'" + GlobalValue::dropLLVMManglingEscape(GV.getName()) +
-      "' is declared with import module '" + Module + "', which " +
-      PortableTriple +
+      "' is declared with " +
+      (Module.empty() ? "import name '" + Name : "import module '" + Module) +
+      "', which " + PortableTriple +
       " does not support: the portable target binds no native code");
 }
 
@@ -78,9 +83,10 @@ bool MSIL::checkPortableModule(Module &M) {
   bool Changed = false;
   for (Function &F : M) {
     StringRef Module = F.getFnAttribute(ImportModuleAttr).getValueAsString();
-    if (!F.isDeclaration() || Module.empty())
+    StringRef Name = F.getFnAttribute(ImportNameAttr).getValueAsString();
+    if (!F.isDeclaration() || (Module.empty() && Name.empty()))
       continue;
-    reportImport(F, Module);
+    reportImport(F, Module, Name);
     F.removeFnAttr(ImportModuleAttr);
     F.removeFnAttr(ImportNameAttr);
     Functions.push_back(&F);
@@ -88,9 +94,10 @@ bool MSIL::checkPortableModule(Module &M) {
   }
   for (GlobalVariable &GV : M.globals()) {
     StringRef Module = GV.getAttribute(ImportModuleAttr).getValueAsString();
-    if (!GV.isDeclaration() || Module.empty())
+    StringRef Name = GV.getAttribute(ImportNameAttr).getValueAsString();
+    if (!GV.isDeclaration() || (Module.empty() && Name.empty()))
       continue;
-    reportImport(GV, Module);
+    reportImport(GV, Module, Name);
     AttributeSet Attrs = GV.getAttributes()
                              .removeAttribute(GV.getContext(), ImportModuleAttr)
                              .removeAttribute(GV.getContext(), ImportNameAttr);

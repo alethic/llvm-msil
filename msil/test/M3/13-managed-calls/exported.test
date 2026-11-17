@@ -1,0 +1,77 @@
+# A dllexport managed call in a -shared library: mclib.c declares 'int f_exp(int)' with __declspec(dllexport) and msil_method (System.Math::Abs), the library exports the C name f_exp, and the program, which declares f_exp as an ordinary dllimport function, calls it directly and through a function pointer; the library's own calls of f_exp (lib_twice) go through its stub.
+# Plan 5.20.4 as amended for MC-1 (MC-1 leftover audit, defect D6, and the
+# user's pick 'Build them now' in the chat, 2026-11-05: dllexport,
+# constructor and destructor on a managed-call declaration have an effect):
+# for a managed call with dllexport, clang's CodeGen defines a forwarder
+# named the C name, weak_odr and dllexport in a COMDAT of its name, which
+# calls the stub and returns its result, so msil-ld exports the C name once
+# while the stub '__msil_mc.f_exp' stays an internal MethodDef and a LOCAL
+# symbol (5.20.6 MW1 as amended); the library's own calls of f_exp still
+# call the stub (5.20.4 MR2). Before the fix the declaration compiled with
+# no diagnostic and no export, so the program's link failed on the
+# undefined f_exp (defect D6's repro: llvm-cil-dump showed only the
+# internal stub).
+# dllexport has this effect on the Windows triples only (the Linux triple
+# has no dllexport; its default visibility exports no managed call), so the
+# test REQUIRES msil-triple-windows. The library mclib (%{msil_shlibs},
+# linked with -shared; natively mclib.dll with mclib.lib) exports f_exp and
+# lib_twice, and every run gets it beside the program. System.Math is no
+# built-in table type, so both links take the .NET Framework 4.8
+# implementation assemblies (%{msil_refs_netfx}); the program runs on .NET
+# 10, TC=0 and the Framework. The managed declaration sits under
+# '#if defined(__MSIL__)' with a C fallback in '#else' (abs), which the
+# native Windows oracle builds as mclib.dll's own export, so the expected
+# file is update-expected.py's (plan 5.20.11 MT3, 5.17.4). Like the other
+# %{msil_shlibs} tests it does not run with msil_link_output=il
+# (msil-prog.py refuses --shlibs there), and the O4 oracle skips it
+# (msil/utils/equiv-allowed.txt). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx, msil-triple-windows
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = mclib=%t/mclib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- mc.h
+#ifdef MCLIB_BUILD
+#define API __declspec(dllexport)
+#else
+#define API __declspec(dllimport)
+#endif
+
+/* The library's managed call, exported under its C name; the program sees
+   an ordinary imported function. */
+#if defined(__MSIL__) && defined(MCLIB_BUILD)
+API int f_exp(int x)
+    __attribute__((msil_method("System.Math", "Abs", "int32(int32)")));
+#else
+API int f_exp(int x);
+#endif
+
+API int lib_twice(int x);
+#--- mclib.c
+#define MCLIB_BUILD
+#include "mc.h"
+
+#if !defined(__MSIL__)
+#include <stdlib.h>
+
+API int f_exp(int x) { return abs(x); }
+#endif
+
+/* The library's own calls of f_exp. */
+API int lib_twice(int x) { return f_exp(x) + f_exp(x); }
+#--- main.c
+#include <stdio.h>
+
+#include "mc.h"
+
+int main(void) {
+  volatile int minus_42 = -42, minus_5 = -5, minus_7 = -7;
+  printf("f_exp(-42) through the export: %d\n", f_exp(minus_42));
+  int (*volatile fp)(int) = f_exp;
+  printf("f_exp(-5) through a pointer to the export: %d\n", fp(minus_5));
+  printf("lib_twice(-7), the library's own two calls: %d\n",
+         lib_twice(minus_7));
+  return 0;
+}

@@ -1,0 +1,4 @@
+f_exp(-42) through the export: 42
+f_exp(-5) through a pointer to the export: 5
+lib_twice(-7), the library's own two calls: 14
+[exit 0]

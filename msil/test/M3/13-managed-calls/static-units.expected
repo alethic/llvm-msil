@@ -1,0 +1,6 @@
+a.c get(-7), Math::Abs: 7
+b.c get(-7, 2), Math::Max: 2
+a.c pick(-30), Math::Abs: 30
+b.c pick(-30), Math::Sign: -1
+b.c get(a.c get(-7), 2): 7
+[exit 0]

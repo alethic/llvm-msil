@@ -1,0 +1,1222 @@
+## Exported and startup managed calls in msil-ld (ImplementationPlan.md
+## 5.20.4 MR2 and MR4 as amended for dllexport, constructor and destructor
+## on a managed-call declaration, milestone MC-1). clang defines one
+## forwarder for each of these attributes
+## (clang/test/CodeGen/MSIL/msil-method-forwarders.c), the backend compiles
+## it like any function (llvm/test/CodeGen/MSIL/managed-call-forwarders.ll),
+## and it calls the unit's stub '__msil_mc.<s>'; the 8th operand of the
+## declaration's !msil.managed.calls entry lists the attributes. The members
+## are FakeWidgets.il's (see managed-calls.test):
+## - dllexport (Windows triples): the forwarder is '<s>' itself, weak_odr
+##   dllexport in the COMDAT group '<s>'. Two units that export one managed
+##   call (exp1.ll and exp2.ll: wguard, Contoso.Widget::Guarded(int32)) give
+##   a -shared link whose export class has 'wguard' once, which calls the
+##   stub, as CIL objects and as LTO inputs. A dllexport definition selects
+##   the dllexport-only export mode on a Windows triple (5.9.3), so plain1
+##   and plain2, GLOBAL functions without dllexport, are not exported. A
+##   unit that declares the C name without the attribute (pmain.ll) binds
+##   to the forwarder, in both input orders and as LTO inputs, so its call
+##   reaches the stub (MR2's reason 4 for an exported name).
+## - constructor: the forwarder is '__msil_mc_ctor.<s>', linkonce_odr hidden
+##   in its own COMDAT group, and its llvm.global_ctors entry is keyed to
+##   that group. Two units that declare one constructor managed call
+##   (ctor1.ll and ctor2.ll: wreset, Contoso.Widget::Reset()) give a module
+##   initializer that calls '__msil_mc_ctor.wreset' once, in object and LTO
+##   links, on x86_64-pc-windows-msvc-msil, x86_64-unknown-linux-gnu-msil
+##   and msil64-unknown-dotnet. On a 'static' declaration (sctor1.ll and
+##   sctor2.ll: wsreset, whose stub is '__msil_mc.wsreset.__uniq.444' in
+##   both units) the forwarder is internal and its entry has no key, so the
+##   initializer calls each unit's forwarder: two calls.
+## - T-M17's second form,
+##   'managed call '<f>' is declared with different 'dllexport', 'constructor' or 'destructor' attributes in different translation units',
+##   for two units whose entries differ only in those attributes: wreset as
+##   constructor(65535) (ctor1.ll) and as constructor(101) (prio.ll), on
+##   x86_64-unknown-linux-gnu-msil, and wguard with and without dllexport
+##   (exp1.ll and noexp.ll), on x86_64-pc-windows-msvc-msil. msil-ld
+##   decides T-M17 for each managed call that two units still declare, in
+##   every link mode (5.20.4 MR4 and 5.20.3 T-M17 as amended in section 12).
+##   In the LTO image and under --lto-emit-asm, with and without
+##   --reference, it compares the bitcode inputs' entries before LTO, which
+##   then does not run (slot P0 compared the merged module's entries before
+##   that; these links used to give T-M17's first form). In object links it
+##   compares the units' stubs, which agree here, then the forwarders that
+##   the units share (the weak '<s>' in the COMDAT group '<s>', and the
+##   priority of the 'Init' entry of '__msil_mc_ctor.<s>'), in both input
+##   orders; these links used to keep the first unit's export or constructor
+##   priority silently. Links that mix a CIL object and a bitcode file give
+##   the second form too (exp1 and noexp, prio and ctor1, in both orders),
+##   and so does exp1.o with noexp.bc and exp2.bc, in two orders, once: the
+##   line used to come from the mixed check and again from slot P0.
+## - A joined 8th operand (MR4's attributes text, which clang's CodeGen and
+##   msil-ld both write with cli::printManagedCallAttributes): join1.ll and
+##   join2.ll export wjoin, Contoso.Widget::Reset(), with constructor(300),
+##   so their entries end in 'dllexport,constructor(300)', and a CIL
+##   object's forwarders (the weak 'wjoin' in the COMDAT group 'wjoin' and
+##   the 'Init' entry of '__msil_mc_ctor.wjoin' at priority 300) spell the
+##   same text. As CIL objects, as bitcode and mixed, in both orders, they
+##   link (-shared) to one export 'wjoin' that calls the stub and a module
+##   initializer that calls '__msil_mc_ctor.wjoin' once. joinx.ll exports
+##   wjoin without constructor(300), so its entry ends in 'dllexport':
+##   beside join1.ll it gives T-M17's second form in object, LTO and mixed
+##   links and under --lto-emit-asm, in both orders.
+## - T-M17's first form,
+##   'managed call '<f>' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units',
+##   for two units that declare one managed call with different arguments,
+##   here with shared forwarders: wguard exported with
+##   Contoso.Widget::Guarded(int32) (exp1.ll) and with
+##   Contoso.Point::Twice(int32) (twice.ll); guarded exported with
+##   msil_catch("Contoso.WidgetException", 5) (cexp5.ll) and with code 6
+##   (cexp6.ll); and wreset as a constructor of Contoso.Widget::Reset()
+##   (ctor1.ll) and of Rewind() (rewind.ll), a member that FakeWidgets does
+##   not have, so the line must stop the link before binding. In object
+##   links msil-ld compares the units' stubs (-shared for the exports, once
+##   without --reference; the constructor on x86_64-unknown-linux-gnu-msil
+##   and msil64-unknown-dotnet); in LTO links it compares the bitcode
+##   inputs' entries before LTO (slot P0 compared the merged module's
+##   entries before that); in links that mix a CIL object and a bitcode
+##   file it compares the object's stub with the stub that code generation
+##   makes of the bitcode's declaration: -shared with exp1 and twice and
+##   with cexp5 and cexp6, an executable whose main calls the exported name
+##   (pmain.o), and the constructor on x86_64-unknown-linux-gnu-msil and
+##   msil64-unknown-dotnet; and exp1.o with twice as a ThinLTO module and
+##   with twice.bc under --lto-partitions=2. Each link (in both input
+##   orders, except the partitioned one) reports the line once and writes no
+##   output. The mixed links used to link silently with one unit's member
+##   (or fail to bind Rewind). Mixed links of units that agree still link:
+##   exp1 and exp2 (one export, whose stub calls Guarded) and ctor1 and
+##   ctor2 (one constructor call, on x86_64-unknown-linux-gnu-msil and
+##   msil64-unknown-dotnet), in both orders. On msil64-unknown-dotnet the
+##   stub that code generation makes of the bitcode's declaration has that
+##   triple's data layout: the comparison neither skips it (ctor1 and
+##   rewind) nor finds a difference that the units do not have (ctor1 and
+##   ctor2).
+## - ThinLTO and LTO partitions (the section 12 row '5.20.4 MR4 amended
+##   (ThinLTO and LTO partitions)', and 5.20.4 MR4 and 5.20.3 T-M17 as
+##   amended in section 12): no slot P0 sees the entries of exactly the
+##   units that still declare a managed call. A ThinLTO backend (a module
+##   made with opt -module-summary) sees another module's entries only with
+##   a function it imports, every partition of --lto-partitions=2 sees them
+##   all, and a merged module keeps the entry of a unit whose optimizer
+##   deleted the declaration (managed-calls-units.test). So in every LTO
+##   mode, full LTO with one module included, msil-ld compares the entries
+##   of the bitcode inputs before LTO, by slot P0's rule (ASSEMBLY only
+##   under --lto-emit-asm, managed-calls-assembly.test), reports each name
+##   once, also when the mixed check above decides it too, and then does
+##   not run LTO; when LTO runs, the modules that it compiles no longer
+##   carry the list, so slot P0 compares no entries. First form: exp1 and
+##   twice, and ctor1 and rewind, as ThinLTO modules in both orders; exp1 as
+##   a ThinLTO module with twice.bc; exp1.bc and twice.bc under
+##   --lto-partitions=2. Second form: exp1 and noexp as ThinLTO modules in
+##   both orders; exp1.bc and noexp.bc under --lto-partitions=2; exp1.o with
+##   noexp and exp2 as ThinLTO modules, in two orders, and with noexp.bc and
+##   exp2.bc under --lto-partitions=2. The ThinLTO pairs used to link with
+##   one unit's declaration (or fail to bind Rewind), and the partitioned
+##   links to print the line once per partition (and once more from the
+##   mixed check). Units without forwarders give the first form too: wpick
+##   is Contoso.Widget::Guarded in pick1.ll and Contoso.Point::Twice in
+##   pick2.ll and pick3.ll. ThinLTO would import pick1's pickA into pick2's
+##   module, whose main calls it, and with it pick1's entry, but imports
+##   nothing into pick3's, so pick1 and pick3 used to link with a stub of
+##   each member (a full LTO link of the two gets the same line, which came
+##   from slot P0 before msil-ld decided it).
+##   With --save-temps such a link writes no output, no LTO object and no
+##   bitcode file: four of them (exp1 with twice as ThinLTO modules, exp1.o
+##   with twice as a ThinLTO module, and exp1.bc and exp1.o with twice.bc
+##   under --lto-partitions=2) each write into a fresh directory, which also
+##   holds their ThinLTO inputs because ThinLTO writes a module's
+##   temporaries next to it, and the directory keeps only those inputs and,
+##   possibly, '<output>.resolution.txt' (the test removes it before listing
+##   the directory). Units that agree still link: exp1 and exp2 as ThinLTO
+##   modules and under --lto-partitions=2 (one export, whose stub calls
+##   Guarded), and ctor1 and ctor2 as ThinLTO modules (one constructor
+##   call).
+## - A bitcode input whose metadata does not read (the section 12 row
+##   '5.20.7 MK6 amended'): damage.py writes exp2.bc with the 8 bytes before
+##   its first '__msil_mc.wguard', the string lengths of the module's
+##   METADATA_STRINGS record, set to 0xff, so opt fails with 'Unterminated
+##   VBR' while the symbol table still reads. Beside exp1.o (both export
+##   wguard, -shared) and beside noexp.o (the second form's pair), in both
+##   orders, msil-ld's managed-call check reports
+##   '<file>: Unterminated VBR' for exp2-bad.bc as the link's only error
+##   line. It used to drop the input (a false second form beside exp1.o,
+##   none beside noexp.o), and LTO then failed with 'Unterminated VBR'
+##   without the file's name. Beside exp1.bc in full LTO, in both orders, the
+##   line is the same, since msil-ld reads the bitcode inputs that declare a
+##   managed call before LTO in every LTO mode (5.20.4 MR4 and 5.20.3 T-M17
+##   as amended in section 12); that link used to fail in LTO with
+##   'Unterminated VBR' without the file's name.
+## - T-M21,
+##   'managed call '<f>' is exported from <A>, but <B> also defines '<f>'':
+##   any other non-local definition of an exported managed call's C name
+##   would replace the weak forwarder silently: a strong one (cdef.ll)
+##   always wins symbol resolution (5.9.5), and a weak one outside the
+##   COMDAT group (cweak.ll: __attribute__((weak))) wins when it comes
+##   first. So each is refused, whatever the input order and whichever
+##   definition resolution keeps, <A> being the first input in load order
+##   that has the forwarder (exp1, or exp2 before it) and <B> the other
+##   definition's, in one line per name: in object, LTO and mixed links (a
+##   CIL object with a bitcode file, either way), in both input orders, for
+##   -shared outputs and for executables whose main calls the exported name
+##   (pmain.ll). The weak definition used to link silently, and its
+##   body replaced the export whenever it came first. An archive member is
+##   extracted only for an undefined name: pmain.o libb.a exp1.o extracts
+##   libb.a's cweak.o for pmain.o's call and gives T-M21 naming
+##   'libb.a(cweak.o)' (libb-bc.a's cweak.bc likewise, under LTO), while
+##   pmain.o exp1.o libb.a extracts nothing and links with no diagnostic:
+##   the export 'wguard' calls the stub, and no 'wguard' body of cweak.ll
+##   reaches the image.
+## - destructor: the forwarder '__msil_mc_dtor.<s>' meets the error that
+##   every global destructor gets until destructors work (M29 on the host
+##   triples, P-2's LowerGlobalDtors on the portable one), naming the C
+##   function:
+##   'global destructor @<s> is not supported for MSIL yet' (dtor.ll: wfini),
+##   from llc -filetype=obj, in LTO image links and under --lto-emit-asm, on
+##   the three triples. It used to name the forwarder.
+## - T-M23's forwarder form,
+##   '<file>: defines '<name>', which is reserved for the MSIL toolchain (a managed-call forwarder)':
+##   '__msil_mc_ctor.<s>' and '__msil_mc_dtor.<s>' are reserved like the
+##   stubs' '__msil_mc.<s>' (T-M23's stub form: managed-calls-checks.test,
+##   managed-calls-lto.test), and only the forwarder that clang makes may
+##   define them: a weak hidden definition in a COMDAT group of its own name,
+##   in an input that declares the managed call <s>, with, in a CIL object,
+##   an init entry (constructor) or a fini entry (destructor) for it. gctor.ll
+##   and gdtor.ll define '__msil_mc_ctor.wreset' and '__msil_mc_dtor.wreset'
+##   as GLOBAL functions (hand-written IR: in C only an asm label could name
+##   them, and clang refuses it with T-M22's forwarder form) beside
+##   ctor1.ll's constructor managed call wreset. In object, LTO and mixed
+##   links, in both input orders, on x86_64-pc-windows-msvc-msil,
+##   x86_64-unknown-linux-gnu-msil and msil64-unknown-dotnet, msil-ld names
+##   the input that defines the name and writes no output. These links used
+##   to succeed silently, the definition replacing or dropping the
+##   constructor managed call. The forwarders that clang makes are never
+##   reported: the links above that succeed have no diagnostic, and dtor.ll's
+##   links have only the destructor error.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs o lto
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+# DEFINE: %{tri} =
+
+## dllexport: one export from two units; only the dllexport definitions.
+# RUN: llc -filetype=obj exp1.ll -o exp1.o
+# RUN: llc -filetype=obj exp2.ll -o exp2.o
+# RUN: llvm-as exp1.ll -o exp1.bc
+# RUN: llvm-as exp2.ll -o exp2.bc
+# RUN: msil-ld -shared exp1.o exp2.o --reference=refs -o o/exp.dll 2>&1 | count 0
+# RUN: llvm-cil-dump o/exp.dll > exp-o.txt
+# RUN: %{listing} members exp-o.txt exp | FileCheck %s --check-prefix=EXPORT
+# RUN: %{listing} method exp-o.txt exp wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=exp-o.txt
+# RUN: msil-ld -shared exp1.bc exp2.bc --reference=refs -o lto/exp.dll 2>&1 | count 0
+# RUN: llvm-cil-dump lto/exp.dll > exp-lto.txt
+# RUN: %{listing} members exp-lto.txt exp | FileCheck %s --check-prefix=EXPORT
+# RUN: %{listing} method exp-lto.txt exp wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=exp-lto.txt
+# EXPORT:           {{^}}.class 'exp' flags=0x00000181 extends [FakeRuntime]System.Object{{$}}
+# EXPORT-NEXT:      {{^}}  .method '<msil>addr_wguard' native int() flags=0x0096 impl=0x0000{{$}}
+# EXPORT-NEXT:      {{^}}  .method 'wguard' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# EXPORT-NEXT:      {{^}}    .param 1 'A_0' flags=0x0000{{$}}
+# EXPORT-NOT:       {{.}}
+# EXPORT-BODY:      {{^    L[0-9]+: }}ldarg.0{{$}}
+# EXPORT-BODY-NEXT: {{^    L[0-9]+: }}call int32(int32) '<Module>'::'__msil_mc.wguard'{{$}}
+# EXPORT-BODY-NEXT: {{^    L[0-9]+: }}ret{{$}}
+# EXPORT-STUB:      {{^  }}.method '__msil_mc.wguard' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# EXPORT-STUB:      {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Widget::'Guarded'{{$}}
+
+## A plain declaration of the exported name binds to the forwarder; under
+## LTO the forwarder may be inlined into main.
+# RUN: llc -filetype=obj pmain.ll -o pmain.o
+# RUN: llvm-as pmain.ll -o pmain.bc
+# RUN: msil-ld pmain.o exp1.o --reference=refs -o o/pmain.exe 2>&1 | count 0
+# RUN: msil-ld exp1.o pmain.o --reference=refs -o o/pmain2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump o/pmain.exe > pmain-o.txt
+# RUN: %{listing} method pmain-o.txt '<Module>' main | FileCheck %s --check-prefix=PMAIN
+# RUN: %{listing} method pmain-o.txt '<Module>' wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=pmain-o.txt
+# RUN: msil-ld pmain.bc exp1.bc --reference=refs -o lto/pmain.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto/pmain.exe > pmain-lto.txt
+# RUN: %{listing} method pmain-lto.txt '<Module>' main | FileCheck %s --check-prefix=PMAIN-LTO
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=pmain-lto.txt
+# PMAIN:     {{^    L[0-9]+: }}call int32(int32) '<Module>'::'wguard'{{$}}
+# PMAIN-LTO: {{^    L[0-9]+: }}call int32(int32) '<Module>'::'{{wguard|__msil_mc\.wguard}}'{{$}}
+
+## constructor: once per program; once per unit for 'static'.
+# DEFINE: %{ctor} = cat %{tri}.head ctor1.ll > ctor1-%{tri}.ll && cat %{tri}.head ctor2.ll > ctor2-%{tri}.ll && \
+# DEFINE:   cat %{tri}.head sctor1.ll > sctor1-%{tri}.ll && cat %{tri}.head sctor2.ll > sctor2-%{tri}.ll && \
+# DEFINE:   llc -filetype=obj ctor1-%{tri}.ll -o ctor1-%{tri}.o && llc -filetype=obj ctor2-%{tri}.ll -o ctor2-%{tri}.o && \
+# DEFINE:   llc -filetype=obj sctor1-%{tri}.ll -o sctor1-%{tri}.o && llc -filetype=obj sctor2-%{tri}.ll -o sctor2-%{tri}.o && \
+# DEFINE:   llvm-as ctor1-%{tri}.ll -o ctor1-%{tri}.bc && llvm-as ctor2-%{tri}.ll -o ctor2-%{tri}.bc && \
+# DEFINE:   llvm-as sctor1-%{tri}.ll -o sctor1-%{tri}.bc && llvm-as sctor2-%{tri}.ll -o sctor2-%{tri}.bc && \
+# DEFINE:   msil-ld ctor1-%{tri}.o ctor2-%{tri}.o --reference=refs -o o/ctor-%{tri}.exe 2>&1 | count 0 && \
+# DEFINE:   msil-ld ctor1-%{tri}.bc ctor2-%{tri}.bc --reference=refs -o lto/ctor-%{tri}.exe 2>&1 | count 0 && \
+# DEFINE:   msil-ld sctor1-%{tri}.o sctor2-%{tri}.o --reference=refs -o o/sctor-%{tri}.exe 2>&1 | count 0 && \
+# DEFINE:   msil-ld sctor1-%{tri}.bc sctor2-%{tri}.bc --reference=refs -o lto/sctor-%{tri}.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump o/ctor-%{tri}.exe > ctor-o-%{tri}.txt && \
+# DEFINE:   llvm-cil-dump lto/ctor-%{tri}.exe > ctor-lto-%{tri}.txt && \
+# DEFINE:   llvm-cil-dump o/sctor-%{tri}.exe > sctor-o-%{tri}.txt && \
+# DEFINE:   llvm-cil-dump lto/sctor-%{tri}.exe > sctor-lto-%{tri}.txt && \
+# DEFINE:   %{listing} method ctor-o-%{tri}.txt '<Module>' .cctor | FileCheck %s --check-prefix=ONCE && \
+# DEFINE:   %{listing} method ctor-lto-%{tri}.txt '<Module>' .cctor | FileCheck %s --check-prefix=ONCE && \
+# DEFINE:   %{listing} method sctor-o-%{tri}.txt '<Module>' .cctor | FileCheck %s --check-prefix=PER-UNIT && \
+# DEFINE:   %{listing} method sctor-lto-%{tri}.txt '<Module>' .cctor | FileCheck %s --check-prefix=PER-UNIT && \
+# DEFINE:   FileCheck %s --check-prefix=RESET --input-file=ctor-o-%{tri}.txt && \
+# DEFINE:   FileCheck %s --check-prefix=RESET --input-file=ctor-lto-%{tri}.txt
+# REDEFINE: %{tri} = win
+# RUN: %{ctor}
+# REDEFINE: %{tri} = lnx
+# RUN: %{ctor}
+# REDEFINE: %{tri} = net
+# RUN: %{ctor}
+## The module initializer, after msil64-unknown-dotnet's guard.
+# ONCE:          {{^    L[0-9]+: }}call void() '<Module>'::'__msil_mc_ctor.wreset'{{$}}
+# ONCE-NOT:      __msil_mc_ctor
+# PER-UNIT:      {{^    L[0-9]+: }}call void() '<Module>'::'__msil_mc_ctor.wsreset{{.*}}'{{$}}
+# PER-UNIT-NEXT: {{^    L[0-9]+: }}call void() '<Module>'::'__msil_mc_ctor.wsreset{{.*}}'{{$}}
+# PER-UNIT-NOT:  __msil_mc_ctor
+# RESET:         {{^    L[0-9]+: }}call void() [FakeWidgets]Contoso.Widget::'Reset'{{$}}
+
+## T-M17's second form.
+# RUN: cat lnx.head prio.ll > prio-lnx.ll
+# RUN: llc -filetype=obj prio-lnx.ll -o prio-lnx.o
+# RUN: llvm-as prio-lnx.ll -o prio-lnx.bc
+# RUN: llc -filetype=obj noexp.ll -o noexp.o
+# RUN: llvm-as noexp.ll -o noexp.bc
+# RUN: not msil-ld ctor1-lnx.bc prio-lnx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld ctor1-lnx.bc prio-lnx.bc -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld --lto-emit-asm ctor1-lnx.bc prio-lnx.bc --reference=refs -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld --lto-emit-asm ctor1-lnx.bc prio-lnx.bc -o x.il 2>&1 | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld exp1.bc noexp.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld exp1.bc noexp.bc -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld --lto-emit-asm exp1.bc noexp.bc --reference=refs -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld --lto-emit-asm noexp.bc exp1.bc -o x.il 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld ctor1-lnx.o prio-lnx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld prio-lnx.o ctor1-lnx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld exp1.o noexp.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld noexp.o exp1.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld exp1.o noexp.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld noexp.bc exp1.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld ctor1-lnx.o prio-lnx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld prio-lnx.bc ctor1-lnx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wreset
+# RUN: not msil-ld -shared exp1.o noexp.bc exp2.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld -shared noexp.bc exp2.bc exp1.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+## ThinLTO modules and LTO partitions.
+# RUN: opt -module-summary exp1.ll -o exp1.thin.bc
+# RUN: opt -module-summary exp2.ll -o exp2.thin.bc
+# RUN: opt -module-summary noexp.ll -o noexp.thin.bc
+# RUN: not msil-ld exp1.thin.bc noexp.thin.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld noexp.thin.bc exp1.thin.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld exp1.bc noexp.bc --lto-partitions=2 --reference=refs -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld -shared exp1.o noexp.thin.bc exp2.thin.bc --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld -shared noexp.thin.bc exp2.thin.bc exp1.o --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not msil-ld -shared exp1.o noexp.bc exp2.bc --lto-partitions=2 --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17B -DF=wguard
+# RUN: not ls x.dll
+# RUN: not ls x.exe
+# RUN: not ls x.il
+# TM17B: {{^}}msil-ld: error: managed call '[[F]]' is declared with different 'dllexport', 'constructor' or 'destructor' attributes in different translation units{{$}}
+
+## A joined 8th operand, 'dllexport,constructor(300)': units that agree link
+## (CIL objects, bitcode, and mixed, in both orders); 'dllexport' against it
+## is T-M17's second form.
+# RUN: llc -filetype=obj join1.ll -o join1.o
+# RUN: llc -filetype=obj join2.ll -o join2.o
+# RUN: llc -filetype=obj joinx.ll -o joinx.o
+# RUN: llvm-as join1.ll -o join1.bc
+# RUN: llvm-as join2.ll -o join2.bc
+# RUN: llvm-as joinx.ll -o joinx.bc
+# RUN: mkdir join
+# DEFINE: %{join-in} =
+# DEFINE: %{join} = msil-ld -shared %{join-in} --reference=refs -o join/join.dll 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump join/join.dll > join.txt && \
+# DEFINE:   %{listing} members join.txt join | FileCheck %s --check-prefix=JOIN && \
+# DEFINE:   %{listing} method join.txt join wjoin | FileCheck %s --check-prefix=JOIN-BODY && \
+# DEFINE:   %{listing} method join.txt '<Module>' .cctor | FileCheck %s --check-prefix=JOIN-ONCE && \
+# DEFINE:   FileCheck %s --check-prefix=JOIN-STUB --input-file=join.txt
+# REDEFINE: %{join-in} = join1.o join2.o
+# RUN: %{join}
+# REDEFINE: %{join-in} = join2.o join1.o
+# RUN: %{join}
+# REDEFINE: %{join-in} = join1.bc join2.bc
+# RUN: %{join}
+# REDEFINE: %{join-in} = join2.bc join1.bc
+# RUN: %{join}
+# REDEFINE: %{join-in} = join1.o join2.bc
+# RUN: %{join}
+# REDEFINE: %{join-in} = join2.bc join1.o
+# RUN: %{join}
+# REDEFINE: %{join-in} = join1.bc join2.o
+# RUN: %{join}
+# REDEFINE: %{join-in} = join2.o join1.bc
+# RUN: %{join}
+# RUN: not msil-ld join1.o joinx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld joinx.o join1.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld join1.bc joinx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld joinx.bc join1.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld join1.o joinx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld joinx.bc join1.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld join1.bc joinx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld joinx.o join1.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld --lto-emit-asm join1.bc joinx.bc --reference=refs -o x.il 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not msil-ld --lto-emit-asm joinx.bc join1.bc -o x.il 2>&1 | %{err} --check-prefix=TM17B -DF=wjoin
+# RUN: not ls x.exe
+# RUN: not ls x.il
+# JOIN:           {{^}}.class 'join' flags=0x00000181 extends [FakeRuntime]System.Object{{$}}
+# JOIN-NEXT:      {{^}}  .method '<msil>addr_wjoin' native int() flags=0x0096 impl=0x0000{{$}}
+# JOIN-NEXT:      {{^}}  .method 'wjoin' void() flags=0x0016 impl=0x0000{{$}}
+# JOIN-NOT:       {{.}}
+# JOIN-BODY:      {{^    L[0-9]+: }}call void() '<Module>'::'__msil_mc.wjoin'{{$}}
+# JOIN-BODY-NEXT: {{^    L[0-9]+: }}ret{{$}}
+# JOIN-ONCE:      {{^    L[0-9]+: }}call void() '<Module>'::'__msil_mc_ctor.wjoin'{{$}}
+# JOIN-ONCE-NOT:  __msil_mc_ctor
+# JOIN-STUB:      {{^  }}.method '__msil_mc.wjoin' void() flags=0x0013 impl=0x0000{{$}}
+# JOIN-STUB:      {{^    L[0-9]+: }}call void() [FakeWidgets]Contoso.Widget::'Reset'{{$}}
+
+## T-M17's first form: CIL objects, LTO inputs, and a CIL object with a
+## bitcode file.
+# RUN: llc -filetype=obj twice.ll -o twice.o
+# RUN: llvm-as twice.ll -o twice.bc
+# RUN: llc -filetype=obj cexp5.ll -o cexp5.o
+# RUN: llc -filetype=obj cexp6.ll -o cexp6.o
+# RUN: llvm-as cexp6.ll -o cexp6.bc
+# RUN: cat lnx.head rewind.ll > rewind-lnx.ll
+# RUN: cat net.head rewind.ll > rewind-net.ll
+# RUN: llc -filetype=obj rewind-lnx.ll -o rewind-lnx.o
+# RUN: llc -filetype=obj rewind-net.ll -o rewind-net.o
+# RUN: llvm-as rewind-lnx.ll -o rewind-lnx.bc
+# RUN: llvm-as rewind-net.ll -o rewind-net.bc
+# RUN: not msil-ld -shared exp1.o twice.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared twice.o exp1.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared exp1.o twice.o -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared cexp5.o cexp6.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=guarded
+# RUN: not msil-ld -shared cexp6.o cexp5.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=guarded
+# RUN: not msil-ld ctor1-lnx.o rewind-lnx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld rewind-lnx.o ctor1-lnx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld ctor1-net.o rewind-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld rewind-net.o ctor1-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld -shared exp1.bc twice.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared twice.bc exp1.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld ctor1-lnx.bc rewind-lnx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld rewind-lnx.bc ctor1-lnx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld -shared exp1.o twice.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared twice.bc exp1.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared twice.o exp1.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared cexp5.o cexp6.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=guarded
+# RUN: not msil-ld -shared cexp6.bc cexp5.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=guarded
+# RUN: not msil-ld pmain.o exp1.o twice.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld pmain.o twice.bc exp1.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld ctor1-lnx.o rewind-lnx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld rewind-lnx.bc ctor1-lnx.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld rewind-lnx.o ctor1-lnx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld ctor1-net.o rewind-net.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld rewind-net.bc ctor1-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wreset
+## ThinLTO modules and LTO partitions, with and without a CIL object.
+# RUN: opt -module-summary twice.ll -o twice.thin.bc
+# RUN: opt -module-summary ctor1-lnx.ll -o ctor1-lnx.thin.bc
+# RUN: opt -module-summary rewind-lnx.ll -o rewind-lnx.thin.bc
+# RUN: not msil-ld -shared exp1.thin.bc twice.thin.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared twice.thin.bc exp1.thin.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld ctor1-lnx.thin.bc rewind-lnx.thin.bc --reference=refs -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld rewind-lnx.thin.bc ctor1-lnx.thin.bc --reference=refs -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17A -DF=wreset
+# RUN: not msil-ld -shared exp1.thin.bc twice.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared exp1.bc twice.bc --lto-partitions=2 --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared exp1.o twice.thin.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared twice.thin.bc exp1.o --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared exp1.o twice.bc --lto-partitions=2 --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17A -DF=wguard
+## Units without forwarders: with an import (pick2) and without (pick3).
+# RUN: opt -module-summary pick1.ll -o pick1.thin.bc
+# RUN: opt -module-summary pick2.ll -o pick2.thin.bc
+# RUN: opt -module-summary pick3.ll -o pick3.thin.bc
+# RUN: llvm-as pick1.ll -o pick1.bc
+# RUN: llvm-as pick3.ll -o pick3.bc
+# RUN: not msil-ld pick1.thin.bc pick2.thin.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wpick
+# RUN: not msil-ld pick2.thin.bc pick1.thin.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM17A -DF=wpick
+# RUN: not msil-ld -shared pick1.thin.bc pick3.thin.bc --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17A -DF=wpick
+# RUN: not msil-ld -shared pick3.thin.bc pick1.thin.bc --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17A -DF=wpick
+# RUN: not msil-ld -shared pick1.bc pick3.bc --reference=refs -o x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wpick
+## --save-temps: no output, no LTO object and no bitcode file; only
+## '<output>.resolution.txt' may be written, and it is removed before the
+## listings. A ThinLTO module's temporaries go next to it, so the ThinLTO
+## inputs are in the fresh directories too.
+# RUN: mkdir st-thin st-mix st-part st-mix-part
+# RUN: opt -module-summary exp1.ll -o st-thin/exp1.thin.bc
+# RUN: opt -module-summary twice.ll -o st-thin/twice.thin.bc
+# RUN: opt -module-summary twice.ll -o st-mix/twice.thin.bc
+# RUN: not msil-ld -shared st-thin/exp1.thin.bc st-thin/twice.thin.bc --reference=refs --save-temps \
+# RUN:   -o st-thin/x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared exp1.o st-mix/twice.thin.bc --reference=refs --save-temps -o st-mix/x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared exp1.bc twice.bc --lto-partitions=2 --reference=refs --save-temps \
+# RUN:   -o st-part/x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: not msil-ld -shared exp1.o twice.bc --lto-partitions=2 --reference=refs --save-temps \
+# RUN:   -o st-mix-part/x.dll 2>&1 | %{err} --check-prefix=TM17A -DF=wguard
+# RUN: rm -f st-thin/x.dll.resolution.txt st-mix/x.dll.resolution.txt st-part/x.dll.resolution.txt \
+# RUN:   st-mix-part/x.dll.resolution.txt
+# RUN: ls st-thin | FileCheck %s --check-prefix=ST-THIN
+# RUN: ls st-mix | FileCheck %s --check-prefix=ST-MIX
+# RUN: ls st-part | count 0
+# RUN: ls st-mix-part | count 0
+# RUN: not ls x.dll
+# RUN: not ls x.exe
+# TM17A: {{^}}msil-ld: error: managed call '[[F]]' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units{{$}}
+# ST-THIN-NOT:  {{.}}
+# ST-THIN:      {{^}}exp1.thin.bc{{$}}
+# ST-THIN-NEXT: {{^}}twice.thin.bc{{$}}
+# ST-THIN-NOT:  {{.}}
+# ST-MIX-NOT:   {{.}}
+# ST-MIX:       {{^}}twice.thin.bc{{$}}
+# ST-MIX-NOT:   {{.}}
+
+## Mixed, ThinLTO and partitioned links of units that agree still link.
+# RUN: mkdir mix
+# RUN: msil-ld -shared exp1.o exp2.bc --reference=refs -o mix/exp.dll 2>&1 | count 0
+# RUN: llvm-cil-dump mix/exp.dll > exp-mix1.txt
+# RUN: msil-ld -shared exp2.bc exp1.o --reference=refs -o mix/exp.dll 2>&1 | count 0
+# RUN: llvm-cil-dump mix/exp.dll > exp-mix2.txt
+# RUN: %{listing} members exp-mix1.txt exp | FileCheck %s --check-prefix=EXPORT
+# RUN: %{listing} method exp-mix1.txt exp wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=exp-mix1.txt
+# RUN: %{listing} members exp-mix2.txt exp | FileCheck %s --check-prefix=EXPORT
+# RUN: %{listing} method exp-mix2.txt exp wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=exp-mix2.txt
+# RUN: msil-ld ctor1-lnx.o ctor2-lnx.bc --reference=refs -o mix/ctor1.exe 2>&1 | count 0
+# RUN: msil-ld ctor2-lnx.bc ctor1-lnx.o --reference=refs -o mix/ctor2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mix/ctor1.exe > ctor-mix1.txt
+# RUN: llvm-cil-dump mix/ctor2.exe > ctor-mix2.txt
+# RUN: %{listing} method ctor-mix1.txt '<Module>' .cctor | FileCheck %s --check-prefix=ONCE
+# RUN: %{listing} method ctor-mix2.txt '<Module>' .cctor | FileCheck %s --check-prefix=ONCE
+# RUN: FileCheck %s --check-prefix=RESET --input-file=ctor-mix1.txt
+# RUN: FileCheck %s --check-prefix=RESET --input-file=ctor-mix2.txt
+# RUN: msil-ld ctor1-net.o ctor2-net.bc --reference=refs -o mix/ctor1-net.exe 2>&1 | count 0
+# RUN: msil-ld ctor2-net.bc ctor1-net.o --reference=refs -o mix/ctor2-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mix/ctor1-net.exe > ctor-mix1-net.txt
+# RUN: llvm-cil-dump mix/ctor2-net.exe > ctor-mix2-net.txt
+# RUN: %{listing} method ctor-mix1-net.txt '<Module>' .cctor | FileCheck %s --check-prefix=ONCE
+# RUN: %{listing} method ctor-mix2-net.txt '<Module>' .cctor | FileCheck %s --check-prefix=ONCE
+# RUN: FileCheck %s --check-prefix=RESET --input-file=ctor-mix1-net.txt
+# RUN: FileCheck %s --check-prefix=RESET --input-file=ctor-mix2-net.txt
+# RUN: mkdir thin part
+# RUN: opt -module-summary ctor2-lnx.ll -o ctor2-lnx.thin.bc
+# RUN: msil-ld -shared exp1.thin.bc exp2.thin.bc --reference=refs -o thin/exp.dll 2>&1 | count 0
+# RUN: llvm-cil-dump thin/exp.dll > exp-thin.txt
+# RUN: msil-ld -shared exp1.bc exp2.bc --lto-partitions=2 --reference=refs -o part/exp.dll 2>&1 | count 0
+# RUN: llvm-cil-dump part/exp.dll > exp-part.txt
+# RUN: %{listing} members exp-thin.txt exp | FileCheck %s --check-prefix=EXPORT
+# RUN: %{listing} method exp-thin.txt exp wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=exp-thin.txt
+# RUN: %{listing} members exp-part.txt exp | FileCheck %s --check-prefix=EXPORT
+# RUN: %{listing} method exp-part.txt exp wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --input-file=exp-part.txt
+# RUN: msil-ld ctor1-lnx.thin.bc ctor2-lnx.thin.bc --reference=refs -o thin/ctor.exe 2>&1 | count 0
+# RUN: llvm-cil-dump thin/ctor.exe > ctor-thin.txt
+# RUN: %{listing} method ctor-thin.txt '<Module>' .cctor | FileCheck %s --check-prefix=ONCE
+# RUN: FileCheck %s --check-prefix=RESET --input-file=ctor-thin.txt
+
+## A bitcode input whose metadata does not read: an error that names the
+## file, the only error line.
+# DEFINE: %{bad} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not="declared with different" \
+# DEFINE:   --implicit-check-not=warning: --check-prefix=BAD-BC
+# RUN: %python damage.py exp2.bc exp2-bad.bc
+# RUN: not opt -disable-output exp2-bad.bc 2>&1 | FileCheck %s --check-prefix=BAD-OPT
+# RUN: not msil-ld -shared exp1.o exp2-bad.bc --reference=refs -o x.dll 2>&1 | %{bad}
+# RUN: not msil-ld -shared exp2-bad.bc exp1.o --reference=refs -o x.dll 2>&1 | %{bad}
+# RUN: not msil-ld noexp.o exp2-bad.bc --reference=refs -o x.exe 2>&1 | %{bad}
+# RUN: not msil-ld exp2-bad.bc noexp.o --reference=refs -o x.exe 2>&1 | %{bad}
+# RUN: not msil-ld -shared exp1.bc exp2-bad.bc --reference=refs -o x.dll 2>&1 | %{bad}
+# RUN: not msil-ld -shared exp2-bad.bc exp1.bc --reference=refs -o x.dll 2>&1 | %{bad}
+# RUN: not ls x.dll
+# RUN: not ls x.exe
+# BAD-OPT: {{^.+}}: exp2-bad.bc: error: Unterminated VBR{{$}}
+# BAD-BC:  {{^}}msil-ld: error: {{.*}}exp2-bad.bc: Unterminated VBR{{$}}
+
+## T-M21: a strong (cdef.ll) or weak (cweak.ll) definition of an exported
+## managed call's C name, in -shared links and in executables whose main
+## calls the name (pmain), each in both input orders.
+# RUN: llc -filetype=obj cdef.ll -o cdef.o
+# RUN: llvm-as cdef.ll -o cdef.bc
+# RUN: llc -filetype=obj cweak.ll -o cweak.o
+# RUN: llvm-as cweak.ll -o cweak.bc
+# DEFINE: %{tm21-main} =
+# DEFINE: %{tm21-fwd} =
+# DEFINE: %{tm21-def} =
+# DEFINE: %{tm21} = not msil-ld -shared %{tm21-fwd} %{tm21-def} --reference=refs -o x.dll 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM21 -DA=%{tm21-fwd} -DB=%{tm21-def} && \
+# DEFINE:   not msil-ld -shared %{tm21-def} %{tm21-fwd} --reference=refs -o x.dll 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM21 -DA=%{tm21-fwd} -DB=%{tm21-def} && \
+# DEFINE:   not msil-ld %{tm21-main} %{tm21-fwd} %{tm21-def} --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM21 -DA=%{tm21-fwd} -DB=%{tm21-def} && \
+# DEFINE:   not msil-ld %{tm21-main} %{tm21-def} %{tm21-fwd} --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM21 -DA=%{tm21-fwd} -DB=%{tm21-def}
+## CIL objects.
+# REDEFINE: %{tm21-main} = pmain.o
+# REDEFINE: %{tm21-fwd} = exp1.o
+# REDEFINE: %{tm21-def} = cdef.o
+# RUN: %{tm21}
+# REDEFINE: %{tm21-def} = cweak.o
+# RUN: %{tm21}
+## Bitcode.
+# REDEFINE: %{tm21-main} = pmain.bc
+# REDEFINE: %{tm21-fwd} = exp1.bc
+# REDEFINE: %{tm21-def} = cdef.bc
+# RUN: %{tm21}
+# REDEFINE: %{tm21-def} = cweak.bc
+# RUN: %{tm21}
+## A CIL object with a bitcode file: the forwarder in the object, then in
+## the bitcode.
+# REDEFINE: %{tm21-main} = pmain.o
+# REDEFINE: %{tm21-fwd} = exp1.o
+# REDEFINE: %{tm21-def} = cdef.bc
+# RUN: %{tm21}
+# REDEFINE: %{tm21-def} = cweak.bc
+# RUN: %{tm21}
+# REDEFINE: %{tm21-fwd} = exp1.bc
+# REDEFINE: %{tm21-def} = cdef.o
+# RUN: %{tm21}
+# REDEFINE: %{tm21-def} = cweak.o
+# RUN: %{tm21}
+## Two units with the forwarder: <A> is the first of them in load order, and
+## the name gets one line.
+# RUN: not msil-ld -shared exp2.o cweak.o exp1.o --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM21 -DA=exp2.o -DB=cweak.o
+# RUN: not msil-ld -shared cweak.bc exp1.bc exp2.bc --reference=refs -o x.dll 2>&1 \
+# RUN:   | %{err} --check-prefix=TM21 -DA=exp1.bc -DB=cweak.bc
+## An archive member, extracted only for an undefined name: before exp1,
+## pmain's call extracts it (T-M21); after exp1 nothing is extracted, and
+## the export calls the stub.
+# RUN: llvm-ar rc libb.a cweak.o
+# RUN: llvm-ar rc libb-bc.a cweak.bc
+# RUN: not msil-ld pmain.o libb.a exp1.o --reference=refs -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=TM21 -DA=exp1.o -DB="libb.a(cweak.o)"
+# RUN: not msil-ld pmain.bc libb-bc.a exp1.bc --reference=refs -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=TM21 -DA=exp1.bc -DB="libb-bc.a(cweak.bc)"
+# RUN: not ls x.dll
+# RUN: not ls x.exe
+# RUN: msil-ld pmain.o exp1.o libb.a --reference=refs -o o/arch.exe 2>&1 | count 0
+# RUN: llvm-cil-dump o/arch.exe > arch-o.txt
+# RUN: %{listing} method arch-o.txt '<Module>' wguard | FileCheck %s --check-prefix=EXPORT-BODY
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --implicit-check-not="ldc.i4 1000" --input-file=arch-o.txt
+# RUN: msil-ld pmain.bc exp1.bc libb-bc.a --reference=refs -o lto/arch.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto/arch.exe > arch-lto.txt
+# RUN: %{listing} method arch-lto.txt '<Module>' main | FileCheck %s --check-prefix=PMAIN-LTO
+# RUN: FileCheck %s --check-prefix=EXPORT-STUB --implicit-check-not="ldc.i4 1000" --input-file=arch-lto.txt
+# TM21: {{^}}msil-ld: error: managed call 'wguard' is exported from [[A]], but [[B]] also defines 'wguard'{{$}}
+
+## destructor: the error names the C function.
+# DEFINE: %{dtor} = cat %{tri}.head dtor.ll > dtor-%{tri}.ll && llvm-as dtor-%{tri}.ll -o dtor-%{tri}.bc && \
+# DEFINE:   not llc -filetype=obj dtor-%{tri}.ll -o dtor-%{tri}.o 2>&1 | %{err} --check-prefix=DTOR-LLC && \
+# DEFINE:   not msil-ld dtor-%{tri}.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=DTOR && \
+# DEFINE:   not msil-ld --lto-emit-asm dtor-%{tri}.bc -o x.il 2>&1 | %{err} --check-prefix=DTOR
+# REDEFINE: %{tri} = win
+# RUN: %{dtor}
+# REDEFINE: %{tri} = lnx
+# RUN: %{dtor}
+# REDEFINE: %{tri} = net
+# RUN: %{dtor}
+# RUN: not ls x.exe
+# RUN: not ls x.il
+# DTOR-LLC: {{^}}error: global destructor @wfini is not supported for MSIL yet{{$}}
+# DTOR:     {{^}}msil-ld: error: global destructor @wfini is not supported for MSIL yet{{$}}
+
+## T-M23's forwarder form: a GLOBAL definition of a constructor (gctor.ll)
+## or destructor (gdtor.ll) forwarder's name beside ctor1.ll's constructor
+## managed call wreset: CIL objects, bitcode, and mixed, in both orders.
+# DEFINE: %{tm23-unit} =
+# DEFINE: %{tm23-name} =
+# DEFINE: %{tm23} = cat %{tri}.head %{tm23-unit}.ll > %{tm23-unit}-%{tri}.ll && \
+# DEFINE:   llc -filetype=obj %{tm23-unit}-%{tri}.ll -o %{tm23-unit}-%{tri}.o && \
+# DEFINE:   llvm-as %{tm23-unit}-%{tri}.ll -o %{tm23-unit}-%{tri}.bc && \
+# DEFINE:   not msil-ld ctor1-%{tri}.o %{tm23-unit}-%{tri}.o --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.o -DN=%{tm23-name} && \
+# DEFINE:   not msil-ld %{tm23-unit}-%{tri}.o ctor1-%{tri}.o --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.o -DN=%{tm23-name} && \
+# DEFINE:   not msil-ld ctor1-%{tri}.bc %{tm23-unit}-%{tri}.bc --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.bc -DN=%{tm23-name} && \
+# DEFINE:   not msil-ld %{tm23-unit}-%{tri}.bc ctor1-%{tri}.bc --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.bc -DN=%{tm23-name} && \
+# DEFINE:   not msil-ld ctor1-%{tri}.o %{tm23-unit}-%{tri}.bc --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.bc -DN=%{tm23-name} && \
+# DEFINE:   not msil-ld %{tm23-unit}-%{tri}.bc ctor1-%{tri}.o --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.bc -DN=%{tm23-name} && \
+# DEFINE:   not msil-ld ctor1-%{tri}.bc %{tm23-unit}-%{tri}.o --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.o -DN=%{tm23-name} && \
+# DEFINE:   not msil-ld %{tm23-unit}-%{tri}.o ctor1-%{tri}.bc --reference=refs -o x.exe 2>&1 \
+# DEFINE:     | %{err} --check-prefix=TM23F -DO=%{tm23-unit}-%{tri}.o -DN=%{tm23-name}
+# REDEFINE: %{tm23-unit} = gctor
+# REDEFINE: %{tm23-name} = __msil_mc_ctor.wreset
+# REDEFINE: %{tri} = win
+# RUN: %{tm23}
+# REDEFINE: %{tri} = lnx
+# RUN: %{tm23}
+# REDEFINE: %{tri} = net
+# RUN: %{tm23}
+# REDEFINE: %{tm23-unit} = gdtor
+# REDEFINE: %{tm23-name} = __msil_mc_dtor.wreset
+# REDEFINE: %{tri} = win
+# RUN: %{tm23}
+# REDEFINE: %{tri} = lnx
+# RUN: %{tm23}
+# REDEFINE: %{tri} = net
+# RUN: %{tm23}
+# RUN: not ls x.exe
+# TM23F: {{^}}msil-ld: error: [[O]]: defines '[[N]]', which is reserved for the MSIL toolchain (a managed-call forwarder){{$}}
+
+#--- win.head
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+#--- lnx.head
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+#--- net.head
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+#--- exp1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __declspec(dllexport) int wguard(int) __attribute__((msil_method(
+;; "Contoso.Widget", "Guarded", "int32(int32)")));
+;; int plain1(int x) { return wguard(x); }
+$wguard = comdat any
+
+define weak_odr dllexport i32 @wguard(i32 noundef %x) #1 comdat {
+  %r = call i32 @__msil_mc.wguard(i32 noundef %x)
+  ret i32 %r
+}
+
+define i32 @plain1(i32 %x) {
+  %r = call i32 @wguard(i32 %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.wguard(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #1 = { "msil-managed-forwarder"="wguard" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wguard", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !"", !"dllexport"}
+#--- exp2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; exp1.ll's declaration in a second unit: int plain2(int x) { return wguard(x); }
+$wguard = comdat any
+
+define weak_odr dllexport i32 @wguard(i32 noundef %x) #1 comdat {
+  %r = call i32 @__msil_mc.wguard(i32 noundef %x)
+  ret i32 %r
+}
+
+define i32 @plain2(i32 %x) {
+  %r = call i32 @wguard(i32 %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.wguard(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #1 = { "msil-managed-forwarder"="wguard" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wguard", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !"", !"dllexport"}
+#--- pmain.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; exp1.ll's C name declared without the attribute in another unit:
+;; int wguard(int); int main(void) { return wguard(3); }
+declare i32 @wguard(i32 noundef)
+
+define i32 @main() {
+  %r = call i32 @wguard(i32 noundef 3)
+  ret i32 %r
+}
+#--- noexp.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; exp1.ll's declaration without dllexport: int wguard(int)
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")));
+;; int main(void) { return wguard(1); }
+define i32 @main() {
+  %r = call i32 @__msil_mc.wguard(i32 noundef 1)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.wguard(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wguard", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- twice.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; exp1.ll's exported name bound to another member in a second unit:
+;; __declspec(dllexport) int wguard(int) __attribute__((msil_method(
+;; "Contoso.Point", "Twice", "int32(int32)")));
+;; int plain3(int x) { return wguard(x); }
+$wguard = comdat any
+
+define weak_odr dllexport i32 @wguard(i32 noundef %x) #1 comdat {
+  %r = call i32 @__msil_mc.wguard(i32 noundef %x)
+  ret i32 %r
+}
+
+define i32 @plain3(i32 %x) {
+  %r = call i32 @__msil_mc.wguard(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.wguard(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #1 = { "msil-managed-forwarder"="wguard" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wguard", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !"", !"dllexport"}
+#--- cexp5.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __declspec(dllexport) int guarded(int, int *) __attribute__((msil_method(
+;; "Contoso.Widget", "Guarded", "int32(int32)"),
+;; msil_catch("Contoso.WidgetException", 5)));
+;; int use5(int x) { return guarded(x, 0); }
+$guarded = comdat any
+
+define weak_odr dllexport i32 @guarded(i32 noundef %x, ptr noundef %c) #1 comdat {
+  %r = call i32 @__msil_mc.guarded(i32 noundef %x, ptr noundef %c)
+  ret i32 %r
+}
+
+define i32 @use5(i32 %x) {
+  %r = call i32 @__msil_mc.guarded(i32 noundef %x, ptr noundef null)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.guarded(i32 noundef, ptr noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val,err;val" "msil-managed-catch"="Contoso.WidgetException=5" }
+attributes #1 = { "msil-managed-forwarder"="guarded" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.guarded", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val,err;val", !"Contoso.WidgetException=5", !"dllexport"}
+#--- cexp6.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; cexp5.ll's declaration in a second unit with another code:
+;; msil_catch("Contoso.WidgetException", 6);
+;; int use6(int x) { return guarded(x, 0); }
+$guarded = comdat any
+
+define weak_odr dllexport i32 @guarded(i32 noundef %x, ptr noundef %c) #1 comdat {
+  %r = call i32 @__msil_mc.guarded(i32 noundef %x, ptr noundef %c)
+  ret i32 %r
+}
+
+define i32 @use6(i32 %x) {
+  %r = call i32 @__msil_mc.guarded(i32 noundef %x, ptr noundef null)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.guarded(i32 noundef, ptr noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val,err;val" "msil-managed-catch"="Contoso.WidgetException=6" }
+attributes #1 = { "msil-managed-forwarder"="guarded" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.guarded", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val,err;val", !"Contoso.WidgetException=6", !"dllexport"}
+#--- cdef.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int wguard(int x) { return x; }: a strong definition of the C name that
+;; exp1.ll exports
+define i32 @wguard(i32 %x) {
+  ret i32 %x
+}
+#--- cweak.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((weak)) int wguard(int x) { return x + 1000; }: a weak
+;; definition of the C name that exp1.ll exports, in no COMDAT group
+define weak i32 @wguard(i32 %x) {
+  %r = add i32 %x, 1000
+  ret i32 %r
+}
+#--- join1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __declspec(dllexport) void wjoin(void) __attribute__((constructor(300),
+;; msil_method("Contoso.Widget", "Reset", "void()")));
+;; int join1(void) { return 1; }
+$wjoin = comdat any
+$__msil_mc_ctor.wjoin = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 300, ptr @__msil_mc_ctor.wjoin, ptr @__msil_mc_ctor.wjoin }]
+
+define weak_odr dllexport void @wjoin() #1 comdat {
+  call void @__msil_mc.wjoin()
+  ret void
+}
+
+define linkonce_odr hidden void @__msil_mc_ctor.wjoin() #1 comdat {
+  call void @__msil_mc.wjoin()
+  ret void
+}
+
+define i32 @join1() {
+  ret i32 1
+}
+
+declare void @__msil_mc.wjoin() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wjoin" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wjoin", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"dllexport,constructor(300)"}
+#--- join2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; join1.ll's declaration in a second unit: int join2(void) { return 2; }
+$wjoin = comdat any
+$__msil_mc_ctor.wjoin = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 300, ptr @__msil_mc_ctor.wjoin, ptr @__msil_mc_ctor.wjoin }]
+
+define weak_odr dllexport void @wjoin() #1 comdat {
+  call void @__msil_mc.wjoin()
+  ret void
+}
+
+define linkonce_odr hidden void @__msil_mc_ctor.wjoin() #1 comdat {
+  call void @__msil_mc.wjoin()
+  ret void
+}
+
+define i32 @join2() {
+  ret i32 2
+}
+
+declare void @__msil_mc.wjoin() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wjoin" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wjoin", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"dllexport,constructor(300)"}
+#--- joinx.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; join1.ll's managed call exported without constructor(300) in a second
+;; unit: __declspec(dllexport) void wjoin(void) __attribute__((msil_method(
+;; "Contoso.Widget", "Reset", "void()"))); int main(void) { return 0; }
+$wjoin = comdat any
+
+define weak_odr dllexport void @wjoin() #1 comdat {
+  call void @__msil_mc.wjoin()
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+declare void @__msil_mc.wjoin() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wjoin" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wjoin", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"dllexport"}
+#--- pick1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A managed call without forwarders: int wpick(int)
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")));
+;; int pickA(int x) { return wpick(x); }
+define i32 @pickA(i32 noundef %x) {
+  %r = call i32 @__msil_mc.wpick(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.wpick(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wpick", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- pick2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; pick1.ll's C name bound to another member, in a unit whose main calls
+;; pick1.ll's pickA: int wpick(int) __attribute__((msil_method(
+;; "Contoso.Point", "Twice", "int32(int32)"))); int pickA(int);
+;; int main(void) { return pickA(-5) + wpick(-5); }
+declare i32 @pickA(i32 noundef)
+
+define i32 @main() {
+  %a = call i32 @pickA(i32 noundef -5)
+  %b = call i32 @__msil_mc.wpick(i32 noundef -5)
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.wpick(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wpick", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- pick3.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; pick2.ll's declaration in a unit that calls nothing of pick1.ll's:
+;; int pickB(int x) { return wpick(x); }
+define i32 @pickB(i32 noundef %x) {
+  %r = call i32 @__msil_mc.wpick(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.wpick(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wpick", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- ctor1.ll
+
+;; void wreset(void) __attribute__((constructor, msil_method(
+;; "Contoso.Widget", "Reset", "void()"))); int one(void) { return 1; }
+$__msil_mc_ctor.wreset = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.wreset, ptr @__msil_mc_ctor.wreset }]
+
+define linkonce_odr hidden void @__msil_mc_ctor.wreset() #1 comdat {
+  call void @__msil_mc.wreset()
+  ret void
+}
+
+define i32 @one() {
+  ret i32 1
+}
+
+declare void @__msil_mc.wreset() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wreset" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wreset", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"constructor(65535)"}
+#--- ctor2.ll
+
+;; ctor1.ll's declaration in a second unit, which has main:
+;; int one(void); int main(void) { return one(); }
+$__msil_mc_ctor.wreset = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.wreset, ptr @__msil_mc_ctor.wreset }]
+
+define linkonce_odr hidden void @__msil_mc_ctor.wreset() #1 comdat {
+  call void @__msil_mc.wreset()
+  ret void
+}
+
+declare i32 @one()
+
+define i32 @main() {
+  %r = call i32 @one()
+  ret i32 %r
+}
+
+declare void @__msil_mc.wreset() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wreset" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wreset", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"constructor(65535)"}
+#--- prio.ll
+
+;; ctor1.ll's declaration with another priority, constructor(101):
+;; int main(void) { return 0; }
+$__msil_mc_ctor.wreset = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 101, ptr @__msil_mc_ctor.wreset, ptr @__msil_mc_ctor.wreset }]
+
+define linkonce_odr hidden void @__msil_mc_ctor.wreset() #1 comdat {
+  call void @__msil_mc.wreset()
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+declare void @__msil_mc.wreset() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wreset" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wreset", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"constructor(101)"}
+#--- rewind.ll
+
+;; ctor1.ll's constructor managed call bound to another member in a second
+;; unit, Contoso.Widget::Rewind(), which FakeWidgets does not have:
+;; void wreset(void) __attribute__((constructor, msil_method(
+;; "Contoso.Widget", "Rewind", "void()"))); int main(void) { return 0; }
+$__msil_mc_ctor.wreset = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.wreset, ptr @__msil_mc_ctor.wreset }]
+
+define linkonce_odr hidden void @__msil_mc_ctor.wreset() #1 comdat {
+  call void @__msil_mc.wreset()
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+declare void @__msil_mc.wreset() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Rewind" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wreset" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wreset", !"Contoso.Widget", !"Rewind", !"void()", !"", !";void", !"", !"constructor(65535)"}
+#--- sctor1.ll
+
+;; static void wsreset(void) __attribute__((constructor, msil_method(
+;; "Contoso.Widget", "Reset", "void()"))); int one(void) { return 1; }
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.wsreset, ptr null }]
+
+define internal void @__msil_mc_ctor.wsreset() #1 {
+  call void @__msil_mc.wsreset.__uniq.444()
+  ret void
+}
+
+define i32 @one() {
+  ret i32 1
+}
+
+declare void @__msil_mc.wsreset.__uniq.444() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wsreset" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wsreset.__uniq.444", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !""}
+#--- sctor2.ll
+
+;; sctor1.ll's 'static' declaration in a second unit, which has main:
+;; int one(void); int main(void) { return one(); }
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.wsreset, ptr null }]
+
+define internal void @__msil_mc_ctor.wsreset() #1 {
+  call void @__msil_mc.wsreset.__uniq.444()
+  ret void
+}
+
+declare i32 @one()
+
+define i32 @main() {
+  %r = call i32 @one()
+  ret i32 %r
+}
+
+declare void @__msil_mc.wsreset.__uniq.444() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wsreset" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wsreset.__uniq.444", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !""}
+#--- dtor.ll
+
+;; void wfini(void) __attribute__((destructor, msil_method("Contoso.Widget",
+;; "Reset", "void()"))); int main(void) { return 0; }
+$__msil_mc_dtor.wfini = comdat any
+
+@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_dtor.wfini, ptr @__msil_mc_dtor.wfini }]
+
+define linkonce_odr hidden void @__msil_mc_dtor.wfini() #1 comdat {
+  call void @__msil_mc.wfini()
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+declare void @__msil_mc.wfini() #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="wfini" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wfini", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"destructor(65535)"}
+#--- gctor.ll
+
+;; A GLOBAL definition of the name of ctor1.ll's constructor forwarder, in
+;; no COMDAT group, and int main(void) { return 0; }. In C only an asm label
+;; could name it (void other(void) __asm__("__msil_mc_ctor.wreset");
+;; void other(void) {}), which clang refuses (T-M22's forwarder form).
+define void @__msil_mc_ctor.wreset() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+#--- gdtor.ll
+
+;; gctor.ll with the name of a destructor forwarder, __msil_mc_dtor.wreset.
+define void @__msil_mc_dtor.wreset() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+#--- damage.py
+## damage.py <in> <out>: writes the bitcode file <in> to <out> with the 8
+## bytes before its first '__msil_mc.wguard' set to 0xff. They end the
+## lengths (VBR6 fields) that the module's METADATA_STRINGS record keeps
+## right before the strings' characters, so the module's metadata no longer
+## reads ('Unterminated VBR') while the symbol table still does.
+import sys
+
+data = bytearray(open(sys.argv[1], "rb").read())
+at = data.find(b"__msil_mc.wguard")
+if at < 8:
+    sys.exit("damage.py: no '__msil_mc.wguard' in " + sys.argv[1])
+data[at - 8 : at] = b"\xff" * 8
+open(sys.argv[2], "wb").write(data)

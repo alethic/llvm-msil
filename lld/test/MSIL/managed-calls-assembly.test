@@ -1,0 +1,157 @@
+## Managed calls whose declarations differ only in ASSEMBLY, msil_method's
+## optional fourth argument (ImplementationPlan.md 5.20.4 MR4 and 5.20.3
+## T-M17 as amended in section 12, milestone MC-1). ASSEMBLY never reaches a
+## linked image: objects name [msil.bcl], and msil-ld binds every member by
+## name against its references. So the links that write an image leave
+## ASSEMBLY out of T-M17's comparison, while --lto-emit-asm, whose text names
+## the scope (ASSEMBLY, or [mscorlib] without one) and keeps one declaration
+## for all units' calls, compares that scope. asys.ll binds f to
+## Contoso.Widget::Guarded(int32) with ASSEMBLY "System", and amsc.ll with
+## "mscorlib", and ga calls it; anone.ll binds f without ASSEMBLY, and its
+## main calls ga and f. The members are FakeWidgets.il's (managed-calls.test).
+## - asys with anone links without a diagnostic as CIL objects, in mixed
+##   links (either unit as the object), in full LTO, as ThinLTO modules (opt
+##   -module-summary) and under --lto-partitions=2, each in both input
+##   orders, and the image calls [FakeWidgets]Contoso.Widget::Guarded and
+##   references no assembly 'System'; the LTO links used to fail with T-M17.
+##   Under --lto-emit-asm the pair fails, in both orders and with references
+##   too, with
+##   'managed call 'f' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units',
+##   once (the error lines are counted), and writes no text, which would
+##   otherwise name the first input's scope for both units' calls ([System]
+##   with asys first, [mscorlib] with anone first).
+## - amsc with anone links in each of those modes, --lto-emit-asm included,
+##   in both orders: both units' texts name [mscorlib], so the one stub calls
+##   [mscorlib]Contoso.Widget::Guarded(int32) for the calls of both units
+##   (ga's inlined into main). Every LTO mode used to refuse this pair.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+## A failed link's error lines (err.txt), counted, then each pinned whole.
+# DEFINE: %{one} = grep error: err.txt | count 1 && %{err} --input-file=err.txt
+# DEFINE: %{bound} = FileCheck %s --check-prefix=BOUND --implicit-check-not="assemblyref 'System'"
+
+# RUN: llc -filetype=obj asys.ll -o asys.o && llvm-as asys.ll -o asys.bc && opt -module-summary asys.ll -o asys.thin.bc
+# RUN: llc -filetype=obj amsc.ll -o amsc.o && llvm-as amsc.ll -o amsc.bc && opt -module-summary amsc.ll -o amsc.thin.bc
+# RUN: llc -filetype=obj anone.ll -o anone.o && llvm-as anone.ll -o anone.bc && \
+# RUN:   opt -module-summary anone.ll -o anone.thin.bc
+
+## The links that write an image, in both orders, for the unit %{a}.
+# DEFINE: %{a} =
+# DEFINE: %{images} = mkdir %{a} && \
+# DEFINE:   msil-ld %{a}.o anone.o --reference=refs -o %{a}/o1.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/o1.exe | %{bound} && \
+# DEFINE:   msil-ld anone.o %{a}.o --reference=refs -o %{a}/o2.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/o2.exe | %{bound} && \
+# DEFINE:   msil-ld %{a}.o anone.bc --reference=refs -o %{a}/m1.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/m1.exe | %{bound} && \
+# DEFINE:   msil-ld anone.bc %{a}.o --reference=refs -o %{a}/m2.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/m2.exe | %{bound} && \
+# DEFINE:   msil-ld %{a}.bc anone.o --reference=refs -o %{a}/m3.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/m3.exe | %{bound} && \
+# DEFINE:   msil-ld anone.o %{a}.bc --reference=refs -o %{a}/m4.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/m4.exe | %{bound} && \
+# DEFINE:   msil-ld %{a}.bc anone.bc --reference=refs -o %{a}/l1.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/l1.exe | %{bound} && \
+# DEFINE:   msil-ld anone.bc %{a}.bc --reference=refs -o %{a}/l2.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/l2.exe | %{bound} && \
+# DEFINE:   msil-ld %{a}.thin.bc anone.thin.bc --reference=refs -o %{a}/t1.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/t1.exe | %{bound} && \
+# DEFINE:   msil-ld anone.thin.bc %{a}.thin.bc --reference=refs -o %{a}/t2.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/t2.exe | %{bound} && \
+# DEFINE:   msil-ld %{a}.bc anone.bc --lto-partitions=2 --reference=refs -o %{a}/p1.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/p1.exe | %{bound} && \
+# DEFINE:   msil-ld anone.bc %{a}.bc --lto-partitions=2 --reference=refs -o %{a}/p2.exe 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump %{a}/p2.exe | %{bound}
+# BOUND: {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Widget::'Guarded'{{$}}
+
+## "System" and none: every image links; --lto-emit-asm refuses the pair.
+# REDEFINE: %{a} = asys
+# RUN: %{images}
+# RUN: not msil-ld --lto-emit-asm asys.bc anone.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm anone.bc asys.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm anone.bc asys.bc --reference=refs -o x.il 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not ls x.il
+# TM17: {{^}}msil-ld: error: managed call 'f' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units{{$}}
+
+## "mscorlib" and none: every mode links, and the text names [mscorlib].
+# REDEFINE: %{a} = amsc
+# RUN: %{images}
+# RUN: msil-ld --lto-emit-asm amsc.bc anone.bc -o amsc/a1.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MSCORLIB --implicit-check-not="[System]" --input-file=amsc/a1.il
+# RUN: grep "^\.method .*'__msil_mc\.f'" amsc/a1.il | count 1
+# RUN: msil-ld --lto-emit-asm anone.bc amsc.bc -o amsc/a2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MSCORLIB --implicit-check-not="[System]" --input-file=amsc/a2.il
+# RUN: grep "^\.method .*'__msil_mc\.f'" amsc/a2.il | count 1
+## References change nothing in the text (the same output name keeps the
+## .assembly line the same).
+# RUN: mkdir amsc/r && msil-ld --lto-emit-asm anone.bc amsc.bc --reference=refs -o amsc/r/a2.il 2>&1 | count 0
+# RUN: diff amsc/a2.il amsc/r/a2.il
+# MSCORLIB-DAG: {{^}}.method assembly static int32 '__msil_mc.f'(int32) cil managed{{$}}
+# MSCORLIB-DAG: {{^ +}}call int32 [mscorlib]Contoso.Widget::Guarded(int32){{$}}
+# MSCORLIB-DAG: {{^ +}}call int32 '__msil_mc.f'(int32){{$}}
+# MSCORLIB-DAG: {{^ +}}call int32 '__msil_mc.f'(int32){{$}}
+
+#--- asys.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)", "System"))); int ga(int x) { return f(x); }
+define i32 @ga(i32 noundef %x) {
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-asm"="System" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"System", !"val;val", !""}
+#--- amsc.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)", "mscorlib"))); int ga(int x) { return f(x); }
+define i32 @ga(i32 noundef %x) {
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-asm"="mscorlib" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"mscorlib", !"val;val", !""}
+#--- anone.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int ga(int);
+;; int main(void) { return ga(1) + f(2); }
+declare i32 @ga(i32 noundef)
+
+define i32 @main() {
+  %a = call i32 @ga(i32 noundef 1)
+  %b = call i32 @__msil_mc.f(i32 noundef 2)
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}

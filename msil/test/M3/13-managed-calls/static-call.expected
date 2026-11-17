@@ -1,0 +1,9 @@
+MemoryCopy forward over an overlap: 0101234589
+MemoryCopy backward over an overlap: 3456789789
+MemoryCopy of 0 bytes: 3456789789
+AllocHGlobal(64) is not null: 1
+sum of the 64 bytes written: 6112
+GetBytes handles: nonzero 1, distinct 1
+GetCommandLineArgs handle is nonzero: 1
+freed three handles
+[exit 0]

@@ -1,0 +1,164 @@
+# One managed call with dllexport and constructor(300) on the Windows triple, constructor(300) alone on the Linux triple, bound to System.Console::WriteLine() and declared by a CIL object (a.c, clang -c) and a bitcode file (b.c, clang -flto -c) of one program: msil-ld links them with no diagnostic, so no T-M17, the constructor prints one blank line before main, each unit's direct call prints one more, and on the Windows triple a -shared link of the same two units exports blank_line.
+# Plan 5.20.4 MR4 as amended for MC-1 (contract D6's forwarders, and the
+# section 12 row '5.20.5 ML1 and 5.20.4 MR4 amended (shared managed-call IR
+# rules)'): the !msil.managed.calls entry of an external managed call with
+# dllexport, constructor or destructor has an 8th operand that lists them,
+# joined by ',' in that order: 'dllexport,constructor(300)' here on the
+# Windows triple, 'constructor(300)' on the Linux triple. clang writes the
+# bitcode's text, msil-ld writes the CIL object's from the object's
+# forwarders, both through cli::printManagedCallAttributes, and in a link
+# that mixes objects and bitcode msil-ld compares the two byte for byte; a
+# difference is T-M17's second form, 'managed call '<f>' is declared with
+# different 'dllexport', 'constructor' or 'destructor' attributes in
+# different translation units', and no output, so a spelling of either side
+# that differed (another order, a blank after the comma) would stop these
+# links. lld/test/MSIL/managed-calls-forwarders.test links hand-written IR
+# and runs nothing, and every %{msil_prog} composite compiles all of its
+# sources one way (the leg's msil_pipeline), so this is the test that
+# compiles an object and a bitcode file from C, links them into one program
+# and runs it. a.c and b.c write the attributes in opposite orders; the
+# text does not depend on that.
+# The two units' constructor forwarders '__msil_mc_ctor.blank_line' are one
+# COMDAT group, which keys their init entries, so the program keeps one
+# forwarder and one entry: exactly one blank line before main (two would
+# mean that both units' entries ran, none that neither did). main then calls
+# a.c's a_blank_line and b.c's b_blank_line, which call blank_line through
+# the object's stub and through LTO's, one blank line each. dllexport has
+# its effect on the Windows triples only (exported.test; the Linux triple
+# has no dllexport, and clang ignores it there with a warning, so the
+# sources write it only for _WIN32), and an executable exports nothing, so
+# on the Windows triple the test also links a.o and b.o alone with -shared,
+# with no diagnostic either: llvm-cil-dump shows the export class's method
+# 'blank_line', which calls the stub, and --link-info the symbol table's
+# 'blank_line', the symbol a program that imports it binds to. The blank
+# lines are Console.WriteLine()'s Environment.NewLine (CR LF on Windows,
+# which the transcript newline rule folds to LF); each function flushes C's
+# stdout before its managed call, so the managed and the C output keep
+# their order. Console is no built-in table type, so every link takes the
+# .NET Framework 4.8 implementation assemblies (%{msil_refs_netfx}). At -O0
+# the links take a.o before b.o, at -O2 b.o before a.o. The composite
+# cannot mix the two compiles, so this test has its own RUN lines: clang -c
+# and clang -flto -c whatever msil_pipeline says, the clang driver's link
+# with msil-ld and %{msil_ldflags} (its output, stdout and stderr, must be
+# empty), %msil_verify, %msil_jitall where the feature msil-jitall is
+# present, the run on the configured runtime and, by
+# %{msil_also_run_check}, on each runtime of the leg's msil_also_run, and
+# with msil_run_netfx the run on the .NET Framework 4.8; every transcript
+# matches the CHECK lines. So every leg that runs this directory runs it:
+# p3-full (.NET 10, TC=0 and the Framework) and wsl-p3 (WSL .NET 10 and
+# TC=0, on x86_64-unknown-linux-gnu-msil) under obj, the MC-1 gate's steps
+# 18 and 18b under lto, and the post-commit legs net8, wsl-net10, lto and
+# lto-wsl. No composite builds this test, so update-expected.py,
+# the native oracle and the O3, O4 and O6 oracles skip it, and the
+# transcript is in the CHECK lines. Portable/02-managed-calls/mixed-link.test
+# is the msil64-unknown-dotnet form. Plan 5.17.13 (MC-1,
+# M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx, msil-cil-dump
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{ml_level} = O0
+# DEFINE: %{ml_out} = %t/O0
+# DEFINE: %{ml_units} = %{ml_out}/a.o %{ml_out}/b.o
+# REDEFINE: %{msil_also_run_image} = %{ml_out}/prog.exe
+# DEFINE: %{ml_build} = \
+# DEFINE:   mkdir -p %{ml_out} \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ml_level} -c %t/a.c -o %{ml_out}/a.o \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ml_level} -flto -c %t/b.c -o %{ml_out}/b.o \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ml_level} -c %t/main.c -o %{ml_out}/main.o \
+# DEFINE:   && %clang_msil -%{ml_level} %{msil_ldflags} %{ml_units} %{ml_out}/main.o -o %{ml_out}/prog.exe 2>&1 | count 0
+# DEFINE: %{ml_check} = \
+# DEFINE:   %msil_verify %{ml_out}/prog.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %{ml_out}/prog.exe %}
+# DEFINE: %{ml_run} = \
+# DEFINE:   %msil_exec --out %{ml_out}/prog.out %{ml_out}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%{ml_out}/prog.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{ml_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --out %{ml_out}/prog.netfx.out %{ml_out}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%{ml_out}/prog.netfx.out --match-full-lines %s
+# DEFINE: %{ml_export} = \
+# DEFINE:   %clang_msil -%{ml_level} %{msil_ldflags} -shared %{ml_units} -o %{ml_out}/mclib.dll 2>&1 | count 0 \
+# DEFINE:   && %msil_cil_dump %{ml_out}/mclib.dll > %{ml_out}/mclib.dump \
+# DEFINE:   && FileCheck %s --check-prefix=EXPORT --input-file=%{ml_out}/mclib.dump \
+# DEFINE:   && %msil_cil_dump --link-info %{ml_out}/mclib.dll > %{ml_out}/mclib.symtab \
+# DEFINE:   && FileCheck %s --check-prefix=SYMTAB --input-file=%{ml_out}/mclib.symtab
+# RUN: %{ml_build}
+# RUN: %{ml_check}
+# RUN: %{ml_run}
+# RUN: %if msil-run-netfx %{ %{ml_netfx} %}
+# RUN: %if msil-triple-windows %{ %{ml_export} %}
+# REDEFINE: %{ml_level} = O2
+# REDEFINE: %{ml_out} = %t/O2
+# REDEFINE: %{ml_units} = %{ml_out}/b.o %{ml_out}/a.o
+# RUN: %{ml_build}
+# RUN: %{ml_check}
+# RUN: %{ml_run}
+# RUN: %if msil-run-netfx %{ %{ml_netfx} %}
+# RUN: %if msil-triple-windows %{ %{ml_export} %}
+# Every run's transcript: the constructor's blank line comes first.
+# CHECK:      {{^$}}
+# CHECK-NEXT: main: one blank line above, from the constructor managed call blank_line, which a.c and b.c declare
+# CHECK-NEXT: main: a.c's direct call of blank_line prints one more:
+# CHECK-EMPTY:
+# CHECK-NEXT: main: b.c's direct call of blank_line prints one more:
+# CHECK-EMPTY:
+# CHECK-NEXT: main: done
+# CHECK-NEXT: [exit 0]
+# The library's export class (the last class of the sorted listing) and
+# its method blank_line, the export forwarder, which calls the stub.
+# EXPORT:      .class 'mclib' flags={{.*}}
+# EXPORT:        .method 'blank_line' void() flags={{.*}}
+# EXPORT-NEXT:     .maxstack {{[0-9]+}}
+# EXPORT-NEXT:     L{{[0-9]+}}: call void() '<Module>'::'__msil_mc.blank_line{{(<msil>[0-9]+)?}}'{{$}}
+# EXPORT-NEXT:     L{{[0-9]+}}: ret{{$}}
+# SYMTAB:      {{^}}ExportClass 'mclib'{{$}}
+# SYMTAB-NEXT: {{^}}Function {{[A-Z]+}} 'blank_line'{{$}}
+#--- a.c
+/* a.c, compiled with clang -c: the managed call blank_line, and a function
+   that calls it. */
+#include <stdio.h>
+
+#if defined(_WIN32)
+__declspec(dllexport)
+#endif
+__attribute__((constructor(300)))
+__attribute__((msil_method("System.Console", "WriteLine", "void()")))
+void blank_line(void);
+
+void a_blank_line(void) {
+  puts("main: a.c's direct call of blank_line prints one more:");
+  fflush(stdout);
+  blank_line();
+}
+#--- b.c
+/* b.c, compiled with clang -flto -c: the same managed call, its attributes
+   written in the opposite order, and a function that calls it. */
+#include <stdio.h>
+
+__attribute__((msil_method("System.Console", "WriteLine", "void()")))
+__attribute__((constructor(300)))
+#if defined(_WIN32)
+__attribute__((dllexport))
+#endif
+void blank_line(void);
+
+void b_blank_line(void) {
+  puts("main: b.c's direct call of blank_line prints one more:");
+  fflush(stdout);
+  blank_line();
+}
+#--- main.c
+/* main.c: neither declares nor calls blank_line itself. */
+#include <stdio.h>
+
+void a_blank_line(void);
+void b_blank_line(void);
+
+int main(void) {
+  puts("main: one blank line above, from the constructor managed call "
+       "blank_line, which a.c and b.c declare");
+  a_blank_line();
+  b_blank_line();
+  puts("main: done");
+  return 0;
+}

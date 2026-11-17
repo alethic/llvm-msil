@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SemaMSILManagedCall.h"
 #include "TypeLocBuilder.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -1991,6 +1992,10 @@ bool Sema::ShouldWarnIfUnusedFileScopedDecl(const DeclaratorDecl *D) const {
     if (FD->doesThisDeclarationHaveABody() &&
         Context.DeclMustBeEmitted(FD))
       return false;
+    // MSIL: the forwarder of a managed call with constructor or destructor
+    // calls it (SemaMSILManagedCall.cpp).
+    if (msil::isStartupManagedCall(*FD))
+      return false;
   } else if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
     // Constants and utility variables are defined in headers with internal
     // linkage; don't warn.  (Unlike functions, there isn't a convenient marker
@@ -3036,6 +3041,10 @@ static bool mergeDeclAttribute(Sema &S, NamedDecl *D,
     NewAttr = S.Wasm().mergeImportNameAttr(D, *INA);
   else if (const auto *ENA = dyn_cast<WebAssemblyExportNameAttr>(Attr))
     NewAttr = S.Wasm().mergeExportNameAttr(D, *ENA);
+  // MSIL managed calls: a redeclaration that writes no msil_method or
+  // msil_catch list inherits it (SemaMSILManagedCall.cpp).
+  else if (isa<MSILMethodAttr, MSILCatchAttr>(Attr))
+    NewAttr = msil::mergeMSILManagedCallAttr(S, D, *Attr);
   else if (const auto *TCBA = dyn_cast<EnforceTCBAttr>(Attr))
     NewAttr = S.mergeEnforceTCBAttr(D, *TCBA);
   else if (const auto *TCBLA = dyn_cast<EnforceTCBLeafAttr>(Attr))
@@ -3169,6 +3178,10 @@ static void checkNewAttributesAfterDef(Sema &S, Decl *New, const Decl *Old) {
 
     if (isa<C11NoReturnAttr>(NewAttribute)) {
       // C's _Noreturn is allowed to be added to a function after it is defined.
+      ++I;
+      continue;
+    } else if (isa<MSILMethodAttr, MSILCatchAttr>(NewAttribute)) {
+      // MSIL: MS2 refuses these with T-M14 (SemaMSILManagedCall.cpp).
       ++I;
       continue;
     } else if (isa<UuidAttr>(NewAttribute)) {
@@ -8348,6 +8361,8 @@ NamedDecl *Sema::ActOnVariableDeclarator(
 
     // Insert the asm attribute.
     NewVD->addAttr(AsmLabelAttr::Create(Context, Label, SE->getStrTokenLoc(0)));
+    // MSIL: '__msil_mc.' names managed-call stubs (SemaMSILManagedCall.cpp).
+    msil::checkMSILAsmLabel(*this, Label, SE->getStrTokenLoc(0));
   } else if (!ExtnameUndeclaredIdentifiers.empty()) {
     llvm::MapVector<IdentifierInfo *, AsmLabelAttr *>::iterator I =
         ExtnameUndeclaredIdentifiers.find(NewVD->getIdentifier());
@@ -10745,6 +10760,8 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     StringLiteral *SE = cast<StringLiteral>(E);
     NewFD->addAttr(
         AsmLabelAttr::Create(Context, SE->getString(), SE->getStrTokenLoc(0)));
+    // MSIL: '__msil_mc.' names managed-call stubs (SemaMSILManagedCall.cpp).
+    msil::checkMSILAsmLabel(*this, SE->getString(), SE->getStrTokenLoc(0));
   } else if (!ExtnameUndeclaredIdentifiers.empty()) {
     llvm::MapVector<IdentifierInfo *, AsmLabelAttr *>::iterator I =
         ExtnameUndeclaredIdentifiers.find(NewFD->getIdentifier());
@@ -11292,6 +11309,14 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   ProcessPragmaWeak(S, NewFD);
   ProcessPragmaExport(NewFD);
   checkAttributesAfterMerging(*this, *NewFD);
+
+  // MSIL managed calls: the checks of msil_method and msil_catch that need
+  // the whole declaration, its previous declaration and its builtin identity
+  // (SemaMSILManagedCall.cpp).
+  if (NewFD->hasAttr<MSILMethodAttr>() || NewFD->hasAttr<MSILCatchAttr>())
+    msil::checkMSILManagedCallDecl(*this, NewFD,
+                                   D.getFunctionDefinitionKind() !=
+                                       FunctionDefinitionKind::Declaration);
 
   AddKnownFunctionAttributes(NewFD);
   // The above can add the format attribute for known builtin/library functions
@@ -21492,6 +21517,9 @@ void Sema::ActOnPragmaWeakID(IdentifierInfo* Name,
       LookupSingleName(TUScope, Name, NameLoc, LookupOrdinaryName);
 
   if (PrevDecl) {
+    // MSIL: a managed call cannot be weak (SemaMSILManagedCall.cpp).
+    if (msil::checkMSILPragmaWeak(*this, *PrevDecl, NameLoc))
+      return;
     auto *Attr = WeakAttr::CreateImplicit(Context, PragmaLoc);
     if (checkWeakAttrCompatibility(*this, *PrevDecl, *Attr))
       PrevDecl->addAttr(Attr);

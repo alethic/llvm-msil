@@ -21,6 +21,7 @@
 #include "llvm/BinaryFormat/CLI.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/CLI/MetadataReader.h"
+#include "llvm/CLI/Signature.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
@@ -1749,7 +1750,12 @@ Error cli::validateLinkInfo(const Record &R, const MetadataReader &MD) {
                               quoted(SIt->second.Module));
   }
 
-  // C5 and C6: the MemberRefs.
+  // C5 and C6: the MemberRefs. C5 checks the ones on '<msil>Symbols' and
+  // '<msil>FnAddr' against the symbols; C6 checks that every other one is a
+  // BCL request, on a TypeRef scoped to an AssemblyRef (directly or through
+  // its enclosing TypeRefs) or on a TypeSpec 'valuetype T' with T such a
+  // TypeRef other than those two (5.20.7 MK3: a managed-call stub's static
+  // member of a value type).
   Expected<std::vector<TypeRefInfo>> TypeRefs = classifyTypeRefs(MD);
   if (!TypeRefs)
     return TypeRefs.takeError();
@@ -1789,17 +1795,55 @@ Error cli::validateLinkInfo(const Record &R, const MetadataReader &MD) {
                               " signature, but the symbol is " +
                               (isData(*S) ? "DATA" : "a FUNCTION"));
   }
+  const uint32_t NumTypeSpecs = MD.getRowCount(TableId::TypeSpec);
   for (uint32_t Row = 1; Row <= NumMemberRefs; ++Row) {
     Expected<MemberRefRow> MR = MD.getMemberRef(Row);
     if (!MR)
       return MR.takeError();
-    const TypeRefInfo *P = ParentInfo(MR->Parent);
-    if (P && (P->Symbols || P->FnAddr || P->ScopedToAssembly))
-      continue;
-    return ruleError(6, "MemberRef " + hex(makeToken(TableId::MemberRef, Row)) +
-                            " " + quoted(MR->Name) + ": its parent " +
-                            hex(MR->Parent) +
-                            " is not a TypeRef scoped to an AssemblyRef");
+    auto Violation = [&](const Twine &Why) {
+      return ruleError(6, "MemberRef " +
+                              hex(makeToken(TableId::MemberRef, Row)) + " " +
+                              quoted(MR->Name) + ": its parent " +
+                              hex(MR->Parent) + " " + Why);
+    };
+    if (getTokenType(MR->Parent) != uint8_t(TableId::TypeSpec)) {
+      const TypeRefInfo *P = ParentInfo(MR->Parent);
+      if (P && (P->Symbols || P->FnAddr || P->ScopedToAssembly))
+        continue;
+      return Violation("is not a TypeRef scoped to an AssemblyRef");
+    }
+    // A TypeSpec parent: its signature must be exactly ELEMENT_TYPE_VALUETYPE
+    // and a TypeRef that is a BCL request.
+    const uint32_t SpecRow = getTokenRow(MR->Parent);
+    if (SpecRow == 0 || SpecRow > NumTypeSpecs)
+      return Violation("is not a TypeSpec of the object");
+    Expected<TypeSpecRow> Spec = MD.getTypeSpec(SpecRow);
+    if (!Spec)
+      return Spec.takeError();
+    Expected<ArrayRef<uint8_t>> Blob = MD.getBlob(Spec->Signature);
+    if (!Blob)
+      return Blob.takeError();
+    Expected<TypeSig> T = decodeTypeSpec(*Blob);
+    if (!T)
+      return Violation("is a TypeSpec whose signature does not decode (" +
+                       toString(T.takeError()) + ")");
+    const TypeRefInfo *P = nullptr;
+    if (T->getElementType() == ELEMENT_TYPE_VALUETYPE &&
+        T->getModifiers().empty()) {
+      P = ParentInfo(T->getTypeRef());
+      if (P && P->ScopedToAssembly && !P->Symbols && !P->FnAddr)
+        continue;
+    }
+    std::string Text;
+    raw_string_ostream OS(Text);
+    printTypeSig(OS, *T, nullptr);
+    if (P && (P->Symbols || P->FnAddr))
+      return Violation(
+          "is the TypeSpec '" + Text + "', whose type is the placeholder " +
+          quoted(P->Symbols ? MSILLink::SymbolsType : MSILLink::FnAddrType));
+    return Violation("is the TypeSpec '" + Text +
+                     "', not 'valuetype T' with T a TypeRef scoped to an "
+                     "AssemblyRef");
   }
 
   // C7: SIGNATURES tokens are MethodDefs or method MemberRefs on

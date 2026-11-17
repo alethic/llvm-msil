@@ -1,0 +1,12 @@
+DateTime(2000, 1, 1): handle nonzero 1
+Ticks: 630822816000000000
+Year: 2000, Day: 1, Hour: 0
+AddDays(1.5): handle nonzero 1, differs 1
+Ticks: 630824112000000000, Day: 2, Hour: 12
+the original's Ticks: 630822816000000000
+Compare(later, d): 1, Compare(d, later): -1, Compare(d, d): 0
+Subtract: TimeSpan Ticks 1296000000000, TotalHours times 10: 360
+DateTime(630822816000000000): Year 2000, Compare with d 0
+DateTime(0): Year 1, Ticks 0
+freed five handles
+[exit 0]

@@ -1,0 +1,11 @@
+Create, Write: length 5
+after Create: 5 bytes "ABCDE"
+Append, Write: length 7
+after Append: 7 bytes "ABCDEFG"
+Open, Read: A B C D E F G; then ReadByte gives -1
+Seek(2, Begin): position 2, byte C
+Seek(-1, End): position 6, byte G
+Seek(-3, Current): position 4, byte E
+Open, ReadWrite: the byte after the one written is B
+after ReadWrite: 7 bytes "aBCDEFG"
+[exit 0]

@@ -1016,6 +1016,9 @@ void Sema::getUndefinedButUsed(
         continue;
       if (FD->getBuiltinID())
         continue;
+      // MSIL managed call: the backend defines its stub.
+      if (FD->getFirstDecl()->hasAttr<MSILMethodAttr>())
+        continue;
     } else {
       const auto *VD = cast<VarDecl>(ND);
       if (VD->hasDefinition() != VarDecl::DeclarationOnly)

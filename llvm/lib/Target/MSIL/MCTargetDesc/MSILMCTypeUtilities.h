@@ -20,6 +20,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/CLI.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include <cstdint>
 
@@ -49,6 +50,24 @@ enum class CallConv : uint8_t {
 struct Signature {
   SmallVector<ValType, 1> Results;
   SmallVector<ValType, 4> Params;
+  /// Empty, or one entry per parameter: ELEMENT_TYPE_I1, _U1, _I2 or _U2
+  /// where the IL parameter is narrower than its ValType, ELEMENT_TYPE_END
+  /// where the ValType applies. Only the method of a managed-call stub has
+  /// such parameters: an enum-converted C char, short or _Bool, whose width
+  /// msil-ld checks against the enum's (plan 5.20.4 MK2). The stack still
+  /// holds an int32 for each, so lowering, the call shape checks, the
+  /// comparisons and the ordering below ignore this field; a stub is called
+  /// directly by its own MethodDef and never interned with another
+  /// function's signature.
+  SmallVector<cli::ElementType, 0> ExactParams;
+  /// ELEMENT_TYPE_I1, _U1, _I2 or _U2 where the IL result is narrower than
+  /// its ValType, else ELEMENT_TYPE_END. As with ExactParams, only the method
+  /// of a managed-call stub has one: an enum-converted C char, short or
+  /// _Bool result, whose width msil-ld checks against the enum's (plan
+  /// 5.20.4 MK2). The stub still returns an int32 from the stack, which
+  /// ECMA-335 allows for a narrower integer result, and the comparisons and
+  /// the ordering below ignore this field.
+  cli::ElementType ExactReturn = cli::ELEMENT_TYPE_END;
   CallConv CC = CallConv::Managed;
 
   bool operator==(const Signature &RHS) const;
@@ -56,6 +75,12 @@ struct Signature {
   /// A strict weak ordering (results, then parameters, then the calling
   /// convention), so signatures can be interned in ordered containers.
   bool operator<(const Signature &RHS) const;
+
+  /// The exact element type of parameter \p I if it is narrower than its
+  /// ValType, else ELEMENT_TYPE_END.
+  cli::ElementType getExactParam(size_t I) const {
+    return I < ExactParams.size() ? ExactParams[I] : cli::ELEMENT_TYPE_END;
+  }
 };
 
 /// Map a legal value type to its CIL type: i32 is int32, i64 is native int
@@ -70,10 +95,14 @@ StringRef getValTypeName(ValType T);
 /// Print the ILAsm spelling of \p T.
 void printValType(raw_ostream &OS, ValType T);
 
-/// Print the result type of \p S: "void" or the type of its only result.
+/// Print the result type of \p S: "void" or the type of its only result; an
+/// exact result type (Signature::ExactReturn) prints as "int8", "unsigned
+/// int8", "int16" or "unsigned int16".
 void printResult(raw_ostream &OS, const Signature &S);
 
-/// Print the parameter list of \p S, for example "(int32, native int)".
+/// Print the parameter list of \p S, for example "(int32, native int)"; a
+/// parameter with an exact type (Signature::ExactParams) prints as "int8",
+/// "unsigned int8", "int16" or "unsigned int16".
 void printParamList(raw_ostream &OS, const Signature &S);
 
 /// Print \p Name as a single-quoted ILAsm identifier. A quote becomes \',

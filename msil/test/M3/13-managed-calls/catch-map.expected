@@ -1,0 +1,9 @@
+an existing file: null handle 0, code -1
+a missing file: null handle 1, code 11
+a missing directory: null handle 1, code 12
+invalid UTF-8 in the path: null handle 1, code 15
+IOException listed first: null handle 1, code 14
+File.Delete in a missing directory: code 12
+File.GetAttributes of a missing file: result 0, code 11
+File.GetAttributes of the existing file: nonzero 1, code -1
+[unhandled exception: System.ArgumentException]

@@ -1,0 +1,15 @@
+char16_t literal: 9 units, equal 1, units: 0067 0072 00fc 00df 0020 20ac 0020 d83d de00
+char16_t lone surrogates: 4 units, equal 1, units: 0061 dc00 0062 d800
+char32_t literal: 8 code points
+char32_t literal: 9 units, equal 1, units: 0067 0072 00fc 00df 0020 20ac 0020 d83d de00
+wchar_t literal: 9 units, equal 1, units: 0067 0072 00fc 00df 0020 20ac 0020 d83d de00
+wchar_t ASCII: 5 units, equal 1, units: 0077 0063 0068 0061 0072
+char16_t empty: 0 units, equal 1, units:
+char32_t empty: 0 units, equal 1, units:
+wchar_t empty: 0 units, equal 1, units:
+null pointers: 1 1 1
+char32_t valid with msil_catch: equal 1, code untouched 1
+char32_t surrogate code point: null result 1, code is EILSEQ 1
+char32_t above U+10FFFF: null result 1, code is EILSEQ 1
+wchar_t valid with msil_catch: not null 1, code untouched 1
+[exit 0]

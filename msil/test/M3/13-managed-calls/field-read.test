@@ -1,0 +1,107 @@
+# Static fields read from C (ldsfld): Stopwatch.Frequency and IsHighResolution (System.dll on the Framework, named with msil_method's ASSEMBLY argument), BitConverter.IsLittleEndian, IntPtr.Zero, String.Empty as a string handle, and DateTime.MinValue and MaxValue as boxed value-type handles; Stopwatch::GetTimestamp from the same scope never goes backward.
+# Plan 5.20.2 MA2 (a field name with a 'field' SIGNATURE: read-only access,
+# ldsfld for a static field), MA3 ('field T'), MA4 (ASSEMBLY is the
+# resolution scope of text output only, default mscorlib; Stopwatch is
+# defined in System on the Framework and is not reachable through
+# [mscorlib] on .NET, while [System] resolves on the Framework, .NET 8,
+# .NET 10 and WSL .NET 8/10, so '-S' text and --lto-emit-asm text need
+# "System"; linked images bind by name against the references and ignore
+# it), 5.20.3 MS4 (the C result corresponds to the field's type), MS5
+# ('val' for int64 and 'native int', 'bool' into _Bool, 'obj' for a string
+# result, 'boxed' for a value-type result, 'this-val' for DateTime's
+# get_Ticks), 5.20.9 MH2. The program links against the .NET Framework 4.8
+# implementation assemblies (%{msil_refs_netfx}: mscorlib.dll and
+# System.dll), because none of these fields is a built-in table entry; the
+# image runs on the Framework, .NET 10 and WSL .NET 10. Frequency is the
+# platform's timer frequency (10000000 on current Windows, 1000000000 on
+# Linux), so the program prints only that it is positive. MinValue is tick
+# 0 and MaxValue tick 3155378975999999999 (measured on Framework 4.8.1, .NET
+# 10 and WSL .NET 10). The members have no C library equivalent, so the
+# expected file is hand-written for both OSes (plan 5.20.11 MT3, 5.17.4 as
+# amended for MC-1). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdint.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define STOPWATCH "System.Diagnostics.Stopwatch"
+
+__attribute__((msil_method(STOPWATCH, "Frequency", "field int64", "System")))
+long long stopwatch_frequency(void);
+
+__attribute__((msil_method(STOPWATCH, "IsHighResolution", "field bool",
+                           "System")))
+_Bool stopwatch_is_high_resolution(void);
+
+__attribute__((msil_method(STOPWATCH, "GetTimestamp", "int64()", "System")))
+long long stopwatch_timestamp(void);
+
+__attribute__((msil_method("System.BitConverter", "IsLittleEndian",
+                           "field bool")))
+_Bool is_little_endian(void);
+
+__attribute__((msil_method("valuetype System.IntPtr", "Zero",
+                           "field native int")))
+intptr_t intptr_zero(void);
+
+__attribute__((msil_method("System.String", "Empty", "field string")))
+mc_handle string_empty(void);
+
+__attribute__((msil_method("valuetype System.DateTime", "MinValue",
+                           "field valuetype System.DateTime")))
+mc_handle date_min(void);
+
+__attribute__((msil_method("valuetype System.DateTime", "MaxValue",
+                           "field valuetype System.DateTime")))
+mc_handle date_max(void);
+
+__attribute__((msil_method("valuetype System.DateTime", "get_Ticks",
+                           "instance int64()")))
+long long date_ticks(mc_handle date);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(mc_handle s);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+int main(void) {
+  printf("Stopwatch.Frequency is positive: %d\n", stopwatch_frequency() > 0);
+  printf("Stopwatch.IsHighResolution: %d\n", stopwatch_is_high_resolution());
+  long long t0 = stopwatch_timestamp();
+  long long t1 = stopwatch_timestamp();
+  printf("GetTimestamp: positive %d, not backward %d\n", t0 > 0, t1 >= t0);
+  printf("BitConverter.IsLittleEndian: %d\n", is_little_endian());
+  printf("IntPtr.Zero: %lld\n", (long long)intptr_zero());
+
+  mc_handle empty = string_empty();
+  char16_t *u = string_units(empty);
+  printf("String.Empty: handle nonzero %d, units not null %d, first unit %d\n",
+         empty != 0, u != NULL, u ? (int)u[0] : -1);
+
+  mc_handle lo = date_min();
+  mc_handle hi = date_max();
+  printf("DateTime.MinValue: handle nonzero %d, Ticks %lld\n", lo != 0,
+         date_ticks(lo));
+  printf("DateTime.MaxValue: handle nonzero %d, Ticks %lld\n", hi != 0,
+         date_ticks(hi));
+  mc_handle lo2 = date_min();
+  printf("a second read of MinValue is a new handle: %d\n", lo2 != lo);
+
+  handle_free(lo2);
+  handle_free(hi);
+  handle_free(lo);
+  handle_free(empty);
+  puts("freed four handles");
+  return 0;
+}

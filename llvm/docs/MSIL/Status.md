@@ -1,6 +1,6 @@
 # MSIL backend: status of Phase 2
 
-State after milestone M27 (2026-11-04, branch `msil`, with upstream llvm-project main at
+State after milestone MC-1 (2026-11-16, branch `msil`, with upstream llvm-project main at
 `1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
 M24-M35, M24 laid the foundations of Phase 3, M25 built the helper archive
 `clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple, and M26 made
@@ -138,7 +138,15 @@ the target frame's status block, which a prefix of the `jmp_buf` names, and thro
 exception that only that frame's filter accepts, so no exception type is shared between
 assemblies; `msil-ld` keeps refusing to bind the family to a native library, every `longjmp` is
 a first-chance CLR exception (7-44 us, by runtime), and a `longjmp` through native frames will
-work on Windows only (section 2, "setjmp and longjmp (M27)"). How to build and use
+work on Windows only (section 2, "setjmp and longjmp (M27)"). MC-1 let C and C++ call .NET
+members directly: a function declaration with `msil_method(TYPE, MEMBER, SIGNATURE)` becomes a
+small IL stub that converts the arguments (UTF-8, UTF-16 and UTF-32 strings, integers as
+enums, GCHandle handles for objects and boxed value types), makes one member access and
+converts the result, `msil_catch` maps listed exceptions to error codes and lets every other
+exception escape, `dllexport` (Windows triples) also exports the function under its C name and
+`constructor` calls it before `main`, and `msil-ld` binds the member through the built-in table
+or `--reference` and checks enum widths and value types against the references (section 2,
+"Managed calls from C and C++ (MC-1)"). How to build and use
 it is in [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in
 section 3 of [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every
 later amendment.
@@ -413,7 +421,7 @@ named below are `msil_also_run` entries of `net8` and `wsl-net10`, which also ru
 
 | Criterion | How Phase 1 meets it |
 |---|---|
-| About 25 small C programs compile at `-O0` and `-O2`, run, and match native clang's output, as a lit suite in CI | `msil/test/M1/11-programs/` has 20 programs (fib, sieve, quicksort over a global array, mergesort, n-queens, hanoi, matrix multiplication, crc32, a string table with relocations, a bytecode VM dispatching through a function-pointer table, fnv1a, string functions, bignum addition, life, fixed-point mandelbrot, collatz, a struct-heavy simulation, linked lists and binary trees in static pools, K&R code). With the struct and function-pointer programs of `08-fnptr/`, `09-structs/` and `10-calls/` and the other execution tests in `msil/test/M1/` (143 in all: 99 C programs, 43 IR files and one test that compiles a C program with `-g`), each test runs at `-O0` and `-O2` and its transcript (stdout and exit status) must equal the one a native clang build produces (on Windows linked with the compiler-rt builtins of the Visual Studio LLVM, for the `__int128` helpers a native build calls; for the Linux triple in WSL, a native Linux build linked on Windows and run in WSL, the E7 oracle of GettingStarted.md section 7); the gate also runs every C program of `msil/test/M1` at `-O1`, `-O3`, `-Os` and `-Oz` and every IR test that uses `%{msil_ll}` (40 of the 43) at `-O1` and `-O3` (the `more-levels` leg, on .NET 8); only the three trap tests `01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll` and `03-control/trap.ll` pin `-O0` and `-O2` in every leg, through CIL objects or, under `asm`, through llc's text and ilasm. The `-g` test, `01-int/calls-arith-debug-info.test`, is a `%{msil_prog}` composite of `calls-arith.c` with `-g` (`%{msil_copts}` is `-g`, `%{msil_expect}` is `calls-arith`): it runs at each leg's `msil_opt_levels` (so `more-levels` runs it at `-O1`, `-O3`, `-Os` and `-Oz`) and gets the composite's runs (`msil_also_run`'s runtimes, the native oracle, .NET Framework), and under `asm` it adds `clang -S -g` and ilasm at `-O0` and `-O2`. The gate runs the suite on .NET 8 (tiered and with `DOTNET_TieredCompilation=0`), .NET 10, .NET Framework 4.8, and in WSL on a private .NET 10 for `x86_64-unknown-linux-gnu-msil` (tiered and optimizing JIT), assembles the programs with the Framework ilasm, the modern Windows ilasm and the Linux ilasm, and round-trips them through the modern ildasm and ilasm (Design.md 5.5). It also runs the upstream regression tests of the 55 upstream files the fork changes (327 lit tests, all of `TargetParserTests` and `MCTests`, and `LLDAsLibAllTests`; the upstream-hooks check of GettingStarted.md section 7). Since M18 it also requires that the backend's binary encoding of every method of the C programs of `msil/test/M1`, at `-O0` and `-O2`, equal what ilasm assembles from the same text (the `encoder-parity` leg; section 2, "Binary CIL"). Since M19 it also requires that the CIL object `clang -c` writes of each C program of `msil/test/M1` at `-O0` and `-O2`, and of each program of `11-programs` for the Linux triple, list exactly like ilasm's object of its object-form text, link-info record included, come out the same from two directories, open in `mdcanon` and both ildasms, agree with its record, and give `llvm-nm`, `llvm-ar` and, in WSL, GNU `nm` and `ar` the symbols of plan 5.8.6 (the `obj-text` and `obj-text-wsl` legs; section 2, "CIL objects"). Since M20 the `obj` leg runs every test of `msil/test/M1` again as a program that `msil-ld` links from CIL objects (`clang -c`, or `llc -filetype=obj` for the IR tests) into an image of its own, at `-O0` and `-O2`, on .NET 8 and .NET Framework 4.8 against the native oracle, with the equivalence oracles O3 (the image of the one-object link lists exactly like ilasm's image of the same file's `-S` text, up to the normalizations of section 2) and O6 (it gets no PEVerify metadata message that ilasm's image does not get), and the `obj-wsl` leg runs the programs of `11-programs` and `msil/test/M2` that way in WSL on .NET 10 (section 2, "CIL object links and the image"). Since M21 the legs `refs-net48`, `refs-net8` and `refs-net10` run `11-programs`, `msil/test/M2/00-link` and `msil/test/M2/05-refs` through CIL objects linked against a reference pack: the .NET Framework 4.8 reference assemblies on .NET 8 and .NET Framework 4.8 (with O3 up to the assembly scopes, and O6), the .NET 8 pack on .NET 8 and the .NET 10 pack on .NET 10 (ILVerify against the pack, PEVerify skipped), and `check-mscorlib-safe.py` runs every entry of `msil-ld`'s built-in `[mscorlib]` table on .NET Framework 4.8, .NET 8, .NET 10 and WSL .NET 10 (section 2, "Reference assemblies and the base class library"). Since M22 the legs that run `msil/test/M2` also run its `04-shared` directory and the library rows of the link-semantics matrix: programs linked against libraries that the test builds with `msil-ld -shared` (a library and its program, two- and three-library cycles, initialization order, shared C library state, a missing library and a missing member, and a C# program compiled by csc against a library), against native oracles built from the same sources as DLLs on Windows and as `-Bsymbolic` ELF shared objects in WSL, also with `DOTNET_TieredCompilation=0` and bound to the .NET 8 pack on .NET 10 (section 2, "Libraries and assembly-to-assembly linking"). CI (`.github/workflows/msil-ci.yml`) runs the same scripts as the local gate; it has a manual trigger only until the repository owner enables more |
+| About 25 small C programs compile at `-O0` and `-O2`, run, and match native clang's output, as a lit suite in CI | `msil/test/M1/11-programs/` has 20 programs (fib, sieve, quicksort over a global array, mergesort, n-queens, hanoi, matrix multiplication, crc32, a string table with relocations, a bytecode VM dispatching through a function-pointer table, fnv1a, string functions, bignum addition, life, fixed-point mandelbrot, collatz, a struct-heavy simulation, linked lists and binary trees in static pools, K&R code). With the struct and function-pointer programs of `08-fnptr/`, `09-structs/` and `10-calls/` and the other execution tests in `msil/test/M1/` (143 in all: 99 C programs, 43 IR files and one test that compiles a C program with `-g`), each test runs at `-O0` and `-O2` and its transcript (stdout and exit status) must equal the one a native clang build produces (on Windows linked with the compiler-rt builtins of the Visual Studio LLVM, for the `__int128` helpers a native build calls; for the Linux triple in WSL, a native Linux build linked on Windows and run in WSL, the E7 oracle of GettingStarted.md section 7); the gate also runs every C program of `msil/test/M1` at `-O1`, `-O3`, `-Os` and `-Oz` and every IR test that uses `%{msil_ll}` (40 of the 43) at `-O1` and `-O3` (the `more-levels` leg, on .NET 8); only the three trap tests `01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll` and `03-control/trap.ll` pin `-O0` and `-O2` in every leg, through CIL objects or, under `asm`, through llc's text and ilasm. The `-g` test, `01-int/calls-arith-debug-info.test`, is a `%{msil_prog}` composite of `calls-arith.c` with `-g` (`%{msil_copts}` is `-g`, `%{msil_expect}` is `calls-arith`): it runs at each leg's `msil_opt_levels` (so `more-levels` runs it at `-O1`, `-O3`, `-Os` and `-Oz`) and gets the composite's runs (`msil_also_run`'s runtimes, the native oracle, .NET Framework), and under `asm` it adds `clang -S -g` and ilasm at `-O0` and `-O2`. The gate runs the suite on .NET 8 (tiered and with `DOTNET_TieredCompilation=0`), .NET 10, .NET Framework 4.8, and in WSL on a private .NET 10 for `x86_64-unknown-linux-gnu-msil` (tiered and optimizing JIT), assembles the programs with the Framework ilasm, the modern Windows ilasm and the Linux ilasm, and round-trips them through the modern ildasm and ilasm (Design.md 5.5). It also runs the upstream regression tests of the 82 upstream files the fork changes (426 lit tests, all of `TargetParserTests` and `MCTests`, and `LLDAsLibAllTests`; the upstream-hooks check of GettingStarted.md section 7). Since M18 it also requires that the backend's binary encoding of every method of the C programs of `msil/test/M1`, at `-O0` and `-O2`, equal what ilasm assembles from the same text (the `encoder-parity` leg; section 2, "Binary CIL"). Since M19 it also requires that the CIL object `clang -c` writes of each C program of `msil/test/M1` at `-O0` and `-O2`, and of each program of `11-programs` for the Linux triple, list exactly like ilasm's object of its object-form text, link-info record included, come out the same from two directories, open in `mdcanon` and both ildasms, agree with its record, and give `llvm-nm`, `llvm-ar` and, in WSL, GNU `nm` and `ar` the symbols of plan 5.8.6 (the `obj-text` and `obj-text-wsl` legs; section 2, "CIL objects"). Since M20 the `obj` leg runs every test of `msil/test/M1` again as a program that `msil-ld` links from CIL objects (`clang -c`, or `llc -filetype=obj` for the IR tests) into an image of its own, at `-O0` and `-O2`, on .NET 8 and .NET Framework 4.8 against the native oracle, with the equivalence oracles O3 (the image of the one-object link lists exactly like ilasm's image of the same file's `-S` text, up to the normalizations of section 2) and O6 (it gets no PEVerify metadata message that ilasm's image does not get), and the `obj-wsl` leg runs the programs of `11-programs` and `msil/test/M2` that way in WSL on .NET 10 (section 2, "CIL object links and the image"). Since M21 the legs `refs-net48`, `refs-net8` and `refs-net10` run `11-programs`, `msil/test/M2/00-link` and `msil/test/M2/05-refs` through CIL objects linked against a reference pack: the .NET Framework 4.8 reference assemblies on .NET 8 and .NET Framework 4.8 (with O3 up to the assembly scopes, and O6), the .NET 8 pack on .NET 8 and the .NET 10 pack on .NET 10 (ILVerify against the pack, PEVerify skipped), and `check-mscorlib-safe.py` runs every entry of `msil-ld`'s built-in `[mscorlib]` table on .NET Framework 4.8, .NET 8, .NET 10 and WSL .NET 10 (section 2, "Reference assemblies and the base class library"). Since M22 the legs that run `msil/test/M2` also run its `04-shared` directory and the library rows of the link-semantics matrix: programs linked against libraries that the test builds with `msil-ld -shared` (a library and its program, two- and three-library cycles, initialization order, shared C library state, a missing library and a missing member, and a C# program compiled by csc against a library), against native oracles built from the same sources as DLLs on Windows and as `-Bsymbolic` ELF shared objects in WSL, also with `DOTNET_TieredCompilation=0` and bound to the .NET 8 pack on .NET 10 (section 2, "Libraries and assembly-to-assembly linking"). CI (`.github/workflows/msil-ci.yml`) runs the same scripts as the local gate; it has a manual trigger only until the repository owner enables more |
 | FileCheck tests on the emitted `.il` | 138 llc and MIR tests in `llvm/test/CodeGen/MSIL` (131 `.ll`, among them M23's `ctor-envp-text.ll` for constructors that take `argc`, `argv` and `envp` in whole-program text on the Linux triples (glibc and musl) and their error on the Windows triples, M22's `asm-comment-barrier.ll` for inline asm whose template holds only comments, `lto-module-flags.ll` for the module flags of `msil-ld`, `imports-linked.ll` for the linked import mode of M15, the 12 `object-*.ll` tests of M19, which write CIL objects with `llc -filetype=obj`, read them back with `llvm-cil-dump`, `llvm-nm` and `llvm-ar` and compare them with ilasm's objects of their object-form text, and M20's `sections-whole-program.ll`, `reloc-loop-threshold.ll`, `function-bitcasts-lto.ll` and `imports-linked-data.ll` for the named sections, the relocation loop, the call adapters of LTO and the data imports of linked text, and 7 `.mir`; both x86_64 triples, the aarch64 triples where the ABI differs, ilasm round trip where a module is complete; since M18 they pin the shortest forms and `nomangle`) and one test there of the bitcode symbol table (`irsymtab-linker-options.ll`), the 9 MC tests of `llvm/test/MC/MSIL` (M18: `llc -show-mc-encoding` for every operand kind, branches at the short-form boundaries, `switch` entries and the synthesized `.cctor` and `'<msil>Main'`, the shortest forms, the BCL members, every operand class in both spellings of `-M object-form`, `nomangle` on four triples with its ImplMap flags 0x0201 read back from ilasm's image, and the clean error of `llvm-mc -filetype=obj`), 22 clang tests in `clang/test/CodeGen/MSIL` (including `design-milestone1.c`, Design.md 12's literal command on fib, and, since M19, `emit-obj.c`, whose `cc1 -emit-obj` writes CIL objects and which reads the headers and record of the objects of `-c` and clang-cl `/c`, and `section-globals.c`, whose constructor registered in `.init_array` or `.CRT$XCU` compiles since M20 and runs from `.cctor`), the driver tests in `clang/test/Driver/msil-toolchain.c` and, for the MSIL toolchain of M14, `msil-link.c` (with M15's `--ucrtbase-imports` on windows-msvc), `msil-lto.c` and `msil-header-search.c`, and, for M19, `msil-object.c` (`-c` and clang-cl `/c` write CIL objects: their cc1 jobs and errors, and the bytes from two directories, `llvm-nm` letters and object-form text of what they write), and, for M22, `msil-shared.c` (`-shared` on the four x86_64 MSIL triples and clang-cl `/LD` and `/LDd` give `msil-ld` `--shared`), the 111 `msil-ld` tests in `lld/test/MSIL` (by prefix 28 `obj-`, 23 `native-`, 17 `bcl-`, 15 `shared-` and 28 others: `dispatch.test` of M13, 24 of the 25 of M14, ten of which M15 updated to its rules, the 21 `native-*.test` of M15, whose ELF shared objects, import libraries and DLLs `yaml2obj`, `llvm-mc`, `ld.lld`, `lld-link` and `llvm-lib` make, the 25 `obj-*.test` of M20, which link CIL objects of `llc -filetype=obj` and read the image with `llvm-cil-dump`, and M21's 17 `bcl-*.test`, which bind against the synthetic reference assemblies of `Inputs/fakepack/` (ilasm sources, their `yaml2obj` images and the generator `gen.py`), with `obj-ctors-null.test` and `start-stop-hidden.test` for two follow-ups of M20, and M22's 15 `shared-*.test`, which build libraries with `msil-ld -shared` and link programs and libraries against them, and `lto-code-model.test`, `native-object-inputs.test`, `obj-ctors-args.test` and `obj-ctors-main-args.test` for three of the four defects of the Rust experiment, and M23's `output-name-netcore.test` for the warning about a `.exe` bound to .NET's core library and `native-alternatename.test` for `/alternatename` over native machine code; `dispatch.test` and `dispatch-coff.test` check which program names reach `msil-ld` and that the other lld flavors, COFF's included, dispatch as before; all but `dispatch-coff.test` also run with `LLD_IN_TEST=2`), the 14 tests of the ECMA-335 tools `llvm-cil-dump` and `llvm-cil-copy` in `llvm/test/tools` (M17; their inputs are `yaml2obj` copies of ilasm images), and unit tests in `llvm/unittests/Target/MSIL` (`MSILImportsTest` pins the standalone import table and the linked import mode; M18's suites `MSILCILRecords`, `MSILBCLMembers`, `MSILBranchForms`, `MSILMCCodeEmitter` and `MSILAsmBackend`, 42 tests, pin the 219 CIL records against `CILOpcodes.def`, the BCL list, the choice of branch forms, the bytes and fixups of every record and the asm backend, and `MSILTargetStreamerTest` the streamer and both spellings of every operand class) and, for the ECMA-335 library (its headers and the link-info record of M13, its writer half of M16, its reader, PE writer, codecs and dumper of M17, and the link model of M20), `llvm/unittests/CLI` (`CLITests`, 21 suites; 426 tests, at least 210 by the floor of the gates from M20; since M22 `CLISymbolTableTest` has 19, at least 9 by a second floor, for the symbol table's INTERFACE flag and ABI descriptors) |
 | `ilverify` reports no stack-shape errors | replaced by the verification policy of section 4 (decision D21, approved by the user 2026-10-12), enforced in every gate |
 
@@ -961,12 +969,16 @@ Windows ones do not; every MSIL triple caps the lock-free atomic width at 64 bit
 
 Narrow results (upstream merge U2): since upstream `05c3ff5c8c06` (merged with `1838cefa99c0`)
 clang marks no `char`, `short` or `_BitInt` result `zeroext` or `signext` on the Linux MSIL
-triples either, as on the Windows ones, so on every MSIL triple the upper bits of the `int32`
-that carries such a result are unspecified and the caller of an exported function narrows the
-result itself; a `bool` result stays zero-extended. Both sides of a call normally come from the
-same clang. CIL objects and libraries built for a Linux triple before the merge marked such
-results and are not narrow-result compatible with ones built after it, which matters only once
-there are toolchain releases (plan section 12, row 'Narrow results after upstream merge U2').
+triples either, as on the Windows ones, so on every host MSIL triple the upper bits of the
+`int32` that carries such a result are unspecified and the caller of an exported function
+narrows the result itself; a `bool` result stays zero-extended. The portable triples
+`msil64-unknown-dotnet` and `msil32-unknown-dotnet` differ: their ABI (P-1a), built on clang's
+`DefaultABIInfo`, marks `char` and `short` results and parameters, and `_BitInt` ones narrower
+than `int`, `signext` or `zeroext` (section 2, "Managed calls from C and C++ (MC-1)"). Both
+sides of a call normally come from the same clang. CIL objects and libraries built for a Linux
+triple before the merge marked such results and are not narrow-result compatible with ones
+built after it, which matters only once there are toolchain releases (plan section 12, row
+'Narrow results after upstream merge U2').
 `msil/test/M2/08-semantics/narrow-result-mismatch.test` pins the IR on both triples, and
 `msil/test/M3/03-helpers/bitint-abi.test` (M24) runs `_BitInt(N)` arguments and results (N = 7,
 17, 33, 65 and 127) on both triples against the native oracle.
@@ -984,7 +996,12 @@ assemble them with `ilasm -arm64`; execution stays x86_64-only (D6).
 ### C and LLVM IR
 
 - Integers of every width: 32-bit values are `int32`; pointers and 64-bit integers are
-  `native int` (D2; `int64` is never emitted). `__int128` arithmetic, shifts and compares are
+  `native int` (D2): no register, local, parameter or result of the program's methods is `int64`,
+  and an `int64` is on the stack only inside a few short instruction sequences
+  ([Design.md](Design.md) 2.3), for example `ldc.i8` then `conv.i` for a constant outside the
+  `int32` range, and `conv.i8` before an `int64` parameter and `conv.i` after an `int64` result of
+  a .NET member (`conv.u8` and `conv.u` for a managed call's `uint64`; `memmove`'s
+  `Buffer::MemoryCopy`, a managed call). `__int128` arithmetic, shifts and compares are
   expanded inline, and since M12 so are `__int128` division and remainder by any divisor, the
   conversions between `__int128` and `float` or `double`, saturating ones included, and the
   signed and unsigned conversions from `__bf16` to `__int128` (LLVM's ExpandIRInsts, as NVPTX
@@ -1907,20 +1924,27 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
   generic), generic arity, parameter count, return type and parameter types; only public ones
   count. A method other than a constructor that the requested type lacks is searched for in
   its base types, nearest first, up to a type without a base type, and the MemberRef keeps
-  the requested type as its parent (plan 5.11.4), where Roslyn would name the declaring type.
+  the requested type as its parent (plan 5.11.4), where Roslyn would name the declaring type;
+  only a managed call's access of a method that a value type or an enum only inherits names the
+  declaring type (MC-1, below).
   Constructors are not inherited (ECMA-335 II.10.5.1): `.ctor`, `.cctor` and every attribute
   constructor are looked up on the requested type only. Fields, like constructors, are looked
   up on the requested type only, because the runtime does not resolve a field MemberRef
   through base types: `ldfld` or `ldsfld` that names a derived type for a field of its base
   type throws `MissingFieldException` on .NET Framework 4.8, .NET 8 and .NET 10. For a
   constructor or a field the undefined-member error below then lists only that type's own
-  constructors or fields of that name. The runtime resolves a method MemberRef from its
-  parent upwards to the first method of that name and signature, custom modifiers included,
-  whatever its accessibility, and checks access afterwards (`MethodAccessException`), so a
-  non-public method of the requested type, or of a type in between, with the public base
-  match's name and signature, custom modifiers included, makes the request the
-  undefined-member error, whose list names that method with ` (not public)`; one that
-  differs from the match only in a custom modifier does not stop the binding. Every base type that a method request's search needs binds by
+  constructors or fields of that name. The runtime resolves a method MemberRef whose parent is a
+  reference type from that parent upwards to the first method of that name and signature, custom
+  modifiers included, whatever its accessibility, and checks access afterwards
+  (`MethodAccessException`), so a non-public method of the requested type, or of a type in
+  between, with the public base match's name and signature, custom modifiers included, makes the
+  request the undefined-member error, whose list names that method with ` (not public)`; one
+  that differs from the match only in a custom modifier does not stop the binding. From a
+  value-type or enum parent the runtime does not search the base types: such a MemberRef to a
+  method that the type only inherits throws `MissingMethodException` (.NET Framework 4.8, .NET 8
+  and .NET 10), so a managed call names the declaring type in the access of such a method (MC-1,
+  below); the binder's search, and its errors, are the same for such a parent. Every base type
+  that a method request's search needs binds by
   the type rules above (a field request never binds a base type): one that the references do
   not define, define twice or forward to an assembly that is not among them gives that type's
   own error (`type '<Ns.Type>' is not defined in the references (<n> assemblies)`, `... is
@@ -2008,7 +2032,9 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
   (`msil/test/harness/mscorlib-safe.test`). M21's three new entries, `NativeLibrary` with `NativeLibrary::Load(string)` and
   `GetExport(native int, string)`, are not mscorlib-safe and never in the table.
 - **Text is never bound (5.11.8).** `clang -S`, llc and `--lto-emit-asm` text keep their
-  `[mscorlib]` scopes and the one `.assembly extern mscorlib`, whatever the references; with
+  `[mscorlib]` scopes and the one `.assembly extern mscorlib`, whatever the references (a managed
+  call's member and the classes and value types that its declaration names take the declaration's
+  ASSEMBLY as their scope when it has one: "Managed calls from C and C++ (MC-1)" below); with
   `--lto-emit-asm`, `msil-ld` still reads the references and applies the identity and
   core-library checks, so a bad set fails there too, and binds nothing. Its native data
   imports therefore always use M20's helper (`kernel32.dll`, `dlopen`/`dlsym`), even with
@@ -2036,7 +2062,10 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
   data-import helper uses `NativeLibrary.Load` and `GetExport` exactly when the references
   define both, so a program bound to the .NET 8 or 10 pack imports native variables without
   `kernel32.dll` or `dlopen`, on .NET 8, .NET 10 and WSL.
-- **Not supported in objects yet:** a MemberRef whose parent is not a TypeRef, and a MethodSpec
+- **Not supported in objects yet:** a MemberRef whose parent is neither a TypeRef nor a TypeSpec
+  `valuetype T` of a TypeRef T (an object gives a managed call's static member such a parent,
+  MK3: `msil-ld` requests the member on T, and the image's MemberRef has T's TypeRef parent, as
+  C# writes it), and a MethodSpec
   (a generic method instantiation, which C does not produce): `<file>: member reference
   '<name>' has a parent other than a type reference, which is not supported yet`, `<file>:
   token 0x<8X> names a generic method instantiation, which is not supported yet`.
@@ -3171,11 +3200,11 @@ LR4).
   text, so that an atomic operation names its `__atomic_*` function as on the host triples), no
   f80 or f128 row and no `*ti*` name.
 - **msil32 is refused until P-4 (plan 5.18.11).** clang accepts `--target=msil32-unknown-dotnet`
-  for `-fsyntax-only` and `-E` (32-bit `long` and pointers, `__msil32__`, no `__int128`; its
-  data model stays amendable until P-4), but code generation, the PE writer and msil-ld refuse
-  it with T-P1, `target 'msil32-unknown-dotnet' is not supported yet: only
-  msil64-unknown-dotnet is implemented`; `clang -c` prints it once (the object writer adds no
-  second error).
+  for `-fsyntax-only`, `-E` and LLVM IR (`-emit-llvm`) (32-bit `long` and pointers,
+  `__msil32__`, no `__int128`; its data model stays amendable until P-4), but code generation,
+  the PE writer and msil-ld refuse it with T-P1, `target 'msil32-unknown-dotnet' is not
+  supported yet: only msil64-unknown-dotnet is implemented`; `clang -c` prints it once (the
+  object writer adds no second error).
 - **The data model (plan 5.18.2 PC2, frozen at P-1b's commit).** `MSILPortableTargetInfo` in
   `clang/lib/Basic/Targets/MSIL.h` derives from `TargetInfo` itself, not from a native target,
   so no host behaviour leaks in:
@@ -3363,8 +3392,8 @@ LR4).
   | Cyclic dynamic allocas, `__builtin_frame_address` | M32: M26's error | M32's shadow stack |
   | `strsignal`, `signal.h`, `raise`, `sigprocmask` | absent until a signal design | |
   | fenv (`fe*`) | absent (`math_errhandling` is `MATH_ERRNO` only) | no step plans it |
-  | Managed calls from C | MC-1 | MC-1's attribute |
-  | `msil32-unknown-dotnet` code generation and links | P-4: T-P1 | P-4 |
+  | Managed calls from C | work since MC-1, through the built-in table only until P-2's links pass `--reference` | the fuller managed calls after Phase 3 ("Managed calls from C and C++ (MC-1)" below) |
+  | `msil32-unknown-dotnet` code generation and links | P-4: T-P1 (MC-1's T-M19 text names `msil64-unknown-dotnet` there) | P-4 |
   | Native libraries and import attributes (T-P4, T-P2); constructors with arguments, null slots and the T-P8 sections; `-S` externals (T-P3); inline assembly with operands or text, architecture intrinsics; `__float128`, `-mlong-double-*`, `-fshort-wchar`; running in a 32-bit or big-endian process (T-P10) | permanent | |
 
   Variadic definitions and calls work from P-1a; native-callable function pointers and M28's
@@ -3917,7 +3946,7 @@ module without a reference to the `setjmp` family is left untouched and keeps it
   with N6's line, and under `--lto-emit-asm`, which cannot import from `c.dll`, the backstop
   `undefined function 'sigprocmask' was not resolved by msil-ld`. M27's execution tests run on
   the host triples only (`sjlj-lower.ll` checks the lowering's IR, the mask included, on
-  `msil64-unknown-dotnet` too); MC-1's `msil/test/Portable/03-sjlj` will be the first portable
+  `msil64-unknown-dotnet` too); MC-1's `msil/test/Portable/03-sjlj` holds the first portable
   execution tests.
 - **Verification** (D21's filter part, plan 5.17.16; section 4). The wrappers' clauses need no
   new allowance: pass 1 accepts no new ILVerify code or PEVerify message, and the neutralized
@@ -3992,12 +4021,1043 @@ the five of `zlib-full` with its two in `contrib`, the two of `lua`, eleven `det
 `verify-eh-filter-masked.test` and `run-inputs.test`), and `CLITests` with 461 tests (M27 adds
 none).
 
+### Managed calls from C and C++ (MC-1)
+
+MC-1 (plan section 6, MC-1) implements plan contract 5.20, the first stage of the managed-calls
+goal (the user's goal of 2026-10-22, moved before P-2 by the program order of 2026-11-01): a C
+or C++ function declaration names one public .NET member, and every call of it calls a small
+IL stub that the backend writes into the calling module, which converts the arguments, makes
+exactly one member access and converts the result. Its scope is what P-2's operating-system
+layer of `c.dll` needs (plan 5.19), and it applies on every MSIL object-format triple, the
+host triples and `msil64-unknown-dotnet` alike, in `-S` and llc text, in CIL objects, under
+LTO and in `--lto-emit-asm` text. It adds no link-info record minor, no pass slot and no
+`pipeline.ll` change, no trailer definition, no runtime support assembly and no exception type
+of its own, and a module without a managed-call declaration keeps its IL (the gate's
+`il-snapshot.py --compare` of `msil/test/M1` and `msil/test/M2` against HEAD's IL). Before
+MC-1, `msil_method` was an unknown attribute (clang's warning) and a call of such a
+declaration an undefined symbol at link time. The user's decision brief answers of 2026-11-01
+fixed the spelling (brief Q23 (a)), the exception rule (Q24 (A)), value types as opaque boxed
+handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates (Q27 (a)).
+
+- **The attributes (plan 5.20.2).** Two clang attributes, each in the GNU and the
+  `[[clang::...]]` spelling, valid on MSIL object-format triples only (the new `TargetSpec`
+  `TargetMSIL`, `T.isOSBinFormatMSIL()`): elsewhere they are clang's `unknown attribute ...
+  ignored` warning, and `__has_attribute(msil_method)` is true exactly on MSIL triples, so a
+  header can guard on it. clang's attribute reference documents both (`AttrDocs.td`).
+
+  ```c
+  __attribute__((msil_method(TYPE, MEMBER, SIGNATURE [, ASSEMBLY])))
+  __attribute__((msil_catch(EXCEPTION_TYPE, CODE)))        /* repeatable; order is significant */
+  ```
+
+  - TYPE is `"Ns.Name"` (or `"Ns.Outer/Inner"` for a nested type) for a reference type,
+    `"valuetype Ns.Name"` for a value type or an enum (the prefix is required for an instance
+    member, whose `this` it sets, and for a constructor; a static method or static field may
+    leave it out, as IL and C# do, and when it is given `msil-ld` checks it: T-M16, or T-M8
+    without references), or an array
+    type `"<elem>[]"`, whose only member is `".ctor"` with the signature
+    `"instance void(int32)"`: `newarr` of that length, with an element that is a primitive,
+    `string`, `object` or `class Ns.T`.
+  - MEMBER is a method name, `".ctor"` (`newobj`, or `newarr` for an array TYPE), a property
+    accessor by its accessor name (`"get_Length"`), or a field name, read only (`ldsfld`,
+    `ldfld`).
+  - SIGNATURE is the member's own CIL signature as its definition declares it, in canonical
+    listing v1 text: `"[instance ]RET(P1, P2, ...)"` or `"[instance ]field T"`, with the
+    listing primitives (`void` as a return only, `bool`, `char`, `int8` to `uint64`,
+    `float32`, `float64`, `native int`, `native uint`, `string`, `object`), `class Ns.T`,
+    `valuetype Ns.T`, `T*` and `T[]`. The parser is `llvm/include/llvm/CLI/ManagedSignature.h`
+    (header-only, shared by clang, the target and the tests).
+  - - ASSEMBLY, optional, is a resolution scope in **text** output only, `-S`, llc and
+    `--lto-emit-asm`: the scope of the declaration's types, the types that the stub names by
+    their class names for the declaration, in the member reference and as the operands of
+    `castclass`, `box`, `unbox`, `unbox.any`, `newarr`, `isinst`, `constrained.` and, in the
+    run-time tests of whole-program text's `enum` conversions ("Output forms" below), `ldtoken`
+    and `sizeof`; the default is `mscorlib`. They are TYPE (the member's parent), the classes
+    and value types of SIGNATURE (its return and parameter types), the element type of an array
+    TYPE, which `newarr` names by its class even when it is a primitive, `string` or `object`
+    (`newarr [mscorlib]System.Byte` for `"uint8[]"`), `System.String` for a `string` parameter
+    passed as a handle, which the stub casts (`castclass [mscorlib]System.String`), and each
+    `msil_catch` type; any other primitive, `string` or `object` is an ILAsm keyword and takes
+    no scope, and the members of the built-in table that the conversions use (`GCHandle`'s among
+    them) and those that the run-time tests call (`System.Type`'s and the constructor of
+    `System.InvalidProgramException`) stay `[mscorlib]`, as does a member that a final form
+    (below) calls on the type that declares it instead of on TYPE (`System.Object`,
+    `System.ValueType` or `System.Enum`), with the types of its signature. No type can carry a
+    scope of its own: SIGNATURE and EXCEPTION_TYPE refuse one (`valuetype
+    [mscorlib]System.TimeSpan` is T-M2). That is a temporary limit: the right answer, text that
+    names each type in its own scope, is for the fuller managed calls, by a route that the user
+    has not chosen yet (plan section 12, the rows '5.20.2 MA4 and 5.20.6 MW2 amended' and
+    'Managed-calls input (a scope for each type in text output)'). Objects always name
+    `[msil.bcl]`, and `msil-ld` binds the member and each type by name against its references,
+    so ASSEMBLY never reaches a linked image. It exists so that standalone text can name
+    `[System]` for `System.Diagnostics.Stopwatch` and `Process`, which live in `System.dll` on
+    the .NET Framework and which .NET's `System.dll` forwards. Such text runs when all of the
+    declaration's types are `System.dll` types, as for `Stopwatch::StartNew`,
+    `Stopwatch::get_ElapsedMilliseconds`, `Process::GetCurrentProcess` and `Process::get_Id`. A
+    `System.dll` member with an `mscorlib` type among the declaration's types gets that type in
+    `[System]` too (the .NET Framework ilasm writes `[System]System.String` and
+    `[System]System.Object` as `mscorlib`'s, so the `castclass [System]System.String` of a
+    `string` parameter passed as a handle runs): the text of `Stopwatch::get_Elapsed` names its
+    result `[System]System.TimeSpan`, and a catch of `System.InvalidOperationException` tests
+    `isinst [System]System.InvalidOperationException`, and the .NET Framework 4.8, .NET 8 and
+    .NET 10 throw `System.MissingMethodException` for the first and `System.TypeLoadException`
+    for the second. Link such a declaration through `msil-ld` with `--reference`, or give it
+    ASSEMBLY `"netstandard"`, the .NET Standard 2.0 facade (in the GAC of the .NET Framework 4.8
+    and in the shared framework of .NET 8 and .NET 10), which forwards the .NET Standard 2.0
+    types of both assemblies: assembled with the .NET Framework ilasm, which writes the
+    reference `netstandard` 2.0.0.0 with the key `cc7b13ffcd2ddd51`, that text runs on the .NET
+    Framework 4.8, .NET 8 and .NET 10. An empty ASSEMBLY is T-M2. A dotted name (`mscorlib`,
+    `System.Runtime`) is printed as is; a name that is not an ILAsm dotted name (a space, `]`, a
+    quote, ...) is printed single-quoted, as ILAsm names are
+    (`['my lib']System.Math`), so ilasm accepts the text, which declares no `.assembly extern`
+    for it (Output forms, below).
+  - `msil_catch`'s EXCEPTION_TYPE names a reference type, and CODE is an integer constant
+    expression from 1 to 2147483647. The entries are tested in the order written, and the first
+    type that the exception is an instance of wins, so a derived type goes before its base.
+
+  The shape of P-2's `fopen` primitive (the codes are `c.dll`'s errno numbers):
+
+  ```c
+  typedef struct __dn_object *dn_handle;   /* an opaque handle type */
+  __attribute__((msil_method("System.IO.FileStream", ".ctor",
+      "instance void(string, valuetype System.IO.FileMode, valuetype System.IO.FileAccess, "
+      "valuetype System.IO.FileShare, int32)"),
+    msil_catch("System.IO.FileNotFoundException", ENOENT),
+    msil_catch("System.IO.DirectoryNotFoundException", ENOENT),
+    msil_catch("System.UnauthorizedAccessException", EACCES),
+    msil_catch("System.Text.DecoderFallbackException", EILSEQ),
+    msil_catch("System.IO.IOException", EIO)))
+  dn_handle __dn_fs_open(const char *path, int mode, int access, int share, int bufsize,
+                         int *err);
+  ```
+
+- **Where they apply (plan 5.20.3 MS1-MS4, MS6).** `clang/lib/Sema/SemaMSILManagedCall.cpp`
+  checks them, called from two `ProcessDeclAttribute` cases (`SemaDeclAttr.cpp`) and, in
+  `SemaDecl.cpp`, from one `mergeDeclAttribute` case, one call in `ActOnFunctionDeclarator` once
+  the declaration has all its attributes, one `checkMSILAsmLabel` call each in
+  `ActOnVariableDeclarator` and `ActOnFunctionDeclarator` (T-M22) and one call in
+  `ActOnPragmaWeakID` (T-M6 for `#pragma weak`). One `checkNewAttributesAfterDef` case in
+  `SemaDecl.cpp` keeps `msil_method` and `msil_catch` written after a definition, so that MS2
+  reports T-M14. One call of `msil::isStartupManagedCall` in
+  `Sema::ShouldWarnIfUnusedFileScopedDecl` (`SemaDecl.cpp`) keeps `-Wunused-function` and
+  `-Wunneeded-internal-declaration` from reporting a managed call with `constructor` or
+  `destructor`, written on it or inherited, which its forwarder calls (below), and one hook in
+  `Sema::getUndefinedButUsed` (`clang/lib/Sema/Sema.cpp`) skips a function with `MSILMethodAttr`
+  (`Sema.h` does not change).
+  - The subject is a function **declaration** without a body (T-M1), prototyped, not variadic
+    and not `main` (T-M12), and not a name that clang treats as a library builtin, such as
+    `strlen` without `-ffreestanding` or `-fno-builtin`, because clang could fold or expand such
+    a call without the stub (T-M12). In C++ it is a namespace-scope function: member functions,
+    function templates and their specializations, `constexpr` and `consteval` functions, and the
+    replaceable global allocation and deallocation functions (`operator new` and `operator
+    delete` in all their forms, which clang declares implicitly and whose calls new and delete
+    expressions make or omit) are T-M13; overloads are allowed, each with its own member and
+    mangled name.
+  - The declaration may have internal linkage, a C `static` declaration or one in a C++
+    anonymous namespace, because the backend's stub defines it (always as an internal
+    function), and it gives no `-Wundefined-internal` warning: the `getUndefinedButUsed` hook
+    above skips it, so `-Werror` builds such as P-2's managed C library are not broken. With
+    `constructor` or `destructor` (written on it or inherited) it gives no `-Wunused-function`
+    or `-Wunneeded-internal-declaration` warning either, as a `static` constructor or destructor
+    definition gives none, since its forwarder calls it ("Exports and start-up calls" below);
+    without them it keeps native clang's warnings (`unused function '<f>'`, or
+    `function '<f>' is not needed and will not be emitted` when an unevaluated operand is its
+    only reference), as a `static` declaration without a definition does. Such a
+    declaration works in object and LTO links alike: its IR name hashes its
+    `!msil.managed.calls` entry and its function type, both its C types and the IR type and
+    extension that the C ABI gives its result and each parameter (below), so the `static`
+    managed calls of two units share an IR name, and may share one stub under LTO, only when
+    their stubs are the same, and two different ones are never compared with each other.
+  - It cannot be combined with `import_module`, `import_name`, `alias`, `ifunc` or `weak`,
+    `#pragma weak` included (T-M6), and `msil_catch` needs `msil_method` on the same declaration
+    (T-M5) and cannot be combined with `constructor` or `destructor` (T-M20). `constructor` and
+    `destructor` are accepted on every triple, and `dllexport` and `dllimport` on the Windows
+    triples ("Exports and start-up calls" below); a constructor or destructor managed call's
+    parameters are checked (T-M19).
+  - `msil_method` goes on the first declaration of the function, and a later declaration
+    repeats the same arguments or omits them and inherits them (the asm-label rule); anything
+    else is T-M14, with a note at the first declaration. `msil_catch` lists merge the same way.
+  - TYPE, MEMBER and SIGNATURE must parse and agree (a field member needs a `field` signature,
+    `.ctor` is `instance` and returns `void`, an array TYPE has `instance void(int32)`), else
+    T-M2 with the offending token or the inconsistency; a form that the fuller goal adds says
+    `<form> is not supported for MSIL yet` (byref types, generic types, generic instantiations
+    and parameters, custom modifiers, `vararg` signatures, function pointer types, `typedref`,
+    multi-dimensional arrays, generic methods, and the two forms that make a delegate from a C
+    function pointer: a class's `.ctor` with the signature `instance void(object, native int)`,
+    the shape of a delegate's constructor, and `Marshal::GetDelegateForFunctionPointer`).
+  - The C parameters are, in order, a `this` handle when the signature is `instance` and
+    MEMBER is not `.ctor`, one parameter per CIL parameter, and a trailing `int *` when any
+    `msil_catch` is present; a wrong count is T-M4 with the expected breakdown, and a trailing
+    parameter of another type T-M5. The C result corresponds to the CIL result, to the
+    constructed object (or array) for `.ctor`, and to the field's type for a field.
+  - A catch type listed twice and a CODE out of range are T-M15. `System.Object`,
+    `System.Exception`, `System.SystemException` and the `ExternalException` family
+    (`System.Runtime.InteropServices.ExternalException`, `SEHException`) are refused for good
+    (T-M11): they would hide unrelated failures, and `ExternalException` carries M27's
+    `longjmp`.
+
+  The texts (plan 5.20.3's table, each pinned whole by MC-1's tests; `<f>` is the function's
+  name as written in source, and in the backend and `msil-ld` the stub's name without its
+  `__msil_mc.` prefix, the C name or the C++ mangled name):
+
+  | Id | Where | Text |
+  |---|---|---|
+  | T-M1 | clang | `'msil_method' is only allowed on a function declaration without a body` |
+  | T-M2 | clang | `'msil_method' <type\|member\|signature\|assembly> '<text>' is not valid: <reason>` (an empty ASSEMBLY: `'msil_method' assembly '' is not valid: it is empty`); for a catch type `'msil_catch' type '<text>' is not valid: <reason>` |
+  | T-M3 | clang | `<parameter <i>\|the 'this' handle\|the result> of '<f>' has C type '<T>', which cannot carry CIL type '<C>'` (`<i>` is the 1-based C position; a C type written through a typedef is followed by clang's ` (aka '<canonical type>')`) |
+  | T-M4 | clang | `'<f>' has <n> parameters; 'msil_method' needs <m> (<breakdown>)` (`1 parameter` when `<n>` is 1), for example `(1 CIL parameter and the 'msil_catch' error code)` |
+  | T-M5 | clang | `'msil_catch' needs 'msil_method' on the same declaration`; `the last parameter of '<f>' has C type '<T>'; 'msil_catch' needs a trailing 'int *' parameter` |
+  | T-M6 | clang | `'msil_method' cannot be combined with '<import_module\|import_name\|alias\|ifunc\|weak>'` |
+  | T-M7 | `msil-ld`, and the stubs of whole-program text when they run, as the message of a `System.InvalidProgramException` ("Output forms" below) | `managed call '<f>': parameter <i> passes <n> bits for '<E>', which is not an enum of that width` (`<i>` is the member's 1-based CIL parameter); for the result or a field read `managed call '<f>': the result has <n> bits for '<E>', which is not an enum of that width` |
+  | T-M8 | `msil-ld` | `managed call '<f>': '<V>' is a value type, which msil-ld checks only against references; pass --reference=<reference assemblies>` |
+  | T-M9 | `msil-ld` | `managed call '<f>': 'msil_catch' type '<T>' does not derive from System.Exception` |
+  | T-M10 | backend (`clang -c` and `-S`, llc), and `msil-ld` for the bitcode inputs of an LTO link, before LTO's optimizer | `taking the address of the managed-call function '<f>' is not supported for MSIL yet` (`msil-ld` prints it after the input and the function or global that holds the use: `<file>: function @<h>: `, `<file>: global variable @<g>: ` or `<file>: global value @<g>: `) |
+  | T-M11 | clang | `catching '<T>' in 'msil_catch' is not supported for MSIL` |
+  | T-M12 | clang | `'msil_method' is only allowed on a prototyped, non-variadic function other than 'main'`; `'msil_method' is not allowed on '<f>', which clang treats as a builtin function` |
+  | T-M13 | clang | `'msil_method' on a C++ <member function\|function template\|constexpr function\|consteval function\|replaceable global allocation function\|replaceable global deallocation function> is not supported for MSIL yet` |
+  | T-M14 | clang | `'<msil_method\|msil_catch>' must appear on the first declaration of '<f>'`; `'<msil_method\|msil_catch>' on this declaration of '<f>' differs from its first declaration`; each with the note `first declared here` |
+  | T-M15 | clang | `'msil_catch' code <v> is not in the range 1 to 2147483647`; `'msil_catch' lists '<T>' twice` |
+  | T-M16 | `msil-ld` | `managed call '<f>': '<T>' is a <value\|reference> type, but the declaration uses it as a <reference\|value> type` |
+  | T-M17 | `msil-ld` (object, mixed and every LTO link), and the backend for llc on a module that `msil-ld` did not link and, in clang and llc, for a direct call that does not match its declaration, which `msil-ld` reports for its bitcode inputs before LTO, as each unit's optimizer left them (slot P0, in its LTO code generation, only for a call that LTO's optimizer made or in an input whose symbol table names no undefined `__msil_mc.` symbol) | `managed call '<f>' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units`, or, for units whose declarations differ only in `dllexport`, `constructor` (its priority included) or `destructor` (the eighth operand), `managed call '<f>' is declared with different 'dllexport', 'constructor' or 'destructor' attributes in different translation units`; the first text also for units whose declarations make different stubs (different C prototypes, or on `msil64-unknown-dotnet` a `char` result built with and without `-funsigned-char`), and for a direct call whose function type differs from the declaration's or whose own `signext` or `zeroext` would change the declaration's stub, such as a narrow result read with the other signedness (a call through a cast pointer in one unit, or the call of a unit that declared another C prototype in an `llvm-link`ed module; such an extension arises only where the triple's ABI marks `char` and `short` values: their results and parameters on `msil64-unknown-dotnet`, only their parameters on the x86_64 Linux triples, and neither on the Windows and aarch64 Linux triples, where the same source compiles); ASSEMBLY counts only under `--lto-emit-asm` and for llc ("`msil-ld`: units that disagree" below) |
+  | T-M18 | `msil-ld` | `managed call '<f>': reading the literal field '<T>::<F>' is not supported for MSIL yet` (`<T>` and `<F>` as the declaration spells TYPE and MEMBER) |
+  | T-M19 | clang | `global constructor '<f>' takes arguments, which MSIL does not pass` (`global destructor` for a destructor; on `msil64-unknown-dotnet`, `constructor '<f>' takes arguments, which msil64-unknown-dotnet does not pass`, or `destructor`; on `msil32-unknown-dotnet`, which code generation refuses until P-4, the same text names `msil64-unknown-dotnet`), at the `constructor` or `destructor` attribute: a destructor managed call with any parameter; a constructor managed call with any parameter on the Windows triples and `msil64-unknown-dotnet`, and on the Linux triples one whose parameters are not a prefix of (`int32`, `native int`, `native int`) by the IL types that its C parameters lower to |
+  | T-M20 | clang | `'msil_catch' cannot be combined with '<constructor\|destructor>'`, at the first `msil_catch`, or at the attribute when the `msil_catch` is inherited; T-M19 is then not reported |
+  | T-M21 | `msil-ld` | `managed call '<f>' is exported from <A>, but <B> also defines '<f>'` (Windows triples): any other non-local definition of `<f>`, GLOBAL or WEAK, function or data, in a CIL object or a bitcode input (archive members and LTO's objects included), whatever the input order and whichever definition resolution keeps; `<A>` is the first input in load order with the forwarder, `<B>` the first other definer, and each name gets one line |
+  | T-M22 | clang | `asm label '<label>' is reserved for the MSIL toolchain (a managed-call stub)` for an asm label written with `__asm__` that starts with `__msil_mc.`, and the same text ending `(a managed-call forwarder)` for one that starts with `__msil_mc_ctor.` or `__msil_mc_dtor.`, on a variable or function declaration, a definition or not |
+  | T-M23 | `msil-ld` | `<file>: defines '<name>', which is reserved for the MSIL toolchain (a managed-call stub)` for a non-local definition named `__msil_mc.<...>` in a CIL object or a bitcode input, and the same text ending `(a managed-call forwarder)` for a non-local `__msil_mc_ctor.<s>` or `__msil_mc_dtor.<s>` that is not clang's forwarder; a local definition (the internal forwarder of a `static` managed call) is never reported |
+  | T-M24 | clang (CodeGen) | `managed calls '<f>' and '<g>' share the symbol '<s>' but differ in their <'msil_method' or 'msil_catch' arguments\|function types\|'dllexport', 'constructor' or 'destructor' attributes>` (the first that differs, in that order), at the later function's first declaration, with the note `'<f>' declared here` at the earlier one's: managed calls of two functions in one unit whose IR names are equal (asm labels, `#pragma redefine_extname`, a C++ asm label equal to another function's mangled name) |
+  | T-M25 | clang (CodeGen) | `'<dllexport\|constructor\|destructor>' on managed call '<f>' needs the forwarder symbol '<n>', which another declaration in this translation unit already uses`, with the note `'<x>' declared here`, when a variable or a function definition of the unit has the forwarder's name; only the `dllexport` form is reachable from source, since T-M22 refuses the names of the other forwarders |
+
+  The clang errors are in the "Semantic Issue" category with no diagnostic group, after M26's
+  `%L` format diagnostics in `DiagnosticSemaKinds.td`.
+- **Conversions (plan 5.20.3 MS5).** Each pair of a C type and its CIL type must match exactly
+  one row, else T-M3. The rows compare canonical C types: in C, where `char16_t`, `char32_t` and
+  `wchar_t` are typedefs of integer types, `unsigned short` takes CIL `char` and, as a pointer,
+  the `utf16` row, `unsigned int *` the `utf32` row, and on the x86_64 Linux triples and the
+  portable triples, whose `wchar_t` is `int`, `const int *` the `utf32` row. For a `valuetype V`
+  other than `GCHandle`, an integer parameter, result or field type (`intptr_t` and `uintptr_t`
+  included) is `enum`, never `boxed`; only the result of V's `.ctor` (always `boxed`) and the
+  `this` handle of V's instance members (`this-val`) take any handle type. No row takes a
+  `_BitInt(N)`, whatever N, a C++ scoped enumeration (`enum class`) or a `long double` yet. A
+  *handle type* is `void *`, `intptr_t`, `uintptr_t` or a pointer to an
+  incomplete struct type (the opaque typedef above), and a *pointer handle type* is `void *` or a
+  pointer to an incomplete struct type; widths are the target's (`native int` is 8
+  bytes on every triple that runs today):
+
+  | CIL type | C type | Code | The stub's IL |
+  |---|---|---|---|
+  | `bool` | `_Bool`/`bool`, or an integer of at most 32 bits | `bool` | in: `conv.u1` (i8), `conv.u2` (i16) or `ldc.i4.1; and` (i1) when the parameter has neither `signext` nor `zeroext`, then `ldc.i4.0; cgt.un`; out: 0 or 1 |
+  | `int8`..`int32`, `uint8`..`uint32` | an integer type of the same width (signedness is not checked; no `_BitInt` yet) | `val` | as is, except that a `_Bool` parameter (IR i1) without `zeroext` for an `int8` or `uint8` first takes `ldc.i4.1; and`, and an 8- or 16-bit result that the IR marks `signext` or `zeroext` ends with `conv.i1` or `conv.i2` (`signext`), or `conv.u1` or `conv.u2` (`zeroext`); a `_Bool` result: `ldc.i4.0; cgt.un` |
+  | `int64`, `uint64` | a 64-bit integer type (signedness is not checked; no `_BitInt` yet) | `val` | the C value is a `native int` in the stub (plan D2): `conv.i8` (`conv.u8` for `uint64`) after the argument is loaded, `conv.i` (`conv.u` for `uint64`) after the call or field read |
+  | `char` | `char16_t`, or `wchar_t` where it is 16 bits | `val` | as is |
+  | `native int`, `native uint` | an object pointer, `intptr_t`, `uintptr_t`, `size_t`, `ptrdiff_t` or a handle type | `val` | as is |
+  | `float32`, `float64` | `float`, `double` (never the other) | `val` | as is |
+  | `T*` | any object pointer | `val` | as is |
+  | `valuetype E`, E an enum | an integer type of at most 64 bits (`intptr_t` included; no `_BitInt` yet) | `enum` | as is, except that a `_Bool` parameter (IR i1) without `zeroext` first takes `ldc.i4.1; and`; a 64-bit C integer, a `native int` in the stub (plan D2), gets `conv.i8` after it is loaded and `conv.i` after the call or field read; an 8- or 16-bit result that the IR marks `signext` or `zeroext` ends with `conv.i1` or `conv.i2` (`signext`), or `conv.u1` or `conv.u2` (`zeroext`); and a `_Bool` result is `ldc.i4.0; cgt.un`. `msil-ld` checks E (below) |
+  | `string` parameter | `const char *`, `char8_t *` (in C also `unsigned char *`), const or not | `utf8` | a byte count, `new UTF8Encoding(false, true)`, `Encoding::GetString(uint8*, int32)` |
+  | `string` parameter | `const char16_t *`, and `const wchar_t *` where `wchar_t` is 16 bits | `utf16` | `newobj String::.ctor(char*)` |
+  | `string` parameter | `const char32_t *`, and `const wchar_t *` where `wchar_t` is 32 bits | `utf32` | a count of 4-byte units, `new UTF32Encoding(false, false, true)`, `GetString` of 4n bytes |
+  | `string`, `object`, `class T`, `T[]` | a handle type | `obj` | in: the handle's object, `castclass` to the CIL type (none for `object`); out: a new handle, 0 for null |
+  | `valuetype V` (not an enum, not `GCHandle`) | a pointer handle type (`void *` or a pointer to an incomplete struct; the result of V's `.ctor`, any handle type) | `boxed` | in: the handle's object, `unbox.any V`; out: `box V`, then a new handle |
+  | `valuetype System.Runtime.InteropServices.GCHandle` | a handle type | `gch` | the C value is the GCHandle's `IntPtr`: `GCHandle::FromIntPtr` in, `GCHandle::ToIntPtr` out, never boxed |
+  | `this` of a reference type | a handle type | `this-obj` | the handle's object, `castclass T`, then `callvirt` (`ldfld` for a field) |
+  | `this` of `valuetype V` | a handle type | `this-val` | the handle's object, `unbox V` (a managed pointer into the boxed copy), then `call V::M` or `constrained. V` and `callvirt` (below; `ldfld` for a field) |
+  | `this` of `valuetype GCHandle` | a handle type | `this-gch` | `FromIntPtr`, `box GCHandle`, `unbox GCHandle`, then the same access as `this-val` (`call` for every `GCHandle` member of the built-in table) |
+  | `void` result | `void` | `void` | |
+  | (trailing) | `int *` | `err` | the code of `msil_catch` (below) |
+
+  The access of a `this-val` or `this-gch` method depends on the member's declaring type,
+  which only `msil-ld`'s binder (its base-chain search) knows:
+  - a member that V declares (every `GCHandle` member of the built-in table among them) is
+    `call V::M`;
+  - a member that V only inherits from `System.ValueType`, `System.Object` or `System.Enum`
+    (`GetHashCode`, `ToString`, `Equals`, `GetType`) is `constrained. V`, then `callvirt` of a
+    MemberRef whose parent is that declaring type, not V (`callvirt instance <sig>
+    [mscorlib]System.ValueType::M`), as C# emits it.
+
+  Neither single form serves both: a plain `call` with a managed pointer as `this` crashes for
+  an inherited member, and `constrained. V` with `callvirt V::M` runs wrong or crashes for a
+  declared member and fails ILVerify and PEVerify for both. So a CIL object (`clang -c`, llc)
+  carries a placeholder, `constrained. V` then `callvirt V::M`, which `msil-ld` rewrites in
+  place after binding: for a declared member the 6 prefix bytes become 6 `nop`s and the
+  `callvirt` becomes `call`; for an inherited member the prefix stays and the site's MemberRef
+  is replaced by one with the same name and signature whose parent is the declaring type. The
+  replaced `V::M` MemberRef stays in the image with no token referring to it, which ECMA-335
+  allows: a known leftover until the fuller managed calls after Phase 3 (plan 5.20.14); LTO
+  images, which get the final form directly (below), have no such row.
+  Offsets, branches and exception clauses do not change. `msil-ld`'s LTO code generation
+  (`--lto-emit-asm` and an object-producing LTO link) records each bound member's declaring
+  type on the stub (the IR function attribute `msil-managed-decl`) before the AsmPrinter
+  writes the stub bodies, so it writes the final form directly; a member it cannot bind
+  (`--lto-emit-asm` without references) gets no attribute, and the backend writes the final
+  form of standalone text for it (below).
+  Standalone text (`clang -S`, llc) is never bound or rewritten, so it never carries the
+  placeholder: the backend writes a final form that it can choose without the binder. One of
+  `System.Object`'s public instance methods with its signature (`bool Equals(object)`, `int32
+  GetHashCode()`, `string ToString()`, `class System.Type GetType()`) is `constrained. V`, then
+  `callvirt instance <sig> [mscorlib]System.Object::M`, which is valid whether or not V
+  overrides the method; every other method is `call V::M`, the form of every `GCHandle` member
+  of the built-in table and of every member that V declares. Such text assembles and runs. A
+  member that V only inherits from `System.ValueType` or `System.Enum` and that is not one of
+  those four is called as `V::M` in the text and throws `System.MissingMethodException` at run
+  time: call it through an object link or LTO, where `msil-ld` binds it. So the llc text and
+  the llc object of such a stub differ at that site by design. A `this-obj` method stays
+  `callvirt V::M` (the runtime resolves an inherited member of a reference type through V), a
+  field access stays `ldfld`, and the stub-internal `GCHandle` calls that the conversions make
+  (`FromIntPtr`, `get_Target`, ...) stay `call`.
+
+  A static method of a value type or an enum V follows its declaring type too, because the
+  runtime resolves a method MemberRef upwards only from a reference-type parent: a static method
+  that V declares is `call V::M`, and one that V only inherits from `System.ValueType`,
+  `System.Object` or `System.Enum` (`ReferenceEquals` and `Equals(object, object)` through any
+  struct; `GetNames`, `GetValues`, `GetName`, `Parse`, `IsDefined`, `ToObject`, `Format` and
+  `GetUnderlyingType` through an enum) is `call` of a MemberRef whose parent is that declaring
+  type (`call string[] [mscorlib]System.Enum::GetNames(class [mscorlib]System.Type)`), as C#
+  emits it; through V it throws `System.MissingMethodException`. V's kind comes from its
+  TypeDef, so TYPE written as `valuetype V` and as plain V get the same form. A CIL object
+  carries `call V::M`, and `msil-ld` replaces the site's MemberRef after binding by one with the
+  same name and signature on the declaring type (the replaced `V::M` row stays, as above);
+  `msil-ld`'s LTO code generation records the declaring type in `msil-managed-decl`, and the
+  backend writes that form directly. Standalone text and `--lto-emit-asm` without references
+  bind nothing and keep `call V::M`, which throws `System.MissingMethodException` at run time
+  for such a member: call it through an object link or LTO with references. A static method of a
+  reference type stays `call V::M` (the runtime resolves it through V), and a static field stays
+  `ldsfld`.
+
+  So a value type is reached through a handle (a pointer type), while an integer for one,
+  `intptr_t` included, is the `enum` row: declare boxed value types with `void *` or an opaque
+  struct pointer. A `.ctor` of a value type is `newobj`, then `box`, so its result, `intptr_t`
+  or `uintptr_t` too, is never the `enum` row, and the `this` handle of a value type's instance
+  member is the `this-val` row, which takes any handle type. Strings are never returned as C
+  strings: a `string` result is a
+  handle, which C converts by calling `Encoding` members itself (P-2 does). `wchar_t` is 16
+  bits on the Windows host triples and 32 bits on the Linux host triples and on both portable
+  triples (`int`, but `unsigned int` on the aarch64 Linux triples), so `wchar_t *` is the UTF-16
+  form on Windows and the UTF-32 form
+  elsewhere. A `_Bool`/`bool` C result is always 0 or 1, C's conversion to `_Bool` (a CLI
+  `bool` may hold any nonzero value for true): the stub normalizes the result of a `bool`
+  member and the `_Bool` result of an integer member (an `int8` or `uint8`, the `val` row) or
+  an enum member alike. IR loses these C distinctions, so clang writes the code of every
+  parameter and of the result into the IR, and the backend only executes it. A narrow
+  parameter's upper bits are defined only where the ABI extends it: clang gives `char` and
+  `short` parameters neither `signext` nor `zeroext` on `x86_64-pc-windows-msvc-msil` and
+  `x86_64-w64-windows-gnu-msil` (both give `_Bool` `zeroext`), and `char`, `short` and `_Bool`
+  none on `aarch64-pc-windows-msvc-msil`, `aarch64-w64-windows-gnu-msil`,
+  `aarch64-unknown-linux-gnu-msil` and `aarch64-unknown-linux-musl-msil`, whose callers may pass
+  such a value unextended (-O2 code does), while `x86_64-unknown-linux-gnu-msil`,
+  `x86_64-unknown-linux-musl-msil` and `msil64-unknown-dotnet` extend every narrow parameter.
+  So the stub narrows a parameter that has neither attribute before the `bool` row's compare,
+  and an unextended `_Bool` before the `val` and `enum` rows (above); an 8-bit or 16-bit integer
+  there needs nothing, since the call truncates the `int32` to the CIL parameter's width
+  (ECMA-335 III.1.6). The stub's `.maxstack` counts the added instructions.
+- **Handles and their lifetime (plan 5.20.9).** A handle is the `IntPtr` of a
+  `GCHandleType.Normal` GCHandle, `GCHandle.ToIntPtr(GCHandle.Alloc(o))`, and 0 is null.
+  - A 0 handle converted by `obj`, `this-obj`, `this-val` or `boxed` is null (the stub loads
+    `ldnull` instead of calling `GCHandle::FromIntPtr(0)`): an `obj` argument passes null, and
+    a null `this` of a `this-obj` or `this-val` call or a null `boxed` argument makes the member
+    access, `unbox` or `unbox.any` throw `System.NullReferenceException`, which
+    `msil_catch("System.NullReferenceException", ...)` can map. `gch` and `this-gch` take the
+    GCHandle's own `IntPtr` and keep `GCHandle::FromIntPtr`, so a GCHandle value of 0 there
+    (`GCHandle::Free` of a null result, for one) throws `System.InvalidOperationException`, as
+    `GCHandle.FromIntPtr(IntPtr.Zero)` does.
+  - Every reference-typed or boxed **result** is a new strong handle that the caller owns; a
+    null result is 0 and allocates nothing. The caller frees it exactly once, through a managed
+    call of `GCHandle::Free`, which the `this-gch` row makes the identity on the C value:
+
+    ```c
+    __attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle", "Free",
+                               "instance void()")))
+    void dn_free(dn_handle h);
+    ```
+
+  - **Arguments are borrowed**: the stub never frees or keeps them, so a handle stays valid
+    after a call.
+  - The stub dereferences a handle with `GCHandle::FromIntPtr`, `box GCHandle`, `unbox
+    GCHandle` and `call instance object GCHandle::get_Target()`, then `castclass`, `unbox.any`
+    or `unbox` (no typed local; one small allocation per dereference). A handle of the wrong
+    type fails `castclass` with `System.InvalidCastException`. A freed handle gives a null
+    target with no exception of its own, so the access that follows usually throws
+    `System.NullReferenceException`; a recycled slot that holds an object of the same type
+    cannot be detected. Use after free is undefined. A value that is not a handle, such as a C
+    buffer or a C string passed through `void *` or `intptr_t` for a `T[]`, `string`, `object`
+    or class parameter, is undefined in the same way: the stub reads it as a GCHandle, so the
+    call throws or crashes when it runs, except that on .NET 8 and 10 memory that starts with
+    a zero word reads as null, which a member that accepts null takes without error. C memory
+    reaches a managed array only through `Marshal::Copy` into an array handle (pinned C buffers
+    are deferred, plan 5.20.14).
+  - Handles are valid on every thread and in every assembly of the process, `-static` copies
+    included. On the .NET Framework a GCHandle belongs to its AppDomain (not measured, and no
+    test crosses AppDomains). Leaks are silent, and handles left at exit are harmless.
+- **Strings and arrays (plan 5.20.10).** A null C string gives a null string. A UTF-8 argument
+  is counted up to its terminating 0 by an IL loop and decoded by a throwing
+  `UTF8Encoding(false, true)`: invalid bytes (an invalid byte, a truncated sequence, an
+  overlong form, an encoded surrogate) throw `System.Text.DecoderFallbackException` instead of
+  turning into U+FFFD, so a file name that is not UTF-8 never silently becomes another name. It
+  is never `Encoding.UTF8`, `Marshal.PtrToStringAnsi` (the ANSI code page on Windows) or
+  `Marshal.PtrToStringUTF8` (absent on the .NET Framework). A UTF-16 argument is
+  `String::.ctor(char*)`, which keeps lone surrogates. A UTF-32 argument is counted in 4-byte
+  units and decoded by a throwing little-endian `UTF32Encoding(false, false, true)`, so a
+  surrogate code point or a value above U+10FFFF throws the same exception. Arrays (`T[]`)
+  are handles: an array TYPE with `.ctor` makes one (`newarr`), `Marshal::Copy` overloads copy
+  between it and C memory, and `System.Array` members (`get_Length`, `GetValue`, `SetValue`)
+  reach its elements; there is no element-access conversion and no marshalling of C arrays,
+  and a C buffer is never an array handle (the handle rules above).
+- **Exceptions (plan 5.20.8; brief Q24 (A)).** Without `msil_catch` the stub has no clause,
+  and every exception escapes as an ordinary .NET exception: an unhandled exception with its
+  stack trace in an executable (`[unhandled exception: <type>]` in the tests), an exception
+  that a managed host can catch in a library. With `msil_catch` the whole stub body, the
+  argument conversions included, is one `.try` region with one filter and one handler (M27's
+  `emitExceptionClause`); only the run-time tests of whole-program text's `enum` conversions
+  ("Output forms" below) come before it.
+  The filter tests `isinst` for each entry in order; on the first
+  match it keeps that entry's code and accepts, and with no match it declines, so the
+  exception propagates from the first pass with its original stack trace. The handler stores
+  the code through the trailing `int *` and returns the zero value of the C return type (0, a
+  null handle, 0.0, or nothing for `void`). On success `*err` is not written, so the caller
+  initializes it, as with `errno`; a null `err` is undefined (the handler's store faults). An
+  exception inside a conversion is mapped like one from the member: `InvalidCastException` of
+  a wrong handle, `NullReferenceException` of a freed or 0 one, `InvalidOperationException`
+  of a 0 GCHandle value, `DecoderFallbackException` of an invalid string.
+  MC-1 defines no exception type and shares none between assemblies (the one exception that a
+  stub throws itself, the `System.InvalidProgramException` of whole-program text's failed `enum`
+  test, comes before the `msil_catch` clause, so no entry maps it), and since
+  T-M11 keeps the `ExternalException` family out of every filter, M27's `setjmp` filters and the stubs' filters never see each other's exceptions.
+  For C++ callers MX1 means nothing yet: an exception that escapes a stub, with or without
+  `msil_catch`, runs no destructor of the C++ frames it crosses, no `catch`, `catch (...)`
+  included, sees it, and a `noexcept` declaration does not stop it, without a report. The MSIL
+  exception model settles what it does (plan section 12, the row '5.20.8 MX1 amended').
+- **In IR and in the backend (plan 5.20.4, 5.20.5).** clang names the IR declaration
+  `__msil_mc.<symbol>`, where `<symbol>` is the name it would otherwise have (the C name, the
+  asm label or the C++ mangled name): the name is a toolchain name (class N3 of plan 5.14.2,
+  `__msil_*`), so late binding never binds it to a native library or another assembly, the IR
+  linker never merges it with an unrelated definition of the C name in another LTO input, and a
+  translation unit that declares the same C name without the attribute refers to `<symbol>`
+  itself, which nothing defines, and so fails to link instead of reaching another unit's stub,
+  unless the managed call is exported (on the Windows triples): then the `dllexport` forwarder
+  defines `<symbol>` and calls the stub ("Exports and start-up calls" below).
+  A declaration with internal linkage is named `__msil_mc.<symbol>.__uniq.<n>`, where `<n>` is
+  `llvm::cli::getManagedCallUniqPostfix` of its `!msil.managed.calls` operands 1-6 (below) and
+  of the function type of its first written declaration, never of the main file's name. The
+  function type is hashed as the text `<C types>; <C ABI>`, for example
+  `char(int); signext i8(i32)`: the C types are canonical and unqualified, an enumeration as
+  its underlying integer type, and the C ABI is the IR type of the result and of each
+  parameter, after `signext` or `zeroext` when the ABI extends it. The stub is made from those
+  operands and from the IR declaration's types and extensions, so two units' `static` managed
+  calls share an IR name only when their stubs are the same, and the IR linker may then merge
+  them. A plain `char` result on `msil64-unknown-dotnet` is `signext i8`, or `zeroext i8` with
+  `-funsigned-char`, and its stub converts the result with `conv.i1` or `conv.u1`: the C ABI
+  part gives the two different names, which the C types alone would not. Equal stubs may still
+  get two names: `short` and `unsigned short` do on `x86_64-pc-windows-msvc-msil`, where both
+  are a plain `i16`. A `-funique-internal-linkage-names` postfix is left out of `<symbol>`, so
+  the name ends in one `.__uniq.<n>`. The `!msil.managed.calls` entry uses that name; every
+  diagnostic still names `<symbol>`.
+  The declaration carries the string attributes `msil-managed-type`, `msil-managed-member`,
+  `msil-managed-sig`, `msil-managed-asm` (only with ASSEMBLY), `msil-managed-conv` (one code
+  per C parameter, `;`, then the result's, for example `"utf8,err;void"`) and, with
+  `msil_catch`, `msil-managed-catch` (`"Type=code;..."` in source order), and one operand of
+  the named metadata `!msil.managed.calls` (`!{name, type, member, sig, asm, conv, catch[,
+  attributes]}`, with `""` for an absent ASSEMBLY or catch list; the eighth operand is written
+  only for an external declaration with `dllexport`, `constructor` or `destructor`: those of
+  `dllexport`, `constructor(<priority>)` and `destructor(<priority>)` that it has, in that
+  order, joined by `,`, with 65535 for no priority, such as `"dllexport,constructor(65535)"`,
+  written by `cli::printManagedCallAttributes`). Calls stay ordinary calls of an external
+  declaration, so the optimizer sees no stub body and no library-call recognition applies to
+  the prefixed name. At slot P0 (`MSILPrepareIRLegacy::doInitialization`, after M24's
+  `relaxStrictInt128Conversions`), also in `msil-ld`'s LTO code generation,
+  `MSIL::createManagedCallStubs` (`llvm/lib/Target/MSIL/MSILManagedCalls.cpp`):
+  - reports T-M17 once per IR name whose `!msil.managed.calls` entries differ, in the second
+    form when only their eighth operands differ, comparing every operand as written (an absent
+    ASSEMBLY and `"mscorlib"` differ here). It meets the entries of several units only in a
+    module that `msil-ld` did not link, such as `llvm-link` output given to llc: a unit's own
+    entries always agree, and `msil-ld` decides T-M17 for its own links itself and removes
+    the list from every module that its LTO compiles ("`msil-ld`: units that disagree" below).
+    P0 also reports, with the first text, every direct call that does not match the declaration,
+    in `clang -c` and `-S` and llc (`msil-ld` applies the same rule before LTO to each bitcode
+    input whose symbol table names an undefined `__msil_mc.` symbol, as its unit's optimizer left
+    it and without its `available_externally` code, so in `msil-ld`'s LTO code generation P0 meets
+    such a call only when LTO's optimizer made it): a call whose function
+    type differs from the declaration's, and a call with the declaration's function type whose
+    own `signext` or `zeroext`, which the declaration does not have at that position, would
+    change the stub. That is the result when it is an `i8` or `i16` converted by `val` or `enum`
+    (the stub ends it with the declaration's extension, which such a call does not expect), a
+    `bool` parameter whose declaration has neither attribute, and a `val` `i1` or an `enum`
+    `i1`, `i8` or `i16` parameter when the call's attribute changes whether it is `zeroext`;
+    never a `val` `i8` or `i16` parameter, a `bool` or `i1` result, or a position where the call
+    has no attribute of its own and so reads the declaration's. One unit makes such a call
+    through a cast pointer, to another function type or to one that differs only in a narrow
+    integer's signedness, which is the same IR as the call of an `llvm-link`ed unit that
+    declared another C prototype: the IR linker keeps the first unit's declaration with its
+    attributes, and each call keeps its own, so units whose C prototypes make different stubs,
+    such as a `short` and an `unsigned short` result on `msil64-unknown-dotnet`, fail in such a
+    module as they fail as separate inputs to `msil-ld`, and units that `msil-ld` accepts as
+    separate inputs still link. From C, a call with the declaration's function type and an
+    extension of its own needs a triple whose ABI marks narrow integers (a call takes the marks
+    of the type that it calls through): `msil64-unknown-dotnet` marks `char` and `short` results
+    and parameters `signext` or `zeroext`, so a cast that changes only their signedness fails
+    there for a result, unless the member returns `bool`, and for a parameter that the member
+    takes as an enum; the x86_64 Linux triples (`x86_64-unknown-linux-gnu-msil` and
+    `x86_64-unknown-linux-musl-msil`) mark only parameters, so only the parameter case fails
+    there; and the Windows triples and the aarch64 Linux triples mark neither, so the same
+    source compiles there. Such a call gets T-M17's first text, `in different translation units`
+    included, until the fuller managed-calls goal gives it a text of its own (such a call is not
+    T-M10, and a function that got T-M17 gets no T-M10);
+  - reports T-M10 for every use of a declaration other than a direct call with its own function
+    type: an address taken, stored or passed, an initializer, once per holding function or
+    global; the use becomes poison (a constant use null), so no
+    managed declaration's address reaches native code or M28's thunks, on any triple. In an LTO
+    link `msil-ld` makes the same walk of each bitcode input itself, before LTO's optimizer, as
+    its unit's own optimizer left it and without its `available_externally` code, which no
+    output compiles, prints T-M10 after `<file>: function @<h>: ` or `<file>: global variable
+    @<g>: ` (`global value @<g>: ` for another global), each line once, and then runs no LTO
+    and writes no output, so at one `-O` level an LTO link refuses what `clang -c` refuses for
+    the same units (a use that a unit's own optimizer folds away is accepted at `-O2` and
+    refused at `-O0` in both, as for a native undefined symbol), except at `-O0` for a use in an
+    `available_externally` body that `always_inline` keeps, which `clang -c` refuses there and
+    an LTO link accepts; P0 then meets T-M10 in LTO's code generation only for a use that LTO's
+    optimizer makes;
+  - reports hand-written IR whose attributes do not parse or do not fit the declaration's IR
+    type as `managed call '<f>' has invalid "msil-managed-*" attributes: <reason>`;
+  - and turns every other declaration, in place, into an internal `noinline` definition
+    with the attribute `msil-managed-stub` and an `unreachable` IR body (delivery kind K5 of
+    plan 5.14.1, as amended for MC-1), so no call is redirected; a declaration that nothing
+    calls becomes a stub too.
+
+  The AsmPrinter then writes the stub's body instead of its machine instructions, as M27's
+  throw helper is written: in whole-program text the run-time tests of the `enum` conversions
+  first ("Output forms" below), then the length loops of the string arguments, then the `this`
+  handle, the arguments, exactly one access (`call` for a static method, `callvirt` for an
+  instance method of a reference type, a value-type `this`'s form above, `newobj`, `newarr`, `ldsfld`, `ldfld`), the result conversion and `ret`, with
+  `msil_catch` inside the clause.
+  The stub's locals (one length per UTF-8 or UTF-32 argument; with `msil_catch` the code and
+  the result) follow the function's own, and `MSILStackCheck` raises `.maxstack` to the
+  body's depth. The members and types are new MC operand kinds (`MSILMemberRefExpr`), which
+  objects encode as `[msil.bcl]` MemberRefs, TypeRefs (nested types included) and `SZARRAY`
+  TypeSpecs, and a static method or static field whose TYPE is written `valuetype T` (T neither
+  a primitive with a one-byte signature form nor `GCHandle`) as a MemberRef on the TypeSpec
+  `valuetype T`, which `msil-ld` checks as that spelling (MK3) and links with T's TypeRef as its
+  parent (a static method that T only inherits is linked on its declaring type instead, above);
+  the stub-internal members (`GCHandle`, the encoders, `String::.ctor(char*)`) are
+  ordinary BCL references. A `setjmp` caller wraps a call of a stub like any other call that
+  may `longjmp` (M27's `MSILLowerSjLj` has no exemption for stubs), because .NET code that a
+  stub calls can call back into C ("Calls from .NET into C" below) and a `longjmp` from there
+  crosses the stub.
+- **Exports and start-up calls (plan 5.20.4 MR2 and MR4 as amended for D6).** A managed-call
+  declaration may also carry `dllexport`, `constructor` (or `constructor(priority)`) or
+  `destructor`. For each, clang's CodeGen (`clang/lib/CodeGen/CGMSILManagedCalls.cpp`) defines a
+  *forwarder*: a function with the managed call's parameters, the attribute
+  `"msil-managed-forwarder"="<s>"` and a body that only calls `__msil_mc.<s>`, which the backend
+  compiles like any other function. The unit's own calls still call the stub.
+  - `dllexport`, on the Windows triples: the forwarder is `<s>` itself, `weak_odr` and
+    `dllexport` in the COMDAT group `<s>`, returning the stub's result, so every unit that
+    declares the managed call defines it and `msil-ld` keeps one and exports it; as any
+    `dllexport` definition does, it makes a Windows `-shared` link export only the `dllexport`
+    definitions (unless `--export-all-symbols`). A unit that declares the C name without the
+    attribute calls the forwarder, so MR2's failed link (above) does not apply to an exported
+    name. Any other non-local definition of `<s>` in a CIL object or bitcode input is T-M21, and
+    a variable or function definition of that name in the same unit is T-M25. On the Linux
+    triples and `msil64-unknown-dotnet` clang ignores `dllexport` and `dllimport` with its usual
+    warning (`unknown attribute 'dllexport' ignored`, or for `__declspec`, `__declspec attribute
+    'dllexport' is not supported`); on the Windows triples `dllimport` is accepted and changes
+    nothing.
+  - `constructor`: the forwarder `__msil_mc_ctor.<s>` returns `void`, is `linkonce_odr` and
+    hidden in a COMDAT group of its own name, and has an `llvm.global_ctors` entry at the
+    attribute's priority (65535 without one) keyed to that group, so the member is called once
+    before `main` however many units declare it. A `static` declaration gets an internal
+    forwarder with an unkeyed entry, called once per unit. The forwarder passes on what the
+    target passes a global constructor: nothing on the Windows triples and
+    `msil64-unknown-dotnet`, and `argc`, `argv` and `envp` on the Linux triples, where the
+    declaration may take a prefix of C parameters that lower to (`int32`, `native int`, `native
+    int`); any other parameter list is T-M19. A result is discarded, as a native constructor's
+    is, so a handle result keeps its object alive until exit, which the handle rules (above)
+    allow.
+  - `destructor`: the forwarder `__msil_mc_dtor.<s>` is registered in `llvm.global_dtors`, and
+    the backend refuses it as it refuses every global destructor, `global destructor @<s> is not
+    supported for MSIL yet`, until destructors run (M29 on the host triples, P-2 on the portable
+    ones). It takes no parameters on any triple (T-M19).
+  - A constructor or destructor managed call cannot have `msil_catch` (T-M20, reported instead
+    of T-M19): nothing would read its code.
+  - A unit defines the forwarders of every managed call that it declares with these
+    attributes, also of one that it never calls, and so does a unit that gets the declaration
+    from a precompiled header (`-include-pch`, clang-cl's `/Yc` and `/Yu`) or from a header
+    module (a module-map module or a C++20 header unit, through `-fmodule-file` or implicit
+    modules): whether or not it names the managed call, it gets the forwarders, their
+    `llvm.global_ctors` entries and the eighth operand (below) that the same unit built with
+    `-include` gets. A header module's file gives them to every unit that loads it, also to
+    one that does not import it (an unnamed `-fmodule-file=<file>` loads the file at startup,
+    while `-fmodule-file=<name>=<file>` and implicit modules load it on import), and with them
+    the forwarders of every submodule, an explicit submodule included, as such a unit also
+    emits the constructor functions defined in the module's headers. A C++20 named module's
+    own object defines them, whether it is compiled from the module's source or from its BMI
+    (`--precompile`, then `-c` of the `.pcm`); an importer defines them only when it names the
+    managed call (a call, for example), and COMDAT keeps one.
+  - Names that start with `__msil_mc_ctor.` or `__msil_mc_dtor.`, like `__msil_mc.`, are
+    reserved: an asm label that starts with one is T-M22, and a non-local definition of such a
+    name other than clang's forwarder is T-M23 (never the internal forwarder of a `static`
+    declaration, a local symbol).
+  - The eighth operand of an external declaration's `!msil.managed.calls` entry lists the
+    attributes (above), so units that agree in everything else but disagree about them fail
+    T-M17's second form, which `msil-ld` reports in every link ("`msil-ld`: units that
+    disagree" below): it compares the bitcode inputs' eighth operands and the CIL objects'
+    shared forwarders (the weak `<s>` in its COMDAT group, the priority of the
+    `__msil_mc_ctor.<s>` entry), and llc the eighth operands of a module that `msil-ld` did
+    not link (slot P0, above). Two functions of one unit that share `<s>` must agree in these
+    attributes too (T-M24).
+- **Output forms (plan 5.20.6).** In a CIL object the stub is an internal method of the
+  object, never a global or exported symbol and never bound late, and its member and types
+  are `[msil.bcl]` requests that `msil-ld` binds. In standalone text (`clang -S`, llc) the
+  stub is printed with its body and its scopes are `[mscorlib]` or the declaration's
+  ASSEMBLY (single-quoted when it is not a dotted name), one scope for all of the
+  declaration's types (ASSEMBLY, above), and a value-type `this` method access is in a final
+  form, while a static method that a value type or an enum only inherits stays `call V::M` and
+  throws at run time (above): **the text is not checked** against any reference, as an explicit
+  import's P/Invoke is not, so ilasm assembles it, and it runs only where each of those types
+  resolves through that one assembly, defined there or forwarded by it (a `System.dll` member
+  with an `mscorlib` type among the declaration's types needs an assembly that resolves both,
+  such as `"netstandard"`, above); a wrong member, signature or scope appears only when the
+  program runs (`System.MissingMethodException` and
+  its kin). The stubs of whole-program text (`-S`, llc and `--lto-emit-asm` text, with or
+  without references) make two of the checks that `msil-ld` makes of an object (T-M16 and T-M7,
+  below) when they run. The `castclass` of a `this-obj` handle, the `unbox` of a `this-val`
+  handle and, right after a constructor's `newobj`, a class's `castclass` and a value type's
+  `box` name TYPE as a type specification of its declared kind (`castclass class [mscorlib]T`,
+  `unbox valuetype [mscorlib]V`, `box valuetype [mscorlib]V`; `System.String` and
+  `System.Object`, and the primitive value types such as `valuetype System.Int64`, keep their
+  plain name), so a value type named without `valuetype` for an instance member or a
+  constructor, or a reference type named with it, fails at the stub's first call with
+  `System.TypeLoadException` (`Could not load type '<T>' from assembly '<program>, ...' due to
+  value type mismatch.`). And before anything else, outside any `msil_catch` clause, the stub
+  tests the type of each `enum` parameter, then of an `enum` result or field read, as C#'s
+  `typeof(E).IsEnum` and `sizeof(E)` would (`ldtoken`, `Type::GetTypeFromHandle`,
+  `Type::get_IsEnum`, `sizeof`): when it is not an enum of the C integer's width, the stub
+  throws `System.InvalidProgramException` with T-M7's text, where an unchecked call could
+  compute a wrong value on any runtime. Declarations that `msil-ld` accepts run as before, and
+  objects, object-form text and linked images carry neither check. The text declares `.assembly
+  extern` only for `mscorlib`, so for any other ASSEMBLY ilasm adds the reference itself, after
+  the warning `Reference to undeclared extern assembly '<name>'. Attempting autodetect`, and the
+  reference depends on the ilasm. The .NET Framework ilasm finds an assembly of the GAC and
+  writes its identity (`System` 4.0.0.0 with the key `b77a5c561934e089`), and its image runs on
+  the .NET Framework 4.8, .NET 8 and .NET 10; the NuGet ilasm (10.0.12) writes `.assembly extern
+  System { .ver 0:0:0:0 }` with no key, and its image runs on .NET 8 and .NET 10 but throws
+  `System.IO.FileNotFoundException` (`Could not load file or assembly 'System, Version=0.0.0.0,
+  Culture=neutral, PublicKeyToken=null'`) on the .NET Framework. An assembly outside the GAC
+  gets that keyless 0.0.0.0 reference from both (the Framework ilasm adds the warning `Failed to
+  autodetect assembly '<name>'`), which the three runtimes resolve to a library without a strong
+  name beside the image. So text for the .NET Framework that names a GAC assembly is assembled
+  with the Framework ilasm, or the program is linked through `msil-ld`, whose references give
+  each assembly its identity. The text cannot declare the reference itself: without references
+  the compiler knows no version or key, and a keyless `.assembly extern System { }` stops the
+  Framework ilasm's lookup, so its image throws the same `FileNotFoundException` on the .NET
+  Framework. `--lto-emit-asm` text is printed the same way, with the same run-time checks, and
+  never bound (plan 5.11.8), but
+  with `--reference` `msil-ld` still runs its checks on the merged module's declarations, and
+  a value-type `this` method access is written in its final form, and a static method that a
+  value type or an enum only inherits calls its declaring type (above).
+- **`msil-ld`: binding and checks (plan 5.20.7).** M21's binder binds each member unchanged:
+  with references any public member binds by name and full signature (a wrong one gets the
+  existing `overloads present` diagnostics), and its scope is the defining assembly of the
+  references (`mscorlib` or `System` with the .NET Framework's assemblies, `System.Runtime`,
+  `System.Console` and their siblings with a .NET pack); without references only the
+  built-in table binds (`msil-ld --print-bcl-table`), and any other member or type is
+  5.11.7's `.NET member '<x>' is not in msil-ld's built-in mscorlib table; pass
+  --reference=<reference assemblies>`, which covers `msil_catch`, `castclass` and `isinst`
+  types too. An image meant for the .NET Framework and modern .NET alike binds against the
+  Framework's assemblies or the table, never a .NET pack. `lld/MSIL/ManagedCalls.cpp` finds
+  each stub's one member access in the objects (a stub of another shape is an internal error,
+  `<object>: managed call '<f>': the stub's body makes more than one member access; the object
+  needs a matching toolchain`, and so, with the same ending, are a `constrained.` prefix that
+  is not directly before the access and a `constrained. V` access of a member that V does not
+  have or that another type declares; the stub's access is a static or reference-type access, the
+  value-type `this` placeholder, or a final form above), pairs the member's parameters with
+  the stub's, rewrites a value-type `this` placeholder in place to its final form, then:
+  - **The Framework value-type hazard.** The .NET Framework 4.8 JIT silently accepts a scalar
+    where a method takes a struct (recon `portable-mc1.md` 3.6: two `int32`s passed to
+    `DateTime::op_Equality` give `True` there, while .NET 8 throws `InvalidProgramException`),
+    so a wrong enum pairing would run on the Framework with a wrong value. With references,
+    every `valuetype E` parameter fed from an integer must be an enum whose underlying type has
+    that integer's width (T-M7, from the referenced TypeDef), and so must a `valuetype E`
+    result or field read (other than `GCHandle`) that the C result takes as an integer (T-M7's
+    result form): a `DateTime` read as a C integer, or an `int64`-backed enum read as `int`,
+    is a link error, not a wrong value or an unexplained `InvalidProgramException` at run time.
+    The `--lto-emit-asm` check makes the same comparison from the IR's result width, and the
+    stubs of whole-program text make it when they run ("Output forms" above). A value
+    type is T-M8 in a link
+    without references, which has no TypeDef to check, except `GCHandle`, whose kind MC-1's
+    table rows fix. The built-in table has no enum, so an enum parameter always needs
+    references.
+  - With references, TYPE's `valuetype` prefix and the `boxed`, `this-val`, `box` and `unbox`
+    uses must name a value type, and the `obj`, `this-obj` and `castclass` uses a reference
+    type (T-M16), and every `msil_catch` type must derive from `System.Exception` (T-M9).
+    Without references a catch type binds only as a table type and its base is not checked: an
+    entry that names a table type that is not an exception never matches, so the exception
+    escapes loudly. The table's exception types after MC-1 are `EntryPointNotFoundException`,
+    P-1a's `PlatformNotSupportedException` and MC-1's `DecoderFallbackException`; M27's
+    `Exception` and `ExternalException` are table types too, but T-M11 refuses them.
+  - With references, reading a literal (`const`) field, a `field T` or `instance field T`
+    member whose FieldDef has the `Literal` flag (`System.Int32::MaxValue`), is T-M18,
+    `managed call '<f>': reading the literal field '<T>::<F>' is not supported for MSIL yet`:
+    such a field has no storage, so its `ldsfld` would link and then throw
+    `System.MissingFieldException` at the first call on every runtime. Without references the
+    flag is not seen; the built-in table has no field.
+  - A type that the references do not define is left to the binder's own error, and each text
+    is reported once per link. `--lto-emit-asm` with `--reference` runs the same checks on the
+    `msil-managed-*` attributes of the merged module (with the IR's integer widths) before
+    code generation; without references it makes none of them, while the stubs of its text, with
+    or without references, check TYPE's kind and each `enum` conversion's type when they run
+    ("Output forms" above).
+  - Bitcode needs no hook of its own: an undefined `__msil_mc.*` name is never bound late,
+    because `mayBindNatively` already refuses every toolchain name, LTO code generation
+    defines the stub, and the import annotation of the merged module skips declarations with
+    `msil-managed-type`. No native library is ever consulted for a managed call.
+  - The built-in table gains 15 rows (plan 5.20.13, `BCLMemberId` 31 to 45), all required and
+    mscorlib-safe: `GCHandle` with `Alloc(object)`, `ToIntPtr`, `FromIntPtr`, `get_Target` and
+    `Free`; `Encoding` with `GetString(uint8*, int32)`; `UTF8Encoding` with `.ctor(bool,
+    bool)`; `UTF32Encoding` with `.ctor(bool, bool, bool)`; the type
+    `DecoderFallbackException`; and `String` with `.ctor(char*)`. The table has 46 entries, 43
+    of them mscorlib-safe (M27's 28 and these 15), which `check-mscorlib-safe.py`'s
+    accessibility probe proves public on .NET Framework 4.8, .NET 8, .NET 10 and WSL .NET 10.
+    A managed member equal to a table row shares its MemberRef.
+- **`msil-ld`: units that disagree (plan 5.20.4 MR4 and 5.20.3 T-M17 as amended in section 12;
+  the user's pick "Option B" in the next-step box, 2026-11-10).** `msil-ld` decides T-M17 for
+  every external managed call that two or more units still declare, once per name, in object,
+  mixed and every LTO link (one module, `--lto-partitions` above 1, ThinLTO and
+  `--lto-emit-asm`), whether or not a unit forwards the call. A CIL object declares it by its
+  stub, and a bitcode input by the undefined `__msil_mc.<s>` that its symbol table lists: a unit
+  whose optimizer deleted its last call of `<s>`, and with it the declaration, takes no part,
+  so, as for a native undefined symbol, the verdict on a call that only dead code makes can
+  depend on `-O` (`msil/test/M3/13-managed-calls/dead-call-binding.test`), and rarely on the
+  link mode, since the `-flto` compile step's pre-link pipeline does not delete exactly the
+  calls that `clang -c`'s pipeline deletes (it keeps an `available_externally` function's body
+  at `-O1` and above, which `clang -c` deletes). A link that fails prints T-M17's text after
+  `msil-ld: error:`, once per name, and writes no output.
+  - CIL objects are compared by their stubs, as text that names what each token refers to,
+    and a bitcode input in a mixed link by the stub that its declaration alone makes: units
+    whose stubs differ get the first form, and units with equal stubs but different forwarders
+    (above) the second.
+  - Bitcode inputs are compared before LTO by their `!msil.managed.calls` entries, then by their
+    declarations' function types, then by the stubs that their declarations make (the last is
+    the MC-1 triage agent's decision, not a user decision): entries that differ only in the
+    eighth operand give the second form, and every other difference (ASSEMBLY aside, below) the
+    first, such as `int` against `long long`, or on `msil64-unknown-dotnet` a `char` result
+    declared in a unit built with `-funsigned-char` and in one built without it, whose stubs
+    extend the result differently (a narrow `val` parameter's `signext` against its `zeroext`
+    makes equal stubs and links, while an `enum` parameter's does not, because the stub's IL
+    parameter type follows its `zeroext`). Two different entries of one name in one input count
+    too: an input that `llvm-link` merged from several units keeps every unit's entry, also that
+    of a unit whose own declaration its optimizer deleted, but one declaration, with the first
+    unit's attributes, while each unit's calls keep their own. Its units are not compared by
+    their stubs, but `msil-ld` refuses such an input before LTO, as llc refuses such a module,
+    where a later unit's call outside an `available_externally` function has another function
+    type or a `signext` or `zeroext` of its own that would change the first unit's stub (above):
+    units that differ only in a narrow result's `signext` and `zeroext`, or in an `enum`
+    parameter's, fail there too, with one T-M17 line in every LTO link, and units that `msil-ld`
+    accepts as separate inputs, such as ones that differ only in a narrow `val` parameter's,
+    still link (clang never writes such an input). The same check refuses, before LTO, one
+    unit's own call through a cast pointer that does not match its declaration, as `clang -c`
+    refuses it (at `-O0` `clang -c` also refuses such a call in an `available_externally` body
+    that `always_inline` keeps, which `msil-ld` leaves out).
+  - ASSEMBLY (the MC-1 triage agent's choice, following Claude's stated preference; not a user
+    decision): a link that writes an image binds every member by name against its references, so
+    ASSEMBLY never makes two units differ there (objects name `[msil.bcl]`, and the entries are
+    compared without it); `--lto-emit-asm`, whose text keeps one stub for every unit's calls and
+    names its scope, compares the scope that the text would name, ASSEMBLY or `mscorlib` without
+    one, so `"System"` beside no ASSEMBLY is T-M17 there and `"mscorlib"` beside none is not
+    (`lld/test/MSIL/managed-calls-assembly.test`).
+  - A CIL object that an archive gives only after LTO, for a symbol that LTO's code generation
+    references (a `puts` that the optimizer made of `printf`), is compared after LTO in the same
+    way, with the units that declared the name before LTO (the bitcode inputs read again from
+    their files: the MC-1 triage agent's choice, following Claude's stated preference; not a
+    user decision) and with the other such objects (`managed-calls-late.test`).
+  - `MSILLinkHooksPass` then removes `!msil.managed.calls` from every module that LTO compiles,
+    so slot P0 compares no entries in `msil-ld`'s links and no LTO partition or ThinLTO module
+    repeats T-M17. `msil-ld` reports a bitcode input's direct call that does not match its
+    declaration, made through a cast pointer or kept in an `llvm-link`ed input (above), and its
+    T-M10 (slot P0's bullet, above) itself, before LTO, and prints each error that slot P0 still
+    reports in LTO's code generation (the invalid-attributes error, and T-M17 or T-M10 for a
+    call or a use that LTO's optimizer made) once, however many modules LTO compiles.
+- **The portable triple.** On `msil64-unknown-dotnet` the same rules apply, with `wchar_t *` as
+  the UTF-32 form and `c.dll`'s errno numbers as natural codes (`EILSEQ` is 84). No portable
+  link passes `--reference` before P-2 (brief Q30 (a) makes P-2's `c.dll` bind `System.*`
+  through the build host's Framework 4.8 implementation assemblies), so a portable program can
+  call only built-in table members today, and no enum or other value type but `GCHandle`.
+  MC-1's own gate proves MC-1 on the host triples (brief Q11 (a)): its llc and lld tests carry
+  `msil64-unknown-dotnet` cases, and `msil/test/Portable/02-managed-calls` runs in the
+  post-commit `Portable` legs only.
+- **Not supported (plan 5.20.14).** Spans and byrefs (`ref`, `out`, `in`, `Span<T>`); C
+  structures by value as .NET structures (only enums as integers and opaque boxed handles);
+  delegates made from C function pointers (P-3's MC-3 piece, over M28's delegate constructor):
+  a managed call of a class's `.ctor(object, native int)`, the shape of a delegate's
+  constructor, or of `Marshal::GetDelegateForFunctionPointer` is T-M2 (`... is not supported
+  for MSIL yet`) until then, and one that names a delegate type with `valuetype` is T-M16 in a
+  link with references (T-M8 without) and throws `System.TypeLoadException` at its first call
+  from whole-program text ("Calls from .NET into C" below says how .NET code can still call
+  C); generic types and methods; field writes and events; C++ member functions and
+  templates, and the replaceable global allocation and deallocation functions, as managed-call
+  subjects (T-M13); the address of a managed-call function (T-M10);
+  checking `-S` text against references; a header generator; typed and delegate-accepting
+  export overloads for C# callers (FeatureIdeas.md item 3); types defined by C code; and
+  inline IL. These wait for the fuller managed calls after Phase 3. A managed call with
+  `destructor` waits for global destructors instead (M29; P-2 on the portable triples).
+- **Calls from .NET into C.** .NET code can call C functions without a managed call, and the
+  toolchain neither sees nor checks such calls. Reflection finds a C function with external
+  linkage, a `public` static method of `<Module>`, by its name (`Module::GetMethod`):
+  `MethodBase::Invoke` checks the arguments it passes (`ArgumentException`,
+  `TargetParameterCountException`), and `Delegate::CreateDelegate` builds a delegate over it
+  that .NET checks (a mismatched signature throws `ArgumentException`). .NET code that is given
+  a C function's address as a `native int` can call it with `calli`, whose signature nothing
+  checks, as in any .NET code. A `longjmp` out of a C function that .NET calls through `calli`
+  or through such a delegate's `Invoke` reaches the `setjmp` caller across the stub; one out of
+  a reflection call (`MethodBase::Invoke`, `Delegate::DynamicInvoke`) ends the program with
+  `System.Reflection.TargetInvocationException`. Reflection can also construct a delegate over
+  the raw address (`Activator::CreateInstance` of a delegate type with the address, from .NET
+  code or from C through managed calls): nothing checks it, as in any .NET program, and it is
+  not supported. Today, and always on `msil64-unknown-dotnet`, a C function's address is its
+  managed method's (`ldftn`), which a managed `calli` calls; from M28 on the host triples it is
+  native-callable (plan 5.15.3), so .NET code calls it with an unmanaged `calli` in the
+  platform's C calling convention, while a managed `calli` on it fails fast on .NET 8 and 10
+  (the .NET Framework still runs it) and a delegate that `Activator::CreateInstance` builds
+  over it crashes (both simulated before M28). On `msil64-unknown-dotnet`, C code that runs on
+  several threads, whether .NET code or the C program itself starts them, shares `c.dll`'s
+  single-threaded C state until P-3 (the thread caveat of "errno (plan 5.19.5)" above, brief
+  Q16 (a); that it covers threads that a C program starts itself is Claude's reading), and from
+  P-2 a host that is not a C program loses no output, because `c.dll`'s standard streams stay
+  unbuffered until a C program's start-up (brief Q28 (b)).
+- **Leftovers of P-1b and M27.** On `msil64-unknown-dotnet` a declaration with
+  `import_name` alone was accepted before MC-1, its import name dropped and the call bound by
+  its C name; it is now an explicit import like `import_module` and gets T-P2's text with the
+  import name, `'<f>' is declared with import name '<n>', which msil64-unknown-dotnet does not
+  support: the portable target binds no native code`, in the backend and for bitcode in
+  `msil-ld`. `msil-ld` now reports T-P2 for every bitcode declaration with an import module (a
+  variable included) or a lone import name before LTO, in images, `-shared` links and
+  `--lto-emit-asm` text alike; under `--lto-emit-asm` an external variable with
+  `import_module` used to get 5.10.14's data-import error instead
+  (`lld/test/MSIL/portable-import-module.test`). `lld/test/MSIL/lto-sjlj.test` pins the
+  reports of an `msil64-unknown-dotnet` `sigsetjmp` site whose mask is known only at run time,
+  linked without `c.dll` (P-1r R1), `never-bind.test` pins N4's error for a variable named
+  `longjmp` under `--lto-emit-asm`, and `clang/test/CodeGen/MSIL/portable-abi.c` pins the
+  caller's `byval` alignment (16 and 32) of the over-aligned `Al16`/`Al32` aggregates in
+  variadic calls on both portable triples.
+- **Verification** (plan 5.20.11 MT2). The stub bodies pass `msil-verify.py` with the existing
+  allow-list; the handle dereference through `box` and `unbox` verifies cleanly with ILVerify,
+  and the filter clauses are M27's shape. A new verifier class in a stub is a defect, not an
+  allow-list change.
+- **Tests.** `msil/test/M3/13-managed-calls` holds 31 split-file tests on the host triples: 23
+  `%{msil_prog}` programs (`dead-call-binding` at `-O2` only, with RUN lines of its own for its
+  other link modes), and `text-stubs`, `static-same-file-name`, `mixed-link` and the five tests of
+  whole-program text's run-time checks (`text-checks`, `text-value-type-as-reference`,
+  `text-reference-type-as-value`, `text-enum-param` and `text-enum-result`), which have RUN lines
+  of their own (below). `static-call`, `strings`, `wide-strings`, `handles` and `shared` bind
+  through the built-in table with no reference, and `text-stubs` and the five text-check tests
+  need none; the other twenty link with `%{msil_refs_netfx}` (`--reference` to the .NET Framework
+  4.8 implementation assemblies `mscorlib.dll` and `System.dll` of
+  `%WINDIR%/Microsoft.NET/Framework64/v4.0.30319`, feature `msil-refs-netfx`), whose images run on
+  the Framework, .NET 10 and WSL .NET 10, except
+  that `ctor-argc` runs on the Linux triple only and `exported` on the Windows triple only.
+  `static-call` (`Buffer::MemoryCopy`, `Marshal::AllocHGlobal`, `BitConverter::GetBytes(int32)`
+  and `Environment::GetCommandLineArgs()` with their array handles freed once), `enum-args`
+  (`FileMode`, `FileAccess`, `FileShare` and `SeekOrigin` as integers), `console`
+  (`Console::OpenStandardOutput()` and `Stream::Write`), `shared` (a `-shared` library's exported
+  functions make managed calls of their own, and the program frees a handle the library returned),
+  `static-units` (two files each declare `static` managed calls `get` and `pick` for different
+  `Math` members, `pick` with the same C prototype in both, each calling its own, through objects
+  and LTO), `static-value-members` (`DateTime::get_Now` and the field `TimeSpan::Zero` with the
+  TYPEs `valuetype System.DateTime` and `valuetype System.TimeSpan`, which objects carry as
+  TypeSpec parents, and `get_Now` again with the TYPE `System.DateTime`), `ctor-once` (an external
+  constructor managed call of `Console::WriteLine()`, declared in two files, runs once before
+  `main`), `ctor-per-unit` (a `static` one runs once per file), `ctor-argc` (a constructor managed
+  call takes the `argc` that the Linux start-up passes), `exported` (a `-shared` library's
+  `dllexport` managed call of `Math::Abs`, which the program calls directly and through a pointer,
+  while the library's own calls go through its stub) and `dead-call-binding` (two files bind one
+  external managed call `f` to `Math::Abs` and to `Math::Sign`, the second only in a call that its
+  own optimizer deletes at `-O2`, where the program links and runs as CIL objects, mixed, through
+  full LTO, ThinLTO and two LTO partitions, while at `-O0` each of those links fails with one
+  T-M17 line) put each managed declaration under
+  `#if defined(__MSIL__)` with a C fallback that the native oracle builds; `strings` (a UTF-8
+  round trip of non-ASCII text through `Marshal::StringToHGlobalUni(string)` and invalid sequences
+  mapped to the C library's `EILSEQ`), `wide-strings` (`char16_t *`, `char32_t *` and
+  `wchar_t *`), `value-types` (`DateTime`'s constructors, `this-val` getters and boxed results),
+  `field-read` (`Stopwatch.Frequency` with ASSEMBLY `"System"`, `String.Empty`,
+  `DateTime.MinValue`), `arrays` (`newarr`, `Marshal::Copy`, `System.Array`), `conversions`
+  (`GCHandle::Alloc` and `GCHandle::ToIntPtr` as `gch` values, `Char` members from `char16_t`,
+  `Single` and `Math` members on `float32`, the 0.0 that `msil_catch`'s handler returns for
+  `float64` and `float32` results, `Double::Parse` and `Single::Parse` of a string that is not a
+  number, printed as bit patterns and checked on the .NET Framework too, and instance field reads
+  through `this-val` and `this-obj` handles), `inherited` (`GetHashCode`, `Equals`, `ToString` and
+  `GetType`, which `ComTypes.FILETIME` only inherits, through `this-val` handles, with `Guid`'s
+  own `GetHashCode` and `ToString` as the declared-member control, and the static methods
+  `Enum::GetNames` (through `DayOfWeek`, with and without the `valuetype` prefix) and
+  `Object::ReferenceEquals` (through `Guid`), which those value types only inherit, called on
+  their declaring type; it also requires `msil-ilverify` and `msil-peverify`, and its image must
+  pass both verifiers, through objects and under LTO),
+  `interfaces` (members called through interface types: `ICollection::get_Count`,
+  `IEnumerable::GetEnumerator` with `IEnumerator::MoveNext` and `get_Current`,
+  `ICloneable::Clone`, `IComparable::CompareTo` on strings, `IDisposable::Dispose` on a
+  `MemoryStream`, and an array passed to `ArrayList`'s `ICollection` constructor), `narrow-values`
+  (`int8`, `uint8`, `int16` and `uint16` values with the high bit set through `Math::Max`
+  overloads, the sign-mismatched pairs of the `val` row, its `uint32`, `uint64` and `native uint`
+  cells with the high bit set and its `int64` cell below zero, `char` values at or above U+8000,
+  `bool` arguments from 2, 256 and -1 and from `char`, `short` and `unsigned short` values
+  narrowed from wider ones, a `_Bool` passed to `bool` and `uint8` parameters, and a `_Bool`
+  result of `Convert::ToByte` and `ToSByte`) and `null-handles` (a 0 `this-obj`, `this-val` or
+  `boxed` handle is null and the call throws `NullReferenceException`, a 0 `this-gch` value throws
+  `InvalidOperationException`, each mapped by `msil_catch`, and a 0 `obj` argument is null and
+  succeeds) have hand-written expected files under the new reason "managed member, no native
+  oracle" of plan 5.17.4; `handles` (`newobj`, `callvirt`, a property getter, `GCHandle::Free`
+  exactly once, then a wrong-type handle failing `castclass` with `InvalidCastException`) and
+  `catch-map` (missing files and directories through `FileStream`'s constructor and `File` members
+  mapped to their codes, the order of the entries, an invalid UTF-8 path, then an unlisted
+  `ArgumentException` escaping) are loud failures. Eight tests have RUN lines of their own and no
+  `.expected` file. `text-stubs` compiles, at `-O0` and `-O2`, `clang -S` text with `this-gch`
+  stubs (`GCHandle::get_IsAllocated` and `Free`) and `this-val` stubs (`DateTime::get_Ticks`, and
+  `GetHashCode`, `Equals`, `GetType` and `TimeSpan`'s `ToString` in `System.Object`'s form),
+  checks those final forms, assembles the text with ilasm, verifies it and runs it on the leg's
+  runtimes and, with `msil_run_netfx`, on the .NET Framework. `static-same-file-name` compiles two
+  files named `u.c`, in two directories, with `-flto`: their `static` managed calls `get` bind
+  different `Math` members and keep two IR names, while their equal declarations `twin` share one,
+  and the program links through full LTO at `-O0` and `-O2` and through ThinLTO at `-O2`.
+  `mixed-link` declares one managed call with `constructor(300)`, and `dllexport` on the Windows
+  triple, in a CIL object and a bitcode file of one program, which links with no diagnostic and
+  prints one blank line before `main`; on the Windows triple the two files also link `-shared`,
+  which exports it. The five text-check tests compile, at `-O0` and `-O2`, `clang -S` text and,
+  from `-flto -c` bitcode, `msil-ld --lto-emit-asm` text without references, assemble both with
+  ilasm and run them on the leg's runtime, on it again with `DOTNET_TieredCompilation=0` and, with
+  `msil_run_netfx`, on the .NET Framework: `text-checks` (right declarations of every row that the
+  text checks, interface members and the constructors of classes and value types among them, and
+  of rows that keep their TypeRef) checks the checks in both texts, verifies both images and runs
+  them against its CHECK lines; `text-value-type-as-reference` and `text-reference-type-as-value`
+  (a value type declared as a class, for a getter and a constructor, and classes declared
+  `valuetype`, for getters and for `System.Action`'s `.ctor(object, native int)` given a C
+  function's address) end with `[unhandled exception: System.TypeLoadException]` and the type
+  loader's `... due to value type mismatch`; `text-enum-param` and `text-enum-result` (structs,
+  wrong-width enums and a primitive value type passed or read as integers, one in a stub whose
+  `msil_catch` lists `InvalidProgramException`) end with
+  `[unhandled exception: System.InvalidProgramException]` and T-M7's text. The directory runs in
+  `p3-full` and `wsl-p3`, and MC-1's gate also runs it under `msil_pipeline=lto`, on Windows and,
+  through WSL, on `x86_64-unknown-linux-gnu-msil`, each on .NET 10 and on .NET 10 with
+  `DOTNET_TieredCompilation=0`. Under `msil_equiv=1` ten of its `%{msil_prog}` tests skip O4
+  (`msil/utils/equiv-allowed.txt`), because their `--lto-emit-asm` text carries the run-time
+  checks and their LTO image does not.
+  `msil/test/Portable/02-managed-calls` holds five tests on `msil64-unknown-dotnet` with no
+  reference: four `%{msil_prog}` programs with `c.dll`, `strings` (UTF-8, 32-bit `wchar_t`,
+  `char32_t` and `char16_t` strings through `Marshal::StringToHGlobalUni(string)`), `handles`
+  (`EntryPointNotFoundException`'s constructor, M27's `Exception::get_HResult` through `this-obj`,
+  `GCHandle::Free` once, then a handle of the wrong type failing `castclass` loudly), `catch-map`
+  (invalid UTF-8 and UTF-32 arguments mapped to `c.dll`'s `EILSEQ` through
+  `DecoderFallbackException`, then the same call without `msil_catch` escaping loudly) and `ctor`
+  (an external and a `static` constructor managed call of `Interlocked::MemoryBarrier()` run
+  before `main` beside a C constructor whose flag `main` checks, and the listing of the `-O2`
+  object pins their forwarders), and `mixed-link`, which has RUN lines of its own and no
+  `.expected` file: one `constructor(300)` managed call declared by a CIL object and a bitcode
+  file, linked with `-nolibc` and no diagnostic, whose image keeps one forwarder and one call of
+  it, and whose run checks that the forwarder and both units' stubs ran.
+  `msil/test/Portable/03-sjlj` holds the first portable `setjmp`/`longjmp` execution tests (P-1r
+  R1): `sjlj-self` (within one assembly), `sjlj-xasm` (between a program and a `-shared` library,
+  both ways) and `sigsetjmp-mask` (a nonzero mask fails to link with N6's line, and mask 0 links
+  and runs). Both portable directories run in the post-commit `Portable` legs only. FileCheck
+  tests: in `llvm/test/CodeGen/MSIL` `managed-call-p0.ll` (the P0 transformation),
+  `managed-call-errors.ll` (T-M10 in its forms, both forms of T-M17, the first also for direct
+  calls whose own `signext` or `zeroext` would change the stub, beside calls whose extension
+  changes none, equal duplicate entries giving nothing, and the invalid-attributes error of a
+  misplaced or wrong `msil-managed-decl`, of the two shapes of a delegate over a C function and
+  of a value type's constructor with an `enum` result), `managed-call-bodies.ll` (one stub per
+  conversion row and member kind, in text and as objects through `llvm-cil-dump`),
+  `managed-call-catch.ll` (the filter clause, its `isinst` order, the handler with the zero value
+  that it returns for each C result type, a `float32` one included, and the clause table),
+  `managed-call-access.ll` (the `this-val` and
+  `this-gch` accesses: the `constrained.` placeholder in objects, the final forms in standalone
+  text and after LTO's `msil-managed-decl`, and the `call D::M` of a static method that a value
+  type or an enum only inherits), `managed-call-narrow.ll` (the exact narrow IL types of `enum`
+  parameters and results), `managed-call-narrow-args.ll` (the narrowing of `i1`, `i8`
+  and `i16` parameters that have neither `signext` nor `zeroext`, also on
+  `aarch64-pc-windows-msvc-msil` and `aarch64-unknown-linux-gnu-msil`), `managed-call-scope.ll`
+  (ASSEMBLY as the text scope of the member and its types, the `isinst` of catch types and the
+  `box` of a value-type result included, single-quoted when it is not a dotted name),
+  `managed-call-typespec.ll` (the TypeSpec parent, in objects, of a static member whose
+  TYPE is written `valuetype T`), `managed-call-debuginfo.ll` (stubs made from `-g -O2` IR),
+  `managed-call-forwarders.ll` (the `dllexport` and constructor forwarders, the destructor's error
+  and a constructor's arguments; the `dllexport` forwarder also on `x86_64-w64-windows-gnu-msil`
+  and the two aarch64 Windows triples), `managed-call-sjlj.ll` (a `setjmp`
+  caller wraps its calls of stubs like any other call) and `managed-call-text-checks.ll` (the
+  run-time checks of whole-program text, which object-form text and objects do not have: the
+  TypeSpecs of the declared kind in `this-obj`, `this-val` and constructor stubs, and the enum
+  checks), on the host x86_64 triples and `msil64-unknown-dotnet`;
+  `clang/test/Sema/attr-msil-method.c` and `clang/test/SemaCXX/attr-msil-method.cpp` (every Sema
+  text whole, both spellings, `__has_attribute`, the accepted forms, both `wchar_t` widths and
+  `msil32-unknown-dotnet`'s ILP32 widths, and the unused-function warnings of `static` managed
+  calls, none with `constructor` or `destructor` and native clang's with neither; part of
+  `check-msil`),
+  `clang/test/CodeGen/MSIL/msil-method.c` (the IR attributes, the `__msil_mc.` names of C and C++
+  functions and the metadata operands, also on `msil32-unknown-dotnet`, whose pointers are `i32`),
+  `msil-method-uniq.c` (the `.__uniq.<n>` names of internal declarations), `msil-method-clash.c`
+  (T-M24),
+  `msil-method-cast.c` (T-M17's first form from clang's code generation for one unit's call
+  through a cast pointer on `msil64-unknown-dotnet`, to another function type or to one that
+  changes only a `char` result's signedness),
+  `msil-method-text-checks.c` (the run-time checks of `clang -S` text's stubs, a C `long`
+  passing its target's width),
+  `msil-method-forwarders.c` (the forwarders and the eighth operand),
+  `msil-method-forwarders-block.c` (block-scope declarations), `msil-method-forwarders-clash.c`
+  (T-M25) and `msil-method-forwarders-pch.c` (declarations from a precompiled header, clang-cl
+  `/Yc` and `/Yu`, a header module and a C++20 named module); `CLIManagedSignatureTest` (25 cases:
+  the signature parser, the TYPE, MEMBER and catch-type names, the shape check with its
+  delegate refusals, the conversion and catch lists of the IR attributes, the stub name and its
+  `.__uniq.<n>` postfix, the ILAsm scope and quoted
+  names, and the eighth operand's attributes text); and in `lld/test/MSIL` `managed-calls.test`
+  (managed calls of every form of TYPE, MEMBER and SIGNATURE bound through `--reference` to a fake
+  pack, `Inputs/fakepack/FakeRuntime` and `FakeWidgets`, the built-in table without references,
+  the refusals of a non-table member, type and catch type, and a `-shared` library that exports
+  the calling function and not the stub, on a host triple and on `msil64-unknown-dotnet`, from an
+  object and through LTO), `managed-calls-checks.test` (T-M7 in both forms, T-M8, T-M9, T-M16,
+  T-M18 and T-M23), `managed-calls-lto.test` (no native binding of a stub name under LTO,
+  `--lto-emit-asm` with and without `--reference`, its checks including
+  T-M7's result form and T-M18, T-M23 before the IR merge, T-M17 for two units, as bitcode
+  inputs and as CIL objects, and slot P0's line alone for a value type's constructor with an
+  `enum` result), `managed-calls-forwarders.test` (exported and constructor managed
+  calls in object, LTO and mixed links, one export or one constructor call per program, T-M17's
+  second form, T-M21 and T-M23's forwarder form), `managed-calls-units.test` (T-M17 between the
+  units that still declare a managed call, one line per name in object, mixed, full LTO, ThinLTO,
+  partitioned and `--lto-emit-asm` links: a unit whose optimizer deleted the call takes no part,
+  two entries of one `llvm-link`ed input count, a C++ header's inline function makes its units'
+  calls, a narrow result declared `signext` in one unit and `zeroext` in another fails, and so
+  does an `enum` parameter, while a narrow `val` parameter's and a `bool` result's link, as
+  separate inputs and as one `llvm-link`ed input, where `msil-ld` gives the line before LTO, and
+  the other errors print one line under partitions and ThinLTO), `managed-calls-address.test`
+  (T-M10 before LTO's optimizer in every LTO mode, one line per holder that a bitcode input's own
+  optimizer kept, after the input's name, as `function @<h>: ` or `global variable @<g>: `, so
+  that an LTO link refuses what `clang -c` refuses at one `-O` level (but at `-O0` for an
+  `available_externally` body that `always_inline` keeps, which only `clang -c` refuses); T-M17
+  there for a unit's own call through a cast pointer or with an extension of its own, and no
+  line for code in an `available_externally` function), `managed-calls-text-checks.test` (the
+  run-time checks of `--lto-emit-asm` text without references, for wrong and right declarations
+  of `this-obj` and `this-val` members, constructors and `enum` parameters and results; with
+  references the same wrong declarations get T-M16 and T-M7 at link time, and an image carries
+  no check), `managed-calls-late.test` (T-M17 in both forms for the CIL objects that an archive
+  gives only after LTO, compared with the link's other units, in full LTO and ThinLTO),
+  `managed-calls-assembly.test` (declarations that differ only in ASSEMBLY link in object, mixed
+  and every LTO link that writes an image, and fail with T-M17 under `--lto-emit-asm` unless both
+  name `mscorlib`) and `managed-calls-inherited.test` (static methods that a struct or an enum
+  only inherits, bound to their declaring type in objects, full LTO, ThinLTO and `--lto-emit-asm`
+  with references). `bcl-reference-option.test` pins the 15 new `--print-bcl-table` lines and
+  `msil/test/M2/05-refs/mscorlib-safe.test` 43 entries.
+
+Tests in the tree after MC-1: `llvm/test/CodeGen/MSIL` 175 (167 llc tests, 7 MIR tests and
+`irsymtab-linker-options.ll`; new: the thirteen `managed-call-*.ll`), `clang/test/CodeGen/MSIL`
+gains `msil-method.c`, `msil-method-uniq.c`, `msil-method-clash.c`, `msil-method-cast.c`,
+`msil-method-text-checks.c` and the four `msil-method-forwarders*.c`, `clang/test/Sema` and
+`clang/test/SemaCXX` gain `attr-msil-method.c` and `attr-msil-method.cpp`, `lld/test/MSIL` 145
+(new: `managed-calls.test`, `managed-calls-address.test`, `managed-calls-assembly.test`,
+`managed-calls-checks.test`, `managed-calls-forwarders.test`, `managed-calls-inherited.test`,
+`managed-calls-late.test`, `managed-calls-lto.test`, `managed-calls-text-checks.test` and
+`managed-calls-units.test`), `msil/test/M3` 69 (31 in `13-managed-calls`), `msil/test/Portable`
+44 (five in `02-managed-calls`, three in `03-sjlj`), `msil/test/Programs` 248 and
+`msil/test/harness` 159 (both unchanged), and `CLITests` with 488 tests in 23 suites (new: the
+25 of `CLIManagedSignatureTest` and two of `CLILinkInfoTest`).
+
 ## 3. What Phase 2 does not do
 
 Phase 2 is the linker phase; most of what it leaves out is Phase 3's (plan section 7, P3-A and
 P3-B). The middle column says what a program meets today, the last one where it is planned:
-plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24, M25, M26 and
-M27 changed name theirs. The rows describe the host triples; what the portable triple
+plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24, M25, M26,
+M27 and MC-1 changed name theirs. The rows describe the host triples; what the portable triple
 `msil64-unknown-dotnet` leaves out, and until which step, is the table "What stays loud on
 msil64" in section 2, "The portable target msil64-unknown-dotnet (P-1a)", and the last rows
 below. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row whose
@@ -4011,6 +5071,7 @@ milestone has not come (section 1).
 | `thread_local` / `_Thread_local` | error: `thread-local variable @<name> is not supported for MSIL yet`, also for a `weak` declaration that nothing defines (which is not made null, unlike other weak declarations) | phase 3 (Design.md 4.4) |
 | Dynamic `alloca`, VLAs, `stacksave`/`stackrestore`, `__builtin_frame_address` | since M26 a dynamic alloca on no loop of its function is a `localloc` in the middle of the method, and `stacksave`/`stackrestore` in such functions are deleted; one in a loop is `a dynamic stack allocation that can repeat within one call (a VLA or alloca in a loop) is not supported for MSIL yet`, and since M27 so is one that a `longjmp` can re-enter (one after a `setjmp` site with a wrapped call), even with no loop in the source; `__builtin_frame_address` is `llvm.frameaddress is not supported for MSIL yet` (section 2, M26). Until M26 every one was an error (`... phase 3 shadow stack`) | acyclic: done (M26); in loops, after a `setjmp` site with a wrapped call, and `__builtin_frame_address(0)`: M32's shadow stack (Design.md 4.2) |
 | `setjmp`/`longjmp` | done in M27 (section 2, "setjmp and longjmp (M27)"): every call that may `longjmp` after a `setjmp` site goes through a wrapper with a whole-body IL `.try` and filter, and `longjmp` throws an `ExternalException` that only the target frame's filter accepts, within one assembly and across library assemblies, on every pipeline and in `-S` and llc text. What stays: every `longjmp` is a first-chance CLR exception (about 26-44 us on the .NET Framework and .NET 8, 7-9 us on .NET 10); a `longjmp` out of a C function that native code called works on Windows and aborts the process on Linux (status 134, from M28 the thunk filter's FailFast), and through another assembly's function pointer it works on both OSes until M28, then on Windows only; `__builtin_setjmp`/`__builtin_longjmp` are `__builtin_setjmp ('llvm.eh.sjlj.setjmp') is not supported for MSIL; use setjmp` (and `longjmp`); taking the address of a `setjmp` name and calling another `returns_twice` function (`vfork`, `getcontext`) are errors; `msil-ld` still refuses to bind the family to a native library (N4), which only an object built without the lowering meets; the windows-gnu, musl and aarch64 spellings are unverified. From M24 to M27 it was an error on every path: on the Linux triples `-S` and llc reported `undefined function '_setjmp' is not defined in this module and is not a Phase-1 import` and `msil-ld` each name of the family, `<file>: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler`; on the Windows triples clang's `setjmp`, which passes the frame address, stopped at `llvm.frameaddress is not supported for MSIL yet`; and the builtins were `llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)`. Until M24 this row said only "error", which was wrong for the Linux object pipeline: `msil-ld` bound the functions to `libc.so.6` without a diagnostic, and simple programs ran by accident (backlog recon BL15) | done (M27), Design.md 4.6; native frames and other assemblies' pointers: M28 |
+| Calling .NET members from C and C++ | done in MC-1 (section 2, "Managed calls from C and C++ (MC-1)"): `msil_method` on a function declaration makes a stub with one member access, strings, integers, enums and GCHandle handles as conversions, `msil_catch` for listed exceptions; with `dllexport` (Windows triples) a managed call is also exported under its C name, and with `constructor` it runs before `main`; before MC-1 the attribute was unknown and the call an undefined symbol | a `destructor` managed call, an error until M29 (host triples) and P-2 (portable triples); delegates made from C function pointers, refused until P-3; spans and byrefs, structures by value, generic members, field writes, C++ member functions, checked `-S` text and a header generator: the fuller managed calls after Phase 3 |
 | Atomics (`_Atomic`, `__atomic_*`, `__sync_*`) | error (only fences work): every atomic operation becomes a call of a function of libatomic's interface (`__atomic_load_4`, ...; since M25's lock-free cap of 8 bytes a 16-byte one is the generic `__atomic_load`, `__atomic_store`, ...), which `-S`, llc and `msil-ld --lto-emit-asm` report as `runtime helper '<name>' is an atomic operation that only msil-ld links` (until M25 `runtime helper '<name>' is not available for MSIL yet (phase 3)`). In a CIL object it is an undefined symbol, and since M24 `msil-ld` binds it natively only on the Linux triples, to `libatomic.so.1` when the link names it (`-latomic`, as a native build does; else `undefined symbol: <name>` with `>>> an atomic operation: link with -latomic, as a native build does`), never on the Windows triples (`>>> an atomic operation (libatomic's interface)`); the helper archive defines no `__atomic_*` function (compiler-rt's `atomic.c` stays out of it, R4/R5), and `__sync_*` names are compiler-runtime helpers, which never bind natively | M30 (the native lock path) |
 | Global destructors, `atexit` | error, also a destructor table (`.fini_array*`, `.CRT$XT*`) since M20 (`global destructors are not supported yet: <s> in <file>`). `atexit` binds to no native library: glibc defines it only in machine code (`symbol 'atexit' is defined only in native object code (.../libc_nonshared.a(atexit.oS)); MSIL cannot link machine code`), with a glibc sysroot that has `libc_nonshared.a`; with the E7 sysroot, whose `libc.so` script names no `libc_nonshared.a`, and on the Windows triples, whose UCRT does not export it, the link stops with `undefined symbol: atexit` (the matrix rows `p6-dtors`, `fini-array`, `crt-xt` and `atexit-order` pin these errors) | phase 3 (Design.md 4.1), which intercepts `atexit` |
 | `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. Where it differs, the helper archive `clang_rt.builtins` forwards since M25 the native `long double` functions that have a `double` counterpart (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...: 170 of `msil-ld`'s 174 names) to that counterpart, and a native binding of one of the others (`fromfpl`, `fromfpxl`, `ufromfpl`, `ufromfpxl` and every `_Float64x` and `_Float128` function), or of any of them in a link without the archive, is the permanent link error `native function '<name>' (<module>) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart` (section 2, "Native libraries and P/Invokes" and "The helper archive (M25)"; in M15-M24 every name was `... takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)`); windows-msvc and `aarch64-w64-windows-gnu` bind them. Since M26 an `L` length modifier before a floating conversion of a `printf` format is a clang warning on the triples where `long double` differs, and of a `scanf` format an error (section 2, M26), and c-testsuite's `00204`, which prints `%Lf`, is excluded on linux-gnu (section 1) | permanent (Design.md 3; section 6, item 14); native `long double` functions: forwarded in M25, the others permanent errors |
@@ -4018,7 +5079,7 @@ milestone has not come (section 1).
 | `__float128`, `x86_fp80`, rounding-mode changes, floating-point environment access | error (CIL rounds to nearest and has no FP exceptions) | |
 | Inline and module-level assembly, other than empty `asm` statements with or without operands (section 2; in LLVM IR since M22 also templates of nothing but `/* */` comments): instructions, outputs not tied to an input, condition-flag outputs (`"=@cc<cond>"`, `"+@cc<cond>"`, tied or not), an output in memory tied to an input of another floating-point type, `asm goto`, Microsoft `__asm`, file-scope `asm` | error: clang's `inline assembly is not supported for the MSIL target '...'` (`Microsoft-style inline assembly ...`, `file-scope assembly ...`), llc's `inline assembly is not supported for MSIL` | never (Design.md 3) |
 | A section that MSIL cannot lay out: a destructor table (`.fini_array*`, `.CRT$XT*`), `.ctors`/`.dtors`, `.preinit_array*` (Linux triples), another `.CRT$X*` section (`.CRT$XI*`, `.CRT$XL*`, `.CRT$XP*`, ...), thread-local data (`.tdata`, `.tbss`); a constructor-table entry that is not a function address; `__start_`/`__stop_` on the Windows triples | error: `global destructors are not supported yet: <s> in <file>`, `section '<name>' in <file> is not supported` (`.preinit_array` too, which ld.so runs before every `.init_array` entry; `--gc-sections` keeps such segments for the report), `thread-local storage is not supported yet: <s> in <file>`, `constructor table entry at <section>+<off> in <file> is not a function address` (in `-S` and llc text `<file>` is the source file; since M21 a null entry of a `.CRT$XC*` table on the Windows triples is skipped instead, as the MSVC CRT's `_initterm` skips it, while a null `.init_array` entry stays the error). Every other section on a variable (`__attribute__((section(...)))`, `__declspec(allocate(...))`) is laid out since M20, in `-S` and llc text as in `msil-ld`'s image, and constructors registered in `.init_array` or `.CRT$XC*` run (section 2). On the Windows triples `__start_X` stays undefined, as with link.exe and lld-link, and in `-S` text it is D26's external-variable error. In M12-M19 `-S` and llc rejected every section on a variable, `global variable @<name> in section "<section>" is not supported for MSIL yet (phase 2 CIL objects)`, and before M12 they dropped it silently, so such a constructor never ran. A section on a function is ignored, and clang's own sectioned globals (`llvm.metadata`) are not affected | destructor tables: phase 3 (Design.md 4.1); `.preinit_array` (its entries run before every `.init_array` entry): a later milestone; `__start_`/`__stop_` on Windows: never (native COFF links do not define them) |
-| Aliases other than those of section 2 (an offset into a function, a function-typed alias of a variable, an alias of an ifunc, a `thread_local` alias of a variable that is not thread-local) and ifuncs (from LLVM IR only: clang ignores `__attribute__((ifunc(...)))` on the MSIL triples with an `unknown attribute` warning) | error: `alias @<name> is not supported for MSIL`, `ifunc @<name> is not supported for MSIL`. A CIL object (M19) keeps every alias of a definition plus a constant offset (offset 0 for a function) as an alias symbol for `msil-ld`; any other alias there is `alias '<name>' must point to a definition plus a constant offset for MSIL` | ifuncs stay errors |
+| Aliases other than those of section 2 (an offset into a function, a function-typed alias of a variable, an alias of an ifunc, a `thread_local` alias of a variable that is not thread-local) and ifuncs (from LLVM IR, and from C on `aarch64-pc-windows-msvc-msil` and `aarch64-w64-windows-gnu-msil`, where clang accepts `__attribute__((ifunc(...)))` because it supports ifuncs on Windows on AArch64; on the other MSIL triples clang ignores it with an `unknown attribute` warning) | error: `alias @<name> is not supported for MSIL`, `ifunc @<name> is not supported for MSIL`. A CIL object (M19) keeps every alias of a definition plus a constant offset (offset 0 for a function) as an alias symbol for `msil-ld`; any other alias there is `alias '<name>' must point to a definition plus a constant offset for MSIL` | ifuncs stay errors |
 | Function pointers passed to native code (callbacks) | function pointer values are managed; no Phase-1 import takes a callback. In a program that `msil-ld` links, a native function of the callback list (plan 5.10.14 and 5.15.11: 53 names since M24, `qsort`, `bsearch`, `signal`, `pthread_create`, `CreateThread`, `__cxa_atexit`, `FlsAlloc`, ...; section 2) is a link error, `native function '<name>' (<module>) takes a C function pointer; passing C functions to native code is not supported for MSIL yet` (in M15-M23 `...; passing functions to native code needs phase 3 thunks`). **Known gap:** a function address passed to any other native function (a native library's own callback API, a Win32 callback) is not diagnosed and fails at run time, until M28 (the user's decision of 2026-10-29) | M28: native-callable function pointers (P3-B; Design.md 4.5) |
 | Structs by value, `__int128`, vectors and `_Float16` in P/Invoke signatures | none of the standalone imports takes one; a natively bound function that does is `native function '<name>' (<module>) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)` | phase 3 |
 | Exports (`-shared`), assembly-to-assembly linking | done in M22 (section 2, "Libraries and assembly-to-assembly linking"), with the known limits listed there; in M14-M21 `msil-ld` reported `-shared is not supported yet`, and in M21 a .NET library that this toolchain built, given as an input, `<path>: linking .NET libraries built by this toolchain is not supported yet` | done (P2-C, M22), Design.md 2.3 |
@@ -4030,7 +5091,7 @@ milestone has not come (section 1).
 | Darwin and i686 triples | clang: `unknown target triple '<triple>'`, for a Darwin triple also when the command only links; `msil-ld`: `unsupported target triple '<codegen triple>' for MSIL` (stock-clang bitcode of such a triple, or such a `--target=`) | phases 4 and 5 |
 | Stack protector (`-fstack-protector*`, `/GS`), control-flow guard, patchable function entries | ignored with a warning (clang-cl's implicit `/GS` is not passed) | |
 | The C library on the portable triple `msil64-unknown-dotnet` | since P-1b the freestanding part of LLVM's libc as the shared assembly `c.dll` (section 2, "The managed C library c.dll (P-1b)"); every OS-dependent function (the heap, stdio streams, `exit` and `atexit`, the environment, clocks and `localtime`, threads, `rand`, signals, fenv) is absent: undeclared through the installed headers, and `undefined symbol: <name>` with `>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide` through a program's own prototype. One errno cell for the whole process, so a multi-threaded .NET host that calls `c.dll` races silently (a documented exception to fail-loudly); `-static` is T-P9 and the build tree's `libc.a` T-P11. Until P-1b a portable program was freestanding only (`-nolibc`) | P-2: the OS layer (stdio, `malloc`, `exit`, time) and destructors; P-3: threads, per-thread errno, `rand`, the lock-path atomics and `-static`; fenv: no step plans it |
-| `msil32-unknown-dotnet` | `-fsyntax-only` and `-E` only; code generation, the PE writer and `msil-ld` stop at T-P1, `target 'msil32-unknown-dotnet' is not supported yet: only msil64-unknown-dotnet is implemented` | P-4 |
+| `msil32-unknown-dotnet` | `-fsyntax-only`, `-E` and LLVM IR (`-emit-llvm`) only; code generation, the PE writer and `msil-ld` stop at T-P1, `target 'msil32-unknown-dotnet' is not supported yet: only msil64-unknown-dotnet is implemented` | P-4 |
 | Basic block sections, late function splitting, basic block address map, static data partitioning (`-fbasic-block-sections=`, `-fsplit-machine-functions`, `-fbasic-block-address-map`, `-fpartition-static-data-sections`) | `-fsplit-machine-functions`, `-fbasic-block-sections=all` and `=list=`, `-fbasic-block-address-map` and `-fpartition-static-data-sections` are a driver error (`unsupported option '...' for target '...'`), because MSIL is not ELF; `-fbasic-block-sections=none` is accepted, and `-fbasic-block-sections=labels` (a deprecated alias) passes the driver as `-fbasic-block-address-map` and ends in the backend's warning `basic block address map is not supported for MSIL; ignored`. Passed to cc1 or llc directly (`-fsplit-machine-functions`, `-mllvm -function-splitting=`, `--basic-block-sections=`, ...), the options are ignored, the address map with that warning: the IL is the same as without them | never: CIL methods have no sections |
 
 ### Known gaps of the Phase 2 exit
@@ -4192,6 +5253,10 @@ ILVerify nor PEVerify reported anything for the filter shape. The other two part
 construction (M28) and `Interlocked` on a `native int` address (M30), come with their
 milestones; any other verifier message on backend output is a defect, or a new D21 question
 for the user.
+MC-1's managed-call stubs (plan 5.20.11 MT2) need no part of their own: their `.try` and
+filter are the M27 shape, and their handle dereference (`GCHandle::FromIntPtr`, `box`,
+`unbox`, `get_Target`, then `castclass`, `unbox.any` or `unbox`) is verifiable, so the stubs
+pass both passes with the existing allow-list, and a new verifier class in a stub is a defect.
 
 Stack *types* are checked only by the verifiers (the JIT accepts most type errors silently), and
 mixing of `native int` and `int64` only by PEVerify, so that check runs on Windows. Every gate
@@ -4264,6 +5329,7 @@ deal with it:
 | When a library's module initializers run (M22) | when the first method that refers to the library is JIT-compiled | same | same (also ReadyToRun) | the program's own `<Module>::.cctor` names every linked library with `ldtoken`, so all of them initialize before `main` |
 | The cost of a `longjmp` (M27: a first-chance `ExternalException`, a filter and a `leave`; per round trip, sjlj recon 6.3) | about 26 us on Windows, 44 us on Linux | about 6.6 us on Windows, 8.5 us on Linux | about 27 us | none: the design accepts it (R8); a call that may `longjmp` but does not costs 1-3 ns (5-8 ns on the Framework) for its wrapper; natively a round trip costs about 65 ns with glibc and 2 us with the UCRT |
 | A managed exception thrown through native frames (a `longjmp` out of a C function that native code called, such as a `qsort` comparator) | caught on Windows; on Linux the process aborts (SIGABRT, status 134) | same as .NET 8 | caught | before M28 only the undiagnosed callback gap (section 3) puts native frames there; from M28 the Linux thunks fail fast with a message instead (R8) |
+| A scalar passed where a method takes a struct (an integer for a value type that is not an enum; MC-1, recon `portable-mc1.md` 3.6) | `System.InvalidProgramException` | same as .NET 8 | accepted silently, with a wrong value (two `int32`s for `DateTime::op_Equality` give `True`) | a managed call passes an integer only for an enum of that width: with `--reference` `msil-ld` checks it against the TypeDef (T-M7, T-M16), and without references any value type but `GCHandle` is T-M8; the stubs of `-S`, llc and `--lto-emit-asm` text test it when they run and throw `System.InvalidProgramException` with T-M7's text |
 
 - **Deep recursion.** `dotnet x.dll` on Windows runs `main` on the host's main thread, whose
   stack is 1.5 MB, while native Linux programs get 8 MB by default (`ulimit -s`, which the Linux
@@ -4351,3 +5417,24 @@ exception filter, `ExternalException` with the status block in `HResult`, the 16
 `jmp_buf` prefix, no shared exception type, no native binding of the family, `longjmp` through
 native frames on Windows only, and every `longjmp` a first-chance exception), with the details
 in plan 5.15.4 and section 2, "setjmp and longjmp (M27)".
+
+MC-1 proposed three items, applied to [Design.md](Design.md) with MC-1's commit,
+with the user's approval (chat, 2026-11-16). Item 25, for 5.2 (steps 2.2 and 3): a reference
+assembly also binds the member and the types that each managed-call declaration names, any public
+member or type and not only the BCL types and members that the generated code needs, by name and
+full signature, and `msil-ld` checks each declaration against them. It is the user's pick on the
+review page (item mc1-d10, 2026-11-04), "Add a row at MC-1's commit limiting the rule to
+compiler-chosen members, and update Design.md 5.2", in the words of MC-1's leftover audit with
+Claude's correction of the check list. Item 26, for 2.3 ("Pointer vs integer"): no register,
+local, parameter or result of the program's methods is `int64`, and an `int64` is on the stack
+only inside a few short instruction sequences, such as those that 2.3 lists. Item 27, for 7.1
+("Assembly references"): the rule for links without references and for `-S` output holds for the
+members the compiler chooses; the member of a managed-call declaration and the types it names are
+the program's choice, and when `msil-ld` writes an assembly it binds them from the references, or
+without references only from the built-in table. Items 26 and 27 are Claude's corrections to match
+the built code. MC-1's other Design.md edit, section 1's sentence that a first stage of the
+managed calls ships during phase 3 while the fuller managed calls and inline IL stay after it, is
+one of the decision brief's Design.md edits DM-1 to DM-17, which the user approved together in one
+click (question box, 2026-11-01, Q12: "Approve all"); it was applied with the plan (plan 5.20.12
+item 8), and the rules of what it built are plan 5.20's and section 2, "Managed calls from C and
+C++ (MC-1)".

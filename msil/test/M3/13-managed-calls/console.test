@@ -1,0 +1,105 @@
+# Output through .NET's console stream: Console::OpenStandardOutput() gives a Stream handle, an array .ctor (newarr) makes a uint8[] that Marshal::Copy fills from C memory, Stream::Write writes all of it or a slice, and Flush pushes it out between lines that C's printf writes.
+# Plan 5.20.2 MA1 and MA3 (an SZARRAY TYPE 'uint8[]' with MEMBER '.ctor'
+# and SIGNATURE 'instance void(int32)' lowers to newarr), 5.20.3 MS5 ('obj'
+# for a class and an array result into a handle type and for a uint8[]
+# parameter from a handle, 'this-obj' for the Stream members, 'val' for
+# 'native int' from an object pointer), 5.20.10 S5 (arrays are handles,
+# copied from C memory with Marshal::Copy), 5.20.9 MH2. The program links
+# against the .NET Framework 4.8 implementation assemblies
+# (%{msil_refs_netfx}), because Console, Stream and Marshal::Copy are no
+# built-in table entries; the image runs on the Framework, .NET 10 and WSL
+# .NET 10. The console stream writes to the process's standard output with
+# no buffer of its own between Write and Flush, and C's stdout has its own
+# buffer, so the program flushes C's stdout before each managed write; the
+# order of the lines is then the program's. Each managed declaration sits
+# under '#if defined(__MSIL__)' with a C fallback in '#else' (fwrite and
+# fflush to stdout, malloc and memcpy), and the native oracle builds the
+# fallbacks (plan 5.20.11 MT3). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#if defined(__MSIL__)
+__attribute__((msil_method("System.Console", "OpenStandardOutput",
+                           "class System.IO.Stream()")))
+mc_handle open_stdout(void);
+
+__attribute__((msil_method("uint8[]", ".ctor", "instance void(int32)")))
+mc_handle new_bytes(int length);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal", "Copy",
+                           "void(native int, uint8[], int32, int32)")))
+void copy_to_array(const void *source, mc_handle array, int start,
+                   int length);
+
+__attribute__((msil_method("System.IO.Stream", "Write",
+                           "instance void(uint8[], int32, int32)")))
+void stream_write(mc_handle stream, mc_handle array, int offset, int count);
+
+__attribute__((msil_method("System.IO.Stream", "Flush", "instance void()")))
+void stream_flush(mc_handle stream);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+#else
+struct mc_object {
+  unsigned char bytes[64];
+};
+static mc_handle open_stdout(void) { return malloc(sizeof(struct mc_object)); }
+static mc_handle new_bytes(int length) {
+  (void)length;
+  return calloc(1, sizeof(struct mc_object));
+}
+static void copy_to_array(const void *source, mc_handle array, int start,
+                          int length) {
+  memcpy(array->bytes + start, source, (size_t)length);
+}
+static void stream_write(mc_handle stream, mc_handle array, int offset,
+                         int count) {
+  (void)stream;
+  fwrite(array->bytes + offset, 1, (size_t)count, stdout);
+}
+static void stream_flush(mc_handle stream) {
+  (void)stream;
+  fflush(stdout);
+}
+static void handle_free(mc_handle handle) { free(handle); }
+#endif
+
+int main(void) {
+  printf("printf before the managed stream\n");
+  fflush(stdout);
+
+  mc_handle out = open_stdout();
+  static const char line[] = "Stream.Write: a line from a uint8[]\n";
+  int n = (int)strlen(line);
+  mc_handle bytes = new_bytes(n);
+  copy_to_array(line, bytes, 0, n);
+  stream_write(out, bytes, 0, n);
+  stream_flush(out);
+
+  printf("printf between the managed writes\n");
+  fflush(stdout);
+
+  /* A slice: Copy into the middle of a larger array, write part of it. */
+  static const char word[] = "[slice]\n";
+  mc_handle big = new_bytes(32);
+  copy_to_array(word, big, 10, 8);
+  stream_write(out, big, 11, 7);
+  stream_flush(out);
+
+  printf("printf after the managed stream\n");
+  handle_free(big);
+  handle_free(bytes);
+  handle_free(out);
+  return 0;
+}

@@ -295,6 +295,9 @@ SUMMARY_RE = re.compile(r"^(\d+) Error\(s\) Verifying ", re.M)
 INSTRUCTION_CANNOT_BE_VERIFIED = re.compile(r"Instruction cannot be verified\.")
 # MEMMOVE: the two native int addresses passed to
 # [mscorlib]System.Buffer::MemoryCopy(void*, void*, int64, int64) (D15).
+# Managed-call stubs (plan 5.20.3 MS5) give the same message for a C pointer
+# passed as is to a member's 'T*' parameter, and for a 'utf16' C string passed
+# to String::.ctor(char*) (plan 5.20.10 S2).
 # Exactly this message; every other 'Unexpected type on the stack' (for
 # example '[found Native Int][expected Long]') stays fatal (D21).
 MEMORYCOPY_NATIVE_INT = re.compile(

@@ -37,7 +37,9 @@
 #include "MSIL.h"
 #include "MSILEHClauses.h"
 #include "MSILMachineFunctionInfo.h"
+#include "MSILManagedCalls.h"
 #include "MSILSubtarget.h"
+#include "MSILTargetMachine.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -212,6 +214,14 @@ static bool stackCheck(MachineFunction &MF) {
   // The AsmPrinter-written filter of a whole-body clause and the throw
   // helper's body need more than the machine instructions (plan 5.15.4).
   MaxStack = std::max(MaxStack, MSIL::getMinMaxStack(MF.getFunction()));
+  // A managed-call stub's body is the AsmPrinter's too, whatever its machine
+  // instructions are (plan 5.20.5 ML2 (2)), with whole-program text's
+  // run-time checks (5.20.6 MW2 as amended).
+  bool ObjectMode =
+      static_cast<const MSILTargetMachine &>(MF.getTarget()).isObjectMode();
+  MaxStack =
+      std::max(MaxStack, MSIL::getManagedCallStubMaxStack(
+                             MF.getFunction(), /*TextChecks=*/!ObjectMode));
   LLVM_DEBUG(dbgs() << ".maxstack " << MaxStack << '\n');
   MFI.setMaxStack(MaxStack);
   return Changed;

@@ -1,0 +1,149 @@
+# UTF-8 C strings into .NET strings: a non-ASCII string makes the round trip through Marshal::StringToHGlobalUni(string) (UTF-16 compared in C, then converted back to UTF-8 and compared with the input), a long string and the empty string pass, a null pointer is a null string, and invalid UTF-8 is mapped by msil_catch("System.Text.DecoderFallbackException", EILSEQ) to the C library's EILSEQ while a valid call leaves the code alone.
+# Plan 5.20.10 S1 (utf8: the stub counts the bytes up to the 0 with an IL
+# loop and decodes them with GetString on a throwing UTF8Encoding(false,
+# true); invalid bytes throw System.Text.DecoderFallbackException, never a
+# silent U+FFFD; a null pointer gives a null string), 5.20.3 MS5 ('const
+# char *' and 'char *' are utf8; a 'native int' result into an object
+# pointer is 'val'), 5.20.8 MX2 and MX4 (the exception of the conversion is
+# mapped like one of the member: the zero value, here a null pointer, and
+# the code through the trailing int *; on success *err is not written).
+# Marshal::StringToHGlobalUni(string) is a built-in table entry (M20), so no
+# reference is needed; for a null string it returns a null pointer,
+# otherwise the string's UTF-16 code units and a terminating 0 in unmanaged
+# memory, which the program never frees (Marshal::FreeHGlobal is no table
+# entry). EILSEQ is the C library's own value (42 in the UCRT, 84 in
+# glibc), so the program prints whether the code equals it. The expected
+# units are the Unicode encodings of the text (U+00E9 is C3 A9 in UTF-8,
+# U+20AC is E2 82 AC, U+1D11E is F0 9D 84 9E and the surrogate pair D834
+# DD1E); the invalid sequences throw on the .NET Framework 4.8.1, .NET 10
+# and WSL .NET 10 (measured with UTF8Encoding(false, true)).
+# The member has no C library equivalent, so the expected file is
+# hand-written for both OSes (plan 5.20.11 MT3, 5.17.4 as amended for
+# MC-1): the program prints the same lines on both. Plan 5.17.13 (MC-1,
+# M3/13-managed-calls).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <uchar.h>
+
+#define MARSHAL "System.Runtime.InteropServices.Marshal"
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf8(const char *s);
+
+/* Non-const char * is the utf8 form too. */
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf8_mutable(char *s);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)"),
+               msil_catch("System.Text.DecoderFallbackException", EILSEQ)))
+char16_t *from_utf8_checked(const char *s, int *err);
+
+/* "héllo, wörld € \U0001D11E" */
+static const char text8[] =
+    "h\xc3\xa9llo, w\xc3\xb6rld \xe2\x82\xac \xf0\x9d\x84\x9e";
+static const char16_t text16[] = {'h', 0xE9, 'l', 'l', 'o', ',', ' ',
+                                  'w', 0xF6, 'r', 'l', 'd', ' ', 0x20AC,
+                                  ' ', 0xD834, 0xDD1E, 0};
+#define TEXT16_UNITS 17
+
+static size_t units(const char16_t *p) {
+  size_t n = 0;
+  while (p[n])
+    ++n;
+  return n;
+}
+
+/* UTF-16 to UTF-8 in C (well-formed input); returns the length. */
+static size_t to_utf8(const char16_t *p, char *out) {
+  size_t n = 0;
+  while (*p) {
+    unsigned long c = *p++;
+    if (c >= 0xD800 && c < 0xDC00 && *p >= 0xDC00 && *p < 0xE000)
+      c = 0x10000 + ((c - 0xD800) << 10) + (*p++ - 0xDC00);
+    if (c < 0x80) {
+      out[n++] = (char)c;
+    } else if (c < 0x800) {
+      out[n++] = (char)(0xC0 | (c >> 6));
+      out[n++] = (char)(0x80 | (c & 0x3F));
+    } else if (c < 0x10000) {
+      out[n++] = (char)(0xE0 | (c >> 12));
+      out[n++] = (char)(0x80 | ((c >> 6) & 0x3F));
+      out[n++] = (char)(0x80 | (c & 0x3F));
+    } else {
+      out[n++] = (char)(0xF0 | (c >> 18));
+      out[n++] = (char)(0x80 | ((c >> 12) & 0x3F));
+      out[n++] = (char)(0x80 | ((c >> 6) & 0x3F));
+      out[n++] = (char)(0x80 | (c & 0x3F));
+    }
+  }
+  out[n] = 0;
+  return n;
+}
+
+static char long8[2100];
+static char back[2100];
+
+/* An invalid sequence: prints the result and the code it stored. */
+static void invalid(const char *what, const char *s) {
+  int err = -1;
+  char16_t *p = from_utf8_checked(s, &err);
+  printf("%s: null result %d, code is EILSEQ %d\n", what, p == NULL,
+         err == EILSEQ);
+}
+
+int main(void) {
+  /* The round trip of a non-ASCII string. */
+  char16_t *p = from_utf8(text8);
+  printf("UTF-8 to UTF-16 is not null: %d\n", p != NULL);
+  if (!p)
+    return 1;
+  printf("UTF-16 units: %u\n", (unsigned)units(p));
+  printf("equal to the expected units: %d\n",
+         units(p) == TEXT16_UNITS &&
+             memcmp(p, text16, sizeof text16) == 0);
+  printf("units:");
+  for (const char16_t *q = p; *q; ++q)
+    printf(" %04x", (unsigned)*q);
+  printf("\n");
+  size_t n = to_utf8(p, back);
+  printf("back to UTF-8: %u bytes, equal to the input %d\n", (unsigned)n,
+         n == strlen(text8) && strcmp(back, text8) == 0);
+  char mutable8[sizeof text8];
+  memcpy(mutable8, text8, sizeof text8);
+  p = from_utf8_mutable(mutable8);
+  printf("through a char *: equal %d\n",
+         p != NULL && memcmp(p, text16, sizeof text16) == 0);
+
+  /* A long string: 2000 ASCII bytes, then the text. */
+  memset(long8, 'a', 2000);
+  memcpy(long8 + 2000, text8, sizeof text8);
+  p = from_utf8(long8);
+  printf("long string: %u units\n", p ? (unsigned)units(p) : 0u);
+  n = p ? to_utf8(p, back) : 0;
+  printf("long string back to UTF-8: equal %d\n",
+         n == strlen(long8) && strcmp(back, long8) == 0);
+
+  /* The empty string is a string; a null pointer is a null string. */
+  p = from_utf8("");
+  printf("empty string: not null %d, first unit %d\n", p != NULL,
+         p ? (int)p[0] : -1);
+  printf("null pointer: null result %d\n", from_utf8(NULL) == NULL);
+
+  /* Invalid UTF-8 through msil_catch; a valid call stores nothing. */
+  int err = -1;
+  p = from_utf8_checked("caf\xc3\xa9", &err);
+  printf("valid with msil_catch: equal %d, code untouched %d\n",
+         p != NULL && p[3] == 0xE9 && p[4] == 0, err == -1);
+  invalid("an invalid byte", "\xff");
+  invalid("a truncated sequence", "ab\xc3");
+  invalid("an overlong form", "\xc0\x80");
+  invalid("an encoded surrogate", "\xed\xa0\x80");
+  invalid("an invalid byte after valid text", "h\xc3\xa9llo\x80");
+  return 0;
+}

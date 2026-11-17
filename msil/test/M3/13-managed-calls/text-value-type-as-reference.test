@@ -1,0 +1,151 @@
+# clang -S text and msil-ld --lto-emit-asm text without references of managed calls whose TYPE names a value type as a reference type: DateTime::get_Year declared on 'System.DateTime' without 'valuetype' (the 'this-obj' row), and DateTime's constructor declared on 'System.DateTime' (its result the 'obj' row), each end the program with an unhandled TypeLoadException before the member is called, on every runtime, where the getter's stub used to read the boxed DateTime as an object and print year 1, and the constructor's stub crashed with AccessViolationException on the .NET Framework 4.8 and InvalidProgramException on .NET 8 and .NET 10.
+# Plan 5.20.6 MW2 as amended for MC-1 (whole-program text checks the
+# declaration when it runs): standalone text (clang -S, llc) and msil-ld's
+# --lto-emit-asm text bind nothing, so no link checks them against the
+# references (5.20.7 MK3 refuses these declarations in an object link and
+# in an --lto-emit-asm link with references, with T-M16's "managed call
+# 'date_year': 'System.DateTime' is a value type, but the declaration uses
+# it as a reference type"); instead the castclass of a 'this-obj' stub's
+# handle names TYPE as a TypeSpec of the declared kind, 'castclass class
+# [mscorlib]System.DateTime', and so does the castclass right after a
+# class's constructor's newobj, which the runtime's type loader refuses
+# when it compiles the stub ('... due to value type mismatch'), so the stub
+# fails at its first call, before any of its code runs. Plan 5.17.4's rule
+# on loud failures: a declaration error that no tool can see fails
+# loudly, never with a wrong result. Without the check the getter's
+# castclass accepted the boxed DateTime and callvirt passed the object
+# reference where get_Year expects the address of a DateTime, and the call
+# returned 1 on the .NET Framework 4.8, .NET 8 and .NET 10; and the
+# constructor's stub treated the new DateTime value itself as an object (a
+# null test, then GCHandle::Alloc(object)), which ended with
+# System.AccessViolationException on the .NET Framework 4.8 and
+# System.InvalidProgramException ('Common Language Runtime detected an
+# invalid program') on .NET 8 and .NET 10. At -O0 and -O2, for each
+# program: clang -S, and clang -flto -c with an --lto-emit-asm link that
+# passes no reference (%{msil_ref_flags} is empty whatever the leg), each
+# text assembled by %ilasm -exe; each image runs on the configured runtime,
+# on it again with DOTNET_TieredCompilation=0 (the optimizing JIT) and, with
+# msil_run_netfx, on the .NET Framework 4.8. The images are neither verified
+# nor force-JITted, because jitall reports the stub that the type loader
+# refuses, so %{msil_also_run_check} (which runs jitall) is not used either.
+# The transcript is the status line alone: the programs print nothing
+# before the call, and an unhandled exception loses the C library's
+# buffered stdout. The LOUD line matches the runtime's report of the refused
+# type on stderr, the check's only message (the type loader's own text,
+# measured alike on the .NET Framework 4.8, .NET 8, .NET 10 and WSL .NET
+# 10). No composite builds this test, so no equivalence oracle compares the
+# text with an object link. Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REDEFINE: %{msil_ref_flags} =
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{tv_prog} = getter
+# DEFINE: %{tv_level} = O0
+# DEFINE: %{tv_dir} = %t/%{tv_prog}-%{tv_level}
+# DEFINE: %{tv_form} = text
+# DEFINE: %{tv_image} = %{tv_dir}/%{tv_form}
+# DEFINE: %{tv_build} = \
+# DEFINE:   mkdir -p %{tv_dir} \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{tv_level} -S %t/%{tv_prog}.c -o %{tv_dir}/text.il \
+# DEFINE:   && %ilasm -exe -output=%{tv_dir}/text.exe %{tv_dir}/text.il \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{tv_level} -flto -c %t/%{tv_prog}.c -o %{tv_dir}/main.o \
+# DEFINE:   && %clang_msil -%{tv_level} %{msil_ldflags} -Wl,--lto-emit-asm %{tv_dir}/main.o -o %{tv_dir}/lto.il \
+# DEFINE:   && %ilasm -exe -output=%{tv_dir}/lto.exe %{tv_dir}/lto.il
+# DEFINE: %{tv_run} = \
+# DEFINE:   %msil_exec --stderr-out %{tv_image}.err --out %{tv_image}.out %{tv_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tv_image}.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{tv_image}.err --check-prefix=LOUD %s \
+# DEFINE:   && %msil_exec --env DOTNET_TieredCompilation=0 --stderr-out %{tv_image}.tc0.err --out %{tv_image}.tc0.out %{tv_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tv_image}.tc0.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{tv_image}.tc0.err --check-prefix=LOUD %s
+# DEFINE: %{tv_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --stderr-out %{tv_image}.netfx.err --out %{tv_image}.netfx.out %{tv_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tv_image}.netfx.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{tv_image}.netfx.err --check-prefix=LOUD %s
+# RUN: %{tv_build}
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# REDEFINE: %{tv_form} = lto
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# REDEFINE: %{tv_level} = O2
+# REDEFINE: %{tv_form} = text
+# RUN: %{tv_build}
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# REDEFINE: %{tv_form} = lto
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# REDEFINE: %{tv_prog} = ctor
+# REDEFINE: %{tv_level} = O0
+# REDEFINE: %{tv_form} = text
+# RUN: %{tv_build}
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# REDEFINE: %{tv_form} = lto
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# REDEFINE: %{tv_level} = O2
+# REDEFINE: %{tv_form} = text
+# RUN: %{tv_build}
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# REDEFINE: %{tv_form} = lto
+# RUN: %{tv_run}
+# RUN: %if msil-run-netfx %{ %{tv_netfx} %}
+# Every run's transcript: the status line alone.
+# CHECK-NOT: {{.}}
+# CHECK:     [unhandled exception: System.TypeLoadException]
+# The runtime's report of the refused TypeSpec.
+# LOUD:      {{^Unhandled [Ee]xception[.:] }}System.TypeLoadException: Could not load type 'System.DateTime' from assembly '{{[^']*}}' due to value type mismatch.{{$}}
+#--- getter.c
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* DateTime's constructor, declared right: TYPE names the value type with
+   'valuetype', so the result is the 'boxed' row. */
+__attribute__((msil_method("valuetype System.DateTime", ".ctor",
+                           "instance void(int32, int32, int32)")))
+mc_handle new_date(int year, int month, int day);
+
+/* Wrong: TYPE names the value type DateTime as a reference type, so the
+   stub's 'this' takes the 'this-obj' row (castclass, callvirt). */
+__attribute__((msil_method("System.DateTime", "get_Year", "instance int32()")))
+int date_year(mc_handle date);
+
+int main(void) {
+  int year = date_year(new_date(2024, 5, 6));
+  /* Reached only without the check: the stub returned 1. */
+  puts(year == 2024 ? "year 2024" : "year wrong");
+  return 1;
+}
+#--- ctor.c
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* Wrong: TYPE names the value type DateTime as a reference type, so the
+   constructor's result takes the 'obj' row (newobj, then the new value
+   made a handle as if it were an object). */
+__attribute__((msil_method("System.DateTime", ".ctor",
+                           "instance void(int32, int32, int32)")))
+mc_handle new_date(int year, int month, int day);
+
+/* DateTime::get_Year, declared right: TYPE names the value type with
+   'valuetype', so the stub's 'this' takes the 'this-val' row. */
+__attribute__((msil_method("valuetype System.DateTime", "get_Year",
+                           "instance int32()")))
+int date_year(mc_handle date);
+
+int main(void) {
+  int year = date_year(new_date(2024, 5, 6));
+  /* Never reached: without the check the constructor's stub failed with
+     AccessViolationException or InvalidProgramException instead. */
+  puts(year == 2024 ? "year 2024" : "year wrong");
+  return 1;
+}

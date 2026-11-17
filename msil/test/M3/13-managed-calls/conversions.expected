@@ -1,0 +1,21 @@
+Type::GetType(FILETIME): handle nonzero 1
+GCHandle::Alloc: handle nonzero 1, differs 1, same object 1
+GCHandle::ToIntPtr gives the handle back: 1 and 1
+get_Target of the Alloc handle: same object 1
+the first handle still works: 1
+ToUpperInvariant: 'a' -> U+0041, U+00E9 -> U+00C9, '7' -> U+0037
+IsDigit: '7' 1, 'x' 0, U+0663 1
+IsNaN: 0/0 1, 1.5 0
+Abs(-2.5) == 2.5: 1, Abs(0.75) == 0.75: 1
+Max(-1.25, 3.5) == 3.5: 1
+Double::Parse("25"): 25, bits 4039000000000000, code -1
+Double::Parse("x"): bits 0000000000000000, code 64
+Single::Parse("25"): 25, bits 41c80000, code -1
+Single::Parse("x"): bits 00000000, code 32
+default FILETIME: dwLowDateTime 0, dwHighDateTime 0
+FILETIME from PtrToStructure: dwLowDateTime 0x89abcdef, dwHighDateTime 0x01234567
+the default one is unchanged: 1
+FILETIME's StructLayoutAttribute: CharSet 2, Size 0
+STATSTG's StructLayoutAttribute: CharSet 3
+handles freed: 8
+[exit 0]

@@ -1,0 +1,70 @@
+# A constructor managed call with external linkage, declared in two translation units: a.c and b.c both declare '__attribute__((constructor)) void blank_line(void)' bound to System.Console::WriteLine(), so the program prints one blank line before main, and main's direct call of blank_line prints one more.
+# Plan 5.20.4 as amended for MC-1 (MC-1 leftover audit, defect D6, and the
+# user's pick 'Build them now' in the chat, 2026-11-05): for a managed call
+# with constructor, clang's CodeGen defines the forwarder
+# '__msil_mc_ctor.<symbol>', which calls the stub and discards its result,
+# and registers it in llvm.global_ctors at the attribute's priority (65535
+# when none is given). For a declaration with external linkage the forwarder
+# is linkonce_odr hidden in a COMDAT of its name, which keys its
+# llvm.global_ctors entry, so msil-ld keeps one forwarder and one entry
+# however many units declare the managed call, and it runs once per program
+# (ctor-per-unit.test has the 'static' form, once per unit). The managed
+# call itself stays callable: main calls blank_line directly. Before the fix
+# the attribute had no effect: no llvm.global_ctors entry, so the program
+# printed only main's blank line. Constructors work on every MSIL triple; on
+# the Windows triples and msil64-unknown-dotnet the forwarder takes no
+# parameters, on the Linux triple a prefix of glibc's (int32, native int,
+# native int) (ctor-argc.test, Portable/02-managed-calls/ctor.test). The
+# blank line is Console.WriteLine()'s Environment.NewLine (CR LF on Windows,
+# which the transcript newline rule folds to LF); main flushes C's stdout
+# before its direct call, so the managed and the C output keep their order.
+# Console is no built-in table type, so the program links against the .NET
+# Framework 4.8 implementation assemblies (%{msil_refs_netfx}); the image
+# runs on the Framework, .NET 10 and WSL .NET 10, through objects and LTO.
+# Each managed declaration sits under '#if defined(__MSIL__)' with a C
+# fallback in '#else' (a.c defines blank_line as a C constructor that prints
+# an empty line with puts; b.c only declares it), and the native oracle
+# builds the fallbacks, so the expected file is update-expected.py's (plan
+# 5.20.11 MT3, 5.17.4). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+/* a.c: the constructor managed call blank_line, as b.c declares it. */
+#include <stdio.h>
+
+#if defined(__MSIL__)
+__attribute__((constructor))
+__attribute__((msil_method("System.Console", "WriteLine", "void()")))
+void blank_line(void);
+#else
+__attribute__((constructor)) void blank_line(void) { puts(""); }
+#endif
+
+int a_answer(void) { return 42; }
+#--- b.c
+/* b.c: the same constructor managed call, and main. */
+#include <stdio.h>
+
+#if defined(__MSIL__)
+__attribute__((constructor))
+__attribute__((msil_method("System.Console", "WriteLine", "void()")))
+void blank_line(void);
+#else
+void blank_line(void);
+#endif
+
+int a_answer(void);
+
+int main(void) {
+  printf("main: one blank line above, from the constructor managed call "
+         "blank_line that a.c and b.c both declare; a_answer() %d\n",
+         a_answer());
+  puts("main: calling blank_line directly prints one more:");
+  fflush(stdout);
+  blank_line();
+  puts("main: done");
+  return 0;
+}

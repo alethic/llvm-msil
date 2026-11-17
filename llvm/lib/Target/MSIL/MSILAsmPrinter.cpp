@@ -66,6 +66,7 @@
 #include "llvm/CLI/ILBuilder.h"
 #include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/LinkInfo.h"
+#include "llvm/CLI/ManagedCallDiagnostic.h"
 #include "llvm/CLI/Opcodes.h"
 #include "llvm/CLI/Signature.h"
 #include "llvm/CLI/Trailer.h"
@@ -412,6 +413,79 @@ static StringRef getCLibrarySoname(const Triple &TT) {
   return TT.isMusl() ? "libc.so" : "libc.so.6";
 }
 
+/// The exact IL type of an enum-converted C integer of the IR type \p T in a
+/// managed-call stub's signature (plan 5.20.4 MK2): 'unsigned int8' for a
+/// _Bool, 'int8' or 'unsigned int8' for a char and 'int16' or 'unsigned
+/// int16' for a short, as \p ZExt (the zeroext attribute) says. Any other
+/// type gives ELEMENT_TYPE_END: an int or a long long has its ValType
+/// (parseManagedCall accepts an 'enum' integer of no other width).
+static cli::ElementType getManagedCallExactType(const Type *T, bool ZExt) {
+  if (!T->isIntegerTy())
+    return cli::ELEMENT_TYPE_END;
+  switch (T->getIntegerBitWidth()) {
+  case 1:
+    return cli::ELEMENT_TYPE_U1;
+  case 8:
+    return ZExt ? cli::ELEMENT_TYPE_U1 : cli::ELEMENT_TYPE_I1;
+  case 16:
+    return ZExt ? cli::ELEMENT_TYPE_U2 : cli::ELEMENT_TYPE_I2;
+  default:
+    return cli::ELEMENT_TYPE_END;
+  }
+}
+
+/// The exact IL parameter and result types of the managed-call stub \p F
+/// (plan 5.20.4 MK2): an enum-converted C _Bool, char or short parameter or
+/// result is declared 'unsigned int8', 'int8', 'unsigned int16' or 'int16'
+/// (getManagedCallExactType), so that msil-ld checks its width, not int32's,
+/// against the enum's value__, as its LTO check does from the IR type. The
+/// caller still pushes an int32 and the stub's ldarg widens it again; the
+/// stub's result extension (conv.i1, conv.u1, conv.i2, conv.u2) leaves an
+/// int32 that a narrower result type accepts. Nothing else changes. Leaves
+/// \p Sig as it is for any other function, for a stub whose attributes do
+/// not parse (emitFunctionBodyStart reports it) and if nothing is narrower.
+static void setManagedCallExactTypes(const Function &F, MSIL::Signature &Sig) {
+  if (!MSIL::isManagedCallStub(F))
+    return;
+  Expected<MSIL::ManagedCall> Call = MSIL::parseManagedCall(F);
+  if (!Call) {
+    consumeError(Call.takeError());
+    return;
+  }
+  const FunctionType *FTy = F.getFunctionType();
+  // The result: parseManagedCall accepts only a scalar result, one IL result.
+  if (Call->Conv.Result == cli::ManagedConv::Enum && Sig.Results.size() == 1) {
+    cli::ElementType Exact = getManagedCallExactType(
+        FTy->getReturnType(), F.hasRetAttribute(Attribute::ZExt));
+    if (Exact != cli::ELEMENT_TYPE_END) {
+      assert(Sig.Results.front() == MSIL::ValType::I32 &&
+             "a narrow integer result is an int32 on the stack");
+      Sig.ExactReturn = Exact;
+    }
+  }
+  // The parameters: parseManagedCall accepts only scalar parameters, one IL
+  // parameter each; anything else keeps the plain parameter list.
+  if (Sig.Params.size() != FTy->getNumParams() ||
+      Call->Conv.Params.size() != FTy->getNumParams())
+    return;
+  SmallVector<cli::ElementType, 0> Exact(Sig.Params.size(),
+                                         cli::ELEMENT_TYPE_END);
+  bool Any = false;
+  for (unsigned I = 0, E = FTy->getNumParams(); I != E; ++I) {
+    if (Call->Conv.Params[I] != cli::ManagedConv::Enum)
+      continue;
+    Exact[I] = getManagedCallExactType(FTy->getParamType(I),
+                                       F.hasParamAttribute(I, Attribute::ZExt));
+    if (Exact[I] == cli::ELEMENT_TYPE_END)
+      continue;
+    assert(Sig.Params[I] == MSIL::ValType::I32 &&
+           "a narrow integer parameter is an int32 on the stack");
+    Any = true;
+  }
+  if (Any)
+    Sig.ExactParams = std::move(Exact);
+}
+
 //===----------------------------------------------------------------------===//
 // Signature services.
 //===----------------------------------------------------------------------===//
@@ -450,6 +524,7 @@ const MSIL::Signature &MSILAsmPrinter::getSignature(const Function &F) {
   for (MVT VT : Params)
     Sig->Params.push_back(MSIL::toValType(VT, PointerSizeInBits));
   assert(Sig->Results.size() <= 1 && "a CIL method returns at most one value");
+  setManagedCallExactTypes(F, *Sig);
   It->second = Sig;
   return *Sig;
 }
@@ -552,6 +627,7 @@ bool MSILAsmPrinter::doInitialization(Module &M) {
   MethodOrder.clear();
   MemberRefRows.clear();
   SymbolMethodRefs.clear();
+  ManagedCalls.clear();
   CallStubs.clear();
   CallStubSet.clear();
   CalledValues.clear();
@@ -660,13 +736,20 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
   // Without a byte order mark ilasm reads the file in the ANSI code page and
   // mangles non-ASCII identifiers and quoted strings (decision D11). The
   // header comments escape non-ASCII bytes, so only the text that is printed
-  // raw matters: the assembly name, the global names, and the library and
-  // entry point strings of the P/Invoke declarations, which come from the
+  // raw matters: the assembly name, the global names, the library and entry
+  // point strings of the P/Invoke declarations, which come from the
   // "msil-import-*" attributes (the names of library calls are ASCII) and,
-  // in msil-ld's linked text, from the strings of !msil.imports.
+  // in msil-ld's linked text, from the strings of !msil.imports, and the
+  // names in the member and type references of the managed-call stubs, which
+  // come from the "msil-managed-*" attributes: TYPE, MEMBER, SIGNATURE,
+  // ASSEMBLY and the msil_catch types (plan 5.20.6 MW2).
   std::string AssemblyName = MSIL::getAssemblyName(M);
-  auto HasNonASCIIImport = [](const Function &F) {
-    for (StringRef Kind : {"msil-import-module", "msil-import-name"})
+  auto HasNonASCIIAttribute = [](const Function &F) {
+    for (StringRef Kind :
+         {StringRef("msil-import-module"), StringRef("msil-import-name"),
+          StringRef(cli::ManagedTypeAttr), StringRef(cli::ManagedMemberAttr),
+          StringRef(cli::ManagedSigAttr), StringRef(cli::ManagedAsmAttr),
+          StringRef(cli::ManagedCatchAttr)})
       if (!isASCII(F.getFnAttribute(Kind).getValueAsString()))
         return true;
     return false;
@@ -693,7 +776,7 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
   bool HasNonASCIIName =
       any_of(M.global_values(),
              [](const GlobalValue &GV) { return !isASCII(GV.getName()); }) ||
-      any_of(M.functions(), HasNonASCIIImport);
+      any_of(M.functions(), HasNonASCIIAttribute);
 
   MSILTargetStreamer &TS = getTargetStreamer();
   // An object prints the Module row's name instead of an assembly name, and
@@ -1020,11 +1103,12 @@ MSILAsmPrinter::collectConstructors(const Module &M) {
   // The module initializer calls each constructor without arguments (C's
   // __attribute__((constructor)) functions take none), or under ELF rules
   // with argc, argv and envp as glibc calls an .init_array entry
-  // (getConstructorArgs), and drops a result.
+  // (getConstructorArgs), and drops a result. A managed call's constructor
+  // forwarder is named as the C function (plan 5.20.4 as amended).
   auto Add = [&](const Function &F, cli::ConstructorEntry E) {
     if (!getConstructorArgs(getSignature(F), Rules)) {
-      F.getContext().emitError(
-          MSIL::getConstructorArgsText(MSIL::getILName(F, TM), Rules));
+      F.getContext().emitError(MSIL::getConstructorArgsText(
+          MSIL::getDiagnosticILName(F, TM), Rules));
       return;
     }
     if (F.isDeclarationForLinker())
@@ -2032,11 +2116,47 @@ void MSILAsmPrinter::emitFunctionBodyStart() {
   if (MSIL::getWholeBodyKind(F) != MSIL::WholeBodyKind::None)
     WholeBody.emplace(F, TM, OutContext, getFunctionNumber(), MFI->getResults(),
                       Locals);
+  // A managed-call stub's body, with its locals after the method's own (plan
+  // 5.20.5 ML2 (2)). MSILPrepareIR makes stubs only of valid declarations;
+  // a hand-written "msil-managed-stub" definition whose attributes do not
+  // parse keeps its machine code, the trap of its 'unreachable'.
+  const MSIL::ManagedCall *Stub = nullptr;
+  unsigned StubFirstLocal = 0;
+  if (MSIL::isManagedCallStub(F)) {
+    Expected<MSIL::ManagedCall> Call = MSIL::parseManagedCall(F);
+    if (Call) {
+      // No msil-ld rewrites whole-program text, so it never carries the
+      // placeholder access of a 'this-val' or 'this-gch' method (plan
+      // 5.20.5 ML2 (2), 5.20.6 MW2 as amended); objects and object-form
+      // text keep it.
+      if (!ObjectMode)
+        MSIL::resolveStandaloneTextAccess(*Call);
+      ManagedCalls.push_back(
+          std::make_unique<MSIL::ManagedCall>(std::move(*Call)));
+      Stub = ManagedCalls.back().get();
+      StubFirstLocal =
+          MSIL::appendManagedCallStubLocals(*Stub, getSignature(F), Locals);
+      WritesBody = true;
+    } else {
+      F.getContext().diagnose(cli::DiagnosticInfoManagedCall(
+          cli::getManagedCallSymbol(F.getName()),
+          cli::ManagedCallErrorKind::InvalidAttributes,
+          toString(Call.takeError())));
+    }
+  }
   TS.emitLocals(Locals);
   if (WritesBody) {
-    MSIL::emitSjLjThrowBody(F, TM, OutContext, [this](const MCInst &Inst) {
-      emitWrittenInstruction(Inst);
-    });
+    auto Emit = [this](const MCInst &Inst) { emitWrittenInstruction(Inst); };
+    // ilasm assembles whole-program text without msil-ld's checks of an
+    // object, so its stubs make them at run time (plan 5.20.6 MW2 as
+    // amended).
+    if (Stub)
+      MSIL::emitManagedCallStubBody(
+          *Stub, getSignature(F), StubFirstLocal, getFunctionNumber(),
+          /*TextChecks=*/!ObjectMode, TS, *OutStreamer, OutContext,
+          *TM.getMCInstrInfo(), Emit);
+    else
+      MSIL::emitSjLjThrowBody(F, TM, OutContext, Emit);
     return;
   }
   if (WholeBody) {
@@ -2048,6 +2168,15 @@ void MSILAsmPrinter::emitFunctionBodyStart() {
   // msil-ld never relaxes branches (plan 5.8), so their forms are chosen
   // once, before the first instruction is emitted.
   MCInstLowering->computeBranchForms(*MF);
+}
+
+void MSILAsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
+  // emitFunctionBodyStart, which sets WritesBody, runs before the first
+  // block. None of a written body's machine instructions is emitted
+  // (emitInstruction), and no branch names its blocks.
+  if (WritesBody)
+    return;
+  AsmPrinter::emitBasicBlockStart(MBB);
 }
 
 void MSILAsmPrinter::emitFunctionBodyEnd() {
@@ -2067,7 +2196,8 @@ void MSILAsmPrinter::emitWrittenInstruction(const MCInst &Inst) {
 }
 
 void MSILAsmPrinter::emitInstruction(const MachineInstr *MI) {
-  // The throw helper's body is the one emitFunctionBodyStart wrote.
+  // The throw helper's or a managed-call stub's body is the one
+  // emitFunctionBodyStart wrote.
   if (WritesBody)
     return;
   assert(matchesCalleeSignature(*MI, *this, ObjectMode) &&
@@ -2357,9 +2487,31 @@ void MSILAsmPrinter::noteObjectTokens(const MachineInstr *MI,
         // A BCL type ('isinst', plan 5.15.4) is a TypeRef row.
         if (cli::getBCLMemberInfo(Ref->getBCLMember()).isType())
           continue;
-        Key = MemberRefKey(BCLRef, std::string(), MSIL::Signature(),
-                           static_cast<unsigned>(Ref->getBCLMember()));
+        // A BCL method and a managed member that name one member with one
+        // signature on one parent share their row, as MetadataBuilder merges
+        // them by parent, name and signature: both are keyed by the member's
+        // identity (plan 5.20.5 ML3), which tells a TypeSpec parent from a
+        // TypeRef parent (MSIL::hasValueTypeSpecParent).
+        if (std::optional<std::string> Id = MSIL::getMemberRefIdentity(*Ref))
+          Key = MemberRefKey(BCLRef, std::move(*Id), MSIL::Signature(), 0);
+        else
+          Key = MemberRefKey(BCLRef, std::string(), MSIL::Signature(),
+                             static_cast<unsigned>(Ref->getBCLMember()));
         break;
+      case MSILMemberRefExpr::ManagedMember:
+        // A managed call's member, a MemberRef row on a TypeRef in
+        // [msil.bcl], or on the TypeSpec 'valuetype [msil.bcl]T' for a
+        // static member of a TYPE written 'valuetype T' (MK3).
+        Key = MemberRefKey(BCLRef, *MSIL::getMemberRefIdentity(*Ref),
+                           MSIL::Signature(), 0);
+        break;
+      case MSILMemberRefExpr::ManagedType:
+        // A managed call's type: a TypeRef or TypeSpec row.
+        continue;
+      case MSILMemberRefExpr::ManagedTypeSpec:
+      case MSILMemberRefExpr::UserString:
+        // Whole-program text only: the object writer refuses them.
+        continue;
       }
       unsigned Row = MemberRefRows.size() + 1;
       if (MemberRefRows.try_emplace(Key, Row).second &&
@@ -2822,10 +2974,13 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
         }
         if (Diagnosed.contains(FnGV))
           continue;
+        // A managed call's constructor forwarder is named as the C function
+        // (plan 5.20.4 as amended).
         if (It == SymOf.end() ||
             R.Symbols[It->second].Kind != MSILLink::SymbolKind::Function ||
             (R.Symbols[It->second].Flags & MSILLink::Undefined)) {
-          Ctx.emitError("global constructor '" + MSIL::getILName(*FnGV, TM) +
+          Ctx.emitError("global constructor '" +
+                        MSIL::getDiagnosticILName(*FnGV, TM) +
                         "' is not a function that this object defines, which "
                         "an MSIL object requires");
           continue;
@@ -2835,8 +2990,8 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
         if (const auto *GA = dyn_cast<GlobalAlias>(FnGV))
           F = dyn_cast_or_null<Function>(getAliasedObject(*GA, Offset));
         if (F && !getConstructorArgs(getSignature(*F), getSectionRules())) {
-          Ctx.emitError(MSIL::getConstructorArgsText(MSIL::getILName(*FnGV, TM),
-                                                     getSectionRules()));
+          Ctx.emitError(MSIL::getConstructorArgsText(
+              MSIL::getDiagnosticILName(*FnGV, TM), getSectionRules()));
           continue;
         }
         MSILLink::InitEntry Entry;

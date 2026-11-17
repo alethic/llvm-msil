@@ -1,0 +1,31 @@
+int8 Max(-100, -120): -100, Max(-128, 127): 127
+uint8 Max(200, 100): 200, Max(128, 127): 128
+int16 Max(-30000, -32768): -30000, Max(-7, -9): -7
+uint16 Max(60000, 5): 60000, Max(32768, 32767): 32768
+int8 through unsigned char: Max(253, 250): 253, Max(0x80, 0x7f): 127
+uint8 through signed char: Max(-56, 10): -56, Max(-1, 127): -1
+uint16 through short: Max(-1, 1): -1, Max(-5536, 5): -5536
+int16 through unsigned short: Max(65535, 1): 1, Max(0x8000, 0x8001): 32769
+uint64 Max(0x8000000000000001, 2): 9223372036854775809, Max(2, ~0ull): 18446744073709551615
+int64 Min(-5, 3): -5
+uint32 Max(0x80000001, 2): 2147483649
+UIntPtr.Add(0xFFFFFFFF00000000, 5): 18446744069414584325
+ToUpperInvariant: U+FF41 -> U+FF21, 'a' -> U+0041
+ToLowerInvariant: U+FF21 -> U+FF41
+the result as an int: 65313, equals 0xFF21 1
+Convert.ToInt32(U+FF41): 65345
+Convert.ToChar(65535): 65535
+Convert.ToInt32(bool) from int 2: 1, 256: 1, -1: 1, 0: 0
+Convert.ToBoolean into int: 7 -> 1, 0 -> 0, -1 -> 1
+Convert.ToInt32(bool) from char (char)256: 0, (char)257: 1, (char)0x180: 1
+Convert.ToInt32(bool) from the cast to char in the argument: 0, 1, 1
+Convert.ToInt32(bool) from short (short)65536: 0, (short)65537: 1, (short)0x18000: 1
+Convert.ToInt32(bool) from the cast to short in the argument: 0, 1, 1
+Convert.ToInt32(bool) from unsigned short (unsigned short)65536: 0, 65537: 1, 0x18000: 1
+Convert.ToInt32(bool) from the cast to unsigned short in the argument: 0, 1, 1
+Convert.ToInt32(bool) from _Bool v & 1, v = 2: 0, v = 3: 1
+Convert.ToInt32(uint8) from _Bool v & 1, v = 2: 0, v = 3: 1
+Convert.ToByte(2) as _Bool: 1, equals 1 1
+Convert.ToSByte(-1) as _Bool: 1, equals 1 1
+Convert.ToByte(0) as _Bool: 0, sum of the three 2
+[exit 0]

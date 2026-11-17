@@ -1,0 +1,192 @@
+## Static methods that a value type only inherits (ImplementationPlan.md
+## 5.20.5 ML2 and 5.20.7 MK1, milestone MC-1). The binder's base-chain
+## search binds a managed call of a static method M through a struct or an
+## enum V that does not declare M to the declaring type D, here
+## System.Enum::GetNames(class System.Type) through the enum Contoso.Color,
+## and System.Object::ReferenceEquals(object, object) through the struct
+## Contoso.Extent and, three bases up (System.Enum, System.ValueType,
+## System.Object), through Contoso.Color (FakeWidgets.il's types that
+## declare no method; FakeRuntime.il's members). The runtime resolves
+## 'call V::M' through the bases of a reference type but not through those
+## of a value type, where it throws MissingMethodException (Framework 4.8
+## and .NET 10), so the image's MemberRef for the access has the parent D.
+## llc writes 'call V::M' in a CIL object, with the TypeSpec 'valuetype V'
+## as the parent, or the TypeRef V when TYPE is written without
+## 'valuetype', and msil-ld replaces the site's MemberRef by one whose
+## parent is D after binding. In LTO code generation msil-ld gives the
+## backend the declaring type, as it does for the 'this-val' methods of
+## 5.20.3 MS5 as amended in section 12 (managed-calls-lto.test), so the
+## backend writes 'call D::M' itself: '[mscorlib]D::M' under --lto-emit-asm
+## with --reference. Each access is checked as a CIL object, in full LTO,
+## as a ThinLTO module (opt -module-summary) and under --lto-emit-asm with
+## --reference, with TYPE written as 'valuetype V' and as plain V, on
+## x86_64-pc-windows-msvc-msil and msil64-unknown-dotnet. These images
+## used to name the parent V, and the text '[mscorlib]V::M'.
+## Controls: a static method that V declares (Contoso.Point::Twice(int32))
+## keeps the parent V, and a static method that a class inherits
+## (ReferenceEquals through Contoso.Widget) keeps the derived parent.
+## Without --reference, --lto-emit-asm binds nothing (5.20.6 MW3), so its
+## text keeps 'call V::M' for the inherited members: a limit of standalone
+## text.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs withrefs none
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+## No access through V::M survives for the inherited members.
+# DEFINE: %{bases} = FileCheck %s --implicit-check-not=Contoso.Color:: --implicit-check-not=Contoso.Extent::
+# DEFINE: %{tri} =
+# DEFINE: %{links} = cat %{tri}.head st.ll > st-%{tri}.ll && \
+# DEFINE:   llc -filetype=obj st-%{tri}.ll -o st-%{tri}.o && \
+# DEFINE:   llvm-as st-%{tri}.ll -o st-%{tri}.bc && \
+# DEFINE:   opt -module-summary st-%{tri}.ll -o st-%{tri}.thin.bc && \
+# DEFINE:   msil-ld st-%{tri}.o --reference=refs -o obj-%{tri}.exe 2>&1 | count 0 && \
+# DEFINE:   msil-ld st-%{tri}.bc --reference=refs -o lto-%{tri}.exe 2>&1 | count 0 && \
+# DEFINE:   msil-ld st-%{tri}.thin.bc --reference=refs -o thin-%{tri}.exe 2>&1 | count 0 && \
+# DEFINE:   msil-ld --lto-emit-asm st-%{tri}.bc --reference=refs -o withrefs/st-%{tri}.il 2>&1 | count 0 && \
+# DEFINE:   msil-ld --lto-emit-asm st-%{tri}.bc -o none/st-%{tri}.il 2>&1 | count 0 && \
+# DEFINE:   llvm-cil-dump st-%{tri}.o | FileCheck %s --check-prefix=OBJ && \
+# DEFINE:   llvm-cil-dump obj-%{tri}.exe | %{bases} --check-prefix=IMAGE && \
+# DEFINE:   llvm-cil-dump lto-%{tri}.exe | %{bases} --check-prefix=IMAGE && \
+# DEFINE:   llvm-cil-dump thin-%{tri}.exe | %{bases} --check-prefix=IMAGE && \
+# DEFINE:   %{bases} --check-prefix=TEXT --input-file=withrefs/st-%{tri}.il && \
+# DEFINE:   FileCheck %s --check-prefix=NONE --input-file=none/st-%{tri}.il
+# REDEFINE: %{tri} = win
+# RUN: %{links}
+# REDEFINE: %{tri} = net
+# RUN: %{links}
+# RUN: %if ilasm %{ %ilasm-verify -output=st-text.dll withrefs/st-win.il %}
+
+## The objects: 'call V::M', through a TypeSpec for 'valuetype V'.
+# OBJ-LABEL: {{^  }}.method '__msil_mc.color_names' native int(native int) {{.+$}}
+# OBJ:       {{^    L[0-9]+: }}call string[](class [msil.bcl]System.Type) valuetype [msil.bcl]Contoso.Color::'GetNames'{{$}}
+# OBJ-LABEL: {{^  }}.method '__msil_mc.color_names_plain' native int(native int) {{.+$}}
+# OBJ:       {{^    L[0-9]+: }}call string[](class [msil.bcl]System.Type) [msil.bcl]Contoso.Color::'GetNames'{{$}}
+# OBJ-LABEL: {{^  }}.method '__msil_mc.color_same' int32(native int, native int) {{.+$}}
+# OBJ:       {{^    L[0-9]+: }}call bool(object, object) valuetype [msil.bcl]Contoso.Color::'ReferenceEquals'{{$}}
+# OBJ-LABEL: {{^  }}.method '__msil_mc.extent_same' int32(native int, native int) {{.+$}}
+# OBJ:       {{^    L[0-9]+: }}call bool(object, object) valuetype [msil.bcl]Contoso.Extent::'ReferenceEquals'{{$}}
+# OBJ-LABEL: {{^  }}.method '__msil_mc.extent_same_plain' int32(native int, native int) {{.+$}}
+# OBJ:       {{^    L[0-9]+: }}call bool(object, object) [msil.bcl]Contoso.Extent::'ReferenceEquals'{{$}}
+# OBJ-LABEL: {{^  }}.method '__msil_mc.point_twice' int32(int32) {{.+$}}
+# OBJ:       {{^    L[0-9]+: }}call int32(int32) valuetype [msil.bcl]Contoso.Point::'Twice'{{$}}
+# OBJ-LABEL: {{^  }}.method '__msil_mc.widget_same' int32(native int, native int) {{.+$}}
+# OBJ:       {{^    L[0-9]+: }}call bool(object, object) [msil.bcl]Contoso.Widget::'ReferenceEquals'{{$}}
+
+## The images: the parent D for an inherited member of a value type; the
+## controls keep their parents.
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.color_names' native int(native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}call string[](class [FakeRuntime]System.Type) [FakeRuntime]System.Enum::'GetNames'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.color_names_plain' native int(native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}call string[](class [FakeRuntime]System.Type) [FakeRuntime]System.Enum::'GetNames'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.color_same' int32(native int, native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}call bool(object, object) [FakeRuntime]System.Object::'ReferenceEquals'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.extent_same' int32(native int, native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}call bool(object, object) [FakeRuntime]System.Object::'ReferenceEquals'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.extent_same_plain' int32(native int, native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}call bool(object, object) [FakeRuntime]System.Object::'ReferenceEquals'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.point_twice' int32(int32) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Point::'Twice'{{$}}
+# IMAGE-LABEL: {{^  }}.method '__msil_mc.widget_same' int32(native int, native int) {{.+$}}
+# IMAGE:       {{^    L[0-9]+: }}call bool(object, object) [FakeWidgets]Contoso.Widget::'ReferenceEquals'{{$}}
+
+## --lto-emit-asm with references: '[mscorlib]D::M'.
+# TEXT-LABEL: {{^}}.method assembly static native int '__msil_mc.color_names'(native int) cil managed{{$}}
+# TEXT:       {{^ +}}call string[] [mscorlib]System.Enum::GetNames(class [mscorlib]System.Type){{$}}
+# TEXT-LABEL: {{^}}.method assembly static native int '__msil_mc.color_names_plain'(native int) cil managed{{$}}
+# TEXT:       {{^ +}}call string[] [mscorlib]System.Enum::GetNames(class [mscorlib]System.Type){{$}}
+# TEXT-LABEL: {{^}}.method assembly static int32 '__msil_mc.color_same'(native int, native int) cil managed{{$}}
+# TEXT:       {{^ +}}call bool [mscorlib]System.Object::ReferenceEquals(object, object){{$}}
+# TEXT-LABEL: {{^}}.method assembly static int32 '__msil_mc.extent_same'(native int, native int) cil managed{{$}}
+# TEXT:       {{^ +}}call bool [mscorlib]System.Object::ReferenceEquals(object, object){{$}}
+# TEXT-LABEL: {{^}}.method assembly static int32 '__msil_mc.extent_same_plain'(native int, native int) cil managed{{$}}
+# TEXT:       {{^ +}}call bool [mscorlib]System.Object::ReferenceEquals(object, object){{$}}
+# TEXT-LABEL: {{^}}.method assembly static int32 '__msil_mc.point_twice'(int32) cil managed{{$}}
+# TEXT:       {{^ +}}call int32 [mscorlib]Contoso.Point::Twice(int32){{$}}
+# TEXT-LABEL: {{^}}.method assembly static int32 '__msil_mc.widget_same'(native int, native int) cil managed{{$}}
+# TEXT:       {{^ +}}call bool [mscorlib]Contoso.Widget::ReferenceEquals(object, object){{$}}
+
+## --lto-emit-asm without references binds nothing: 'call V::M'.
+# NONE-LABEL: {{^}}.method assembly static native int '__msil_mc.color_names'(native int) cil managed{{$}}
+# NONE:       {{^ +}}call string[] [mscorlib]Contoso.Color::GetNames(class [mscorlib]System.Type){{$}}
+# NONE-LABEL: {{^}}.method assembly static native int '__msil_mc.color_names_plain'(native int) cil managed{{$}}
+# NONE:       {{^ +}}call string[] [mscorlib]Contoso.Color::GetNames(class [mscorlib]System.Type){{$}}
+# NONE-LABEL: {{^}}.method assembly static int32 '__msil_mc.color_same'(native int, native int) cil managed{{$}}
+# NONE:       {{^ +}}call bool [mscorlib]Contoso.Color::ReferenceEquals(object, object){{$}}
+# NONE-LABEL: {{^}}.method assembly static int32 '__msil_mc.extent_same'(native int, native int) cil managed{{$}}
+# NONE:       {{^ +}}call bool [mscorlib]Contoso.Extent::ReferenceEquals(object, object){{$}}
+# NONE-LABEL: {{^}}.method assembly static int32 '__msil_mc.extent_same_plain'(native int, native int) cil managed{{$}}
+# NONE:       {{^ +}}call bool [mscorlib]Contoso.Extent::ReferenceEquals(object, object){{$}}
+
+#--- win.head
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+#--- net.head
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+#--- st.ll
+
+;; typedef struct dn_object *dn_handle;
+;; dn_handle color_names(dn_handle) __attribute__((msil_method(
+;; "valuetype Contoso.Color", "GetNames", "string[](class System.Type)")));
+;; Contoso.Color inherits System.Enum's static GetNames
+declare ptr @__msil_mc.color_names(ptr) #0
+
+;; dn_handle color_names_plain(dn_handle); the same with the TYPE
+;; "Contoso.Color"
+declare ptr @__msil_mc.color_names_plain(ptr) #1
+
+;; int color_same(dn_handle, dn_handle) __attribute__((msil_method(
+;; "valuetype Contoso.Color", "ReferenceEquals", "bool(object, object)")));
+;; System.Object's static ReferenceEquals through the enum
+declare i32 @__msil_mc.color_same(ptr, ptr) #2
+
+;; int extent_same(dn_handle, dn_handle) __attribute__((msil_method(
+;; "valuetype Contoso.Extent", "ReferenceEquals", "bool(object, object)")));
+;; Contoso.Extent inherits System.Object's static ReferenceEquals
+declare i32 @__msil_mc.extent_same(ptr, ptr) #3
+
+;; int extent_same_plain(dn_handle, dn_handle); the same with the TYPE
+;; "Contoso.Extent"
+declare i32 @__msil_mc.extent_same_plain(ptr, ptr) #4
+
+;; int point_twice(int) __attribute__((msil_method("valuetype Contoso.Point",
+;; "Twice", "int32(int32)"))); a static method that Contoso.Point declares
+declare i32 @__msil_mc.point_twice(i32) #5
+
+;; int widget_same(dn_handle, dn_handle) __attribute__((msil_method(
+;; "Contoso.Widget", "ReferenceEquals", "bool(object, object)"))); the class
+;; Contoso.Widget inherits ReferenceEquals
+declare i32 @__msil_mc.widget_same(ptr, ptr) #6
+
+define i32 @main() {
+  %n0 = call ptr @__msil_mc.color_names(ptr null)
+  %n1 = call ptr @__msil_mc.color_names_plain(ptr %n0)
+  %s0 = call i32 @__msil_mc.color_same(ptr %n0, ptr %n1)
+  %s1 = call i32 @__msil_mc.extent_same(ptr %n0, ptr %n1)
+  %s2 = call i32 @__msil_mc.extent_same_plain(ptr %n0, ptr %n1)
+  %s3 = call i32 @__msil_mc.point_twice(i32 %s0)
+  %s4 = call i32 @__msil_mc.widget_same(ptr %n0, ptr %n1)
+  %a0 = add i32 %s1, %s2
+  %a1 = add i32 %a0, %s3
+  %a2 = add i32 %a1, %s4
+  ret i32 %a2
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Color" "msil-managed-member"="GetNames" "msil-managed-sig"="string[](class System.Type)" "msil-managed-conv"="obj;obj" }
+attributes #1 = { "msil-managed-type"="Contoso.Color" "msil-managed-member"="GetNames" "msil-managed-sig"="string[](class System.Type)" "msil-managed-conv"="obj;obj" }
+attributes #2 = { "msil-managed-type"="valuetype Contoso.Color" "msil-managed-member"="ReferenceEquals" "msil-managed-sig"="bool(object, object)" "msil-managed-conv"="obj,obj;bool" }
+attributes #3 = { "msil-managed-type"="valuetype Contoso.Extent" "msil-managed-member"="ReferenceEquals" "msil-managed-sig"="bool(object, object)" "msil-managed-conv"="obj,obj;bool" }
+attributes #4 = { "msil-managed-type"="Contoso.Extent" "msil-managed-member"="ReferenceEquals" "msil-managed-sig"="bool(object, object)" "msil-managed-conv"="obj,obj;bool" }
+attributes #5 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #6 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="ReferenceEquals" "msil-managed-sig"="bool(object, object)" "msil-managed-conv"="obj,obj;bool" }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6}
+!0 = !{!"__msil_mc.color_names", !"valuetype Contoso.Color", !"GetNames", !"string[](class System.Type)", !"", !"obj;obj", !""}
+!1 = !{!"__msil_mc.color_names_plain", !"Contoso.Color", !"GetNames", !"string[](class System.Type)", !"", !"obj;obj", !""}
+!2 = !{!"__msil_mc.color_same", !"valuetype Contoso.Color", !"ReferenceEquals", !"bool(object, object)", !"", !"obj,obj;bool", !""}
+!3 = !{!"__msil_mc.extent_same", !"valuetype Contoso.Extent", !"ReferenceEquals", !"bool(object, object)", !"", !"obj,obj;bool", !""}
+!4 = !{!"__msil_mc.extent_same_plain", !"Contoso.Extent", !"ReferenceEquals", !"bool(object, object)", !"", !"obj,obj;bool", !""}
+!5 = !{!"__msil_mc.point_twice", !"valuetype Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+!6 = !{!"__msil_mc.widget_same", !"Contoso.Widget", !"ReferenceEquals", !"bool(object, object)", !"", !"obj,obj;bool", !""}

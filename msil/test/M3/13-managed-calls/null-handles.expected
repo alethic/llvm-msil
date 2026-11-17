@@ -1,0 +1,15 @@
+HResult of a valid handle: 0x80131523, code -1
+Ticks of a valid handle: 1234567, code -1
+Compare of valid handles: 0, code -1
+IsAllocated of a valid handle: 1, code -1
+HResult of 0: result 0, code 14
+Ticks of 0: result 0, code 14
+Compare(0, d): result 0, code 14
+Compare(d, 0): result 0, code 14
+IsAllocated of 0: result 0, code 15
+Free of 0: code 15
+ReferenceEquals(0, 0): 1, code -1
+ReferenceEquals(e, 0): 0, code -1
+Free of a valid handle: code -1
+handles freed: 2
+[exit 0]

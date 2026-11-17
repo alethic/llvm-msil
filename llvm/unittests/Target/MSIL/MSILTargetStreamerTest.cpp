@@ -26,6 +26,7 @@
 #include "MCTargetDesc/MSILMCTypeUtilities.h"
 #include "MSILMCInstLower.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -803,11 +804,58 @@ TEST_F(MSILTargetStreamerTest, MSILMemberRefBCLMember) {
               "native int [msil.bcl]System.Runtime.InteropServices.Marshal::"
               "AllocHGlobal(native int)");
 
-  // Every method of the list prints exactly as printBCLMemberRef does.
+  // A row that spells a class or value type in its signature prints that type
+  // scoped as the owner is (5.20.5 ML3, MW2): ILAsm resolves an unscoped name
+  // in the current module, and in object form [msil.bcl] matches the TypeRef
+  // that MSILObjectWriter's encodeBCLMethodSig writes.
+  const struct {
+    cli::BCLMemberId Id;
+    const char *WholeProgram;
+    const char *Object;
+  } Scoped[] = {
+      {cli::BCLMemberId::AttributeUsageAttribute_ctor,
+       "instance void [mscorlib]System.AttributeUsageAttribute::.ctor("
+       "valuetype [mscorlib]System.AttributeTargets)",
+       "instance void [msil.bcl]System.AttributeUsageAttribute::.ctor("
+       "valuetype [msil.bcl]System.AttributeTargets)"},
+      {cli::BCLMemberId::GCHandle_Alloc,
+       "valuetype [mscorlib]System.Runtime.InteropServices.GCHandle "
+       "[mscorlib]System.Runtime.InteropServices.GCHandle::Alloc(object)",
+       "valuetype [msil.bcl]System.Runtime.InteropServices.GCHandle "
+       "[msil.bcl]System.Runtime.InteropServices.GCHandle::Alloc(object)"},
+      {cli::BCLMemberId::GCHandle_ToIntPtr,
+       "native int [mscorlib]System.Runtime.InteropServices.GCHandle::"
+       "ToIntPtr(valuetype [mscorlib]System.Runtime.InteropServices.GCHandle)",
+       "native int [msil.bcl]System.Runtime.InteropServices.GCHandle::"
+       "ToIntPtr(valuetype [msil.bcl]System.Runtime.InteropServices.GCHandle)"},
+      {cli::BCLMemberId::GCHandle_FromIntPtr,
+       "valuetype [mscorlib]System.Runtime.InteropServices.GCHandle "
+       "[mscorlib]System.Runtime.InteropServices.GCHandle::"
+       "FromIntPtr(native int)",
+       "valuetype [msil.bcl]System.Runtime.InteropServices.GCHandle "
+       "[msil.bcl]System.Runtime.InteropServices.GCHandle::"
+       "FromIntPtr(native int)"},
+  };
+  for (const auto &S : Scoped) {
+    SCOPED_TRACE(StringRef(cli::getBCLMemberInfo(S.Id).IdName).str());
+    expectForms(MSILMemberRefExpr::createBCL(S.Id, *Ctx), S.WholeProgram,
+                S.Object);
+  }
+
+  // Every other method of the list prints exactly as printBCLMemberRef does.
+  auto Named = [](StringRef Text) {
+    return Text.contains("class ") || Text.contains("valuetype ");
+  };
   for (const cli::BCLMemberInfo &Info : cli::getAllBCLMembers()) {
     if (!Info.isMethod())
       continue;
     SCOPED_TRACE(StringRef(Info.IdName).str());
+    if (Named(Info.Return) || Named(Info.Params)) {
+      EXPECT_TRUE(llvm::any_of(Scoped, [&](const auto &S) {
+        return S.Id == Info.Id;
+      })) << "a row with a named type needs a literal expectation above";
+      continue;
+    }
     std::string Whole, Object;
     raw_string_ostream WOS(Whole), OOS(Object);
     cli::printBCLMemberRef(WOS, Info.Id, "mscorlib");

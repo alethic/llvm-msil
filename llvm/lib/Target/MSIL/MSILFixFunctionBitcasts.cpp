@@ -535,12 +535,16 @@ static Value *convertValue(IRBuilder<> &Builder, Value *V, Type *To,
 /// zero-extends constants and narrow loads (ldind.u1, ldind.u2). The table's
 /// int32 conversions (conv.i) then apply to that int32, as the object path's
 /// adapter applies them to the CIL method's result. A result of type \p To,
-/// or of another type, is unchanged. Clang marks no char, short or _BitInt
-/// result 'signext' or 'zeroext' on any MSIL triple (a bool result stays
-/// 'zeroext'): since upstream 05c3ff5c8c06 the Linux triples, like the
-/// Windows ones, leave the bits above such a result unspecified, so the
-/// sign-extending branch is reached only from hand-written IR (plan section
-/// 12, 'Narrow results after upstream merge U2').
+/// or of another type, is unchanged. On the host triples clang marks no
+/// char, short or _BitInt result 'signext' or 'zeroext' (a bool result stays
+/// 'zeroext' on the x86-64 ones): since upstream 05c3ff5c8c06 the Linux
+/// triples, like the Windows ones, leave the bits above such a result
+/// unspecified (plan section 12, 'Narrow results after upstream merge U2').
+/// On the portable triples (msil64-unknown-dotnet, msil32-unknown-dotnet)
+/// clang's ABI is DefaultABIInfo's, which marks a char or short result, and
+/// a _BitInt result narrower than int, 'signext' when its type is signed and
+/// 'zeroext' when it is unsigned, so both branches are reached from clang's
+/// output there.
 static Value *widenNarrowResult(IRBuilder<> &Builder, CallInst *Call,
                                 const Function &F, Type *To) {
   Type *RetTy = Call->getType();

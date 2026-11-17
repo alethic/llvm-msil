@@ -305,6 +305,26 @@ void va_sink(int n, ...);
 // P32:       call void (i32, ...) @va_sink(i32 noundef 2, ptr noundef byval([24 x i8]) align 8 {{%[^,]*}}, ptr noundef byval(i256) align 8 {{%[^)]*}})
 void call_va_bi(unsigned _BitInt(129) a, _BitInt(200) b) { va_sink(2, a, b); }
 
+// The over-aligned aggregates as variadic arguments (the caller side of the
+// callee-side va_al16 and va_al32 below): the caller's byval copy has the
+// type's alignment, 16 and 32 on both widths, the alignment that
+// ExpandVariadics' MSILPortable class (MSILPortable::indirectCopyAlign) gives
+// the copy whose address it puts in the slot
+// (llvm/test/Transforms/ExpandVariadics/msil-abi.ll). Section 12 row 'MC-1.f
+// extended (P-1a leftover: ABI pair caller side)'.
+// CHECK-LABEL: define {{[^@]*}}void @call_va_al(ptr noundef byval(%struct.Al16) align 16 {{%[^,]*}}, ptr noundef byval(%struct.Al32) align 32 {{%[^)]*}})
+// CHECK:       call void (i32, ...) @va_sink(i32 noundef 2, ptr noundef byval(%struct.Al16) align 16 {{%[^,]*}}, ptr noundef byval(%struct.Al32) align 32 {{%[^)]*}})
+void call_va_al(struct Al16 a, struct Al32 b) { va_sink(2, a, b); }
+
+// Locals passed in the other order: each argument keeps its own alignment.
+// CHECK-LABEL: define {{[^@]*}}void @call_va_al_local()
+// CHECK:       call void (i32, ...) @va_sink(i32 noundef 2, ptr noundef byval(%struct.Al32) align 32 {{%[^,]*}}, ptr noundef byval(%struct.Al16) align 16 {{%[^)]*}})
+void call_va_al_local(void) {
+  struct Al16 a = {1};
+  struct Al32 b = {2};
+  va_sink(2, b, a);
+}
+
 // ... and va_arg reads one 8-byte slot holding a pointer to it, neither
 // masked nor realigned, then loads the value through it.
 // CHECK-LABEL: define {{[^@]*}}void @va_bi129(ptr {{[^,]*}}sret({{[^)]*}}) align {{[0-9]+}} %agg.result, i32 noundef %n, ...)

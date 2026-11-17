@@ -37,6 +37,7 @@
 #include "Config.h"
 #include "Exports.h"
 #include "InputFiles.h"
+#include "ManagedCalls.h"
 #include "NativeLibraries.h"
 #include "ReferenceSet.h"
 #include "SymbolTable.h"
@@ -48,7 +49,9 @@
 #include "lld/Common/Strings.h"
 #include "lld/Common/TargetOptionsCommandFlags.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
@@ -56,6 +59,9 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CLI/CallMismatchDiagnostic.h"
 #include "llvm/CLI/ImageLayout.h"
+#include "llvm/CLI/ManagedCallDiagnostic.h"
+#include "llvm/CLI/ManagedCallIR.h"
+#include "llvm/CLI/ManagedSignature.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/GlobalAlias.h"
@@ -67,9 +73,11 @@
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/LTO/Config.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CachePruning.h"
 #include "llvm/Support/Caching.h"
 #include "llvm/Support/CodeGen.h"
@@ -84,7 +92,9 @@
 #include <cstddef>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -224,6 +234,53 @@ struct UCRTStdioBits {
   uint64_t scanfBits;
 };
 
+/// Removes the elements of the llvm.global_ctors or llvm.global_dtors list
+/// \p name of \p m whose associated global (the third field) has no
+/// definition in \p m. Such an element is keyed to a COMDAT that did not
+/// prevail in this link: LTO made the COMDAT's members available_externally
+/// (or the optimizer made them declarations), and the prevailing copy, in a
+/// CIL object, keeps its own element, keyed to its own COMDAT, which runs the
+/// function once. So the element goes with its COMDAT, as the IR linker drops
+/// it when another bitcode module's copy prevails ("the initializer function
+/// will only run if the associated data from the current module is not
+/// discarded", LangRef). Kept, it would name a function that the LTO object
+/// does not define, which the backend refuses: the constructor forwarder
+/// '__msil_mc_ctor.<s>' of a managed call that an object and a bitcode file
+/// both declare is one (plan 5.20.4 as amended for constructor).
+static void dropDiscardedStructors(Module &m, StringRef name) {
+  GlobalVariable *list = m.getNamedGlobal(name);
+  if (!list || !list->hasInitializer())
+    return;
+  const auto *elements = dyn_cast<ConstantArray>(list->getInitializer());
+  if (!elements)
+    return;
+  SmallVector<Constant *, 8> kept;
+  for (const Use &op : elements->operands()) {
+    auto *element = cast<Constant>(op.get());
+    const auto *s = dyn_cast<ConstantStruct>(element);
+    const auto *key =
+        s && s->getNumOperands() > 2
+            ? dyn_cast<GlobalValue>(s->getOperand(2)->stripPointerCasts())
+            : nullptr;
+    if (!key || !key->isDeclarationForLinker())
+      kept.push_back(element);
+  }
+  if (kept.size() == elements->getNumOperands())
+    return;
+  if (kept.empty()) {
+    list->eraseFromParent();
+    return;
+  }
+  auto *type =
+      ArrayType::get(elements->getType()->getElementType(), kept.size());
+  auto *replacement =
+      new GlobalVariable(m, type, list->isConstant(), list->getLinkage(),
+                         ConstantArray::get(type, kept), "", list,
+                         list->getThreadLocalMode(), list->getAddressSpace());
+  replacement->takeName(list);
+  list->eraseFromParent();
+}
+
 /// msil-ld's hooks in LTO's code generator (plan 5.9.13), a legacy pass that
 /// lto::Config::PreCodeGenPassesHook adds ahead of the MSIL backend's passes.
 /// It sets module flags of the merged module: "msil-assembly-name" (MDString,
@@ -247,10 +304,16 @@ struct UCRTStdioBits {
 /// *-windows-msvc-msil it sets the UCRT stdio option bits of the link as the
 /// module flags "msil-ucrt-printf-bits" and "msil-ucrt-scanf-bits" (i64,
 /// Override; plan 5.15.2). After code generation it prints --print-imports.
+/// First it drops the llvm.global_ctors and llvm.global_dtors elements keyed
+/// to a COMDAT that did not prevail (dropDiscardedStructors).
 /// Before it sets the flags, it makes the prevailing linkonce_odr copies that
 /// LTO keeps external although no regular object needs them linkonce_odr
 /// again (restoreDiscardableCopies), so that the backend drops the unused ones
-/// (decision D26).
+/// (decision D26). In every LTO code generation it names the declaring type of
+/// each 'this-val' or 'this-gch' instance method managed call that binds, and
+/// of each static one through a value type or an enum that only inherits the
+/// member, in "msil-managed-decl" (annotateManagedCallDeclaringTypes, plan
+/// 5.20.5 ML2 (2) as amended; one that does not bind gets none).
 class MSILLinkHooksPass final : public ModulePass {
 public:
   static char ID;
@@ -276,6 +339,18 @@ public:
   // first.
   bool doInitialization(Module &m) override {
     LLVMContext &context = m.getContext();
+    // msil-ld decided T-M17 before LTO, for the units that still declare
+    // each managed call (checkMixedManagedCalls, checkBitcodeManagedCalls),
+    // and LTO runs only when that reported nothing. The list still holds the
+    // entries of units whose declarations their optimizers deleted, which
+    // must not count, and a partition or ThinLTO module would report a name
+    // again: slot P0 (the MSIL backend's MSILPrepareIR, whose initialization
+    // runs after this pass's) then compares no entries.
+    if (NamedMDNode *calls = m.getNamedMetadata(cli::ManagedCallsMetadata))
+      m.eraseNamedMetadata(calls);
+    // Before annotate makes the available_externally functions declarations.
+    dropDiscardedStructors(m, "llvm.global_ctors");
+    dropDiscardedStructors(m, "llvm.global_dtors");
     restoreDiscardableCopies(m);
     if (!assemblyName.empty())
       m.setModuleFlag(Module::Override, "msil-assembly-name",
@@ -301,6 +376,14 @@ public:
     }
     if (imports)
       annotate(m);
+    // The declaring type of each 'this-val' or 'this-gch' instance method
+    // managed call, and of each static one through a value type or an enum
+    // that only inherits the member (5.20.3 MS5, 5.20.5 ML2 (2) as amended),
+    // from which the backend writes the stub's final access form: the
+    // AsmPrinter, which writes the stub bodies, is initialized after this
+    // pass. On the declaration, or on the stub that MSILPrepareIR made of it
+    // in place.
+    annotateManagedCallDeclaringTypes(m);
     return true;
   }
 
@@ -997,6 +1080,10 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
     // defines it in the module (plan 5.14.4 T6).
     if (findOfferedTrailerDef(name))
       continue;
+    // A managed call (plan 5.20.4) is no import: the backend gives it a stub
+    // method that accesses the .NET member, and the binder binds the member.
+    if (f.hasFnAttribute(cli::ManagedTypeAttr))
+      continue;
     bool isUsed = hasLiveUses(f, &dropped);
 
     // An explicit import module is used as it is, unchecked (plan 5.10.7),
@@ -1295,6 +1382,76 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
   }
 }
 
+namespace {
+// msil-ld refuses the bitcode inputs' calls of a managed call with another
+// function type or extension (cli::hasManagedCallOfOtherType,
+// cli::hasManagedCallOfOtherExtension: T-M17) and their other uses of it
+// but a direct call of its own function type (T-M10) before LTO
+// (checkBitcodeManagedCallUses), except in an input whose symbol table lists
+// no '__msil_mc.' name (hand-written IR; clang names every managed call so),
+// which it leaves to slot P0, and in the available_externally functions and
+// variables, which no output compiles. P0 reports such a declaration in the
+// module that keeps it: T-M17 for a call of another function type or
+// extension, and no T-M10 then, else T-M10 for each holder of another use.
+// A ThinLTO module holds available_externally functions, its own (a GNU or
+// C99 inline function that another unit defines) and those that the import
+// brings, and a caller that inlines one that holds such a use holds the use
+// too: P0 would report T-M10 there under that caller's name, for a use that
+// no output compiles where the function is defined (clang -c drops such a
+// body at -O1 and above before P0), beside the T-M17 of the declaration's
+// own module, where full LTO's merged module gets T-M17 alone, or, for
+// hand-written IR, a second time. This pass makes an available_externally
+// function that holds a use of a managed call other than a direct call of
+// its own function type (cli::collectManagedCallHolders) a declaration, as
+// EliminateAvailableExternallyPass makes it after optimization: only the
+// module that defines the holder reports the use (T-M17, or T-M10 where no
+// call of another type is left), and a caller calls that definition instead
+// of an inlined copy.
+// createConfig adds it to each ThinLTO backend's optimization pipeline at
+// PassBuilder's ThinLTO early extension point, which comes first, before the
+// inliner, at every optimization level (after the target's own
+// MSILFixFunctionBitcastsLTOPass, which TargetMachine registers there
+// first); the module that -save-temps writes after the import is the one
+// imported.
+class DropImportedManagedCallHoldersPass
+    : public RequiredPassInfoMixin<DropImportedManagedCallHoldersPass> {
+public:
+  PreservedAnalyses run(Module &m, ModuleAnalysisManager &);
+};
+} // namespace
+
+PreservedAnalyses
+DropImportedManagedCallHoldersPass::run(Module &m, ModuleAnalysisManager &) {
+  SmallSetVector<const Instruction *, 4> insts;
+  SmallSetVector<const GlobalValue *, 4> globals;
+  for (const Function &fn : m)
+    if (fn.isDeclaration() && fn.hasFnAttribute(cli::ManagedTypeAttr))
+      cli::collectManagedCallHolders(fn, insts, globals);
+  SmallPtrSet<const Function *, 4> holders;
+  for (const Instruction *inst : insts)
+    holders.insert(inst->getFunction());
+  bool changed = false;
+  for (Function &fn : m) {
+    if (!fn.hasAvailableExternallyLinkage() || !holders.contains(&fn))
+      continue;
+    fn.deleteBody();
+    changed = true;
+  }
+  return changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
+
+namespace {
+// The managed-call errors that LTO has printed in this link
+// (handleLTODiagnostic), by symbol, kind and detail. createConfig makes one
+// per configuration, so no global outlives a link (LLD_IN_TEST=2, plan
+// 5.9.1).
+struct ReportedManagedCallErrors {
+  std::mutex mutex;
+  std::set<std::tuple<std::string, cli::ManagedCallErrorKind, std::string>>
+      errors;
+};
+} // namespace
+
 // msil-ld's LTO diagnostic handler: lld's (lld::diagnosticHandler), except
 // that plan 5.9.8's signature mismatch of a helper's call inside LTO is plan
 // 5.14.2 N-1's error, never 5.9.8's adapter and warning. On 5.9.8's LTO path,
@@ -1307,10 +1464,28 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
 // N-1's text from the diagnostic's name and printed shapes, as CallBinder
 // does for the objects' calls: the first line names a helper, and the
 // adapter's or the error's reason line goes. The text is an error, so the
-// link stops before the backend's adapter reaches an output. Every other
-// diagnostic, an ordinary name's mismatch included, is lld's. ThinLTO's
-// backends call it from their threads.
-static void handleLTODiagnostic(const DiagnosticInfo &di) {
+// link stops before the backend's adapter reaches an output. A managed-call
+// error (cli::DiagnosticInfoManagedCall, which names the call, not a
+// function that holds it: slot P0's T-M17 for a direct call whose function
+// type is not the declaration's or that has a 'signext' or 'zeroext' of its
+// own that would change the declaration's stub, and its invalid-attributes
+// error) is printed once per link for each symbol, kind and detail
+// (\p reported): every partition carries every declaration, and code
+// generation may meet one in several ThinLTO modules or partitions, which
+// one module reports once. msil-ld reports P0's T-M17 for a call of another
+// function type or extension in the bitcode inputs, and T-M10, which names
+// each holder, itself before LTO (checkBitcodeManagedCallUses), without this
+// handler; LTO runs only when that reported nothing, so P0 reports them in
+// LTO's code generation only for a call or a use that LTO's optimizer made,
+// or for an input whose symbol table lists no '__msil_mc.' name
+// (hand-written IR). Slot P0's T-M10 there names the function or global
+// that takes the address and is not repeated: each holder is compiled in
+// one module only, and a ThinLTO module's available_externally holders
+// become declarations before optimization (DropImportedManagedCallHoldersPass).
+// Every other diagnostic, an ordinary name's mismatch included, is lld's.
+// ThinLTO's backends and the partitions call it from their threads.
+static void handleLTODiagnostic(const DiagnosticInfo &di,
+                                ReportedManagedCallErrors &reported) {
   if (const auto *m = dyn_cast<cli::DiagnosticInfoCallMismatch>(&di)) {
     if (isHelperName(m->getName(), ctx)) {
       error("function signature mismatch: " + m->getName() +
@@ -1318,6 +1493,14 @@ static void handleLTODiagnostic(const DiagnosticInfo &di) {
             m->getDefined() + "\n>>> called as " + m->getCalled());
       return;
     }
+  }
+  if (const auto *mc = dyn_cast<cli::DiagnosticInfoManagedCall>(&di)) {
+    std::lock_guard<std::mutex> lock(reported.mutex);
+    if (!reported.errors
+             .emplace(mc->getSymbol().str(), mc->getErrorKind(),
+                      mc->getDetail().str())
+             .second)
+      return;
   }
   diagnosticHandler(di);
 }
@@ -1334,7 +1517,16 @@ createConfig(std::shared_ptr<const DiscardableCopies> discardable) {
   c.Options.DataSections = true;
 
   c.DisableVerify = ctx.arg.disableVerify;
-  c.DiagHandler = handleLTODiagnostic;
+  c.DiagHandler = [reported = std::make_shared<ReportedManagedCallErrors>()](
+                      const DiagnosticInfo &di) {
+    handleLTODiagnostic(di, *reported);
+  };
+  c.PassBuilderCallback = [](PassBuilder &pb) {
+    pb.registerThinLinkTimeOptimizationEarlyEPCallback(
+        [](ModulePassManager &mpm, OptimizationLevel) {
+          mpm.addPass(DropImportedManagedCallHoldersPass());
+        });
+  };
   c.OptLevel = ctx.arg.ltoo;
   c.CPU = getCPUStr();
   c.MAttrs = getMAttrs();
@@ -1376,6 +1568,9 @@ createConfig(std::shared_ptr<const DiscardableCopies> discardable) {
       size_t errorsBefore = errorCount();
       *imports = ImportAnnotation();
       annotateImports(m, *imports, discardable.get());
+      // The managed calls' type checks (plan 5.20.7 MK2-MK4, MK7), with
+      // references only (5.20.6 MW3): the text binds nothing.
+      checkManagedCallDeclarations(m);
       if (errorCount() == errorsBefore)
         return true;
       // Code generation, and with it MSILLinkHooksPass::doFinalization, does
@@ -1463,6 +1658,19 @@ bool isThinLTO(const BitcodeFile *f) {
 
 BitcodeCompiler::BitcodeCompiler()
     : discardable(std::make_shared<DiscardableCopies>()) {
+  // T-M17 while the bitcode inputs still have their symbol tables (add gives
+  // them to LTO): for the managed calls that CIL objects and bitcode inputs
+  // both declare, then, in every LTO mode, for those that bitcode inputs
+  // declare, each name once. Then, in every LTO mode, for the uses that the
+  // bitcode inputs' compiled code holds before LTO's optimizer, except those
+  // of the names that got T-M17: T-M17 for a call of another function type
+  // or extension, each name once, else T-M10.
+  StringSet<> reported;
+  bool ok = checkMixedManagedCalls(unreadableBitcode, reported);
+  ok &= checkBitcodeManagedCalls(unreadableBitcode, reported);
+  ok &= checkBitcodeManagedCallUses(unreadableBitcode, reported);
+  managedCallErrors = !ok;
+
   // Initialize ltoObj. ThinLTO input and LTO partitions give one CIL object
   // per module; under --lto-emit-asm the driver rejects them before LTO runs.
   auto onIndexWrite = [&](StringRef s) { thinIndices.erase(s); };
@@ -1517,6 +1725,55 @@ static StringSet<> getDLLExportNames(const lto::InputFile &obj) {
   return names;
 }
 
+// T-P2 (plan 5.18.6 PL4) for the bitcode input \p obj on a portable triple,
+// which binds no native code: every declaration, function or variable, with
+// an import module, and every declaration with an import name and no import
+// module (import_name alone, an explicit import too), in the backend's text
+// (MSILPortable.cpp), before LTO merges a declaration away or 5.10.14 reports
+// a variable as a data import. The modules are read lazily, as
+// getDLLExportNames reads them. Returns the number of errors reported.
+static unsigned reportPortableImports(const lto::InputFile &obj) {
+  unsigned numErrors = 0;
+  Expected<std::vector<BitcodeModule>> mods =
+      getBitcodeModuleList(obj.getFileBuffer());
+  if (!mods) {
+    consumeError(mods.takeError());
+    return numErrors;
+  }
+  for (BitcodeModule &bm : *mods) {
+    LLVMContext context;
+    Expected<std::unique_ptr<Module>> m =
+        bm.getLazyModule(context, /*ShouldLazyLoadMetadata=*/true,
+                         /*IsImporting=*/false);
+    if (!m) {
+      consumeError(m.takeError());
+      continue;
+    }
+    for (const GlobalValue &gv : (*m)->global_values()) {
+      if (!gv.isDeclaration())
+        continue;
+      StringRef module, name;
+      if (const auto *f = dyn_cast<Function>(&gv)) {
+        module = f->getFnAttribute("msil-import-module").getValueAsString();
+        name = f->getFnAttribute("msil-import-name").getValueAsString();
+      } else if (const auto *v = dyn_cast<GlobalVariable>(&gv)) {
+        module = v->getAttribute("msil-import-module").getValueAsString();
+        name = v->getAttribute("msil-import-name").getValueAsString();
+      }
+      if (module.empty() && name.empty())
+        continue;
+      ++numErrors;
+      error("'" + GlobalValue::dropLLVMManglingEscape(gv.getName()) +
+            "' is declared with " +
+            (module.empty() ? "import name '" + name
+                            : "import module '" + module) +
+            "', which " + ctx.arg.target.str() +
+            " does not support: the portable target binds no native code");
+    }
+  }
+  return numErrors;
+}
+
 // The UCRT's inline functions that return the address of its printf and
 // scanf options words (plan 5.15.2, 'Startup options').
 static bool isUCRTStdioOptionsFunction(StringRef name) {
@@ -1525,7 +1782,14 @@ static bool isUCRTStdioOptionsFunction(StringRef name) {
 }
 
 void BitcodeCompiler::add(BitcodeFile &f) {
+  // checkMixedManagedCalls or checkBitcodeManagedCalls reported that the
+  // modules do not read, so LTO, which then does not run, would report it
+  // again.
+  if (unreadableBitcode.contains(&f))
+    return;
   lto::InputFile &obj = *f.obj;
+  if (!cli::bindsNatively(ctx.arg.target))
+    numPortableImportErrors += reportPortableImports(obj);
   unsigned symNum = 0;
   ArrayRef<Symbol *> syms = f.getSymbols();
   std::vector<lto::SymbolResolution> resols(syms.size());
@@ -1617,6 +1881,17 @@ void BitcodeCompiler::setBitcodeLibFuncs(ArrayRef<StringRef> bitcodeLibFuncs) {
 // Merge all the bitcode files we have seen, codegen the result
 // and return the resulting objects.
 SmallVector<InputFile *, 0> BitcodeCompiler::compile() {
+  // T-P2 stops the link before LTO: the backend would report the same
+  // declarations again, and --lto-emit-asm writes no text. So do the errors
+  // of checkMixedManagedCalls and checkBitcodeManagedCalls, which decide
+  // T-M17 for every LTO mode (MSILLinkHooksPass removes !msil.managed.calls
+  // before slot P0 when LTO runs), and of checkBitcodeManagedCallUses, which
+  // decides T-M17 for a call of another function type or extension and T-M10
+  // before LTO's optimizer could delete such a call or fold a use away: LTO
+  // would report a bitcode input that does not read again, and write an
+  // output.
+  if (numPortableImportErrors || managedCallErrors)
+    return {};
   unsigned maxTasks = ltoObj->getMaxTasks();
   buf.resize(maxTasks);
   files.resize(maxTasks);

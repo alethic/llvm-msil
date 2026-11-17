@@ -36,8 +36,8 @@
 //              [mscorlib] table (plan 5.11.7) contains it.
 //
 // Each macro is expanded only when it is defined; the file #undef's both at
-// the end. Entries are only ever added (M20, M21, M22 and P-1a add theirs);
-// the order fixes the BCLMemberId values.
+// the end. Entries are only ever added (M20, M21, M22, P-1a, M27 and MC-1 add
+// theirs); the order fixes the BCLMemberId values.
 //
 //===----------------------------------------------------------------------===//
 
@@ -140,6 +140,46 @@ CLI_BCL_METHOD(ExternalException_ctor, ExternalException, ".ctor", true,
                "void", "string, int32", Required, "", true)
 CLI_BCL_METHOD(Exception_get_HResult, Exception, "get_HResult", true, "int32",
                "", Required, "", true)
+
+// MC-1: managed calls from C and C++, stage 1 (plan 5.20)
+// A managed-call stub's object handles are Normal GCHandles passed as native
+// int (plan 5.20.9): a result becomes a new handle, an argument is
+// dereferenced through FromIntPtr, box and unbox, then get_Target (no typed
+// local), and C frees a result through a GCHandle::Free declaration.
+CLI_BCL_TYPE(GCHandle, "System.Runtime.InteropServices", "GCHandle", true)
+CLI_BCL_METHOD(GCHandle_Alloc, GCHandle, "Alloc", false,
+               "valuetype System.Runtime.InteropServices.GCHandle", "object",
+               Required, "", true)
+CLI_BCL_METHOD(GCHandle_ToIntPtr, GCHandle, "ToIntPtr", false, "native int",
+               "valuetype System.Runtime.InteropServices.GCHandle", Required,
+               "", true)
+CLI_BCL_METHOD(GCHandle_FromIntPtr, GCHandle, "FromIntPtr", false,
+               "valuetype System.Runtime.InteropServices.GCHandle",
+               "native int", Required, "", true)
+CLI_BCL_METHOD(GCHandle_get_Target, GCHandle, "get_Target", true, "object",
+               "", Required, "", true)
+CLI_BCL_METHOD(GCHandle_Free, GCHandle, "Free", true, "void", "", Required,
+               "", true)
+// UTF-8 and UTF-32 string arguments are decoded by throwing decoders (plan
+// 5.20.10 S1, S3): GetString on a new UTF8Encoding(false, true) or
+// UTF32Encoding(false, false, true), whose failure is a
+// DecoderFallbackException that msil_catch can map to a code without
+// references ...
+CLI_BCL_TYPE(Encoding, "System.Text", "Encoding", true)
+CLI_BCL_METHOD(Encoding_GetString, Encoding, "GetString", true, "string",
+               "uint8*, int32", Required, "", true)
+CLI_BCL_TYPE(UTF8Encoding, "System.Text", "UTF8Encoding", true)
+CLI_BCL_METHOD(UTF8Encoding_ctor, UTF8Encoding, ".ctor", true, "void",
+               "bool, bool", Required, "", true)
+CLI_BCL_TYPE(UTF32Encoding, "System.Text", "UTF32Encoding", true)
+CLI_BCL_METHOD(UTF32Encoding_ctor, UTF32Encoding, ".ctor", true, "void",
+               "bool, bool, bool", Required, "", true)
+CLI_BCL_TYPE(DecoderFallbackException, "System.Text",
+             "DecoderFallbackException", true)
+// ... and UTF-16 string arguments by String::.ctor(char*) (S2).
+CLI_BCL_TYPE(String, "System", "String", true)
+CLI_BCL_METHOD(String_ctor_PChar, String, ".ctor", true, "void", "char*",
+               Required, "", true)
 
 #undef CLI_BCL_TYPE
 #undef CLI_BCL_METHOD

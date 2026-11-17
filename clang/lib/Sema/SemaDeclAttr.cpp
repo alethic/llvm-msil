@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SemaMSILManagedCall.h"
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -7806,6 +7807,13 @@ ProcessDeclAttribute(Sema &S, Decl *D, const ParsedAttr &AL,
     break;
   case ParsedAttr::AT_WebAssemblyImportName:
     S.Wasm().handleWebAssemblyImportNameAttr(D, AL);
+    break;
+  // MSIL managed calls (SemaMSILManagedCall.cpp).
+  case ParsedAttr::AT_MSILMethod:
+    msil::handleMSILMethodAttr(S, D, AL);
+    break;
+  case ParsedAttr::AT_MSILCatch:
+    msil::handleMSILCatchAttr(S, D, AL);
     break;
   case ParsedAttr::AT_IBOutlet:
     S.ObjC().handleIBOutlet(D, AL);

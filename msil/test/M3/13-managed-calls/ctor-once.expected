@@ -1,0 +1,6 @@
+
+main: one blank line above, from the constructor managed call blank_line that a.c and b.c both declare; a_answer() 42
+main: calling blank_line directly prints one more:
+
+main: done
+[exit 0]

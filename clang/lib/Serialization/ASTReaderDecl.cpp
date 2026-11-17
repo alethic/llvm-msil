@@ -14,6 +14,7 @@
 #include "../AST/ByteCode/Context.h"
 #include "ASTCommon.h"
 #include "ASTReaderInternals.h"
+#include "MSILManagedCallDecls.h"
 #include "clang/AST/ASTConcept.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTStructuralEquivalence.h"
@@ -3358,8 +3359,12 @@ bool ASTReader::isConsumerInterestedIn(Decl *D) {
     return Var->isFileVarDecl() &&
            (Var->isThisDeclarationADefinition() == VarDecl::Definition ||
             OMPDeclareTargetDeclAttr::isDeclareTargetDeclaration(Var));
+  // MSIL: also a managed call with dllexport, constructor or destructor,
+  // which has no body, so that CodeGen gets it for its forwarders
+  // (MSILManagedCallDecls.h).
   if (const auto *Func = dyn_cast<FunctionDecl>(D))
-    return Func->doesThisDeclarationHaveABody() || PendingBodies.count(D);
+    return Func->doesThisDeclarationHaveABody() || PendingBodies.count(D) ||
+           msil::isForwardedManagedCallDecl(Func);
 
   if (auto *ES = D->getASTContext().getExternalSource())
     if (ES->hasExternalDefinitions(D) == ExternalASTSource::EK_Never)

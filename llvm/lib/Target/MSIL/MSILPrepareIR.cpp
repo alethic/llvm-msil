@@ -19,8 +19,8 @@
 ///   ifunc and global variable (llvm.used and the like excepted) is erased,
 ///   so only the module header is printed.
 /// - On the portable triples, which bind no native code, a declaration with
-///   an import module is an error (MSIL::checkPortableModule, plan 5.18.6
-///   PL4).
+///   an import module or an import name is an error
+///   (MSIL::checkPortableModule, plan 5.18.6 PL4).
 /// - The stack protector and SafeStack attributes are removed with a warning.
 /// - The function entry instrumentation attributes (patchable function entry
 ///   and prefix, fentry calls) are removed, with a warning when one of them
@@ -40,6 +40,12 @@
 ///   than 64 bits becomes the plain instruction before any pass runs
 ///   (doInitialization, MSIL::relaxStrictInt128Conversions), so that
 ///   ExpandIRInsts expands it inline as it expands the plain conversions.
+/// - Each managed-call declaration (one with "msil-managed-type", plan 5.20.4),
+///   called or not, becomes, in place, an internal stub whose body the
+///   AsmPrinter writes, before any pass runs (doInitialization,
+///   MSIL::createManagedCallStubs, plan 5.20.5 ML2): every translation unit
+///   must give it the same arguments (T-M17), and any use of it but a direct
+///   call is an error and becomes poison (T-M10).
 ///
 /// Then, before any function is checked, the module is lowered as the whole
 /// program, which it is in -S output, in llc's and in msil-ld's
@@ -173,6 +179,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILManagedCalls.h"
 #include "MSILPortable.h"
 #include "MSILPreExpand.h"
 #include "MSILTargetMachine.h"
@@ -1437,7 +1444,10 @@ static bool diagnoseGlobalDtors(Module &M) {
           CS && CS->getNumOperands() >= 2)
         if (auto *Fn =
                 dyn_cast<GlobalValue>(CS->getOperand(1)->stripPointerCasts())) {
-          M.getContext().emitError("global destructor " + MSIL::getIRName(*Fn) +
+          // A managed call's destructor forwarder is named as the C
+          // function (plan 5.20.4 as amended).
+          M.getContext().emitError("global destructor " +
+                                   MSIL::getDiagnosticIRName(*Fn) +
                                    " is not supported for MSIL yet");
           Named = true;
         }
@@ -2219,6 +2229,9 @@ bool MSILPrepareIRLegacy::doInitialization(Module &M) {
   bool Changed = stripPseudoProbes(M);
   Changed |= diagnoseGCStrategies(M, DeletedBodies);
   Changed |= MSIL::relaxStrictInt128Conversions(M);
+  // Plan 5.20.5 ML2 (1): after the int128 relaxation, before any later P0
+  // step; in msil-ld's LTO code generation as well.
+  Changed |= MSIL::createManagedCallStubs(M);
   return Changed;
 }
 

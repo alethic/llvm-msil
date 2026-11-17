@@ -31,6 +31,17 @@
 ## (setjmp wrappers in the reference report)'): the LTO pipeline sees the
 ## call before code generation wraps it, and obj-sjlj.test pins the object
 ## link.
+## msil64-unknown-dotnet (P-1r R1; section 12 rows 2026-11-03 'P-1r R1:
+## Four M27 statements ...' and 2026-11-04 'MC-1.g extended (M27 leftover:
+## the dotnet signal-mask site in msil-ld)'): a sigsetjmp site whose mask is
+## known only at run time also calls sigprocmask there, and nothing binds it
+## quietly: c.dll does not export it before the signal design, and no native
+## library is ever consulted on the portable triple. With no c.dll on the
+## link, the llc object and the LTO image report the undefined symbol with
+## N6's line for a link without c.dll (the LTO reference names
+## '<output>.lto.o'), and --lto-emit-asm, which cannot import from c.dll,
+## stops in code generation with the linked-text backstop. No output is
+## written.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -43,6 +54,8 @@
 # RUN: llvm-as b.ll -o b.bc
 # RUN: llvm-as undef.ll -o undef.bc
 # RUN: llvm-as undef-win.ll -o undef-win.bc
+# RUN: llvm-as dotnet.ll -o dotnet.bc
+# RUN: llc -filetype=obj dotnet.ll -o dotnet.o
 
 # DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR"
@@ -177,6 +190,27 @@
 # RUN:   | FileCheck %s %{crash} --check-prefix=UNDEF -DOBJ=undef-win.bc --implicit-check-not=__msil_sjlj_invoke
 # UNDEF:      {{^}}msil-ld: error: undefined symbol: undefined_fn{{$}}
 # UNDEF-NEXT: {{^}}>>> referenced by [[OBJ]]:(main){{$}}
+
+## msil64-unknown-dotnet, a mask known only at run time, no c.dll: an
+## object link, an LTO image and --lto-emit-asm.
+# RUN: not msil-ld dotnet.o -o dotnet.exe 2>&1 \
+# RUN:   | FileCheck %s %{crash} --check-prefix=DOTNET-MASK -DREF=dotnet.o --implicit-check-not=error: \
+# RUN:     --implicit-check-not=warning:
+# RUN: not msil-ld dotnet.bc -o dotnet-lto.exe 2>&1 \
+# RUN:   | FileCheck %s %{crash} --check-prefix=DOTNET-MASK -DREF=dotnet-lto.exe.lto.o --implicit-check-not=error: \
+# RUN:     --implicit-check-not=warning:
+# RUN: not msil-ld --lto-emit-asm dotnet.bc -o dotnet.il 2>&1 \
+# RUN:   | FileCheck %s %{crash} --check-prefix=DOTNET-MASK-TEXT --implicit-check-not=error: \
+# RUN:     --implicit-check-not=warning:
+# RUN: not ls dotnet.exe
+# RUN: not ls dotnet-lto.exe
+# RUN: not ls dotnet.il
+# DOTNET-MASK:          {{^}}msil-ld: error: undefined symbol: sigprocmask{{$}}
+# DOTNET-MASK-NEXT:     {{^}}>>> a C library function; link the managed C library c.dll (-lc){{$}}
+# DOTNET-MASK-NEXT:     {{^}}>>> referenced by [[REF]]:(masked){{$}}
+# DOTNET-MASK-NOT:      {{.}}
+# DOTNET-MASK-TEXT:     {{^}}msil-ld: error: undefined function 'sigprocmask' was not resolved by msil-ld{{$}}
+# DOTNET-MASK-TEXT-NOT: {{.}}
 
 #--- libc.yaml
 ## A libc.so.6 stand-in: puts, sigprocmask and every Linux name of the
@@ -428,4 +462,43 @@ first:
   br label %done
 done:
   ret i32 0
+}
+
+#--- dotnet.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; static sigjmp_buf sbuf;
+;; __attribute__((noinline)) void sigjump(sigjmp_buf b) { siglongjmp(b, 5); }
+;; __attribute__((noinline)) int masked(int mask) {
+;;   int r = sigsetjmp(sbuf, mask);
+;;   if (r == 0) sigjump(sbuf);
+;;   return r;
+;; }
+;; int main(int argc, char **argv) { return masked(argc); }
+@sbuf = internal global [200 x i8] zeroinitializer, align 8
+
+declare i32 @sigsetjmp(ptr, i32) returns_twice
+declare void @siglongjmp(ptr, i32) noreturn
+
+define void @sigjump(ptr %b) noinline {
+  call void @siglongjmp(ptr %b, i32 5)
+  unreachable
+}
+
+define i32 @masked(i32 %mask) noinline {
+entry:
+  %r = call i32 @sigsetjmp(ptr @sbuf, i32 %mask)
+  %z = icmp eq i32 %r, 0
+  br i1 %z, label %first, label %done
+first:
+  call void @sigjump(ptr @sbuf)
+  unreachable
+done:
+  ret i32 %r
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %m = call i32 @masked(i32 %argc)
+  ret i32 %m
 }

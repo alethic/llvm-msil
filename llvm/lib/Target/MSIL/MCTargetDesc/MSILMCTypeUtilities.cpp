@@ -14,6 +14,7 @@
 
 #include "MCTargetDesc/MSILMCTypeUtilities.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -63,17 +64,49 @@ StringRef MSIL::getValTypeName(ValType T) {
 
 void MSIL::printValType(raw_ostream &OS, ValType T) { OS << getValTypeName(T); }
 
+// Print the narrow integer \p Exact of an exact parameter or result type
+// (Signature::ExactParams, Signature::ExactReturn), or \p T if there is none.
+static void printExactType(raw_ostream &OS, cli::ElementType Exact,
+                           MSIL::ValType T) {
+  switch (Exact) {
+  case cli::ELEMENT_TYPE_END:
+    MSIL::printValType(OS, T);
+    return;
+  case cli::ELEMENT_TYPE_I1:
+    OS << "int8";
+    return;
+  case cli::ELEMENT_TYPE_U1:
+    OS << "unsigned int8";
+    return;
+  case cli::ELEMENT_TYPE_I2:
+    OS << "int16";
+    return;
+  case cli::ELEMENT_TYPE_U2:
+    OS << "unsigned int16";
+    return;
+  default:
+    llvm_unreachable("MSIL: an exact parameter or result type is a narrow "
+                     "integer");
+  }
+}
+
 void MSIL::printResult(raw_ostream &OS, const Signature &S) {
   assert(S.Results.size() <= 1 && "a CIL method has at most one result");
+  assert((!S.Results.empty() || S.ExactReturn == cli::ELEMENT_TYPE_END) &&
+         "an exact result type needs a result");
   if (S.Results.empty())
     OS << "void";
   else
-    printValType(OS, S.Results.front());
+    printExactType(OS, S.ExactReturn, S.Results.front());
 }
 
 void MSIL::printParamList(raw_ostream &OS, const Signature &S) {
+  assert((S.ExactParams.empty() || S.ExactParams.size() == S.Params.size()) &&
+         "an exact type for every parameter or for none");
   OS << '(';
-  interleaveComma(S.Params, OS, [&OS](ValType T) { printValType(OS, T); });
+  interleaveComma(seq(S.Params.size()), OS, [&](size_t I) {
+    printExactType(OS, S.getExactParam(I), S.Params[I]);
+  });
   OS << ')';
 }
 

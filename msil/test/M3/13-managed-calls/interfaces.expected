@@ -1,0 +1,11 @@
+ICollection.Count of int32[7]: 7
+IEnumerator handle nonzero: 1
+elements: 10 -20 30
+MoveNext after the end: 0
+ICloneable.Clone: a new array 1, Length 3, ICollection.Count 3
+ArrayList(ICollection) Count: 3
+IComparable.CompareTo: apple < banana 1, banana > apple 1, apple == apple 1
+MemoryStream CanRead before IDisposable.Dispose: 1
+CanRead after: 0
+handles freed: 11
+[exit 0]

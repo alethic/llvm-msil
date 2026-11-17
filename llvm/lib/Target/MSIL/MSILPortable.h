@@ -35,13 +35,17 @@ namespace MSIL {
 /// variable declaration with an "msil-import-module" attribute (C's
 /// import_module) is the error T-P2, "'<f>' is declared with import module
 /// '<module>', which msil64-unknown-dotnet does not support: the portable
-/// target binds no native code", and loses its "msil-import-module" and
-/// "msil-import-name" attributes, so no P/Invoke and no IMPORT symbol is made
-/// of it. A reported function's calls are erased (an invoke branches to its
-/// normal destination) and every other use becomes poison, so that no second
-/// error names it; a reported variable stays an external variable, which
-/// whole-program text reports as it reports any other one. Returns whether
-/// the module changed.
+/// target binds no native code". A declaration with an "msil-import-name"
+/// attribute and no import module (C's import_name alone) is reported too,
+/// as "'<f>' is declared with import name '<n>', which msil64-unknown-dotnet
+/// does not support: the portable target binds no native code", and is
+/// handled the same way. A reported declaration loses its
+/// "msil-import-module" and "msil-import-name" attributes, so no P/Invoke and
+/// no IMPORT symbol is made of it. A reported function's calls are erased (an
+/// invoke branches to its normal destination) and every other use becomes
+/// poison, so that no second error names it; a reported variable stays an
+/// external variable, which whole-program text reports as it reports any
+/// other one. Returns whether the module changed.
 bool checkPortableModule(Module &M);
 
 /// The normalized text of the target triple \p TT, as a portable text

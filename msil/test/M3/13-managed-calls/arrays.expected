@@ -1,0 +1,20 @@
+uint8[5]: handle nonzero 1, Length 5
+out from index 1: 02 80 fe ff aa aa aa aa
+new int32[6]: 0 0 0 0 0 0
+int32[6] after Copy at 2: 0 0 10 -20 30 -2147483648
+GetValue(3) through Convert.ToInt32: -20
+float64[3]: Length 3, equal 1
+object[3]: Length 3, element 0 is null 1
+element 1: a r r a y s
+element 2 is the uint8[5]: Length 5
+string[3]: Length 3
+String.Join("-", string[]): "abc-de-f"
+its type: "System.String[]"
+Stream[2]: Length 2, element 0 is null 1, element 1 nonzero 1
+its type: "System.IO.Stream[]"
+element 1's type: "System.IO.MemoryStream"
+Math.GetMethod("Abs", {Int64}).ReturnType: "System.Int64"
+Math.GetMethod("Abs", {Int32}).ReturnType: "System.Int32"
+the Type[]'s type: "System.Type[]"
+handles freed: 34
+[exit 0]

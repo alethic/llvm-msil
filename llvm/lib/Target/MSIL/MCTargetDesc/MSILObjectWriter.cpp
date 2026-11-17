@@ -33,6 +33,7 @@
 #include "MCTargetDesc/MSILTargetStreamer.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
@@ -87,7 +88,10 @@ static cli::TypeSig toTypeSig(MSIL::ValType T) {
 /// The ECMA-335 signature blob of \p S. Methods and member references are
 /// static and managed (DEFAULT), as their ILAsm text spells them; a 'calli'
 /// signature (\p IsCallSite) keeps its unmanaged calling convention, which
-/// ilasm writes as the C (SIG_C) or stdcall (SIG_STDCALL) kind.
+/// ilasm writes as the C (SIG_C) or stdcall (SIG_STDCALL) kind. A method's
+/// parameter or result with an exact narrow type (MSIL::Signature::
+/// ExactParams and ExactReturn, a managed-call stub's) gets that type, as
+/// MSIL::printParamList and MSIL::printResult spell it.
 static SmallVector<uint8_t, 16> encodeSignature(const MSIL::Signature &S,
                                                 bool IsCallSite) {
   assert(S.Results.size() <= 1 && "a CIL method has at most one result");
@@ -105,33 +109,63 @@ static SmallVector<uint8_t, 16> encodeSignature(const MSIL::Signature &S,
       break;
     }
   }
+  assert((!S.Results.empty() || S.ExactReturn == cli::ELEMENT_TYPE_END) &&
+         "an exact result type needs a result");
+  assert((!IsCallSite || S.ExactReturn == cli::ELEMENT_TYPE_END) &&
+         "a 'calli' signature has no exact result type");
   if (!S.Results.empty())
-    M.Return = toTypeSig(S.Results.front());
-  for (MSIL::ValType T : S.Params)
-    M.Params.push_back(toTypeSig(T));
+    M.Return = !IsCallSite && S.ExactReturn != cli::ELEMENT_TYPE_END
+                   ? cli::TypeSig::get(S.ExactReturn)
+                   : toTypeSig(S.Results.front());
+  assert((S.ExactParams.empty() || S.ExactParams.size() == S.Params.size()) &&
+         "an exact type for every parameter or for none");
+  assert((!IsCallSite || S.ExactParams.empty()) &&
+         "a 'calli' signature has no exact parameter types");
+  for (size_t I = 0, E = S.Params.size(); I != E; ++I) {
+    cli::ElementType Exact = S.getExactParam(I);
+    M.Params.push_back(!IsCallSite && Exact != cli::ELEMENT_TYPE_END
+                           ? cli::TypeSig::get(Exact)
+                           : toTypeSig(S.Params[I]));
+  }
   SmallVector<uint8_t, 16> Out;
   cli::encodeMethodSig(M, Out);
   return Out;
 }
 
+/// The signature type of a class or value type: CLASS or VALUETYPE and the
+/// TypeRef of its full name, which the callback gives.
+using NamedTypeFn =
+    function_ref<cli::TypeSig(bool IsValueType, StringRef FullName)>;
+
 /// Parses a type of llvm/CLI/BCLMembers.def, which spells types as canonical
-/// listing v1 does (plan 5.7.10): a primitive, then any number of '*' and
+/// listing v1 does (plan 5.7.10): a primitive, 'class <name>' or 'valuetype
+/// <name>' (\p Named gives its signature type), then any number of '*' and
 /// '[]'. \p AllowVoid accepts a plain 'void' (a return type). Anything else
 /// gives std::nullopt.
-static std::optional<cli::TypeSig> parseBCLType(StringRef Text,
-                                                bool AllowVoid) {
+static std::optional<cli::TypeSig> parseBCLType(StringRef Text, bool AllowVoid,
+                                                NamedTypeFn Named) {
   Text = Text.trim();
   if (Text.consume_back("*")) {
-    std::optional<cli::TypeSig> Pointee = parseBCLType(Text, true);
+    std::optional<cli::TypeSig> Pointee = parseBCLType(Text, true, Named);
     if (!Pointee)
       return std::nullopt;
     return cli::TypeSig::getPointer(*Pointee);
   }
   if (Text.consume_back("[]")) {
-    std::optional<cli::TypeSig> Element = parseBCLType(Text, false);
+    std::optional<cli::TypeSig> Element = parseBCLType(Text, false, Named);
     if (!Element)
       return std::nullopt;
     return cli::TypeSig::getSZArray(*Element);
+  }
+  // A class or a value type (the GCHandle rows, plan 5.20.13).
+  for (bool IsValueType : {false, true}) {
+    StringRef Name = Text;
+    if (Name.consume_front(IsValueType ? "valuetype " : "class ")) {
+      Name = Name.trim();
+      if (Name.empty())
+        return std::nullopt;
+      return Named(IsValueType, Name);
+    }
   }
   if (Text == "void") {
     if (!AllowVoid)
@@ -167,11 +201,12 @@ static std::optional<cli::TypeSig> parseBCLType(StringRef Text,
 /// BCLMembers.def text. Returns false if a type is not one parseBCLType
 /// knows.
 static bool encodeBCLMethodSig(const cli::BCLMemberInfo &Info,
-                               SmallVectorImpl<uint8_t> &Out) {
+                               SmallVectorImpl<uint8_t> &Out,
+                               NamedTypeFn Named) {
   assert(Info.isMethod() && "not a BCL method");
   cli::MethodSig M;
   M.Header = Info.HasThis ? cli::SIG_HASTHIS : cli::SIG_DEFAULT;
-  std::optional<cli::TypeSig> Return = parseBCLType(Info.Return, true);
+  std::optional<cli::TypeSig> Return = parseBCLType(Info.Return, true, Named);
   if (!Return)
     return false;
   M.Return = *Return;
@@ -180,7 +215,7 @@ static bool encodeBCLMethodSig(const cli::BCLMemberInfo &Info,
     SmallVector<StringRef, 4> Parts;
     Params.split(Parts, ',');
     for (StringRef Part : Parts) {
-      std::optional<cli::TypeSig> T = parseBCLType(Part, false);
+      std::optional<cli::TypeSig> T = parseBCLType(Part, false, Named);
       if (!T)
         return false;
       M.Params.push_back(*T);
@@ -188,6 +223,56 @@ static bool encodeBCLMethodSig(const cli::BCLMemberInfo &Info,
   }
   cli::encodeMethodSig(M, Out);
   return true;
+}
+
+/// The signature type of the managed-call type \p T (plan 5.20.5 ML3), with
+/// \p Named giving each class and value type its TypeRef, operands first.
+static cli::TypeSig toTypeSig(const cli::ManagedType &T, NamedTypeFn Named) {
+  using TK = cli::ManagedType::TypeKind;
+  switch (T.Kind) {
+  case TK::Void:
+    return cli::TypeSig();
+  case TK::Bool:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_BOOLEAN);
+  case TK::Char:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_CHAR);
+  case TK::Int8:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I1);
+  case TK::UInt8:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_U1);
+  case TK::Int16:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I2);
+  case TK::UInt16:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_U2);
+  case TK::Int32:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I4);
+  case TK::UInt32:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_U4);
+  case TK::Int64:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I8);
+  case TK::UInt64:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_U8);
+  case TK::Float32:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_R4);
+  case TK::Float64:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_R8);
+  case TK::NativeInt:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I);
+  case TK::NativeUInt:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_U);
+  case TK::String:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_STRING);
+  case TK::Object:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_OBJECT);
+  case TK::Class:
+  case TK::ValueType:
+    return Named(T.Kind == TK::ValueType, T.TypeName);
+  case TK::Pointer:
+    return cli::TypeSig::getPointer(toTypeSig(T.getElement(), Named));
+  case TK::SZArray:
+    return cli::TypeSig::getSZArray(toTypeSig(T.getElement(), Named));
+  }
+  llvm_unreachable("MSIL: unknown managed type kind");
 }
 
 //===----------------------------------------------------------------------===//
@@ -264,6 +349,15 @@ void MSILObjectWriter::recordRelocation(const MCFragment &F,
                                     "output, which a CIL object does not have");
     return;
   }
+  if (Ref->getKind() == MSILMemberRefExpr::ManagedTypeSpec ||
+      Ref->getKind() == MSILMemberRefExpr::UserString) {
+    // An object's stubs leave these checks to msil-ld (plan 5.20.6 MW2 as
+    // amended), and a CIL object has no user strings.
+    reportError(Fixup.getLoc(), "MSIL: the run-time checks of a managed-call "
+                                "stub are whole-program output, which a CIL "
+                                "object does not have");
+    return;
+  }
   TokenOperand Op;
   Op.Kind = Ref->getKind();
   Op.Name = Ref->getName().str();
@@ -271,6 +365,10 @@ void MSILObjectWriter::recordRelocation(const MCFragment &F,
     Op.Sig = *Sig;
   if (Op.Kind == MSILMemberRefExpr::BCLMember)
     Op.BCL = Ref->getBCLMember();
+  if (const cli::ManagedType *T = Ref->getManagedType())
+    Op.MType = *T;
+  if (const cli::ManagedSignature *S = Ref->getManagedSignature())
+    Op.MSig = *S;
   uint64_t Offset = Asm->getFragmentOffset(F) + Fixup.getOffset();
   TokenSites[F.getParent()].insert_or_assign(Offset, std::move(Op));
 }
@@ -400,15 +498,32 @@ uint64_t MSILObjectWriter::writeObject(MCAssembler &Asm,
   // the only MemberRefs a SIGNATURES entry may name (rule C7).
   DenseSet<uint32_t> SymbolsMethodRefs;
 
-  // The TypeRef of a BCL type, '[msil.bcl]<Namespace>.<Name>'; a nested type
-  // 'Outer/Inner' is scoped to its enclosing type's TypeRef, as ilasm does.
-  auto GetBCLTypeRef = [&](const cli::BCLMemberInfo &Type) {
+  // The TypeRef of a type in '[msil.bcl]', by its namespace and name; a
+  // nested type 'Outer/Inner' is scoped to its enclosing type's TypeRef, as
+  // ilasm does.
+  auto GetTypeRef = [&](StringRef Namespace, StringRef Name) {
     SmallVector<StringRef, 2> Names;
-    StringRef(Type.Name).split(Names, '/');
-    cli::EntityHandle Ref = MB.addTypeRef(BCLScope, Type.Namespace, Names[0]);
+    Name.split(Names, '/');
+    cli::EntityHandle Ref = MB.addTypeRef(BCLScope, Namespace, Names[0]);
     for (StringRef Inner : drop_begin(Names))
       Ref = MB.addTypeRef(Ref, "", Inner);
     return Ref;
+  };
+  // The TypeRef of a BCL type, '[msil.bcl]<Namespace>.<Name>'.
+  auto GetBCLTypeRef = [&](const cli::BCLMemberInfo &Type) {
+    return GetTypeRef(Type.Namespace, Type.Name);
+  };
+  // The TypeRef of a type by its full name ('Ns.Outer/Inner'): the classes
+  // and value types of BCLMembers.def signatures and of managed calls (plan
+  // 5.20.5 ML3), which msil-ld binds by name.
+  auto GetNamedTypeRef = [&](StringRef FullName) {
+    auto [Namespace, Name] = cli::splitManagedTypeName(FullName);
+    return GetTypeRef(Namespace, Name);
+  };
+  auto NamedTypeSig = [&](bool IsValueType, StringRef FullName) {
+    uint32_t Token = GetNamedTypeRef(FullName).Value;
+    return IsValueType ? cli::TypeSig::getValueType(Token)
+                       : cli::TypeSig::getClass(Token);
   };
   // A MemberRef of a C symbol on its placeholder parent '<Type>' (plan
   // 5.8.3). Each row is added after the rows it refers to, in this order, so
@@ -472,11 +587,11 @@ uint64_t MSILObjectWriter::writeObject(MCAssembler &Asm,
       if (Info.isType())
         return ResolvedToken{ResolvedToken::Final, GetBCLTypeRef(Info).Value};
       SmallVector<uint8_t, 16> Sig;
-      if (!encodeBCLMethodSig(Info, Sig)) {
+      if (!encodeBCLMethodSig(Info, Sig, NamedTypeSig)) {
         Fail("MSIL: cannot encode the signature of BCL member '" + Info.IdName +
              "' (" + Info.Return + " (" + Info.Params +
              ")): llvm/CLI/BCLMembers.def has a type that is not a "
-             "primitive, a pointer or an array");
+             "primitive, a class, a value type, a pointer or an array");
         return std::nullopt;
       }
       cli::EntityHandle Parent =
@@ -485,6 +600,54 @@ uint64_t MSILObjectWriter::writeObject(MCAssembler &Asm,
       return ResolvedToken{ResolvedToken::Final,
                            MB.addMemberRef(Parent, Info.Name, SigBlob).Value};
     }
+    case MSILMemberRefExpr::ManagedMember: {
+      // The member of a managed call (plan 5.20.6 MW1): a MemberRef on the
+      // TypeRef of its class or value type in '[msil.bcl]', with its own
+      // signature; msil-ld binds it by name and full signature. A static
+      // member of a TYPE written 'valuetype T' has the TypeSpec 'valuetype
+      // T' as its parent instead (MK3, MSIL::hasValueTypeSpecParent), as
+      // ilasm makes it of the object-form text. The signature's TypeRefs
+      // come first, then the parent's TypeRef and its TypeSpec.
+      assert(Op.MType && Op.MType->isNamed() && Op.MSig &&
+             "a managed member needs its type and its signature");
+      const cli::ManagedSignature &MS = *Op.MSig;
+      SmallVector<uint8_t, 16> Sig;
+      if (MS.IsField) {
+        cli::encodeFieldSig(toTypeSig(MS.Return, NamedTypeSig), Sig);
+      } else {
+        cli::MethodSig M;
+        M.Header = MS.HasThis ? cli::SIG_HASTHIS : cli::SIG_DEFAULT;
+        M.Return = toTypeSig(MS.Return, NamedTypeSig);
+        for (const cli::ManagedType &P : MS.Params)
+          M.Params.push_back(toTypeSig(P, NamedTypeSig));
+        cli::encodeMethodSig(M, Sig);
+      }
+      uint32_t SigBlob = MB.addBlob(Sig);
+      cli::EntityHandle Parent = GetNamedTypeRef(Op.MType->TypeName);
+      if (MSIL::hasValueTypeSpecParent(*Op.MType, MS)) {
+        SmallVector<uint8_t, 8> Spec;
+        cli::encodeTypeSpec(cli::TypeSig::getValueType(Parent.Value), Spec);
+        Parent = MB.addTypeSpec(MB.addBlob(Spec));
+      }
+      return ResolvedToken{ResolvedToken::Final,
+                           MB.addMemberRef(Parent, Op.Name, SigBlob).Value};
+    }
+    case MSILMemberRefExpr::ManagedType: {
+      // A class, a value type or a primitive is the TypeRef of its class; a
+      // pointer or array type is a TypeSpec.
+      assert(Op.MType && "a managed type token needs its type");
+      StringRef RefName = MSIL::getManagedTypeRefName(*Op.MType);
+      if (!RefName.empty())
+        return ResolvedToken{ResolvedToken::Final,
+                             GetNamedTypeRef(RefName).Value};
+      SmallVector<uint8_t, 16> Spec;
+      cli::encodeTypeSpec(toTypeSig(*Op.MType, NamedTypeSig), Spec);
+      return ResolvedToken{ResolvedToken::Final,
+                           MB.addTypeSpec(MB.addBlob(Spec)).Value};
+    }
+    case MSILMemberRefExpr::ManagedTypeSpec:
+    case MSILMemberRefExpr::UserString:
+      llvm_unreachable("recordRelocation refuses whole-program tokens");
     }
     llvm_unreachable("MSIL: unknown member reference kind");
   };

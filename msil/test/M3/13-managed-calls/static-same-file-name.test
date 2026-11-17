@@ -1,0 +1,111 @@
+# Two translation units whose main files have the same name, d1/u.c and d2/u.c, each compiled with -flto -c from its own directory: each declares a static managed call 'static int get(int)', d1/u.c's bound to System.Math::Abs and d2/u.c's to Math::Sign, and both declare the same 'static int twin(int)' (Math::Abs); d2/u.c's main prints get(-3), d1/u.c's a_get(-4) and each unit's twin(-5), and returns get(-3) + a_get(-4), which is 3; through full LTO at -O0 and -O2 and through ThinLTO at -O2.
+# Plan 5.20.4 (IR name, MR4) and T-M17 as amended for MC-1 (section 12 rows
+# '5.20.4 (IR name, MR4) and T-M17 amended (...)' and '5.20.4 (IR name,
+# MR4) amended again (...)'): a managed-call declaration with internal
+# linkage gets the IR name '__msil_mc.<symbol>.__uniq.<n>', where <n>
+# hashes the declaration's !msil.managed.calls operands (TYPE, MEMBER,
+# SIGNATURE, ASSEMBLY, the conversion and catch lists) and its function
+# type, never the name of the translation unit's main file. Equal names
+# therefore mean interchangeable declarations: the two 'get' declarations,
+# which differ in MEMBER, keep two IR names and two stubs, and the two
+# 'twin' declarations, which are equal, share one IR name, which full LTO's
+# IR linker may merge, since either stub does the same. Under the earlier
+# rule <n> was the postfix of the main file's name as the command line
+# gave it, 'u.c' in both units here, so both 'get' declarations were named
+# '__msil_mc.get.__uniq.<one n>', and the LTO link stopped with the false
+# T-M17 'managed call 'get' is declared with different 'msil_method' or
+# 'msil_catch' arguments in different translation units', while the same
+# units linked as objects ran and exited with 3 (MC-1 leftover audit,
+# defect D2). msil-prog.py compiles each source by its path from its build
+# directory (../d1/u.c, ../d2/u.c), names that never collide, so this test
+# has its own RUN lines instead of a composite: each unit is compiled from
+# its own directory as 'u.c' (lit's internal 'cd'), the clang driver links
+# the two bitcode files with msil-ld (its linker on MSIL triples) and
+# %{msil_ldflags}, then %msil_verify, %msil_jitall where the feature
+# msil-jitall is present, the run on the configured runtime and, by
+# %{msil_also_run_check}, on each runtime of the leg's msil_also_run, and
+# with msil_run_netfx the run on the .NET Framework 4.8; every transcript
+# matches the CHECK lines. The builds are LTO whatever msil_pipeline says,
+# so every leg that runs this directory links them: p3-full (.NET 10, TC=0
+# and the Framework) and wsl-p3 (WSL .NET 10 and TC=0, on
+# x86_64-unknown-linux-gnu-msil) under obj, and the MC-1 gate's steps 18
+# and 18b under lto. System.Math is no built-in table type, so the links
+# take the .NET Framework 4.8 implementation assemblies
+# (%{msil_refs_netfx}). No composite builds this test, so update-expected.py,
+# the native oracle and the O3, O4 and O6 oracles skip it; Sign(-3) and
+# Abs(-4) are -1 and 4 by C's own arithmetic (the static-units.test
+# fallbacks), and the transcript is in the CHECK lines. Plan 5.17.13 (MC-1,
+# M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{sf_lto} = -flto
+# DEFINE: %{sf_level} = O0
+# DEFINE: %{sf_out} = %t/full-O0
+# REDEFINE: %{msil_also_run_image} = %{sf_out}/prog.exe
+# DEFINE: %{sf_build} = \
+# DEFINE:   rm -rf %{sf_out} && mkdir -p %{sf_out} \
+# DEFINE:   && cd %t/d1 && %clang_msil %{msil_cflags} -%{sf_level} %{sf_lto} -c u.c -o %{sf_out}/u1.o \
+# DEFINE:   && cd %t/d2 && %clang_msil %{msil_cflags} -%{sf_level} %{sf_lto} -c u.c -o %{sf_out}/u2.o \
+# DEFINE:   && cd %t \
+# DEFINE:   && %clang_msil -%{sf_level} %{msil_ldflags} %{sf_out}/u1.o %{sf_out}/u2.o -o %{sf_out}/prog.exe \
+# DEFINE:   && %msil_verify %{sf_out}/prog.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %{sf_out}/prog.exe %}
+# DEFINE: %{sf_run} = \
+# DEFINE:   %msil_exec --out %{sf_out}/prog.out %{sf_out}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%{sf_out}/prog.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{sf_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --out %{sf_out}/prog.netfx.out %{sf_out}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%{sf_out}/prog.netfx.out --match-full-lines %s
+# RUN: %{sf_build}
+# RUN: %{sf_run}
+# RUN: %if msil-run-netfx %{ %{sf_netfx} %}
+# REDEFINE: %{sf_level} = O2
+# REDEFINE: %{sf_out} = %t/full-O2
+# RUN: %{sf_build}
+# RUN: %{sf_run}
+# RUN: %if msil-run-netfx %{ %{sf_netfx} %}
+# REDEFINE: %{sf_lto} = -flto=thin
+# REDEFINE: %{sf_out} = %t/thin-O2
+# RUN: %{sf_build}
+# RUN: %{sf_run}
+# RUN: %if msil-run-netfx %{ %{sf_netfx} %}
+# Every run's transcript.
+# CHECK:      d2/u.c get(-3), Math::Sign: -1
+# CHECK-NEXT: d1/u.c a_get(-4), Math::Abs: 4
+# CHECK-NEXT: twin(-5) of d1/u.c and of d2/u.c, Math::Abs: 5 5
+# CHECK-NEXT: [exit 3]
+#--- d1/u.c
+/* d1/u.c: a static managed call 'get' bound to Math::Abs. */
+static int get(int x)
+    __attribute__((msil_method("System.Math", "Abs", "int32(int32)")));
+
+/* d2/u.c declares the same 'twin': the two are interchangeable. */
+static int twin(int x)
+    __attribute__((msil_method("System.Math", "Abs", "int32(int32)")));
+
+int a_get(int x) { return get(x); }
+
+int a_twin(int x) { return twin(x); }
+#--- d2/u.c
+/* d2/u.c: a static managed call 'get' bound to Math::Sign, and main. */
+#include <stdio.h>
+
+static int get(int x)
+    __attribute__((msil_method("System.Math", "Sign", "int32(int32)")));
+
+static int twin(int x)
+    __attribute__((msil_method("System.Math", "Abs", "int32(int32)")));
+
+int a_get(int x);
+int a_twin(int x);
+
+int main(void) {
+  volatile int minus_three = -3, minus_four = -4, minus_five = -5;
+  printf("d2/u.c get(-3), Math::Sign: %d\n", get(minus_three));
+  printf("d1/u.c a_get(-4), Math::Abs: %d\n", a_get(minus_four));
+  printf("twin(-5) of d1/u.c and of d2/u.c, Math::Abs: %d %d\n",
+         a_twin(minus_five), twin(minus_five));
+  return get(minus_three) + a_get(minus_four);
+}

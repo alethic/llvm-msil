@@ -1,0 +1,212 @@
+# clang -S text and msil-ld --lto-emit-asm text without references of managed calls whose TYPE names a reference type as a value type: StringBuilder::get_Length declared on 'valuetype System.Text.StringBuilder' and String::get_Length declared on 'valuetype System.String' (the 'this-val' row), and the delegate type System.Action's constructor declared on 'valuetype System.Action' (its result the 'boxed' row) and given a C function's address, each end the program with an unhandled TypeLoadException before the member is called, on every runtime, where the getters' stubs used to unbox the object and print a wrong length and the constructor's stub built a working delegate over the C function.
+# Plan 5.20.6 MW2 as amended for MC-1 (whole-program text checks the
+# declaration when it runs): standalone text (clang -S, llc) and msil-ld's
+# --lto-emit-asm text bind nothing, so no link checks them against the
+# references (5.20.7 MK3 refuses these declarations in an object link and in
+# an --lto-emit-asm link with references, with T-M16's "managed call
+# 'builder_length': 'System.Text.StringBuilder' is a reference type, but the
+# declaration uses it as a value type"); instead the unbox of a 'this-val'
+# stub's object names TYPE as a TypeSpec of the declared kind, 'unbox
+# valuetype [mscorlib]System.Text.StringBuilder', and so does the box of a
+# value type's constructed object, 'box valuetype [mscorlib]System.Action'
+# right after the constructor's newobj, which the runtime's type loader
+# refuses when it compiles the stub ('... due to value type mismatch'), so
+# the stub fails at its first call, before any of its code runs.
+# System.String gets the TypeSpec too: only 'this-obj' and a class's
+# constructor keep the TypeRef for System.String and System.Object, and
+# 'this-val' and a value type's constructor for the primitive value types,
+# whose kind is fixed. Plan 5.17.4's rule on loud failures: a
+# declaration error that no tool can see fails loudly, never with a wrong
+# result. Without the check the stub's unbox took the object for a boxed
+# value, and get_Length read the wrong memory: 2147483647 for the
+# StringBuilder on the .NET Framework 4.8, .NET 8 and .NET 10; and
+# System.Action's constructor, which takes the delegate constructor's
+# arguments (an object and a method's address), made a delegate over the C
+# function, whose two calls through Action::Invoke printed the C function's
+# line twice and exited 42 on the .NET Framework 4.8, .NET 8 and .NET 10,
+# though TYPE says that System.Action is a value type. At -O0 and -O2, for
+# each program: clang -S, and clang -flto -c with an --lto-emit-asm link
+# that passes no reference (%{msil_ref_flags} is empty whatever the leg),
+# each text assembled by %ilasm -exe; each image runs on the configured
+# runtime, on it again with DOTNET_TieredCompilation=0 (the optimizing JIT)
+# and, with msil_run_netfx, on the .NET Framework 4.8. The images are
+# neither verified nor force-JITted, because jitall reports the stub that
+# the type loader refuses, so %{msil_also_run_check} (which runs jitall) is
+# not used either. The transcript is the status line alone: the programs
+# print nothing before the call (the action program prints only from its C
+# function, which never runs), and an unhandled exception loses the C
+# library's buffered stdout. The BUILDER, STRING and ACTION lines match the
+# runtime's report of the refused type on stderr, the check's only message
+# (the type loader's own text, measured alike on the .NET Framework 4.8,
+# .NET 8, .NET 10 and WSL .NET 10). No composite builds this test, so no
+# equivalence oracle compares the text with an object link. Plan 5.17.13
+# (MC-1, M3/13-managed-calls).
+# REDEFINE: %{msil_ref_flags} =
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{tr_prog} = builder
+# DEFINE: %{tr_loud} = BUILDER
+# DEFINE: %{tr_level} = O0
+# DEFINE: %{tr_dir} = %t/%{tr_prog}-%{tr_level}
+# DEFINE: %{tr_form} = text
+# DEFINE: %{tr_image} = %{tr_dir}/%{tr_form}
+# DEFINE: %{tr_build} = \
+# DEFINE:   mkdir -p %{tr_dir} \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{tr_level} -S %t/%{tr_prog}.c -o %{tr_dir}/text.il \
+# DEFINE:   && %ilasm -exe -output=%{tr_dir}/text.exe %{tr_dir}/text.il \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{tr_level} -flto -c %t/%{tr_prog}.c -o %{tr_dir}/main.o \
+# DEFINE:   && %clang_msil -%{tr_level} %{msil_ldflags} -Wl,--lto-emit-asm %{tr_dir}/main.o -o %{tr_dir}/lto.il \
+# DEFINE:   && %ilasm -exe -output=%{tr_dir}/lto.exe %{tr_dir}/lto.il
+# DEFINE: %{tr_run} = \
+# DEFINE:   %msil_exec --stderr-out %{tr_image}.err --out %{tr_image}.out %{tr_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tr_image}.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{tr_image}.err --check-prefix=%{tr_loud} %s \
+# DEFINE:   && %msil_exec --env DOTNET_TieredCompilation=0 --stderr-out %{tr_image}.tc0.err --out %{tr_image}.tc0.out %{tr_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tr_image}.tc0.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{tr_image}.tc0.err --check-prefix=%{tr_loud} %s
+# DEFINE: %{tr_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --stderr-out %{tr_image}.netfx.err --out %{tr_image}.netfx.out %{tr_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{tr_image}.netfx.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{tr_image}.netfx.err --check-prefix=%{tr_loud} %s
+# RUN: %{tr_build}
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_form} = lto
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_level} = O2
+# REDEFINE: %{tr_form} = text
+# RUN: %{tr_build}
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_form} = lto
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_prog} = string
+# REDEFINE: %{tr_loud} = STRING
+# REDEFINE: %{tr_level} = O0
+# REDEFINE: %{tr_form} = text
+# RUN: %{tr_build}
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_form} = lto
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_level} = O2
+# REDEFINE: %{tr_form} = text
+# RUN: %{tr_build}
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_form} = lto
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_prog} = action
+# REDEFINE: %{tr_loud} = ACTION
+# REDEFINE: %{tr_level} = O0
+# REDEFINE: %{tr_form} = text
+# RUN: %{tr_build}
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_form} = lto
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_level} = O2
+# REDEFINE: %{tr_form} = text
+# RUN: %{tr_build}
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# REDEFINE: %{tr_form} = lto
+# RUN: %{tr_run}
+# RUN: %if msil-run-netfx %{ %{tr_netfx} %}
+# Every run's transcript: the status line alone.
+# CHECK-NOT: {{.}}
+# CHECK:     [unhandled exception: System.TypeLoadException]
+# The runtime's report of the refused TypeSpec.
+# BUILDER:   {{^Unhandled [Ee]xception[.:] }}System.TypeLoadException: Could not load type 'System.Text.StringBuilder' from assembly '{{[^']*}}' due to value type mismatch.{{$}}
+# STRING:    {{^Unhandled [Ee]xception[.:] }}System.TypeLoadException: Could not load type 'System.String' from assembly '{{[^']*}}' due to value type mismatch.{{$}}
+# ACTION:    {{^Unhandled [Ee]xception[.:] }}System.TypeLoadException: Could not load type 'System.Action' from assembly '{{[^']*}}' due to value type mismatch.{{$}}
+#--- builder.c
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* StringBuilder's constructor, declared right: a reference type, so the
+   result is the 'obj' row. */
+__attribute__((msil_method("System.Text.StringBuilder", ".ctor",
+                           "instance void(string)")))
+mc_handle new_builder(const char *text);
+
+/* Wrong: TYPE names the reference type StringBuilder as a value type, so
+   the stub's 'this' takes the 'this-val' row (unbox, call). */
+__attribute__((msil_method("valuetype System.Text.StringBuilder",
+                           "get_Length", "instance int32()")))
+int builder_length(mc_handle builder);
+
+int main(void) {
+  int length = builder_length(new_builder("hello"));
+  /* Reached only without the check: the stub returned 2147483647. */
+  puts(length == 5 ? "length 5" : "length wrong");
+  return 1;
+}
+#--- string.c
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* String::Concat, declared right: its string result is the 'obj' row. */
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+mc_handle concat(const char *a, const char *b);
+
+/* Wrong: TYPE names the reference type String as a value type, so the
+   stub's 'this' takes the 'this-val' row (unbox, call). */
+__attribute__((msil_method("valuetype System.String", "get_Length",
+                           "instance int32()")))
+int string_length(mc_handle s);
+
+int main(void) {
+  int length = string_length(concat("hel", "lo"));
+  /* Reached only without the check: the stub returned a wrong length. */
+  puts(length == 5 ? "length 5" : "length wrong");
+  return 1;
+}
+#--- action.c
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* Wrong: TYPE names the delegate type System.Action, a reference type, as
+   a value type, so the constructor's result takes the 'boxed' row (newobj,
+   box). The arguments are a delegate constructor's: the target object
+   (none) and the address of the method, here a C function's. */
+__attribute__((msil_method("valuetype System.Action", ".ctor",
+                           "instance void(object, native int)")))
+mc_handle new_action(mc_handle target, void *function);
+
+/* Action::Invoke, declared right: a reference type, the 'this-obj' row. */
+__attribute__((msil_method("System.Action", "Invoke", "instance void()")))
+void action_invoke(mc_handle action);
+
+static int calls;
+
+/* Reached only without the check, through the delegate. */
+static void callback(void) {
+  calls += 21;
+  puts("C function called through a .NET delegate");
+}
+
+int main(void) {
+  mc_handle action = new_action(0, (void *)callback);
+  action_invoke(action);
+  action_invoke(action);
+  /* Reached only without the check: the delegate ran twice, exit 42. */
+  return calls;
+}

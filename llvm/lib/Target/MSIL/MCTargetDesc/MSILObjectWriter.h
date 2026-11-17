@@ -39,6 +39,7 @@
 #include "llvm/BinaryFormat/CLI.h"
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/CLI/BCLMembers.h"
+#include "llvm/CLI/ManagedSignature.h"
 #include "llvm/CLI/Signature.h"
 #include "llvm/MC/MCMSILObjectWriter.h"
 #include "llvm/TargetParser/Triple.h"
@@ -84,6 +85,11 @@ private:
     std::optional<MSIL::Signature> Sig;
     /// The BCL member (BCLMember).
     cli::BCLMemberId BCL = cli::BCLMemberId();
+    /// The type that declares a ManagedMember, or the type of a ManagedType;
+    /// Name is a ManagedMember's name.
+    std::optional<cli::ManagedType> MType;
+    /// A ManagedMember's own signature.
+    std::optional<cli::ManagedSignature> MSig;
   };
   /// A method definition: emitMethodBegin to emitMethodEnd.
   struct MethodRecord {

@@ -1,0 +1,252 @@
+# clang -S text and msil-ld --lto-emit-asm text without references of managed calls that pass a C integer for a 'valuetype' parameter that is not an enum of the integer's width: a 64-bit integer for the struct System.TimeSpan (DateTime::Add, CIL parameter 1, C parameter 2 after the 'this' handle), for the int32 enum System.DateTimeKind (DateTime::SpecifyKind, parameter 2), and for FileStream's FileMode in a stub whose msil_catch entries list System.InvalidProgramException, and an int for 'valuetype System.Int32' (Math::Abs): each stub throws InvalidProgramException with T-M7's parameter text before the member is called, outside its .try, on every runtime.
+# Plan 5.20.6 MW2 as amended for MC-1 (whole-program text checks the
+# declaration when it runs) and 5.20.3's T-M7 (its parameter form):
+# standalone text (clang -S, llc) and msil-ld's --lto-emit-asm text bind
+# nothing, so no link compares an 'enum' conversion with E's TypeDef (5.20.7
+# MK2 refuses these declarations in an object link and in an --lto-emit-asm
+# link with references); instead, at the very start of its body, the stub
+# tests each 'enum' parameter's E: E must be an enum (typeof(E).IsEnum:
+# ldtoken E, Type::GetTypeFromHandle and Type::get_IsEnum, with no local)
+# and sizeof E must be the C integer's size, or the stub throws
+# System.InvalidProgramException with msil-ld's text, "managed call '<f>':
+# parameter <i> passes <n> bits for '<E>', which is not an enum of that
+# width", <i> being the member's 1-based CIL parameter. The tests come
+# before the UTF-8 length loops and before the .try of msil_catch (5.20.8
+# MX2), so no entry maps their exception, not even one that lists
+# System.InvalidProgramException. A primitive value type (System.Int32
+# here) is never an enum, so its test is only the throw, and the stub
+# always throws. Plan 5.17.4's rule on loud
+# failures: a declaration error that no tool can see fails loudly.
+# Without the tests the struct ran by accident on the .NET Framework 4.8
+# (the integer stood in for the TimeSpan) and threw InvalidProgramException
+# without a message on .NET 8 and .NET 10, the wrong widths ran on every
+# runtime, the catch stub mapping FileStream's FileNotFoundException to its
+# code 2, and the long form of int32 named no member
+# (MissingMethodException). At -O0 and -O2, for each program: clang -S, and
+# clang -flto -c with an --lto-emit-asm link that passes no reference
+# (%{msil_ref_flags} is empty whatever the leg), each text assembled by
+# %ilasm -exe; each image runs on the configured runtime and on it again
+# with DOTNET_TieredCompilation=0 (the optimizing JIT), is force-JITted
+# (jitall compiles the stubs: their checks are ordinary code) and runs on
+# each runtime of the leg's msil_also_run by %{msil_also_run_check}, and
+# with msil_run_netfx on the .NET Framework 4.8. The images are not
+# verified: the member still gets the integer where it takes E, which
+# ILVerify and PEVerify report for the struct. The transcript is the status
+# line alone: the programs print nothing before the call, and an unhandled
+# exception loses the C library's buffered stdout. The STRUCT, WIDTH, CATCH
+# and PRIMITIVE lines match the stub's own message in the runtime's report
+# on stderr (the msil_also_run runs check the transcript only). No composite
+# builds this test, so no equivalence oracle compares the text with an
+# object link. Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REDEFINE: %{msil_ref_flags} =
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{ep_prog} = struct
+# DEFINE: %{ep_loud} = STRUCT
+# DEFINE: %{ep_level} = O0
+# DEFINE: %{ep_dir} = %t/%{ep_prog}-%{ep_level}
+# DEFINE: %{ep_form} = text
+# DEFINE: %{ep_image} = %{ep_dir}/%{ep_form}
+# REDEFINE: %{msil_also_run_image} = %{ep_image}.exe
+# DEFINE: %{ep_build} = \
+# DEFINE:   mkdir -p %{ep_dir} \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ep_level} -S %t/%{ep_prog}.c -o %{ep_dir}/text.il \
+# DEFINE:   && %ilasm -exe -output=%{ep_dir}/text.exe %{ep_dir}/text.il \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ep_level} -flto -c %t/%{ep_prog}.c -o %{ep_dir}/main.o \
+# DEFINE:   && %clang_msil -%{ep_level} %{msil_ldflags} -Wl,--lto-emit-asm %{ep_dir}/main.o -o %{ep_dir}/lto.il \
+# DEFINE:   && %ilasm -exe -output=%{ep_dir}/lto.exe %{ep_dir}/lto.il
+# DEFINE: %{ep_run} = \
+# DEFINE:   %msil_exec --stderr-out %{ep_image}.err --out %{ep_image}.out %{ep_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{ep_image}.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{ep_image}.err --check-prefix=%{ep_loud} %s \
+# DEFINE:   && %msil_exec --env DOTNET_TieredCompilation=0 --stderr-out %{ep_image}.tc0.err --out %{ep_image}.tc0.out %{ep_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{ep_image}.tc0.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{ep_image}.tc0.err --check-prefix=%{ep_loud} %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{ep_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --stderr-out %{ep_image}.netfx.err --out %{ep_image}.netfx.out %{ep_image}.exe \
+# DEFINE:   && FileCheck --input-file=%{ep_image}.netfx.out --match-full-lines %s \
+# DEFINE:   && FileCheck --input-file=%{ep_image}.netfx.err --check-prefix=%{ep_loud} %s
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_level} = O2
+# REDEFINE: %{ep_form} = text
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_prog} = width
+# REDEFINE: %{ep_loud} = WIDTH
+# REDEFINE: %{ep_level} = O0
+# REDEFINE: %{ep_form} = text
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_level} = O2
+# REDEFINE: %{ep_form} = text
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_prog} = catch
+# REDEFINE: %{ep_loud} = CATCH
+# REDEFINE: %{ep_level} = O0
+# REDEFINE: %{ep_form} = text
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_level} = O2
+# REDEFINE: %{ep_form} = text
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_prog} = primitive
+# REDEFINE: %{ep_loud} = PRIMITIVE
+# REDEFINE: %{ep_level} = O0
+# REDEFINE: %{ep_form} = text
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_level} = O2
+# REDEFINE: %{ep_form} = text
+# RUN: %{ep_build}
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# REDEFINE: %{ep_form} = lto
+# RUN: %{ep_run}
+# RUN: %if msil-run-netfx %{ %{ep_netfx} %}
+# Every run's transcript: the status line alone.
+# CHECK-NOT: {{.}}
+# CHECK:     [unhandled exception: System.InvalidProgramException]
+# The stub's message, in the runtime's report on stderr.
+# STRUCT:    {{^Unhandled [Ee]xception[.:] }}System.InvalidProgramException: managed call 'date_add': parameter 1 passes 64 bits for 'System.TimeSpan', which is not an enum of that width{{$}}
+# WIDTH:     {{^Unhandled [Ee]xception[.:] }}System.InvalidProgramException: managed call 'date_specify_kind': parameter 2 passes 64 bits for 'System.DateTimeKind', which is not an enum of that width{{$}}
+# CATCH:     {{^Unhandled [Ee]xception[.:] }}System.InvalidProgramException: managed call 'open_file': parameter 2 passes 64 bits for 'System.IO.FileMode', which is not an enum of that width{{$}}
+# PRIMITIVE: {{^Unhandled [Ee]xception[.:] }}System.InvalidProgramException: managed call 'abs32': parameter 1 passes 32 bits for 'System.Int32', which is not an enum of that width{{$}}
+#--- say.h
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* Prints "<what> <v>": reached only without the checks. */
+static void say(const char *what, long long v) {
+  char digits[24];
+  int n = 0;
+  unsigned long long u =
+      v < 0 ? 0 - (unsigned long long)v : (unsigned long long)v;
+  while (*what)
+    putchar(*what++);
+  putchar(' ');
+  if (v < 0)
+    putchar('-');
+  do {
+    digits[n++] = (char)('0' + u % 10);
+    u /= 10;
+  } while (u);
+  while (n)
+    putchar(digits[--n]);
+  putchar('\n');
+}
+#--- struct.c
+#include "say.h"
+
+__attribute__((msil_method("valuetype System.DateTime", ".ctor",
+                           "instance void(int32, int32, int32)")))
+mc_handle new_date(int year, int month, int day);
+
+__attribute__((msil_method("valuetype System.DateTime", "get_Ticks",
+                           "instance int64()")))
+long long date_ticks(mc_handle date);
+
+/* Wrong: System.TimeSpan is a struct, not an enum; the integer stands for
+   its ticks. */
+__attribute__((msil_method(
+    "valuetype System.DateTime", "Add",
+    "instance valuetype System.DateTime(valuetype System.TimeSpan)")))
+mc_handle date_add(mc_handle date, long long span);
+
+int main(void) {
+  mc_handle date = new_date(2024, 5, 6);
+  mc_handle later = date_add(date, 10000000);
+  say("ticks added", date_ticks(later) - date_ticks(date));
+  return 1;
+}
+#--- width.c
+#include "say.h"
+
+__attribute__((msil_method("valuetype System.DateTime", ".ctor",
+                           "instance void(int64)")))
+mc_handle new_date(long long ticks);
+
+__attribute__((msil_method("valuetype System.DateTime", "get_Kind",
+                           "instance valuetype System.DateTimeKind()")))
+int date_kind(mc_handle date);
+
+/* Wrong: System.DateTimeKind is an int32 enum, passed as a 64-bit
+   integer. */
+__attribute__((msil_method("valuetype System.DateTime", "SpecifyKind",
+                           "valuetype System.DateTime(valuetype "
+                           "System.DateTime, valuetype System.DateTimeKind)")))
+mc_handle date_specify_kind(mc_handle date, long long kind);
+
+int main(void) {
+  /* DateTimeKind.Utc (1). */
+  say("kind", date_kind(date_specify_kind(new_date(0), 1)));
+  return 1;
+}
+#--- catch.c
+#include "say.h"
+
+/* Wrong: System.IO.FileMode is an int32 enum, passed as a 64-bit integer;
+   the entries list System.InvalidProgramException too, which never maps the
+   test's exception. */
+__attribute__((msil_method("System.IO.FileStream", ".ctor",
+                           "instance void(string, valuetype "
+                           "System.IO.FileMode, valuetype System.IO.FileAccess)"),
+               msil_catch("System.IO.FileNotFoundException", 2),
+               msil_catch("System.InvalidProgramException", 99)))
+mc_handle open_file(const char *path, long long mode, int access, int *err);
+
+int main(void) {
+  int err = 0;
+  /* FileMode.Open (3) and FileAccess.Read (1) of a file that does not
+     exist. */
+  mc_handle file = open_file("no-such-file.txt", 3, 1, &err);
+  say("err", err);
+  return file ? 2 : 1;
+}
+#--- primitive.c
+#include "say.h"
+
+/* Wrong: the primitive value type System.Int32 is never an enum (Math::Abs
+   takes 'int32'), so this stub always throws. */
+__attribute__((msil_method("System.Math", "Abs",
+                           "int32(valuetype System.Int32)")))
+int abs32(int value);
+
+int main(void) {
+  say("abs", abs32(-5));
+  return 1;
+}

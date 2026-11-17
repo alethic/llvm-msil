@@ -1,0 +1,11 @@
+three boxed FILETIMEs: nonzero 1, distinct 1
+GetHashCode: stable 1, equal for equal values 1, stable for the nonzero one 1
+Equals: a with b 1, a with itself 1, a with c 0, c with a 0
+ToString is the type name: 1 and 1
+GetType: handle nonzero 1, FullName is the type name 1, the same object as Type::GetType's 1
+Guid.Empty: GetHashCode 0, ToString is zeros 1
+Guid("00112233-4455-6677-8899-aabbccddeeff"): handle nonzero 1, GetHashCode stable 1, ToString round trip 1
+Enum::GetNames through DayOfWeek: 7 names, and 7 without the prefix
+Object::ReferenceEquals through Guid: two handles of one object 1 (distinct handles 1), two objects 0
+handles freed: 17
+[exit 0]

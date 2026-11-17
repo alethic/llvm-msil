@@ -118,6 +118,8 @@ TARGETS = [
     ("field-obj-q", "field-obj.il", ["FIELD_Q"], "obj"),
     ("field-obj-m", "field-obj.il", ["FIELD_M"], "obj"),
     ("field-obj-base", "field-obj.il", ["FIELD_BASE"], "obj"),
+    ("FakeRuntime", "FakeRuntime.il", [], "dll"),
+    ("FakeWidgets", "FakeWidgets.il", [], "dll"),
 ]
 
 # output name -> (description for the YAML header, function(bytearray) that

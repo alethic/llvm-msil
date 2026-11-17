@@ -13,6 +13,7 @@
 #include "InputFiles.h"
 #include "Config.h"
 #include "InputChunks.h"
+#include "ManagedCalls.h"
 #include "SymbolTable.h"
 #include "TokenMap.h"
 #include "lld/Common/CommonLinkerContext.h"
@@ -643,6 +644,9 @@ void ObjFile::parse(bool ignoreComdats) {
     return;
   }
 
+  // T-M23: a definition of a reserved managed-call stub name.
+  checkReservedManagedCallNames(*this);
+
   for (const MSILLink::SignatureInfo &info : record.Signatures)
     sigInfos[info.Token] = &info;
   if (!readMethods())
@@ -893,6 +897,9 @@ static Symbol *createBitcodeSymbol(const lto::InputFile::Symbol &objSym,
 }
 
 void BitcodeFile::parse() {
+  // T-M23: a definition of a reserved managed-call stub name.
+  checkReservedManagedCallNames(*this);
+
   // COMDAT groups (lld/ELF/InputFiles.cpp:1906-1912): the first input that
   // presents a group keeps it, and NoDeduplicate groups are always kept. C
   // produces only Any and NoDeduplicate.

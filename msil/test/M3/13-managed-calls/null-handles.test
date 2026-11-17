@@ -1,0 +1,136 @@
+# Handles of 0: a 0 'this' of a reference type (Exception::get_HResult), a 0 'this' of a value type (DateTime::get_Ticks) and a 0 boxed value-type argument (DateTime::Compare) are null, so the call throws NullReferenceException, which msil_catch maps to its code; a 0 'this' of GCHandle (get_IsAllocated, Free) is a GCHandle value of 0, so GCHandle::FromIntPtr throws InvalidOperationException, mapped to its own code; a 0 'obj' argument is null and the call succeeds without writing the code.
+# Plan 5.20.9 MH1 as built (section 12 row '5.20.9 MH1 as built (...)'): a
+# handle of 0 converted by 'this-obj', 'this-val' or 'boxed' is null, as
+# for 'obj' (the stub branches to ldnull instead of calling
+# GCHandle::FromIntPtr(0)), so the member access, unbox or unbox.any throws
+# NullReferenceException, the type 5.20.8 MX4 names for bad handles; 'gch'
+# and 'this-gch' keep GCHandle::FromIntPtr, because the C value is the
+# GCHandle's IntPtr (5.20.3's table), so a GCHandle value of 0 throws
+# InvalidOperationException, as GCHandle.FromIntPtr(IntPtr.Zero) does on
+# the .NET Framework and on .NET. 5.20.8 MX2 and MX4: with msil_catch the
+# whole stub body, its conversions included, is one .try whose filter tests
+# the entries in the order written, stores the first match's code and
+# returns the zero value of the C return type; on success *err is not
+# written. Every declaration lists both entries, NullReferenceException
+# (14) first and InvalidOperationException (15) second, so the code tells
+# which exception the call threw. DateTime is no built-in table type, so
+# the program links against the .NET Framework 4.8 implementation
+# assemblies (%{msil_refs_netfx}); the image runs on the Framework, .NET 10
+# and WSL .NET 10. The members have no C library equivalent, so the
+# expected file is hand-written for both OSes (plan 5.20.11 MT3, 5.17.4 as
+# amended for MC-1). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define GCH "valuetype System.Runtime.InteropServices.GCHandle"
+#define DT "valuetype System.DateTime"
+
+/* Codes of this test (any values from 1 to INT32_MAX). */
+enum { CODE_NULL = 14, CODE_INVALID = 15 };
+
+#define CATCH_BOTH                                                             \
+  msil_catch("System.NullReferenceException", CODE_NULL),                      \
+      msil_catch("System.InvalidOperationException", CODE_INVALID)
+
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+mc_handle new_entry_point_not_found(const char *message);
+
+/* 'this-obj' */
+__attribute__((msil_method("System.Exception", "get_HResult",
+                           "instance int32()"),
+               CATCH_BOTH))
+int exception_hresult(mc_handle exception, int *err);
+
+/* 'this-val' and 'boxed' */
+__attribute__((msil_method(DT, ".ctor", "instance void(int64)")))
+mc_handle new_date(long long ticks);
+
+__attribute__((msil_method(DT, "get_Ticks", "instance int64()"), CATCH_BOTH))
+long long date_ticks(mc_handle date, int *err);
+
+__attribute__((msil_method(DT, "Compare", "int32(" DT ", " DT ")"),
+               CATCH_BOTH))
+int date_compare(mc_handle a, mc_handle b, int *err);
+
+/* 'this-gch' */
+__attribute__((msil_method(GCH, "get_IsAllocated", "instance bool()"),
+               CATCH_BOTH))
+_Bool handle_is_allocated(mc_handle handle, int *err);
+
+__attribute__((msil_method(GCH, "Free", "instance void()"), CATCH_BOTH))
+void handle_free_checked(mc_handle handle, int *err);
+
+__attribute__((msil_method(GCH, "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+/* 'obj': a null argument is no error. */
+__attribute__((msil_method("System.Object", "ReferenceEquals",
+                           "bool(object, object)"),
+               CATCH_BOTH))
+_Bool same_object(mc_handle a, mc_handle b, int *err);
+
+int main(void) {
+  mc_handle e = new_entry_point_not_found("null-handles: an exception");
+  mc_handle d = new_date(1234567);
+  int err;
+
+  /* Valid handles: the code is not written. */
+  err = -1;
+  int hr = exception_hresult(e, &err);
+  printf("HResult of a valid handle: 0x%08x, code %d\n", (unsigned)hr, err);
+  err = -1;
+  long long ticks = date_ticks(d, &err);
+  printf("Ticks of a valid handle: %lld, code %d\n", ticks, err);
+  err = -1;
+  int cmp = date_compare(d, d, &err);
+  printf("Compare of valid handles: %d, code %d\n", cmp, err);
+  err = -1;
+  _Bool allocated = handle_is_allocated(e, &err);
+  printf("IsAllocated of a valid handle: %d, code %d\n", allocated, err);
+
+  /* 0 through 'this-obj', 'this-val' and 'boxed': NullReferenceException. */
+  err = -1;
+  hr = exception_hresult(0, &err);
+  printf("HResult of 0: result %d, code %d\n", hr, err);
+  err = -1;
+  ticks = date_ticks(0, &err);
+  printf("Ticks of 0: result %lld, code %d\n", ticks, err);
+  err = -1;
+  cmp = date_compare(0, d, &err);
+  printf("Compare(0, d): result %d, code %d\n", cmp, err);
+  err = -1;
+  cmp = date_compare(d, 0, &err);
+  printf("Compare(d, 0): result %d, code %d\n", cmp, err);
+
+  /* 0 through 'this-gch': InvalidOperationException. */
+  err = -1;
+  allocated = handle_is_allocated(0, &err);
+  printf("IsAllocated of 0: result %d, code %d\n", allocated, err);
+  err = -1;
+  handle_free_checked(0, &err);
+  printf("Free of 0: code %d\n", err);
+
+  /* 0 through 'obj': null, no exception. */
+  err = -1;
+  _Bool same = same_object(0, 0, &err);
+  printf("ReferenceEquals(0, 0): %d, code %d\n", same, err);
+  err = -1;
+  same = same_object(e, 0, &err);
+  printf("ReferenceEquals(e, 0): %d, code %d\n", same, err);
+
+  err = -1;
+  handle_free_checked(d, &err);
+  printf("Free of a valid handle: code %d\n", err);
+  handle_free(e);
+  printf("handles freed: 2\n");
+  return 0;
+}

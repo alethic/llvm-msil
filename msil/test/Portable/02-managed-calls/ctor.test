@@ -1,0 +1,69 @@
+# Constructor managed calls on msil64-unknown-dotnet: an external one ('__attribute__((constructor)) void barrier(void)') and a 'static' one (unit_barrier), both bound to System.Threading.Interlocked::MemoryBarrier(), compile, link with c.dll, verify and run before main, beside a C constructor whose flag main checks; the object has a forwarder for each, which calls its stub.
+# Plan 5.20.4 as amended for MC-1 (MC-1 leftover audit, defect D6, and the
+# user's pick 'Build them now' in the chat, 2026-11-05): for a managed call
+# with constructor, clang's CodeGen defines the forwarder
+# '__msil_mc_ctor.<symbol>', which calls the stub and discards its result,
+# and registers it in llvm.global_ctors: linkonce_odr hidden in a COMDAT
+# that keys its entry for an external declaration (once per program),
+# internal and unkeyed for a 'static' one (once per unit). Constructors
+# work on every MSIL triple; on msil64-unknown-dotnet, as on the Windows
+# triples, the forwarder takes no parameters (the Dotnet rules call
+# constructors without arguments), and Sema refuses a parameter (T-M19).
+# Every member is a built-in table entry (no --reference before P-2): the
+# table's parameterless static methods are Interlocked::MemoryBarrier()
+# (Phase 1) and Environment::GetCommandLineArgs(), and neither has an
+# effect that C sees, so how often the constructors run is proven on the
+# host triples (M3/13-managed-calls/ctor-once.test and ctor-per-unit.test),
+# and this test proves that they link, verify and run here: the program
+# checks the flag of an ordinary C constructor (bit 1 of the exit status),
+# and the EXT and UNIT lines pin, in the -O2 object (llvm-cil-dump), each
+# forwarder and its body, a call of the stub and ret (the internal
+# declaration's IR name ends in '.__uniq.<n>', 5.20.4 as amended). main
+# makes no call of its own, so each stub's only caller is its forwarder.
+# Before the fix the attribute had no effect: no forwarder, so the EXT and
+# UNIT lines fail. A link that writes --lto-emit-asm text cannot import
+# c.dll (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REQUIRES: msil-cil-dump
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/main.c -o %t/main.o
+# RUN: %msil_cil_dump %t/main.o > %t/main.dump
+# RUN: FileCheck %s --check-prefix=EXT --input-file=%t/main.dump
+# RUN: FileCheck %s --check-prefix=UNIT --input-file=%t/main.dump
+# EXT:      .method '__msil_mc_ctor.barrier' void() flags={{.*}}
+# EXT-NEXT:   .maxstack {{[0-9]+}}
+# EXT-NEXT:   L{{[0-9]+}}: call void() '<Module>'::'__msil_mc.barrier'{{$}}
+# EXT-NEXT:   L{{[0-9]+}}: ret{{$}}
+# UNIT:      .method '__msil_mc_ctor.unit_barrier' void() flags={{.*}}
+# UNIT-NEXT:   .maxstack {{[0-9]+}}
+# UNIT-NEXT:   L{{[0-9]+}}: call void() '<Module>'::'__msil_mc.unit_barrier.__uniq.{{[0-9]+}}'{{$}}
+# UNIT-NEXT:   L{{[0-9]+}}: ret{{$}}
+#--- main.c
+#define INTERLOCKED "System.Threading.Interlocked"
+
+/* External: one forwarder per program. */
+__attribute__((constructor))
+__attribute__((msil_method(INTERLOCKED, "MemoryBarrier", "void()")))
+void barrier(void);
+
+/* Internal: one forwarder per unit. */
+__attribute__((constructor))
+__attribute__((msil_method(INTERLOCKED, "MemoryBarrier", "void()")))
+static void unit_barrier(void);
+
+/* volatile, so that -O2 cannot fold the constructor into the initializer. */
+static volatile int c_constructor_ran;
+
+__attribute__((constructor)) static void c_constructor(void) {
+  c_constructor_ran = 1;
+}
+
+int main(void) {
+  int failed = 0;
+  if (!c_constructor_ran)
+    failed |= 1;
+  return failed;
+}

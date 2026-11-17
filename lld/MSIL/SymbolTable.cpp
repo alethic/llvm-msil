@@ -16,6 +16,7 @@
 #include "InputChunks.h"
 #include "InputFiles.h"
 #include "LTO.h"
+#include "ManagedCalls.h"
 #include "NativeLibraries.h"
 #include "TokenMap.h"
 #include "TrailerDefFile.h"
@@ -186,6 +187,12 @@ void SymbolTable::compileBitcodeFiles() {
       }
     }
   }
+
+  // The units that declare each managed call, while the bitcode inputs still
+  // have their symbol tables: finalizeObjectSymbols compares the CIL objects
+  // that the LTO objects extract with them (T-M17).
+  if (!ctx.arg.ltoEmitAsm)
+    managedCallUnitsBeforeLTO = recordManagedCallUnits();
 
   // Compile bitcode files and replace bitcode symbols.
   lto.reset(new BitcodeCompiler);
@@ -1142,6 +1149,12 @@ void SymbolTable::resolveAlternateNames() {
 }
 
 void SymbolTable::finalizeObjectSymbols() {
+  // T-M17 for the CIL objects that LTO's extractions brought, then T-M21
+  // again, with them and the LTO objects.
+  if (managedCallUnitsBeforeLTO)
+    checkLateManagedCalls(*managedCallUnitsBeforeLTO);
+  checkExportedManagedCalls();
+
   // A definition that lost resolution: its own method or segment is not the
   // symbol's (plan 5.9.5). COMDAT losers are discarded already.
   SmallVector<InputChunk *, 0> lost;

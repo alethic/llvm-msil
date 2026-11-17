@@ -52,9 +52,10 @@
 # gate (plan section 12, row 'Q32 amended').
 #   net8           every MSIL FileCheck directory (llvm/test/CodeGen/MSIL, clang/test/CodeGen/MSIL,
 #                  the clang driver tests, lld/test/MSIL, llvm/test/MC/MSIL, the llvm-cil-dump and
-#                  llvm-cil-copy tests, and from M26 clang/test/Sema/msil-long-double-format.c and
-#                  llvm/test/Transforms/ExpandVariadics/msil-abi.ll) and msil/test (M1, M2, M3
-#                  and the harness; msil/test/Programs
+#                  llvm-cil-copy tests, from M26 clang/test/Sema/msil-long-double-format.c and
+#                  llvm/test/Transforms/ExpandVariadics/msil-abi.ll, and from MC-1
+#                  clang/test/Sema/attr-msil-method.c and clang/test/SemaCXX/attr-msil-method.cpp)
+#                  and msil/test (M1, M2, M3 and the harness; msil/test/Programs
 #                  is filtered out: the corpus legs run it) under obj on .NET 8 (tiered) and on the
 #                  .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS clang's
 #                  compiler-rt builtins), msil_equiv=1 (O3 on the --no-gc-sections equivalence link
@@ -361,6 +362,7 @@ $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/
                'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
                'clang/test/Driver/msil-object.c', 'clang/test/Driver/msil-shared.c',
+               'clang/test/Sema/attr-msil-method.c', 'clang/test/SemaCXX/attr-msil-method.cpp',
                'clang/test/Sema/msil-long-double-format.c',
                'llvm/test/Transforms/ExpandVariadics/msil-abi.ll', 'lld/test/MSIL',
                'llvm/test/tools/llvm-cil-dump', 'llvm/test/tools/llvm-cil-copy', 'llvm/test/MC/MSIL',

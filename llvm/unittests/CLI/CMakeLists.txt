@@ -14,6 +14,7 @@ add_llvm_unittest(CLITests
   ILDecoderTest.cpp
   ImageLayoutTest.cpp
   LinkInfoTest.cpp
+  ManagedSignatureTest.cpp
   MetadataBuilderTest.cpp
   MetadataReaderTest.cpp
   MethodBodyTest.cpp

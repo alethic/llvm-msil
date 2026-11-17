@@ -1,0 +1,11 @@
+UTF8Encoding handle is nonzero: 1
+GetString handles: nonzero 1, distinct 1
+first string: "managed"
+second string: "handles"
+first string again: "managed"
+HResult: 0x80131523
+get_Target handle: nonzero 1, differs from the first 1
+HResult through it: 0x80131523
+a string through get_Target: "managed"
+handles freed: 6
+[unhandled exception: System.InvalidCastException]

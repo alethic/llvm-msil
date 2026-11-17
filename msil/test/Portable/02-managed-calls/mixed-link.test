@@ -1,0 +1,139 @@
+# One constructor(300) managed call on msil64-unknown-dotnet, bound to System.Threading.Interlocked::MemoryBarrier() and declared by a CIL object (a.c, clang -c) and a bitcode file (b.c, clang -flto -c) of one program: msil-ld links them with no diagnostic, so no T-M17, the image's module initializer calls the one constructor forwarder once, and the program runs, its C constructor and each unit's direct call included.
+# Plan 5.20.4 MR4 as amended for MC-1 (contract D6's forwarders, and the
+# section 12 row '5.20.5 ML1 and 5.20.4 MR4 amended (shared managed-call IR
+# rules)'): the !msil.managed.calls entry of an external managed call with
+# constructor has an 8th operand, 'constructor(300)' here. clang writes the
+# bitcode's text, msil-ld writes the CIL object's from the object's
+# forwarder (the init entry of '__msil_mc_ctor.barrier' at priority 300),
+# both through cli::printManagedCallAttributes, and in a link that mixes
+# objects and bitcode msil-ld compares the two byte for byte; a difference
+# is T-M17's second form, 'managed call '<f>' is declared with different
+# 'dllexport', 'constructor' or 'destructor' attributes in different
+# translation units', and no output. This is
+# M3/13-managed-calls/mixed-link.test on the portable triple, without
+# dllexport, which has no effect here (plan 5.18.6 PL7; clang ignores it
+# with a warning). a.c and b.c write the attributes in opposite orders.
+# The two units' forwarders are one COMDAT group, which keys their init
+# entries, so the image keeps one forwarder and one entry: the IMG lines
+# pin, in the -O0 and the -O2 image (llvm-cil-dump, every other mention of
+# '__msil_mc_ctor' refused), the one call of '__msil_mc_ctor.barrier' in
+# <Module>::.cctor and the forwarder's body, a call of one unit's stub and
+# ret. The table's parameterless static methods,
+# Interlocked::MemoryBarrier() and Environment::GetCommandLineArgs(), have
+# no effect that C sees (ctor.test), and no portable test passes
+# --reference before P-2, so how often the constructor runs is read from
+# the image here, and the host test proves it at run time; the run proves
+# that the forwarder and both units' stubs run: main checks the flag of an
+# ordinary C constructor (bit 0 of the exit status) and calls a.c's
+# a_barrier and b.c's b_barrier (bits 1 and 2), which call barrier through
+# the object's stub and through LTO's. The program uses nothing from the C
+# library, so its links pass -nolibc (as ../00-freestanding's do) and the
+# image references no c.dll: no run and no force-JIT takes a dependency
+# file, which %{msil_also_run_check}'s force-JIT could not take. At -O0
+# the link takes a.o before b.o, at -O2 b.o before a.o. The composite
+# cannot mix the two compiles, so this test has its own RUN lines: clang -c
+# and clang -flto -c whatever msil_pipeline says, the clang driver's link
+# with msil-ld and %{msil_ldflags} (its output, stdout and stderr, must be
+# empty), llvm-cil-dump, %msil_verify, %msil_jitall where the feature
+# msil-jitall is present, the run on the configured runtime and, by
+# %{msil_also_run_check}, on each runtime of the leg's msil_also_run, and
+# with msil_run_netfx the run on the .NET Framework 4.8; every transcript
+# is '[exit 0]', the CHECK line (before P-2 a portable program has no
+# stdout and checks itself, ../lit.local.cfg). No composite builds this
+# test, so it has no expected file and update-expected.py skips it.
+# Like every test here it runs only in the post-commit Portable legs
+# (decision brief answers Q11 (a)). Plan 5.20.11 MT3 (MC-1,
+# Portable/02-managed-calls).
+# REQUIRES: msil-cil-dump
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{ml_level} = O0
+# DEFINE: %{ml_out} = %t/O0
+# DEFINE: %{ml_units} = %{ml_out}/a.o %{ml_out}/b.o
+# REDEFINE: %{msil_also_run_image} = %{ml_out}/prog.exe
+# DEFINE: %{ml_build} = \
+# DEFINE:   mkdir -p %{ml_out} \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ml_level} -c %t/a.c -o %{ml_out}/a.o \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ml_level} -flto -c %t/b.c -o %{ml_out}/b.o \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{ml_level} -c %t/main.c -o %{ml_out}/main.o \
+# DEFINE:   && %clang_msil -%{ml_level} %{msil_ldflags} -nolibc %{ml_units} %{ml_out}/main.o -o %{ml_out}/prog.exe 2>&1 | count 0
+# DEFINE: %{ml_image} = \
+# DEFINE:   %msil_cil_dump %{ml_out}/prog.exe > %{ml_out}/prog.dump \
+# DEFINE:   && FileCheck %s --check-prefix=IMG --input-file=%{ml_out}/prog.dump --implicit-check-not=__msil_mc_ctor
+# DEFINE: %{ml_check} = \
+# DEFINE:   %msil_verify %{ml_out}/prog.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %{ml_out}/prog.exe %}
+# DEFINE: %{ml_run} = \
+# DEFINE:   %msil_exec --out %{ml_out}/prog.out %{ml_out}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%{ml_out}/prog.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{ml_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --out %{ml_out}/prog.netfx.out %{ml_out}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%{ml_out}/prog.netfx.out --match-full-lines %s
+# RUN: %{ml_build}
+# RUN: %{ml_image}
+# RUN: %{ml_check}
+# RUN: %{ml_run}
+# RUN: %if msil-run-netfx %{ %{ml_netfx} %}
+# REDEFINE: %{ml_level} = O2
+# REDEFINE: %{ml_out} = %t/O2
+# REDEFINE: %{ml_units} = %{ml_out}/b.o %{ml_out}/a.o
+# RUN: %{ml_build}
+# RUN: %{ml_image}
+# RUN: %{ml_check}
+# RUN: %{ml_run}
+# RUN: %if msil-run-netfx %{ %{ml_netfx} %}
+# Every run's transcript: no failed check.
+# CHECK: [exit 0]
+# The module initializer's one call of the one forwarder, and its body.
+# IMG:      .method '.cctor' void() flags={{.*}}
+# IMG:        L{{[0-9]+}}: call void() '<Module>'::'__msil_mc_ctor.barrier'{{$}}
+# IMG:      .method '__msil_mc_ctor.barrier' void() flags={{.*}}
+# IMG-NEXT:   .maxstack {{[0-9]+}}
+# IMG-NEXT:   L{{[0-9]+}}: call void() '<Module>'::'__msil_mc.barrier{{(<msil>[0-9]+)?}}'{{$}}
+# IMG-NEXT:   L{{[0-9]+}}: ret{{$}}
+#--- a.c
+/* a.c, compiled with clang -c: the managed call barrier, and a function
+   that calls it. */
+__attribute__((constructor(300)))
+__attribute__((msil_method("System.Threading.Interlocked", "MemoryBarrier",
+                           "void()")))
+void barrier(void);
+
+int a_barrier(void) {
+  barrier();
+  return 1;
+}
+#--- b.c
+/* b.c, compiled with clang -flto -c: the same managed call, its attributes
+   written in the opposite order, and a function that calls it. */
+__attribute__((msil_method("System.Threading.Interlocked", "MemoryBarrier",
+                           "void()")))
+__attribute__((constructor(300)))
+void barrier(void);
+
+int b_barrier(void) {
+  barrier();
+  return 2;
+}
+#--- main.c
+/* main.c: neither declares nor calls barrier itself. */
+int a_barrier(void);
+int b_barrier(void);
+
+/* volatile, so that -O2 cannot fold the constructor into the initializer. */
+static volatile int c_constructor_ran;
+
+__attribute__((constructor)) static void c_constructor(void) {
+  c_constructor_ran = 1;
+}
+
+int main(void) {
+  int failed = 0;
+  if (!c_constructor_ran)
+    failed |= 1;
+  if (a_barrier() != 1)
+    failed |= 2;
+  if (b_barrier() != 2)
+    failed |= 4;
+  return failed;
+}

@@ -7470,6 +7470,178 @@ definition is never imported.
   }];
 }
 
+def MSILMethodDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+Clang supports the ``__attribute__((msil_method(type, member, signature[,
+assembly])))`` attribute, also spelled ``[[clang::msil_method(...)]]``, on
+targets whose object format is MSIL (such as ``x86_64-pc-windows-msvc-msil``
+and ``msil64-unknown-dotnet``). It makes a function declaration call one
+public .NET member directly: every call of the function calls a small private
+stub method that converts the arguments, accesses the member and converts the
+result.
+
+```c
+typedef struct __dn_object *dn_handle;
+__attribute__((msil_method("System.IO.FileStream", ".ctor",
+    "instance void(string, valuetype System.IO.FileMode, "
+    "valuetype System.IO.FileAccess, valuetype System.IO.FileShare, int32)"),
+  msil_catch("System.IO.FileNotFoundException", ENOENT),
+  msil_catch("System.IO.IOException", EIO)))
+dn_handle open_stream(const char *path, int mode, int access, int share,
+                      int bufsize, int *err);
+```
+
+The arguments are string literals:
+
+* ``type`` names the type that declares the member: ``"Ns.Name"`` (or
+  ``"Ns.Outer/Inner"`` for a nested type) for a reference type,
+  ``"valuetype Ns.Name"`` for a value type or an enum, or an array type such as
+  ``"uint8[]"``, whose only member is ``".ctor"`` with the signature
+  ``"instance void(int32)"`` (a new array of that length).
+* ``member`` is a method name, ``".ctor"`` for a constructor, a property
+  accessor such as ``"get_Length"``, or a field name, which is read only.
+* ``signature`` is the member's own CIL signature as its definition declares
+  it, in canonical listing text: ``"[instance ]RET(P1, P2, ...)"`` for a method
+  or ``"[instance ]field T"`` for a field. Its types are ``void`` (as a return
+  type only), ``bool``, ``char``, ``int8`` to ``uint64``, ``float32``,
+  ``float64``, ``native int``, ``native uint``, ``string``, ``object``,
+  ``class Ns.T``, ``valuetype Ns.T``, ``T*`` and ``T[]``. Generic types and
+  methods, byrefs, custom modifiers and ``vararg`` are not supported, and
+  neither are delegates made from C function pointers: a class's ``".ctor"``
+  with the signature ``"instance void(object, native int)"``, the shape of a
+  delegate's constructor, and ``System.Runtime.InteropServices.Marshal``'s
+  ``GetDelegateForFunctionPointer`` are errors.
+* ``assembly`` (optional) is, in text output (``-S``, llc and msil-ld's
+  ``--lto-emit-asm``), the scope of ``type`` (for an array type, of its element
+  type, which ``newarr`` names by its class name even when it is a primitive,
+  ``string`` or ``object``, such as ``System.Byte`` for ``"uint8[]"``), of each
+  ``class Ns.T`` and ``valuetype Ns.T`` in ``signature``, of ``System.String``
+  for a ``string`` parameter passed as a handle (the stub casts it) and of each
+  ``msil_catch`` type; the default is ``mscorlib``. Such text runs only where
+  all of those types resolve through that one assembly (the .NET Framework
+  ilasm, though, writes ``[System]System.String`` and ``[System]System.Object``
+  as ``mscorlib``'s). For example, ``System.Diagnostics.Stopwatch`` is
+  in the .NET Framework's ``System.dll``, and its ``get_Elapsed`` returns
+  ``mscorlib``'s ``System.TimeSpan``: text with ``"System"`` fails at run time
+  on the .NET Framework 4.8, .NET 8 and .NET 10, while text with
+  ``"netstandard"`` (the .NET Standard 2.0 facade, which forwards both types)
+  runs on all three when the .NET Framework ilasm assembles it. A linked
+  program does not use ``assembly``: it binds the member and each of those
+  types by name, against the linker's reference assemblies, or against its
+  built-in table when it has none, so a declaration whose types live in more
+  than one assembly should be linked. A method that a value type only inherits
+  from ``System.Object``, ``System.ValueType`` or ``System.Enum`` is called on
+  that declaring type in a linked program and in ``--lto-emit-asm`` text with
+  references; that text names it in ``mscorlib`` with the types of its
+  signature. ``-S`` and llc text, and ``--lto-emit-asm`` text without
+  references, call only ``System.Object``'s ``Equals``, ``GetHashCode``,
+  ``ToString`` and ``GetType`` that way; any other such method, a static one
+  included, is called on ``type`` there and throws
+  ``System.MissingMethodException`` at run time, so link such a call.
+
+The C parameters are a ``this`` handle for an instance member other than a
+constructor, one parameter per CIL parameter and, with ``msil_catch``, a
+trailing ``int *``. Each C type must carry its CIL type: integers, ``char16_t``,
+``float``, ``double`` and pointers as they are; an enum as an integer of its
+width; a ``string`` parameter from a UTF-8 (``char *``, ``char8_t *``), UTF-16
+(``char16_t *``) or UTF-32 (``char32_t *``) C string, decoded strictly, with
+``wchar_t *`` as UTF-16 or UTF-32 by the width of ``wchar_t``; and objects, other
+value types (boxed) and ``GCHandle`` values as handles. Objects, ``GCHandle``
+values, the ``this`` handle and the result of a value type's constructor take
+any handle type: ``void *``, ``intptr_t``, ``uintptr_t`` or a pointer to an
+incomplete struct type. Other value types take only a pointer handle
+(``void *`` or a pointer to an incomplete struct type), because an integer
+type given for one, ``intptr_t`` and ``uintptr_t`` included, is taken as an
+enum of that width, which the linker checks. Text output (``-S``, llc and
+msil-ld's ``--lto-emit-asm``) checks it when the stub runs, throwing
+``System.InvalidProgramException`` with the linker's message, and there a
+``type`` whose ``valuetype`` prefix does not match the type's kind fails at
+the first call of an instance member or a constructor with
+``System.TypeLoadException``. An object handle is a GCHandle:
+one that a call returns is new and is freed once, by a declaration of
+``GCHandle::Free``; one that is passed is borrowed. A C buffer or C string is
+not a handle: passed for an object, array or ``string`` parameter (through
+``void *`` or ``intptr_t``), it makes the call throw or crash when it runs,
+or, on .NET 8 and 10, reads as null when it starts with a zero word.
+Declaring handles as a pointer to an incomplete struct type lets clang refuse
+a typed C buffer, and ``System.Runtime.InteropServices.Marshal``'s ``Copy``
+copies C memory into an array handle.
+
+The attribute applies to a prototyped, non-variadic function declaration
+without a body, other than ``main`` and the library builtins; in C++, to a
+namespace-scope function that is not a template, ``constexpr`` or a
+replaceable global allocation or deallocation function (``operator new`` and
+``operator delete``). It must be on the first declaration, and it cannot be
+combined with ``import_module``, ``import_name``, ``alias``, ``ifunc`` or
+``weak``. Taking the address of such a function is not supported. Clang
+records the arguments in ``msil-managed-*`` IR attributes of the declaration,
+whose IR name is ``__msil_mc.<symbol>``. Names that start with
+``__msil_mc.``, ``__msil_mc_ctor.`` or ``__msil_mc_dtor.`` are reserved for
+the toolchain, so an asm label that starts with one is an error. Declarations
+of different functions with external linkage that share one symbol (through
+asm labels or ``#pragma redefine_extname``) share that stub, so they must give
+the same ``msil_method`` and ``msil_catch`` arguments, the same function type
+and the same ``dllexport``, ``constructor`` and ``destructor`` attributes;
+otherwise clang reports an error.
+
+On the Windows MSIL triples, ``__declspec(dllexport)`` (or
+``__attribute__((dllexport))``) on the declaration also exports the function
+under its C name: each translation unit that declares it defines a forwarder of
+that name, a ``weak_odr`` function in a COMDAT of the same name that calls the
+stub, so the linker keeps one forwarder and exports it. Another definition of
+that name in the program is a link error, and clang reports an error when a
+variable or another function definition in the same translation unit has that
+name (through an asm label or ``#pragma redefine_extname``). On the Windows
+MSIL triples ``dllimport`` is accepted and changes nothing: the stub calls the
+member in every translation unit. On the other MSIL triples ``dllexport`` and
+``dllimport`` are ignored with clang's usual warning, as on any target that is
+not Windows.
+
+With ``constructor`` (or ``constructor(priority)``), the function is called
+before ``main`` like any global constructor: once per program for a
+declaration with external linkage, and once per translation unit for a
+``static`` one. It is called through a forwarder that passes it the start-up
+arguments that the target passes a global constructor. On the Windows MSIL
+triples and ``msil64-unknown-dotnet`` there are none, so the declaration must
+take no parameters. On the Linux MSIL triples they are ``argc``, ``argv`` and
+``envp``, so its parameters may be a prefix of those three: C parameters that
+lower to ``int32``, ``native int`` and ``native int``, such as ``int``,
+``char **`` and ``char **``. Any other parameter list is an error. A
+``destructor`` managed call takes no parameters on any MSIL triple, and like
+every global destructor it is still reported as an error, because global
+destructors are not supported for MSIL targets yet. Neither a constructor nor
+a destructor managed call can have ``msil_catch``, because nothing reads its
+code.
+  }];
+}
+
+def MSILCatchDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``__attribute__((msil_catch(exception_type, code)))`` attribute, also
+spelled ``[[clang::msil_catch(...)]]``, maps a .NET exception thrown by the
+member of an ``msil_method`` declaration to an error code. ``exception_type``
+is a string literal that names a reference type (``"Ns.Name"``), and ``code``
+is an integer constant expression from 1 to 2147483647. The attribute may be
+repeated; the entries are tested in the order written, and the first type the
+exception is an instance of wins (list a derived type before its base). The
+declaration then takes a trailing ``int *`` parameter: when a listed exception
+is caught, its code is stored there and the function returns the zero value of
+its return type. An exception that no entry lists is not caught: in an
+executable it ends the program with its stack trace, as any unhandled .NET
+exception does, and in a library that .NET code calls, that code can catch it.
+Until MSIL has an exception model, such an exception runs no C++ destructor of
+the frames it crosses, and no C++ ``catch``, ``catch (...)`` included, sees it.
+
+``System.Object``, ``System.Exception``, ``System.SystemException``,
+``System.Runtime.InteropServices.ExternalException`` and
+``System.Runtime.InteropServices.SEHException`` cannot be listed, because they
+would hide unrelated failures. ``msil_catch`` requires ``msil_method`` on the
+same declaration.
+  }];
+}
+
 def ArtificialDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{

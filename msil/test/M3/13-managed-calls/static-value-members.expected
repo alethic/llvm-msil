@@ -1,0 +1,4 @@
+DateTime.Now (valuetype System.DateTime): Year plausible 1
+DateTime.Now (System.DateTime, no prefix): Year plausible 1, the same Year 1
+TimeSpan.Zero (valuetype System.TimeSpan): Ticks 0
+[exit 0]

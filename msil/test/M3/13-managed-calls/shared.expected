@@ -1,0 +1,6 @@
+lib_copy over an overlap: abcabcdeij
+the program's copy_bytes: efghijghij
+lib_alloc_copy: from the library's AllocHGlobal
+library handles: nonzero 1, distinct 1
+freed the library's handles in the program
+[exit 0]

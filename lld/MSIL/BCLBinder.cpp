@@ -266,6 +266,14 @@ struct BCLBinder::Impl {
   Expected<cli::ElementType> getEnumUnderlyingType(StringRef ns,
                                                    StringRef name);
 
+  // The managed-call checks' type queries (plan 5.20.7 MK2-MK4, MK7).
+  Expected<TypeDefinition> resolveQueriedType(StringRef ns, StringRef name);
+  Expected<BCLTypeKind> getTypeKind(const TypeDefinition &type, StringRef full);
+  Expected<SmallVector<std::string, 4>>
+  getBaseTypes(const TypeDefinition &type);
+  Expected<cli::FieldAttributes> getFieldFlags(const TypeDefinition &type,
+                                               StringRef full, StringRef field);
+
   // The built-in [mscorlib] table (plan 5.11.7).
   Error notInTable(StringRef what);
   const cli::BCLMemberInfo *findBuiltinType(StringRef ns, StringRef name);
@@ -1042,6 +1050,103 @@ BCLBinder::Impl::getEnumUnderlyingType(StringRef ns, StringRef name) {
   if (!d)
     return d.takeError();
   return getEnumUnderlyingType(*d, joinTypeName(ns, name));
+}
+
+//===----------------------------------------------------------------------===//
+// The managed-call checks' type queries (plan 5.20.7 MK2-MK4, MK7)
+//===----------------------------------------------------------------------===//
+
+// The definition of a queried type: the references' only, since the built-in
+// table records no type's kind, base or underlying type.
+Expected<TypeDefinition> BCLBinder::Impl::resolveQueriedType(StringRef ns,
+                                                             StringRef name) {
+  if (builtin)
+    return notInTable(joinTypeName(ns, name));
+  return resolveType(ns, name);
+}
+
+// An interface, or a type without a base (System.Object), is a reference
+// type; otherwise the base type's name decides, as the runtime's does:
+// System.Enum makes an enum and System.ValueType a value type, except that
+// System.Enum itself is a class.
+Expected<BCLTypeKind> BCLBinder::Impl::getTypeKind(const TypeDefinition &type,
+                                                   StringRef full) {
+  const cli::MetadataReader &r = type.file->getReader();
+  Expected<cli::TypeDefRow> row = r.getTypeDef(cli::getTokenRow(type.token));
+  if (!row)
+    return fileError(*type.file, row.takeError());
+  if ((row->Flags & cli::TypeAttributes::ClassSemanticsMask) ==
+          cli::TypeAttributes::Interface ||
+      row->Extends == 0 || full == "System.Enum")
+    return BCLTypeKind::Reference;
+  // A generic base type is never System.Enum or System.ValueType.
+  uint8_t table = cli::getTokenType(row->Extends);
+  if (table != static_cast<uint8_t>(cli::TableId::TypeDef) &&
+      table != static_cast<uint8_t>(cli::TableId::TypeRef))
+    return BCLTypeKind::Reference;
+  auto base = getIndexTypeName(r, row->Extends);
+  if (!base)
+    return fileError(*type.file, base.takeError());
+  std::string baseName = joinTypeName(base->first, base->second);
+  if (baseName == "System.Enum")
+    return BCLTypeKind::Enum;
+  if (baseName == "System.ValueType")
+    return BCLTypeKind::ValueType;
+  return BCLTypeKind::Reference;
+}
+
+// The base types by resolveBase, the walk of the member search (plan
+// 5.11.4), which binds each base by the type rules.
+Expected<SmallVector<std::string, 4>>
+BCLBinder::Impl::getBaseTypes(const TypeDefinition &type) {
+  SmallVector<std::string, 4> bases;
+  TypeDefinition t = type;
+  for (unsigned depth = 0;; ++depth) {
+    const cli::MetadataReader &r = t.file->getReader();
+    Expected<cli::TypeDefRow> row = r.getTypeDef(cli::getTokenRow(t.token));
+    if (!row)
+      return fileError(*t.file, row.takeError());
+    if (row->Extends == 0)
+      break;
+    // Damaged metadata: base types that form a cycle.
+    if (depth > maxTypeNestingDepth)
+      return bindError(
+          getDisplayPath(t.file->getPath()) + ": the base types of '" +
+          joinTypeName(row->Namespace, row->Name) + "' form a cycle");
+    Expected<std::optional<TypeDefinition>> base = resolveBase(t, row->Extends);
+    if (!base)
+      return base.takeError();
+    if (!*base)
+      break;
+    t = **base;
+    auto name = getIndexTypeName(t.file->getReader(), t.token);
+    if (!name)
+      return fileError(*t.file, name.takeError());
+    bases.push_back(joinTypeName(name->first, name->second));
+  }
+  return bases;
+}
+
+// The flags of the first public field \p field of \p type, as
+// resolveMember counts fields: in \p type only, public ones only.
+Expected<cli::FieldAttributes>
+BCLBinder::Impl::getFieldFlags(const TypeDefinition &type, StringRef full,
+                               StringRef field) {
+  const cli::MetadataReader &r = type.file->getReader();
+  Expected<cli::TypeDefRow> row = r.getTypeDef(cli::getTokenRow(type.token));
+  if (!row)
+    return fileError(*type.file, row.takeError());
+  for (uint32_t index = row->FieldBegin; index < row->FieldEnd; ++index) {
+    Expected<cli::FieldRow> f = r.getField(index);
+    if (!f)
+      return fileError(*type.file, f.takeError());
+    if (f->Name == field &&
+        (f->Flags & cli::FieldAttributes::FieldAccessMask) ==
+            cli::FieldAttributes::Public)
+      return f->Flags;
+  }
+  return bindError("'" + full + "' in " + type.file->getIdentity().str() +
+                   " has no public field '" + field + "'");
 }
 
 //===----------------------------------------------------------------------===//
@@ -1875,6 +1980,70 @@ Error BCLBinder::rewriteAttributeBlob(const cli::MethodSig &Ctor,
 
 void BCLBinder::printBinding(StringRef Request, raw_ostream &OS) {
   OS << Request << " -> " << I->describe(Request) << '\n';
+}
+
+bool BCLBinder::hasReferences() const { return !I->builtin; }
+
+Expected<BCLTypeKind> BCLBinder::getTypeKind(StringRef Ns, StringRef Name) {
+  Expected<TypeDefinition> d = I->resolveQueriedType(Ns, Name);
+  if (!d)
+    return d.takeError();
+  return I->getTypeKind(*d, joinTypeName(Ns, Name));
+}
+
+Expected<cli::ElementType> BCLBinder::getEnumUnderlyingType(StringRef Ns,
+                                                            StringRef Name) {
+  Expected<TypeDefinition> d = I->resolveQueriedType(Ns, Name);
+  if (!d)
+    return d.takeError();
+  std::string full = joinTypeName(Ns, Name);
+  Expected<BCLTypeKind> kind = I->getTypeKind(*d, full);
+  if (!kind)
+    return kind.takeError();
+  if (*kind != BCLTypeKind::Enum)
+    return bindError("'" + full + "' in " + d->file->getIdentity().str() +
+                     " is not an enum");
+  return I->getEnumUnderlyingType(*d, full);
+}
+
+Expected<SmallVector<std::string, 4>> BCLBinder::getBaseTypes(StringRef Ns,
+                                                              StringRef Name) {
+  Expected<TypeDefinition> d = I->resolveQueriedType(Ns, Name);
+  if (!d)
+    return d.takeError();
+  return I->getBaseTypes(*d);
+}
+
+Expected<cli::FieldAttributes>
+BCLBinder::getFieldFlags(StringRef Ns, StringRef Name, StringRef Field) {
+  Expected<TypeDefinition> d = I->resolveQueriedType(Ns, Name);
+  if (!d)
+    return d.takeError();
+  return I->getFieldFlags(*d, joinTypeName(Ns, Name), Field);
+}
+
+Expected<std::string> BCLBinder::getDeclaringType(const BCLRequest &R) {
+  std::string own = joinTypeName(R.Namespace, R.Name);
+  if (R.K != BCLRequest::Method)
+    return bindError("BCL request for '" + I->formatRequest(R) +
+                     "' is not a method request");
+  if (I->builtin) {
+    if (!I->findBuiltinMethod(R))
+      return I->notInTable(I->formatRequest(R));
+    return own;
+  }
+  Expected<TypeDefinition> parent = I->resolveType(R.Namespace, R.Name);
+  if (!parent)
+    return parent.takeError();
+  Expected<MemberDefinition> def = I->resolveMember(R, *parent);
+  if (!def)
+    return def.takeError();
+  if (def->owner.file == parent->file && def->owner.token == parent->token)
+    return own;
+  auto name = getIndexTypeName(def->owner.file->getReader(), def->owner.token);
+  if (!name)
+    return fileError(*def->owner.file, name.takeError());
+  return joinTypeName(name->first, name->second);
 }
 
 void lld::msil::printBuiltinBCLTable(raw_ostream &OS) {

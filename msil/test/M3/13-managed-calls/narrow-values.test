@@ -1,0 +1,279 @@
+# Narrow values across a stub: int8, uint8, int16 and uint16 parameters and results with high-bit values (System.Math::Max overloads), the sign-mismatched pairs that the 'val' row allows (unsigned char for int8, signed char for uint8, short for uint16, unsigned short for int16), the 'val' row's uint32, uint64 and native uint cells with the high bit set and its int64 cell below zero (Math::Max(uint32, uint32), Max(uint64, uint64), Min(int64, int64) and UIntPtr::Add(native uint, int32)), char parameters and results at or above U+8000, 'bool' parameters passed from an int holding 2, 256 and -1 and from a char, short and unsigned short narrowed from 256 or 65536 (C value 0, so false) or from a value with low bits that are not all 0 (true), each both through a C object and as the cast in the argument, a _Bool argument made from 'v & 1' passed to 'bool' (Convert::ToInt32(bool)) and to 'uint8' (Convert::ToInt32(uint8)), a 'bool' result read into an int, and a _Bool result of an 8-bit integer CIL type (Convert::ToByte and ToSByte) that is 0 or 1 and compares equal to 1.
+# Plan 5.20.3 MS5: the 'val' row for 'int8'..'int32' and 'uint8'..'uint32'
+# accepts an integer type of the same width with the signedness not
+# checked, so the bits pass as they are and the C value is the C type's
+# reading of those bits (an unsigned char result of int8 -3 is 253, a
+# signed char result of uint8 200 is -56, a short result of uint16 65535 is
+# -1); the 'val' rows for 'uint32' (unsigned int), 'int64' and 'uint64' (a
+# 64-bit integer type, which is a native int in IL, so the stub converts
+# each argument with conv.i8 or conv.u8 and the result with conv.i or
+# conv.u) and 'native uint' (uintptr_t), whose values with the high bit set
+# reach the member and come back unchanged: Max(uint64) of
+# 0x8000000000000001 and 2 is 9223372036854775809 and of 2 and ~0ull
+# 18446744073709551615, Min(int64) of -5 and 3 is -5, Max(uint32) of
+# 0x80000001 and 2 is 2147483649, and UIntPtr::Add of 0xFFFFFFFF00000000
+# and 5 is 18446744069414584325 (MC-1 leftover audit, defect D13: no
+# execution test ran these cells); the 'val' row for 'char' from char16_t
+# (a char at or above U+8000 is not negative); the 'bool' row (an integer
+# of at most 32 bits, 'in: ldc.i4.0; cgt.un', so an int holding 2, 256 or
+# -1 passes true; 'out: ldc.i4.0; cgt.un' as the section 12 row '5.20.3 MS5
+# amended (... the bool row's stub IL ...)' gives it, so a bool result read
+# into an int is 0 or 1); the section 12 row '5.20.3 MS5 amended (... a
+# stub parameter of IR type i1, i8 or i16 that has neither `signext` nor
+# `zeroext` ...)': the int32 of such a parameter has undefined bits above
+# the C value, so the stub narrows it before the row's IL ('conv.u1' for
+# i8, 'conv.u2' for i16 and 'ldc.i4.1; and' for i1, then the bool row's
+# 'ldc.i4.0; cgt.un'; for an i1 given to an 8-bit 'val' parameter,
+# 'ldc.i4.1; and' alone). clang gives char and short parameters no
+# extension attribute on the Windows ABIs, and the caller passes, as it
+# is, the int32 that the narrowing cast was applied to (with optimization,
+# and for a cast in the argument at -O0 too), so a char, short or unsigned
+# short narrowed from 256 or 65536 (C value 0, which C converts to false)
+# prints 0, both through a C object ('char c = (char)v;') and as the cast
+# in the argument itself ('bool_to_int_c((char)v)'), while one narrowed
+# from 257, 0x180, 65537 or 0x18000 (low bits not all 0; 0x180 and 0x18000
+# leave only the C type's top bit) prints 1; a _Bool argument made from
+# 'v & 1' is 0 for v = 2 and 1 for v = 3, both for ToInt32(bool) and for
+# ToInt32(uint8) ('val'): the x86_64 triples give _Bool 'zeroext', so the
+# caller already passes its C value, and the aarch64 triples, which do
+# not, are in llvm/test/CodeGen/MSIL/managed-call-narrow-args.ll; and the
+# section 12 row '5.20.3 MS5 amended (... when the C result is
+# `_Bool`/`bool` ... `val` ... `enum` ...)': a _Bool result whose row is
+# 'val' for an 8-bit integer CIL type is the member's value converted to
+# _Bool (C11 6.3.1.2), so Convert::ToByte(2) read as _Bool is 1, prints 1
+# and compares equal to 1 at every level. Every input is a volatile object,
+# so -O2 cannot fold it, and each narrow result is printed straight from
+# the call (its C type's promotion to int, which relies on the stub giving
+# a correctly extended value). Math, Char, Convert and
+# UIntPtr are no built-in table types, so the program links against the
+# .NET Framework 4.8 implementation assemblies (%{msil_refs_netfx}); the
+# image runs on the Framework, .NET 10 and WSL .NET 10. The values are
+# .NET's and the same on every runtime: Char.ToUpperInvariant maps U+FF41
+# (FULLWIDTH LATIN SMALL LETTER A) to U+FF21 and ToLowerInvariant maps it
+# back, Convert.ToInt32(char) is the code unit, Convert.ToChar(65535) is
+# U+FFFF, Convert.ToInt32(bool) is 1 or 0 and Convert.ToBoolean(int32) is
+# true for nonzero. Char's invariant case mappings and the Convert members
+# have no C library equivalent, so the expected file is hand-written for
+# both OSes (plan 5.20.11 MT3, 5.17.4 as amended for MC-1); its Math and
+# UIntPtr lines are also what C's own unsigned and signed arithmetic gives.
+# Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdint.h>
+#include <stdio.h>
+#include <uchar.h>
+
+#define MATH "System.Math"
+#define CONVERT "System.Convert"
+#define CHAR "valuetype System.Char"
+#define UINTPTR "valuetype System.UIntPtr"
+
+/* Each narrow CIL type with the C type of its signedness. */
+__attribute__((msil_method(MATH, "Max", "int8(int8, int8)")))
+signed char max_i8(signed char a, signed char b);
+
+__attribute__((msil_method(MATH, "Max", "uint8(uint8, uint8)")))
+unsigned char max_u8(unsigned char a, unsigned char b);
+
+__attribute__((msil_method(MATH, "Max", "int16(int16, int16)")))
+short max_i16(short a, short b);
+
+__attribute__((msil_method(MATH, "Max", "uint16(uint16, uint16)")))
+unsigned short max_u16(unsigned short a, unsigned short b);
+
+/* The sign-mismatched pairs of the 'val' row (signedness not checked). */
+__attribute__((msil_method(MATH, "Max", "int8(int8, int8)")))
+unsigned char max_i8_as_unsigned(unsigned char a, unsigned char b);
+
+__attribute__((msil_method(MATH, "Max", "uint8(uint8, uint8)")))
+signed char max_u8_as_signed(signed char a, signed char b);
+
+__attribute__((msil_method(MATH, "Max", "uint16(uint16, uint16)")))
+short max_u16_as_signed(short a, short b);
+
+__attribute__((msil_method(MATH, "Max", "int16(int16, int16)")))
+unsigned short max_i16_as_unsigned(unsigned short a, unsigned short b);
+
+/* The 'val' row's 32-bit, 64-bit and native unsigned cells, and int64. */
+__attribute__((msil_method(MATH, "Max", "uint64(uint64, uint64)")))
+unsigned long long max_u64(unsigned long long a, unsigned long long b);
+
+__attribute__((msil_method(MATH, "Min", "int64(int64, int64)")))
+long long min_i64(long long a, long long b);
+
+__attribute__((msil_method(MATH, "Max", "uint32(uint32, uint32)")))
+unsigned max_u32(unsigned a, unsigned b);
+
+__attribute__((msil_method(UINTPTR, "Add", "native uint(native uint, int32)")))
+uintptr_t uintptr_add(uintptr_t pointer, int offset);
+
+/* char at or above U+8000, as a parameter and as a result. */
+__attribute__((msil_method(CHAR, "ToUpperInvariant", "char(char)")))
+char16_t char_upper(char16_t c);
+
+__attribute__((msil_method(CHAR, "ToLowerInvariant", "char(char)")))
+char16_t char_lower(char16_t c);
+
+__attribute__((msil_method(CONVERT, "ToInt32", "int32(char)")))
+int char_code(char16_t c);
+
+__attribute__((msil_method(CONVERT, "ToChar", "char(int32)")))
+char16_t code_char(int code);
+
+/* 'bool' from an int parameter, and a 'bool' result read into an int. */
+__attribute__((msil_method(CONVERT, "ToInt32", "int32(bool)")))
+int bool_to_int(int b);
+
+__attribute__((msil_method(CONVERT, "ToBoolean", "bool(int32)")))
+int int_to_bool(int v);
+
+/* 'bool' from char, short and unsigned short parameters (no signext or
+   zeroext on the Windows ABIs) and from a _Bool, and a _Bool for an 8-bit
+   integer CIL type ('val'). */
+__attribute__((msil_method(CONVERT, "ToInt32", "int32(bool)")))
+int bool_to_int_c(char b);
+
+__attribute__((msil_method(CONVERT, "ToInt32", "int32(bool)")))
+int bool_to_int_s(short b);
+
+__attribute__((msil_method(CONVERT, "ToInt32", "int32(bool)")))
+int bool_to_int_us(unsigned short b);
+
+__attribute__((msil_method(CONVERT, "ToInt32", "int32(bool)")))
+int bool_to_int_b(_Bool b);
+
+__attribute__((msil_method(CONVERT, "ToInt32", "int32(uint8)")))
+int uint8_to_int_b(_Bool b);
+
+/* A _Bool result of an 8-bit integer CIL type ('val'). */
+__attribute__((msil_method(CONVERT, "ToByte", "uint8(int32)")))
+_Bool to_byte_as_bool(int v);
+
+__attribute__((msil_method(CONVERT, "ToSByte", "int8(int32)")))
+_Bool to_sbyte_as_bool(int v);
+
+int main(void) {
+  volatile signed char i8a = -100, i8b = -120, i8c = -128, i8d = 127;
+  printf("int8 Max(-100, -120): %d, Max(-128, 127): %d\n", max_i8(i8a, i8b),
+         max_i8(i8c, i8d));
+  volatile unsigned char u8a = 200, u8b = 100, u8c = 0x80, u8d = 0x7f;
+  printf("uint8 Max(200, 100): %d, Max(128, 127): %d\n", max_u8(u8a, u8b),
+         max_u8(u8c, u8d));
+  volatile short i16a = -30000, i16b = -32768, i16c = -7, i16d = -9;
+  printf("int16 Max(-30000, -32768): %d, Max(-7, -9): %d\n",
+         max_i16(i16a, i16b), max_i16(i16c, i16d));
+  volatile unsigned short u16a = 60000, u16b = 5, u16c = 0x8000, u16d = 0x7fff;
+  printf("uint16 Max(60000, 5): %d, Max(32768, 32767): %d\n",
+         max_u16(u16a, u16b), max_u16(u16c, u16d));
+
+  /* int8 -3 and -6 as unsigned char 253 and 250: Max is -3, read as 253;
+     0x80 and 0x7f are int8 -128 and 127: Max is 127. */
+  volatile unsigned char ua = 253, ub = 250, uc = 0x80, ud = 0x7f;
+  printf("int8 through unsigned char: Max(253, 250): %d, Max(0x80, 0x7f): %d\n",
+         max_i8_as_unsigned(ua, ub), max_i8_as_unsigned(uc, ud));
+  /* uint8 200 and 10 as signed char -56 and 10: Max is 200, read as -56;
+     uint8 255 and 127 as -1 and 127: Max is 255, read as -1. */
+  volatile signed char sa = -56, sb = 10, sc = -1, sd = 127;
+  printf("uint8 through signed char: Max(-56, 10): %d, Max(-1, 127): %d\n",
+         max_u8_as_signed(sa, sb), max_u8_as_signed(sc, sd));
+  /* uint16 65535 and 1 as short -1 and 1: Max is 65535, read as -1;
+     uint16 60000 and 5 as -5536 and 5: Max is 60000, read as -5536. */
+  volatile short ha = -1, hb = 1, hc = -5536, hd = 5;
+  printf("uint16 through short: Max(-1, 1): %d, Max(-5536, 5): %d\n",
+         max_u16_as_signed(ha, hb), max_u16_as_signed(hc, hd));
+  /* int16 -1 and 1 as unsigned short 65535 and 1: Max is 1; int16 -32768
+     and -32767 as 0x8000 and 0x8001: Max is -32767, read as 32769. */
+  volatile unsigned short wa = 65535, wb = 1, wc = 0x8000, wd = 0x8001;
+  printf("int16 through unsigned short: Max(65535, 1): %d, "
+         "Max(0x8000, 0x8001): %d\n",
+         max_i16_as_unsigned(wa, wb), max_i16_as_unsigned(wc, wd));
+
+  /* The high bit of uint64, uint32 and native uint is no sign bit. */
+  volatile unsigned long long qa = 0x8000000000000001ull, qb = 2,
+                              qc = ~0ull;
+  printf("uint64 Max(0x8000000000000001, 2): %llu, Max(2, ~0ull): %llu\n",
+         max_u64(qa, qb), max_u64(qb, qc));
+  volatile long long la = -5, lb = 3;
+  printf("int64 Min(-5, 3): %lld\n", min_i64(la, lb));
+  volatile unsigned da = 0x80000001u, db = 2;
+  printf("uint32 Max(0x80000001, 2): %u\n", max_u32(da, db));
+  volatile uintptr_t pa = (uintptr_t)0xFFFFFFFF00000000ull;
+  volatile int five = 5;
+  printf("UIntPtr.Add(0xFFFFFFFF00000000, 5): %llu\n",
+         (unsigned long long)uintptr_add(pa, five));
+
+  volatile char16_t fullwidth_a = 0xFF41, fullwidth_cap_a = 0xFF21,
+                    ascii_a = u'a';
+  printf("ToUpperInvariant: U+FF41 -> U+%04X, 'a' -> U+%04X\n",
+         (unsigned)char_upper(fullwidth_a), (unsigned)char_upper(ascii_a));
+  printf("ToLowerInvariant: U+FF21 -> U+%04X\n",
+         (unsigned)char_lower(fullwidth_cap_a));
+  int upper = char_upper(fullwidth_a);
+  printf("the result as an int: %d, equals 0xFF21 %d\n", upper,
+         upper == 0xFF21);
+  printf("Convert.ToInt32(U+FF41): %d\n", char_code(fullwidth_a));
+  volatile int ffff = 0xFFFF;
+  printf("Convert.ToChar(65535): %d\n", code_char(ffff));
+
+  volatile int two = 2, b256 = 256, minus_one = -1, zero = 0;
+  printf("Convert.ToInt32(bool) from int 2: %d, 256: %d, -1: %d, 0: %d\n",
+         bool_to_int(two), bool_to_int(b256), bool_to_int(minus_one),
+         bool_to_int(zero));
+  volatile int seven = 7;
+  int t = int_to_bool(seven), f = int_to_bool(zero);
+  printf("Convert.ToBoolean into int: 7 -> %d, 0 -> %d, -1 -> %d\n", t, f,
+         int_to_bool(minus_one));
+
+  /* Narrowed to 0 (false): 256 as char, 65536 as short and unsigned short.
+     Low bits not all 0 (true): 257 and 0x180 (only bit 7 left) as char,
+     65537 and 0x18000 (only bit 15 left) as short and unsigned short. Each
+     through a C object, then as the cast in the argument. */
+  volatile int c_zero = 256, c_one = 257, c_top = 0x180;
+  volatile int s_zero = 65536, s_one = 65537, s_top = 0x18000;
+  char c0 = (char)c_zero, c1 = (char)c_one, c2 = (char)c_top;
+  printf("Convert.ToInt32(bool) from char (char)256: %d, (char)257: %d, "
+         "(char)0x180: %d\n",
+         bool_to_int_c(c0), bool_to_int_c(c1), bool_to_int_c(c2));
+  printf("Convert.ToInt32(bool) from the cast to char in the argument: "
+         "%d, %d, %d\n",
+         bool_to_int_c((char)c_zero), bool_to_int_c((char)c_one),
+         bool_to_int_c((char)c_top));
+  short s0 = (short)s_zero, s1 = (short)s_one, s2 = (short)s_top;
+  printf("Convert.ToInt32(bool) from short (short)65536: %d, (short)65537: "
+         "%d, (short)0x18000: %d\n",
+         bool_to_int_s(s0), bool_to_int_s(s1), bool_to_int_s(s2));
+  printf("Convert.ToInt32(bool) from the cast to short in the argument: "
+         "%d, %d, %d\n",
+         bool_to_int_s((short)s_zero), bool_to_int_s((short)s_one),
+         bool_to_int_s((short)s_top));
+  unsigned short w0 = (unsigned short)s_zero, w1 = (unsigned short)s_one,
+                 w2 = (unsigned short)s_top;
+  printf("Convert.ToInt32(bool) from unsigned short (unsigned short)65536: "
+         "%d, 65537: %d, 0x18000: %d\n",
+         bool_to_int_us(w0), bool_to_int_us(w1), bool_to_int_us(w2));
+  printf("Convert.ToInt32(bool) from the cast to unsigned short in the "
+         "argument: %d, %d, %d\n",
+         bool_to_int_us((unsigned short)s_zero),
+         bool_to_int_us((unsigned short)s_one),
+         bool_to_int_us((unsigned short)s_top));
+  /* A _Bool made from v & 1: false for v = 2, true for v = 3. */
+  volatile int v_even = 2, v_odd = 3;
+  printf("Convert.ToInt32(bool) from _Bool v & 1, v = 2: %d, v = 3: %d\n",
+         bool_to_int_b(v_even & 1), bool_to_int_b(v_odd & 1));
+  printf("Convert.ToInt32(uint8) from _Bool v & 1, v = 2: %d, v = 3: %d\n",
+         uint8_to_int_b(v_even & 1), uint8_to_int_b(v_odd & 1));
+
+  _Bool b = to_byte_as_bool(two);
+  _Bool c = to_sbyte_as_bool(minus_one);
+  _Bool z = to_byte_as_bool(zero);
+  printf("Convert.ToByte(2) as _Bool: %d, equals 1 %d\n", (int)b, b == 1);
+  printf("Convert.ToSByte(-1) as _Bool: %d, equals 1 %d\n", (int)c, c == 1);
+  printf("Convert.ToByte(0) as _Bool: %d, sum of the three %d\n", (int)z,
+         b + c + z);
+  return 0;
+}

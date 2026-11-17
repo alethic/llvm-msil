@@ -1,0 +1,138 @@
+# Object handles: newobj gives a handle, callvirt calls an instance method through a 'this' handle and returns a string handle, a property getter reads an object, GCHandle's get_Target gives a second handle to the same object, string handles pass back as string arguments, every handle is freed exactly once through GCHandle::Free; then a new string handle, which the failing call ends the program with, is passed as the 'this' of Exception::get_HResult and fails castclass loudly with System.InvalidCastException.
+# Plan 5.20.9 (MH1: a handle is the IntPtr of a Normal GCHandle, 0 is
+# null; MH2: every reference-typed result is a new strong handle owned by
+# the caller, freed exactly once through a managed call of GCHandle::Free,
+# whose 'this-gch' conversion is the identity on the C value: the test
+# frees every handle exactly once that way, then passes a new string
+# handle, which the failing call ends the program with, as the 'this' of
+# Exception::get_HResult; MH3: arguments are borrowed, so a handle stays
+# valid after it is passed; MH4: a handle of the wrong type fails castclass
+# with InvalidCastException),
+# 5.20.3 MS5 (the rows 'obj' for class and string results and for a string
+# parameter from a handle, 'this-obj' and 'this-gch'; 'bool' parameters
+# from _Bool), 5.20.5 ML2 (2) (newobj for .ctor, callvirt for an instance
+# method of a reference type), 5.20.8 MX1 (without msil_catch the exception
+# escapes as an ordinary unhandled .NET exception). Every member is a
+# built-in table entry, so no reference is needed: MC-1's
+# UTF8Encoding::.ctor(bool, bool), Encoding::GetString(uint8*, int32) and
+# GCHandle rows, M20's Marshal::StringToHGlobalUni(string), Phase 2's
+# EntryPointNotFoundException::.ctor(string) and M27's
+# Exception::get_HResult(). The HResult of an EntryPointNotFoundException
+# is COR_E_ENTRYPOINTNOTFOUND, 0x80131523, on the .NET Framework and on .NET
+# (measured on Framework 4.8.1, .NET 10 and WSL .NET 10).
+# The members have no C library equivalent and the program ends on an
+# unhandled exception (a loud failure, plan 5.17.4), so the transcript is
+# hand-written for both OSes: the lines before the call, then the status
+# line '[unhandled exception: System.InvalidCastException]'. The LOUD line
+# matches the program's own stderr line, written before the call; the
+# runtime's report of the exception is never matched. Plan 5.17.13 (MC-1,
+# M3/13-managed-calls).
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: handles: passing a string handle as the 'this' of Exception::get_HResult
+# LOUD-NOT: handles: returned from the wrong-type call
+#--- main.c
+#include <stdio.h>
+#include <string.h>
+#include <uchar.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+__attribute__((msil_method("System.Text.UTF8Encoding", ".ctor",
+                           "instance void(bool, bool)")))
+mc_handle new_utf8_encoding(_Bool emit_bom, _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.Encoding", "GetString",
+                           "instance string(uint8*, int32)")))
+mc_handle encoding_get_string(mc_handle encoding, const unsigned char *bytes,
+                              int count);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_to_utf16(mc_handle s);
+
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+mc_handle new_entry_point_not_found(const char *message);
+
+__attribute__((msil_method("System.Exception", "get_HResult",
+                           "instance int32()")))
+int exception_hresult(mc_handle exception);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "get_Target", "instance object()")))
+mc_handle handle_target(mc_handle handle);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+static int frees;
+static void release(mc_handle h) {
+  handle_free(h);
+  ++frees;
+}
+
+/* Prints the UTF-16 units of a string handle as ASCII. */
+static void put_string(const char *what, mc_handle s) {
+  char16_t *p = string_to_utf16(s);
+  printf("%s: \"", what);
+  for (; p && *p; ++p)
+    putchar(*p < 0x80 ? (int)*p : '?');
+  printf("\"\n");
+}
+
+int main(void) {
+  /* newobj, then callvirt through the 'this' handle: a string result. */
+  mc_handle enc = new_utf8_encoding(0, 1);
+  printf("UTF8Encoding handle is nonzero: %d\n", enc != 0);
+  static const unsigned char bytes[] = "managed handles";
+  mc_handle s = encoding_get_string(enc, bytes, 7);
+  mc_handle s2 = encoding_get_string(enc, bytes + 8, 7);
+  printf("GetString handles: nonzero %d, distinct %d\n", s != 0 && s2 != 0,
+         s != s2);
+  put_string("first string", s);
+  put_string("second string", s2);
+  /* Arguments are borrowed: the handle still works after the call. */
+  put_string("first string again", s);
+
+  /* A property getter through the base class. */
+  mc_handle e = new_entry_point_not_found("handles: a managed exception");
+  printf("HResult: 0x%08x\n", (unsigned)exception_hresult(e));
+
+  /* get_Target: a second handle to the same object. */
+  mc_handle t = handle_target(e);
+  printf("get_Target handle: nonzero %d, differs from the first %d\n", t != 0,
+         t != e);
+  printf("HResult through it: 0x%08x\n", (unsigned)exception_hresult(t));
+  mc_handle st = handle_target(s);
+  put_string("a string through get_Target", st);
+
+  /* A new string handle for the loud call below, taken before the frees
+     (GetString needs enc): the failing call ends the program with it, so
+     it is the one handle never freed. A freed handle there would give
+     NullReferenceException instead (MH4). */
+  mc_handle wrong = encoding_get_string(enc, bytes, 7);
+
+  release(st);
+  release(t);
+  release(e);
+  release(s2);
+  release(s);
+  release(enc);
+  printf("handles freed: %d\n", frees);
+
+  /* The loud call: a string is not a System.Exception. */
+  fflush(stdout);
+  fputs("handles: passing a string handle as the 'this' of "
+        "Exception::get_HResult\n",
+        stderr);
+  fflush(stderr);
+  int hr = exception_hresult(wrong);
+  printf("returned from the wrong-type call: %d\n", hr);
+  fprintf(stderr, "handles: returned from the wrong-type call\n");
+  return 0;
+}

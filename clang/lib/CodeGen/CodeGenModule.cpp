@@ -18,6 +18,7 @@
 #include "CGCall.h"
 #include "CGDebugInfo.h"
 #include "CGHLSLRuntime.h"
+#include "CGMSILManagedCalls.h"
 #include "CGObjCRuntime.h"
 #include "CGOpenCLRuntime.h"
 #include "CGOpenMPRuntime.h"
@@ -1287,6 +1288,11 @@ void CodeGenModule::Release() {
     if (PGOStats.hasDiagnostics())
       PGOStats.reportDiagnostics(getDiags(), getCodeGenOpts().MainFileName);
   }
+  // MSIL managed calls: T-M24's check of those that share an IR name, then
+  // the forwarders of exported and startup ones with their entries.
+  llvm::StringMap<std::string> MSILForwardedCalls;
+  if (getTriple().isOSBinFormatMSIL())
+    emitMSILManagedCallForwarders(*this, MangledDeclNames, MSILForwardedCalls);
   llvm::stable_sort(GlobalCtors, [](const Structor &L, const Structor &R) {
     return L.LexOrder < R.LexOrder;
   });
@@ -1394,6 +1400,11 @@ void CodeGenModule::Release() {
   emitLLVMUsed();
   if (SanStats)
     SanStats->finish();
+
+  // MSIL managed calls: one !msil.managed.calls operand per managed-call
+  // declaration of the module, once every function has been emitted.
+  if (getTriple().isOSBinFormatMSIL())
+    emitMSILManagedCallsMetadata(getModule(), MSILForwardedCalls);
 
   if (CodeGenOpts.Autolink &&
       (Context.getLangOpts().Modules || !LinkerOptionsMetadata.empty())) {
@@ -2772,6 +2783,10 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
   const auto *ND = cast<NamedDecl>(GD.getDecl());
   std::string MangledName = getMangledNameImpl(*this, GD, ND);
 
+  // MSIL managed calls: '__msil_mc.<symbol>' (plan 5.20.4 MR2 as amended).
+  if (getTriple().isOSBinFormatMSIL())
+    mangleMSILManagedCallName(*this, GD, MangledName);
+
   // Ensure either we have different ABIs between host and device compilations,
   // says host compilation following MSVC ABI but device compilation follows
   // Itanium C++ ABI or, if they follow the same ABI, kernel names after
@@ -3978,6 +3993,10 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
     // shares, to the IR attributes of an MSIL import (a P/Invoke) here.
     if (getTriple().isOSBinFormatMSIL() && !FD->doesThisDeclarationHaveABody())
       addMSILImportAttributes(*FD, *F);
+
+    // The IR attributes of an MSIL managed call (plan 5.20.4 MR1).
+    if (getTriple().isOSBinFormatMSIL())
+      addMSILManagedCallAttributes(*FD, *F);
   }
 
   if (const auto *CSA = FD->getAttr<CodeSegAttr>())
@@ -5013,9 +5032,12 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
 
   // MSIL: a body-less function or 'extern' variable declaration gives the IR
   // declaration that an earlier use created its import attributes, as the
-  // annotations of a function already used are updated below.
-  if (getTriple().isOSBinFormatMSIL())
+  // annotations of a function already used are updated below. A managed call
+  // with dllexport, constructor or destructor is declared for its forwarders.
+  if (getTriple().isOSBinFormatMSIL()) {
     updateMSILImportAttributes(*this, GD);
+    declareMSILManagedCallWithForwarders(*this, GD);
+  }
 
   // Ignore declarations, they will be emitted on their first use.
   if (const auto *FD = dyn_cast<FunctionDecl>(Global)) {

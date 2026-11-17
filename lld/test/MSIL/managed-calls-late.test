@@ -1,0 +1,501 @@
+## CIL objects that an archive gives only after LTO (ImplementationPlan.md
+## 5.20.4 MR4 and 5.20.3 T-M17 as amended in section 12, milestone MC-1).
+## LTO's code generation can reference a symbol that no input referenced: on
+## x86_64-pc-windows-msvc-msil its optimizer turns printf("hi\n") into
+## puts("hi"), so the LTO object extracts an archive member that defines
+## puts, after LTO. --trace lists that member after the LTO object, which
+## --trace-symbol=puts shows referencing puts, and --why-extract names the
+## LTO object ('<output>.lto.o', or '<output>.lto.<module>.o' for a ThinLTO
+## module). msil-ld compares every external managed call that such a member
+## declares, forwarded or not, with the units that it compared before LTO,
+## the bitcode inputs re-read from their files, so a late member gets the
+## verdict it gets when it is given from the start:
+##   'managed call '<f>' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units',
+## once, and no output. The members are FakeWidgets.il's and FakeRuntime.il's
+## (managed-calls.test). Every link that fails counts its error lines.
+## - A constructor managed call: r1main.ll (bitcode) declares init as a
+##   constructor managed call of Contoso.Widget::Reset(), and main calls
+##   printf("hi\n"); lib1.a holds two CIL objects, lprintf.o, which defines
+##   printf, and lputs1.o, which defines puts and declares init as a
+##   constructor managed call of System.Threading.Interlocked::MemoryBarrier().
+##   r1main with lib1.a fails with the line, naming init, in full LTO and as
+##   a ThinLTO module (opt -module-summary), as it does when lputs1.o and
+##   lprintf.o are given from the start. The late links used to succeed with
+##   no diagnostic, the module initializer calling r1main's forwarder alone,
+##   so lputs1.o's start-up call was lost. lib1ok.a, whose lputs1ok.o binds
+##   init to Reset too, links in both modes.
+## - A managed call that no unit forwards: r2main.ll binds f to
+##   Contoso.Widget::Guarded(int32), and main calls printf("hi\n") and f;
+##   lib2.a's lputs2.o binds f to Contoso.Point::Twice(int32), and its puts
+##   calls f. The same, naming f, late and from the start, in full LTO and as
+##   a ThinLTO module; all of these links used to succeed, each unit calling
+##   its own member. lib2ok.a, whose lputs2ok.o binds f to Guarded, links.
+## - The units that a late member is compared with are the bitcode inputs
+##   re-read, not the stubs in LTO's output (option (b) of the late
+##   comparison; option (a), the stubs that LTO kept, would link this case):
+##   r3main.ll binds f to Guarded and calls it only in h(x, y) when y is not
+##   0, and main calls h(1, 0), so LTO's optimizer deletes the call while
+##   r3main.bc still declares f. With lib2.a, the late lputs2.o fails with
+##   the line in full LTO and as a ThinLTO module, as it does from the start;
+##   these links used to succeed, with lputs2.o's binding alone.
+## - A CIL object given from the start is one of the units that a late
+##   member is compared with: aearly.ll, a CIL object, defines g, which calls
+##   f bound to Guarded, and the bitcode amain.ll declares no managed call;
+##   its main calls printf("hi\n") and g. With lib2.a, the late lputs2.o
+##   fails with the line, naming f, in full LTO and as a ThinLTO module
+##   (--trace lists aearly.o after amain's bitcode, before lib2.a's
+##   members). With lib2ok.a it links, and --why-extract names the LTO object
+##   as the reference that extracted lputs2ok.o.
+## - Two late members, and a name that no unit declared before LTO: the
+##   bitcode cmain.ll declares no managed call, and its main calls
+##   printf("hi\n") and printf("x"), which LTO's optimizer turns into
+##   puts("hi") and putchar('x'). lib3.a holds lprintf.o, lputs2ok.o (f
+##   bound to Guarded) and lputchar.o, whose putchar calls f bound to
+##   Contoso.Point::Twice(int32), so the LTO object extracts two members
+##   that disagree: the line once, naming f, in full LTO and as a ThinLTO
+##   module.
+## - T-M17's second form after LTO,
+##   'managed call '<f>' is declared with different 'dllexport', 'constructor' or 'destructor' attributes in different translation units':
+##   lib1p.a's lputs1p.o declares init as a constructor managed call of
+##   Contoso.Widget::Reset(), as r1main.ll does, but at constructor(200), so
+##   the two entries differ only in their attributes (the 8th operand).
+##   r1main with lib1p.a fails with that line once, naming init, in full LTO
+##   and as a ThinLTO module; with lib1ok.a, whose entry is r1main's, it
+##   links (above).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+## A failed link's error lines (err.txt), counted, then each pinned whole.
+# DEFINE: %{one} = grep error: err.txt | count 1 && %{err} --input-file=err.txt
+## The member that LTO's puts extracts, after the LTO object (trace.txt).
+# DEFINE: %{late} = FileCheck %s --check-prefix=LATE --input-file=trace.txt
+# DEFINE: %{why} = FileCheck %s --check-prefix=WHY --match-full-lines --strict-whitespace
+
+# TM17:      {{^}}msil-ld: error: managed call '[[F]]' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units{{$}}
+# TM17B:     {{^}}msil-ld: error: managed call '[[F]]' is declared with different 'dllexport', 'constructor' or 'destructor' attributes in different translation units{{$}}
+# LATE:      {{^}}[[MAIN]]{{$}}
+# LATE-NEXT: {{^}}[[LIB]](lprintf.o){{$}}
+# LATE-NEXT: {{^}}[[LIB]]([[MEMBER]]): lazy definition of puts{{$}}
+# LATE-NEXT: {{^}}[[LTO]]{{$}}
+# LATE-NEXT: {{^}}[[LTO]]: reference to puts{{$}}
+# LATE-NEXT: {{^}}[[LIB]]([[MEMBER]]){{$}}
+#      WHY:reference	extracted	symbol
+# WHY-NEXT:[[MAIN]]	[[LIB]](lprintf.o)	printf
+# WHY-NEXT:[[LTO]]	[[LIB]]([[MEMBER]])	puts
+#  WHY-NOT:{{.}}
+
+# RUN: llvm-as r1main.ll -o r1main.bc && opt -module-summary r1main.ll -o r1main.thin.bc
+# RUN: llvm-as r2main.ll -o r2main.bc && opt -module-summary r2main.ll -o r2main.thin.bc
+# RUN: llvm-as r3main.ll -o r3main.bc && opt -module-summary r3main.ll -o r3main.thin.bc
+# RUN: llvm-as amain.ll -o amain.bc && opt -module-summary amain.ll -o amain.thin.bc
+# RUN: llvm-as cmain.ll -o cmain.bc && opt -module-summary cmain.ll -o cmain.thin.bc
+# RUN: llc -filetype=obj aearly.ll -o aearly.o
+# RUN: llc -filetype=obj lprintf.ll -o lprintf.o
+# RUN: llc -filetype=obj lputs1.ll -o lputs1.o
+# RUN: llc -filetype=obj lputs1ok.ll -o lputs1ok.o
+# RUN: llc -filetype=obj lputs1p.ll -o lputs1p.o
+# RUN: llc -filetype=obj lputs2.ll -o lputs2.o
+# RUN: llc -filetype=obj lputs2ok.ll -o lputs2ok.o
+# RUN: llc -filetype=obj lputchar.ll -o lputchar.o
+# RUN: llvm-ar rcs lib1.a lprintf.o lputs1.o
+# RUN: llvm-ar rcs lib1ok.a lprintf.o lputs1ok.o
+# RUN: llvm-ar rcs lib1p.a lprintf.o lputs1p.o
+# RUN: llvm-ar rcs lib2.a lprintf.o lputs2.o
+# RUN: llvm-ar rcs lib2ok.a lprintf.o lputs2ok.o
+# RUN: llvm-ar rcs lib3.a lprintf.o lputs2ok.o lputchar.o
+
+## A constructor managed call: late, from the start, and agreeing.
+# RUN: not msil-ld r1main.bc lib1.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=init
+# RUN: %{late} -DMAIN=r1main.bc -DLIB=lib1.a -DMEMBER=lputs1.o -DLTO=x.exe.lto.o
+# RUN: not msil-ld r1main.thin.bc lib1.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=init
+# RUN: %{late} -DMAIN=r1main.thin.bc -DLIB=lib1.a -DMEMBER=lputs1.o -DLTO=x.exe.lto.r1main.thin.o
+# RUN: not msil-ld r1main.bc lputs1.o lprintf.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17 -DF=init
+# RUN: not msil-ld r1main.thin.bc lputs1.o lprintf.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17 -DF=init
+# RUN: not ls x.exe
+# RUN: msil-ld r1main.bc lib1ok.a --reference=refs --why-extract=ok1.why -o ok1.exe 2>&1 | count 0
+# RUN: %{why} --input-file=ok1.why -DMAIN=r1main.bc -DLIB=lib1ok.a -DMEMBER=lputs1ok.o -DLTO=ok1.exe.lto.o
+# RUN: llvm-cil-dump ok1.exe | FileCheck %s --check-prefix=RESET --implicit-check-not=MemoryBarrier
+# RUN: msil-ld r1main.thin.bc lib1ok.a --reference=refs --why-extract=ok1t.why -o ok1t.exe 2>&1 | count 0
+# RUN: %{why} --input-file=ok1t.why -DMAIN=r1main.thin.bc -DLIB=lib1ok.a -DMEMBER=lputs1ok.o \
+# RUN:   -DLTO=ok1t.exe.lto.r1main.thin.o
+# RUN: llvm-cil-dump ok1t.exe | FileCheck %s --check-prefix=RESET --implicit-check-not=MemoryBarrier
+# RESET: {{^    L[0-9]+: }}call void() [FakeWidgets]Contoso.Widget::'Reset'{{$}}
+
+## A managed call that no unit forwards: late, from the start, and agreeing.
+# RUN: not msil-ld r2main.bc lib2.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: %{late} -DMAIN=r2main.bc -DLIB=lib2.a -DMEMBER=lputs2.o -DLTO=x.exe.lto.o
+# RUN: not msil-ld r2main.thin.bc lib2.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: %{late} -DMAIN=r2main.thin.bc -DLIB=lib2.a -DMEMBER=lputs2.o -DLTO=x.exe.lto.r2main.thin.o
+# RUN: not msil-ld r2main.bc lputs2.o lprintf.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17 -DF=f
+# RUN: not msil-ld r2main.thin.bc lputs2.o lprintf.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17 -DF=f
+# RUN: not ls x.exe
+# RUN: msil-ld r2main.bc lib2ok.a --reference=refs --why-extract=ok2.why -o ok2.exe 2>&1 | count 0
+# RUN: %{why} --input-file=ok2.why -DMAIN=r2main.bc -DLIB=lib2ok.a -DMEMBER=lputs2ok.o -DLTO=ok2.exe.lto.o
+# RUN: llvm-cil-dump ok2.exe | FileCheck %s --check-prefix=GUARDED --implicit-check-not=Twice
+# RUN: msil-ld r2main.thin.bc lib2ok.a --reference=refs --why-extract=ok2t.why -o ok2t.exe 2>&1 | count 0
+# RUN: %{why} --input-file=ok2t.why -DMAIN=r2main.thin.bc -DLIB=lib2ok.a -DMEMBER=lputs2ok.o \
+# RUN:   -DLTO=ok2t.exe.lto.r2main.thin.o
+# RUN: llvm-cil-dump ok2t.exe | FileCheck %s --check-prefix=GUARDED --implicit-check-not=Twice
+# GUARDED: {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Widget::'Guarded'{{$}}
+
+## Option (b): a late member that disagrees only with a call that LTO's
+## optimizer deletes, while the bitcode input still declares the managed
+## call, fails as it does from the start.
+# RUN: not msil-ld r3main.bc lib2.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: %{late} -DMAIN=r3main.bc -DLIB=lib2.a -DMEMBER=lputs2.o -DLTO=x.exe.lto.o
+# RUN: not msil-ld r3main.thin.bc lib2.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: %{late} -DMAIN=r3main.thin.bc -DLIB=lib2.a -DMEMBER=lputs2.o -DLTO=x.exe.lto.r3main.thin.o
+# RUN: not msil-ld r3main.bc lputs2.o lprintf.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17 -DF=f
+# RUN: not msil-ld r3main.thin.bc lputs2.o lprintf.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17 -DF=f
+# RUN: not ls x.exe
+
+## A CIL object given from the start (aearly.o) against a late member; and
+## agreeing.
+# RUN: not msil-ld amain.bc aearly.o lib2.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: FileCheck %s --check-prefix=EARLY --input-file=trace.txt -DMAIN=amain.bc -DLTO=x.exe.lto.o
+# RUN: not msil-ld amain.thin.bc aearly.o lib2.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: FileCheck %s --check-prefix=EARLY --input-file=trace.txt -DMAIN=amain.thin.bc \
+# RUN:   -DLTO=x.exe.lto.amain.thin.o
+# RUN: not ls x.exe
+# RUN: msil-ld amain.bc aearly.o lib2ok.a --reference=refs --why-extract=oka.why -o oka.exe 2>&1 | count 0
+# RUN: %{why} --input-file=oka.why -DMAIN=amain.bc -DLIB=lib2ok.a -DMEMBER=lputs2ok.o -DLTO=oka.exe.lto.o
+# RUN: llvm-cil-dump oka.exe | FileCheck %s --check-prefix=GUARDED --implicit-check-not=Twice
+# RUN: msil-ld amain.thin.bc aearly.o lib2ok.a --reference=refs --why-extract=okat.why -o okat.exe 2>&1 | count 0
+# RUN: %{why} --input-file=okat.why -DMAIN=amain.thin.bc -DLIB=lib2ok.a -DMEMBER=lputs2ok.o \
+# RUN:   -DLTO=okat.exe.lto.amain.thin.o
+# RUN: llvm-cil-dump okat.exe | FileCheck %s --check-prefix=GUARDED --implicit-check-not=Twice
+# EARLY:      {{^}}[[MAIN]]{{$}}
+# EARLY-NEXT: {{^}}aearly.o{{$}}
+# EARLY-NEXT: {{^}}lib2.a(lprintf.o){{$}}
+# EARLY-NEXT: {{^}}lib2.a(lputs2.o): lazy definition of puts{{$}}
+# EARLY-NEXT: {{^}}[[LTO]]{{$}}
+# EARLY-NEXT: {{^}}[[LTO]]: reference to puts{{$}}
+# EARLY-NEXT: {{^}}lib2.a(lputs2.o){{$}}
+
+## Two late members that disagree on a name that no unit declared before
+## LTO.
+# RUN: not msil-ld cmain.bc lib3.a --reference=refs --trace --trace-symbol=puts --trace-symbol=putchar \
+# RUN:   -o x.exe > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: FileCheck %s --check-prefix=TWO --input-file=trace.txt -DMAIN=cmain.bc -DLTO=x.exe.lto.o
+# RUN: not msil-ld cmain.thin.bc lib3.a --reference=refs --trace --trace-symbol=puts --trace-symbol=putchar \
+# RUN:   -o x.exe > trace.txt 2> err.txt && %{one} --check-prefix=TM17 -DF=f
+# RUN: FileCheck %s --check-prefix=TWO --input-file=trace.txt -DMAIN=cmain.thin.bc \
+# RUN:   -DLTO=x.exe.lto.cmain.thin.o
+# RUN: not ls x.exe
+# TWO:      {{^}}[[MAIN]]{{$}}
+# TWO-NEXT: {{^}}lib3.a(lprintf.o){{$}}
+# TWO-NEXT: {{^}}lib3.a(lputs2ok.o): lazy definition of puts{{$}}
+# TWO-NEXT: {{^}}lib3.a(lputchar.o): lazy definition of putchar{{$}}
+# TWO-NEXT: {{^}}[[LTO]]{{$}}
+# TWO-NEXT: {{^}}[[LTO]]: reference to puts{{$}}
+# TWO-NEXT: {{^}}lib3.a(lputs2ok.o){{$}}
+# TWO-NEXT: {{^}}lib3.a(lputs2ok.o): definition of puts{{$}}
+# TWO-NEXT: {{^}}[[LTO]]: reference to putchar{{$}}
+# TWO-NEXT: {{^}}lib3.a(lputchar.o){{$}}
+
+## T-M17's second form after LTO: init at constructor(200).
+# RUN: not msil-ld r1main.bc lib1p.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17B -DF=init
+# RUN: %{late} -DMAIN=r1main.bc -DLIB=lib1p.a -DMEMBER=lputs1p.o -DLTO=x.exe.lto.o
+# RUN: not msil-ld r1main.thin.bc lib1p.a --reference=refs --trace --trace-symbol=puts -o x.exe \
+# RUN:   > trace.txt 2> err.txt && %{one} --check-prefix=TM17B -DF=init
+# RUN: %{late} -DMAIN=r1main.thin.bc -DLIB=lib1p.a -DMEMBER=lputs1p.o -DLTO=x.exe.lto.r1main.thin.o
+# RUN: not ls x.exe
+
+#--- r1main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$__msil_mc_ctor.init = comdat any
+
+@.str = private unnamed_addr constant [4 x i8] c"hi\0A\00"
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.init, ptr @__msil_mc_ctor.init }]
+
+;; void init(void) __attribute__((msil_method("Contoso.Widget", "Reset",
+;; "void()"), constructor)); int main(void) { printf("hi\n"); return 0; }
+define i32 @main() {
+  %c = call i32 (ptr, ...) @printf(ptr noundef @.str)
+  ret i32 0
+}
+
+declare i32 @printf(ptr noundef, ...)
+
+declare void @__msil_mc.init() #0
+
+define linkonce_odr hidden void @__msil_mc_ctor.init() #1 comdat {
+  call void @__msil_mc.init()
+  ret void
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="init" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.init", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"constructor(65535)"}
+#--- lprintf.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int printf(const char *fmt, ...) { return 0; }
+define i32 @printf(ptr noundef %fmt, ...) {
+  ret i32 0
+}
+#--- lputs1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$__msil_mc_ctor.init = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.init, ptr @__msil_mc_ctor.init }]
+
+;; void init(void) __attribute__((msil_method("System.Threading.Interlocked",
+;; "MemoryBarrier", "void()"), constructor));
+;; int puts(const char *s) { return 0; }
+define i32 @puts(ptr noundef %s) {
+  ret i32 0
+}
+
+declare void @__msil_mc.init() #0
+
+define linkonce_odr hidden void @__msil_mc_ctor.init() #1 comdat {
+  call void @__msil_mc.init()
+  ret void
+}
+
+attributes #0 = { "msil-managed-type"="System.Threading.Interlocked" "msil-managed-member"="MemoryBarrier" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="init" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.init", !"System.Threading.Interlocked", !"MemoryBarrier", !"void()", !"", !";void", !"", !"constructor(65535)"}
+#--- lputs1ok.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$__msil_mc_ctor.init = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__msil_mc_ctor.init, ptr @__msil_mc_ctor.init }]
+
+;; lputs1.ll with r1main.ll's binding: void init(void) __attribute__((
+;; msil_method("Contoso.Widget", "Reset", "void()"), constructor));
+define i32 @puts(ptr noundef %s) {
+  ret i32 0
+}
+
+declare void @__msil_mc.init() #0
+
+define linkonce_odr hidden void @__msil_mc_ctor.init() #1 comdat {
+  call void @__msil_mc.init()
+  ret void
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="init" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.init", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"constructor(65535)"}
+#--- r2main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@.str = private unnamed_addr constant [4 x i8] c"hi\0A\00"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int main(void) { printf("hi\n"); return f(1); }
+define i32 @main() {
+  %c = call i32 (ptr, ...) @printf(ptr noundef @.str)
+  %r = call i32 @__msil_mc.f(i32 noundef 1)
+  ret i32 %r
+}
+
+declare i32 @printf(ptr noundef, ...)
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- r3main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@.str = private unnamed_addr constant [4 x i8] c"hi\0A\00"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); static int h(int x, int y) { return y ? f(x) : 0; }
+;; int main(void) { printf("hi\n"); return h(1, 0); }, at -O0: the bitcode
+;; declares f, and LTO deletes its call when it inlines h(1, 0).
+define i32 @main() {
+  %c = call i32 (ptr, ...) @printf(ptr noundef @.str)
+  %r = call i32 @h(i32 noundef 1, i32 noundef 0)
+  ret i32 %r
+}
+
+define internal i32 @h(i32 noundef %x, i32 noundef %y) {
+entry:
+  %c = icmp ne i32 %y, 0
+  br i1 %c, label %call, label %done
+
+call:
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  br label %done
+
+done:
+  %v = phi i32 [ %r, %call ], [ 0, %entry ]
+  ret i32 %v
+}
+
+declare i32 @printf(ptr noundef, ...)
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- lputs2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Point", "Twice",
+;; "int32(int32)"))); int puts(const char *s) { return f(2); }
+define i32 @puts(ptr noundef %s) {
+  %r = call i32 @__msil_mc.f(i32 noundef 2)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- lputs2ok.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; lputs2.ll with r2main.ll's binding: int f(int) __attribute__((
+;; msil_method("Contoso.Widget", "Guarded", "int32(int32)")));
+define i32 @puts(ptr noundef %s) {
+  %r = call i32 @__msil_mc.f(i32 noundef 2)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- lputs1p.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$__msil_mc_ctor.init = comdat any
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 200, ptr @__msil_mc_ctor.init, ptr @__msil_mc_ctor.init }]
+
+;; lputs1ok.ll at another priority: void init(void) __attribute__((
+;; msil_method("Contoso.Widget", "Reset", "void()"), constructor(200)));
+define i32 @puts(ptr noundef %s) {
+  ret i32 0
+}
+
+declare void @__msil_mc.init() #0
+
+define linkonce_odr hidden void @__msil_mc_ctor.init() #1 comdat {
+  call void @__msil_mc.init()
+  ret void
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Reset" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+attributes #1 = { "msil-managed-forwarder"="init" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.init", !"Contoso.Widget", !"Reset", !"void()", !"", !";void", !"", !"constructor(200)"}
+#--- amain.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@.str = private unnamed_addr constant [4 x i8] c"hi\0A\00"
+
+;; int g(int); int main(void) { printf("hi\n"); return g(1); }
+define i32 @main() {
+  %c = call i32 (ptr, ...) @printf(ptr noundef @.str)
+  %r = call i32 @g(i32 noundef 1)
+  ret i32 %r
+}
+
+declare i32 @printf(ptr noundef, ...)
+
+declare i32 @g(i32 noundef)
+#--- aearly.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int g(int x) { return f(x); }
+define i32 @g(i32 noundef %x) {
+  %r = call i32 @__msil_mc.f(i32 noundef %x)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- cmain.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@.str = private unnamed_addr constant [4 x i8] c"hi\0A\00"
+@.str.1 = private unnamed_addr constant [2 x i8] c"x\00"
+
+;; int main(void) { printf("hi\n"); printf("x"); return 0; }; LTO's
+;; optimizer makes the calls puts("hi") and putchar('x')
+define i32 @main() {
+  %c = call i32 (ptr, ...) @printf(ptr noundef @.str)
+  %d = call i32 (ptr, ...) @printf(ptr noundef @.str.1)
+  ret i32 0
+}
+
+declare i32 @printf(ptr noundef, ...)
+#--- lputchar.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Point", "Twice",
+;; "int32(int32)"))); int putchar(int c) { return f(3); }
+define i32 @putchar(i32 noundef %c) {
+  %r = call i32 @__msil_mc.f(i32 noundef 3)
+  ret i32 %r
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}

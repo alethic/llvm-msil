@@ -128,6 +128,11 @@
 # native program with the same REDEFINE: values; jitall and msil-verify.py
 # take neither.
 #
+# From MC-1 (plan 5.20.11 MT3): on a Windows host, %{msil_refs_netfx} links
+# against the .NET Framework 4.8 implementation assemblies mscorlib.dll and
+# System.dll (feature msil-refs-netfx), for the managed-call tests that bind
+# members outside msil-ld's built-in table (see "reference assemblies").
+#
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
 # compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
@@ -3127,6 +3132,28 @@ note(
     )
 )
 
+# The .NET Framework 4.8 implementation assemblies (plan 5.20.11 MT3; MC-1):
+# on a Windows host, %{msil_refs_netfx} is -Wl,--reference=<file> for
+# mscorlib.dll and System.dll of %WINDIR%/Microsoft.NET/Framework64/v4.0.30319
+# (netfx_dir, see "ilasm"), and the feature msil-refs-netfx says that both
+# exist. Unlike %{msil_ref_dir_net48} it needs no targeting pack: every
+# Windows host with the .NET Framework 4.8 has them. A test that binds a
+# .NET member or type outside msil-ld's built-in table (a managed call,
+# plan 5.20.7) REQUIRES msil-refs-netfx and links with
+# 'REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}', which replaces the
+# references of msil_references on the MSIL side of every link. The images
+# reference mscorlib and System 4.0.0.0 and load on the .NET Framework, on
+# modern .NET and under WSL alike (the link runs on the Windows host). On
+# other hosts, and when a file is missing, the substitution names a
+# placeholder and the feature is absent.
+netfx_refs = [os.path.join(netfx_dir, f) for f in ("mscorlib.dll", "System.dll")]
+if is_windows and all(os.path.isfile(f) for f in netfx_refs):
+    features.add("msil-refs-netfx")
+    refs_netfx_flags = " ".join("-Wl,--reference=" + quote(f) for f in netfx_refs)
+    note("Framework references: %s" % ", ".join(slashes(f) for f in netfx_refs))
+else:
+    refs_netfx_flags = "msil-refs-netfx-not-found"
+
 references = params.get("msil_references", "none")
 ref_dir = None
 if references != "none":
@@ -4239,6 +4266,11 @@ substitutions = [
         )
         for n in REF_PACKS
     ],
+    # The .NET Framework 4.8 implementation assemblies (REQUIRES:
+    # msil-refs-netfx; plan 5.20.11 MT3, MC-1; see "reference assemblies").
+    # After %{msil_ref_flags}, so a test's 'REDEFINE: %{msil_ref_flags} =
+    # %{msil_refs_netfx}' expands in the same pass.
+    ("%{msil_refs_netfx}", refs_netfx_flags),
     # The glibc sysroot of the hosted tests (msil_glibc_sysroot).
     (
         "%{msil_glibc_sysroot}",

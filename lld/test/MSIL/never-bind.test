@@ -47,11 +47,16 @@
 ##   the LTO links that reference the family here are built with llc's and
 ##   code generation's hidden -msil-disable-sjlj-lowering (M27.b; through
 ##   msil-ld's -mllvm for LTO), which leaves the module unchanged. Under
-##   --lto-emit-asm msil-ld neither binds nor reports an N4 name, because
-##   code generation lowers every call and use (the section 12 row 'M27
-##   5.9.6 and 5.10.13 amended (setjmp family under --lto-emit-asm)'), so
-##   that mode has no N4 error; lto-sjlj.test and obj-sjlj.test link the
-##   lowered family.
+##   --lto-emit-asm msil-ld neither binds nor reports an N4 function,
+##   because code generation lowers every call and use (the section 12 row
+##   'M27 5.9.6 and 5.10.13 amended (setjmp family under --lto-emit-asm)'),
+##   so that mode has no N4 error for functions; lto-sjlj.test and
+##   obj-sjlj.test link the lowered family. A variable with an N4 name
+##   (sjvar.ll: '@longjmp = external global i32') is not lowered, so it gets
+##   N4's error in every mode, --lto-emit-asm included (section 12 rows
+##   2026-11-04 '5.9.6 and 5.10.13 as built (setjmp family under
+##   --lto-emit-asm: functions only, ...)' and 'MC-1.g extended (M27
+##   leftover: an N4 variable under --lto-emit-asm)').
 ## - Import names: the native libraries are searched by a symbol's import
 ##   name (msil-import-name, C's import_name) when it has one, so the guards
 ##   also test that name. Ordinary symbols imported as __extendhfsf2 (N1),
@@ -116,6 +121,7 @@
 # RUN: llvm-as atom-win.ll -o atom-win.bc
 # RUN: llvm-as foo.ll -o foo.bc
 # RUN: llvm-as sj.ll -o sj.bc
+# RUN: llvm-as sjvar.ll -o sjvar.bc
 # RUN: llvm-as imp.ll -o imp.bc
 # RUN: llvm-as impweak.ll -o impweak.bc
 
@@ -362,6 +368,18 @@
 # RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-lto.txt
 # N4-NUM8-COUNT-8: {{^}}msil-ld: error: {{.+}}
 # N4-NUM8-NOT:     {{.}}
+
+## A variable with an N4 name: MSILLowerSjLj lowers only calls and uses of
+## functions, so the variable keeps N4's error under --lto-emit-asm as in an
+## LTO image link, whether or not libc.so.6 exports the name: exactly one
+## line, and no output.
+# RUN: not msil-ld --lto-emit-asm sjvar.bc libc.so.6 -o sjvar.il 2>&1 | %{err} --check-prefix=N4-VAR
+# RUN: not msil-ld --lto-emit-asm sjvar.bc -o sjvar.il 2>&1 | %{err} --check-prefix=N4-VAR
+# RUN: not msil-ld sjvar.bc libc.so.6 -o sjvar.exe 2>&1 | %{err} --check-prefix=N4-VAR
+# RUN: not ls sjvar.il
+# RUN: not ls sjvar.exe
+# N4-VAR:     {{^}}msil-ld: error: sjvar.bc: 'longjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-VAR-NOT: {{.}}
 
 ## An object definition resolves the family; libc.so.6 binds nothing.
 # RUN: msil-ld --no-gc-sections sj.o sj2.o sjdef.o libc.so.6 -o sjdef.exe 2>&1 | count 0
@@ -831,6 +849,19 @@ declare void @longjmp(ptr, i32) noreturn
 define void @leave() {
   call void @longjmp(ptr @buf2, i32 3)
   unreachable
+}
+
+#--- sjvar.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A variable, not a function, with the N4 name longjmp: the setjmp
+;; lowering never sees it, so msil-ld refuses it in every mode.
+@longjmp = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @longjmp
+  ret i32 %v
 }
 
 #--- sjdef.ll

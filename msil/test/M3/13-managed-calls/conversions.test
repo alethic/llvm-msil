@@ -1,0 +1,242 @@
+# The remaining conversion rows and member kinds, run: GCHandle::Alloc(object) as a 'gch' result and GCHandle::ToIntPtr(GCHandle) as a 'gch' parameter, Char members from char16_t (ASCII and U+00E9), Single::IsNaN and Math::Abs on float32, the 0.0 that msil_catch's handler returns for a float64 and a float32 result (Double::Parse and Single::Parse of "x" give +0.0, all bits clear, and the code; of "25" they give 25 and leave the code unwritten; the bit patterns are printed, and the .NET Framework run checks them too), an instance field read (ldfld) through a 'this-val' handle (ComTypes.FILETIME's fields, on a boxed copy from Activator::CreateInstance and from Marshal::PtrToStructure) and through a 'this-obj' handle (StructLayoutAttribute's CharSet and Size, from Type::get_StructLayoutAttribute); every handle is freed exactly once.
+# Plan 5.20.3 MS5 (the rows 'gch' for a GCHandle result and parameter: the C
+# value is the GCHandle's IntPtr, GCHandle::ToIntPtr / FromIntPtr, never
+# boxed; 'val' for 'char' from char16_t, for 'float32' from and into float
+# and for a 'float64' result into double; 'bool' into _Bool; 'enum' for a
+# field of an enum type read into an int; 'this-val' for the 'this' of a
+# value type and 'this-obj' for the 'this' of a reference type, with ldfld
+# for a field; 'obj' for class, object and string parameters and results;
+# 'utf8' for a string parameter from char *), 5.20.2 MA2 and MA3 (a field
+# member with an 'instance field T' SIGNATURE: read-only ldfld), MA1 (the
+# 'valuetype' prefix for Char, Single, Double and FILETIME, which msil-ld
+# checks against the TypeDef, 5.20.7 MK3), 5.20.9 MH2 (every
+# reference-typed result, the GCHandle result among them, is a new strong
+# handle that the caller frees once through GCHandle::Free), 5.20.8 MX2
+# (with msil_catch the handler stores the code through the trailing int *
+# and returns the zero value of the C return type, for a float64 or float32
+# result 0.0: ldc.i4.0, then conv.r8 or conv.r4 into the result local; on
+# success the code is not written). GCHandle::Alloc and ToIntPtr are MC-1's
+# built-in table rows; Char, Single, Double, Math, Type, Activator,
+# Marshal::PtrToStructure, FILETIME, StructLayoutAttribute and
+# FormatException are not, so the program links against the .NET Framework
+# 4.8 implementation assemblies (%{msil_refs_netfx}: mscorlib.dll and
+# System.dll); the image runs on the Framework, .NET 10 and WSL .NET 10.
+# The values are .NET's and the same on every runtime: Char.ToUpperInvariant
+# maps U+00E9 to U+00C9, Char.IsDigit is true for U+0663 (ARABIC-INDIC DIGIT
+# THREE, category Nd), a default FILETIME has zero fields, the
+# StructLayoutAttribute of ComTypes.FILETIME has CharSet Ansi (2) and Size 0
+# and that of ComTypes.STATSTG CharSet Unicode (3) (measured on Framework
+# 4.8.1 and .NET 10; the Pack field differs between them, 8 and 0, so it is
+# not read), and Double.Parse and Single.Parse read "25" as 25 in every
+# culture (it has no separator, sign or exponent) and throw FormatException
+# for "x". The program prints the bit patterns of the parsed results, so
+# the handler's value must be +0.0 exactly: a handler without its conv.r8
+# or conv.r4 stores an int32 into the float64 or float32 result local,
+# which the JITs accept, and then .NET 8 and .NET 10 return 0 but the .NET
+# Framework 4.8.1 returns nonzero bits that change from run to run
+# (measured), so the test's .NET Framework run (msil_run_netfx) is the run
+# that catches that defect. The members have no C library equivalent, so
+# the expected file is hand-written for both OSes (plan 5.20.11 MT3, 5.17.4
+# as amended for MC-1). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <uchar.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define GCH "valuetype System.Runtime.InteropServices.GCHandle"
+#define FILETIME "valuetype System.Runtime.InteropServices.ComTypes.FILETIME"
+#define LAYOUT "System.Runtime.InteropServices.StructLayoutAttribute"
+
+/* 'gch': a GCHandle result and a GCHandle parameter. */
+__attribute__((msil_method(GCH, "Alloc", GCH "(object)")))
+mc_handle handle_alloc(mc_handle target);
+
+__attribute__((msil_method(GCH, "ToIntPtr", "native int(" GCH ")")))
+intptr_t handle_to_intptr(mc_handle handle);
+
+__attribute__((msil_method(GCH, "get_Target", "instance object()")))
+mc_handle handle_target(mc_handle handle);
+
+__attribute__((msil_method(GCH, "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+__attribute__((msil_method("System.Object", "ReferenceEquals",
+                           "bool(object, object)")))
+_Bool same_object(mc_handle a, mc_handle b);
+
+/* 'val' for char and float32. */
+__attribute__((msil_method("valuetype System.Char", "ToUpperInvariant",
+                           "char(char)")))
+char16_t char_upper(char16_t c);
+
+__attribute__((msil_method("valuetype System.Char", "IsDigit", "bool(char)")))
+_Bool char_is_digit(char16_t c);
+
+__attribute__((msil_method("valuetype System.Single", "IsNaN",
+                           "bool(float32)")))
+_Bool single_is_nan(float f);
+
+__attribute__((msil_method("System.Math", "Abs", "float32(float32)")))
+float math_abs(float f);
+
+__attribute__((msil_method("System.Math", "Max", "float32(float32, float32)")))
+float math_max(float a, float b);
+
+/* 'val' for float64 and float32 results with msil_catch: a string that is
+   not a number throws FormatException, and the handler returns 0.0. The
+   codes are this test's (any values from 1 to INT32_MAX). */
+enum { CODE_DOUBLE = 64, CODE_FLOAT = 32 };
+
+__attribute__((msil_method("valuetype System.Double", "Parse",
+                           "float64(string)"),
+               msil_catch("System.FormatException", CODE_DOUBLE)))
+double parse_d(const char *s, int *err);
+
+__attribute__((msil_method("valuetype System.Single", "Parse",
+                           "float32(string)"),
+               msil_catch("System.FormatException", CODE_FLOAT)))
+float parse_f(const char *s, int *err);
+
+/* Instance fields: ldfld through 'this-val' and 'this-obj'. */
+__attribute__((msil_method("System.Type", "GetType",
+                           "class System.Type(string)")))
+mc_handle type_get(const char *name);
+
+__attribute__((msil_method("System.Activator", "CreateInstance",
+                           "object(class System.Type)")))
+mc_handle create_instance(mc_handle type);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "PtrToStructure",
+                           "object(native int, class System.Type)")))
+mc_handle ptr_to_structure(const void *p, mc_handle type);
+
+__attribute__((msil_method(FILETIME, "dwLowDateTime", "instance field int32")))
+int filetime_low(mc_handle ft);
+
+__attribute__((msil_method(FILETIME, "dwHighDateTime",
+                           "instance field int32")))
+int filetime_high(mc_handle ft);
+
+__attribute__((msil_method("System.Type", "get_StructLayoutAttribute",
+                           "instance class " LAYOUT "()")))
+mc_handle type_struct_layout(mc_handle type);
+
+__attribute__((msil_method(LAYOUT, "CharSet",
+                           "instance field valuetype "
+                           "System.Runtime.InteropServices.CharSet")))
+int layout_char_set(mc_handle layout);
+
+__attribute__((msil_method(LAYOUT, "Size", "instance field int32")))
+int layout_size(mc_handle layout);
+
+#define E_ACUTE ((char16_t)0x00E9)       /* LATIN SMALL LETTER E WITH ACUTE */
+#define ARABIC_THREE ((char16_t)0x0663) /* ARABIC-INDIC DIGIT THREE */
+
+static int frees;
+static void release(mc_handle h) {
+  handle_free(h);
+  ++frees;
+}
+
+int main(void) {
+  /* GCHandle::Alloc: the result is a new handle to the same object, and
+     GCHandle::ToIntPtr gives a handle back unchanged. */
+  mc_handle ft_type =
+      type_get("System.Runtime.InteropServices.ComTypes.FILETIME");
+  printf("Type::GetType(FILETIME): handle nonzero %d\n", ft_type != 0);
+  mc_handle again = handle_alloc(ft_type);
+  printf("GCHandle::Alloc: handle nonzero %d, differs %d, same object %d\n",
+         again != 0, again != ft_type, same_object(again, ft_type));
+  printf("GCHandle::ToIntPtr gives the handle back: %d and %d\n",
+         handle_to_intptr(again) == (intptr_t)again,
+         handle_to_intptr(ft_type) == (intptr_t)ft_type);
+  mc_handle target = handle_target(again);
+  printf("get_Target of the Alloc handle: same object %d\n",
+         same_object(target, ft_type));
+  release(target);
+  release(again);
+  /* The first handle is unaffected by freeing the second. */
+  printf("the first handle still works: %d\n",
+         same_object(ft_type, ft_type) && ft_type != 0);
+
+  /* char and float32. */
+  printf("ToUpperInvariant: 'a' -> U+%04X, U+00E9 -> U+%04X, '7' -> U+%04X\n",
+         (unsigned)char_upper(u'a'), (unsigned)char_upper(E_ACUTE),
+         (unsigned)char_upper(u'7'));
+  printf("IsDigit: '7' %d, 'x' %d, U+0663 %d\n", char_is_digit(u'7'),
+         char_is_digit(u'x'), char_is_digit(ARABIC_THREE));
+  volatile float zero = 0.0f;
+  printf("IsNaN: 0/0 %d, 1.5 %d\n", single_is_nan(zero / zero),
+         single_is_nan(1.5f));
+  printf("Abs(-2.5) == 2.5: %d, Abs(0.75) == 0.75: %d\n",
+         math_abs(-2.5f) == 2.5f, math_abs(0.75f) == 0.75f);
+  printf("Max(-1.25, 3.5) == 3.5: %d\n", math_max(-1.25f, 3.5f) == 3.5f);
+
+  /* float64 and float32 results with msil_catch: "25" gives 25 and leaves
+     the code alone; "x" gives the handler's +0.0, all bits clear, and the
+     code. The bit patterns show any other value. */
+  int code = -1;
+  double d = parse_d("25", &code);
+  uint64_t d_bits;
+  memcpy(&d_bits, &d, sizeof d_bits);
+  printf("Double::Parse(\"25\"): %d, bits %016llx, code %d\n", (int)d,
+         (unsigned long long)d_bits, code);
+  code = -1;
+  d = parse_d("x", &code);
+  memcpy(&d_bits, &d, sizeof d_bits);
+  printf("Double::Parse(\"x\"): bits %016llx, code %d\n",
+         (unsigned long long)d_bits, code);
+  code = -1;
+  float f = parse_f("25", &code);
+  uint32_t f_bits;
+  memcpy(&f_bits, &f, sizeof f_bits);
+  printf("Single::Parse(\"25\"): %d, bits %08x, code %d\n", (int)f,
+         (unsigned)f_bits, code);
+  code = -1;
+  f = parse_f("x", &code);
+  memcpy(&f_bits, &f, sizeof f_bits);
+  printf("Single::Parse(\"x\"): bits %08x, code %d\n", (unsigned)f_bits,
+         code);
+
+  /* ldfld through 'this-val': a default FILETIME, then one copied from C
+     memory with nonzero fields. */
+  mc_handle ft0 = create_instance(ft_type);
+  printf("default FILETIME: dwLowDateTime %d, dwHighDateTime %d\n",
+         filetime_low(ft0), filetime_high(ft0));
+  static const uint32_t words[2] = {0x89abcdefu, 0x01234567u};
+  mc_handle ft1 = ptr_to_structure(words, ft_type);
+  printf("FILETIME from PtrToStructure: dwLowDateTime 0x%08x, "
+         "dwHighDateTime 0x%08x\n",
+         (unsigned)filetime_low(ft1), (unsigned)filetime_high(ft1));
+  printf("the default one is unchanged: %d\n",
+         filetime_low(ft0) == 0 && filetime_high(ft0) == 0);
+
+  /* ldfld through 'this-obj': StructLayoutAttribute's public fields. */
+  mc_handle layout = type_struct_layout(ft_type);
+  printf("FILETIME's StructLayoutAttribute: CharSet %d, Size %d\n",
+         layout_char_set(layout), layout_size(layout));
+  mc_handle st_type =
+      type_get("System.Runtime.InteropServices.ComTypes.STATSTG");
+  mc_handle st_layout = type_struct_layout(st_type);
+  printf("STATSTG's StructLayoutAttribute: CharSet %d\n",
+         layout_char_set(st_layout));
+
+  release(st_layout);
+  release(st_type);
+  release(layout);
+  release(ft1);
+  release(ft0);
+  release(ft_type);
+  printf("handles freed: %d\n", frees);
+  return 0;
+}

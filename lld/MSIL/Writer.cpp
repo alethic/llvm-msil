@@ -49,6 +49,7 @@
 #include "Exports.h"
 #include "InputChunks.h"
 #include "InputFiles.h"
+#include "ManagedCalls.h"
 #include "MapFile.h"
 #include "NativeLibraries.h"
 #include "OutputSegment.h"
@@ -151,6 +152,9 @@ private:
   // The methods of the trailer definitions (declareTrailerDefs), which the
   // map file names '<trailer>'.
   DenseSet<uint32_t> trailerDefMethods;
+  // The managed-call stubs' accesses that binding changes (5.20.5 ML2 (2)
+  // as amended), rewritten in their code copies (encodeBodies).
+  ManagedAccessRewrites managedAccesses;
 
   // -shared (plan 5.9.15): the export plan, the methods of the exported
   // functions (their own definitions, not aliases), the exported variables'
@@ -1031,10 +1035,11 @@ bool Writer::encodeBodies(MethodBodyStream &bodies) {
     SmallVector<ExceptionClause, 0> clauses;
     MethodBodyInfo info;
     if (m.kind == OutputMethod::Object) {
-      // Copied byte for byte; only token operands change, and the ldsfld of
-      // a library export's address becomes the call of its accessor, so code
-      // sizes, branch offsets, .maxstack and EH offsets never change (plan
-      // 5.9.7).
+      // Copied byte for byte; only token operands change, the ldsfld of a
+      // library export's address becomes the call of its accessor, and a
+      // managed-call stub's access gets its final form after binding, so
+      // code sizes, branch offsets, .maxstack and EH offsets never change
+      // (plan 5.9.7, 5.20.5 ML2 (2)).
       InputMethod *im = m.input;
       ObjFile *f = im->file;
       auto lookup = [&](uint32_t token) -> Expected<uint32_t> {
@@ -1056,6 +1061,10 @@ bool Writer::encodeBodies(MethodBodyStream &bodies) {
         fail(std::move(e));
         continue;
       }
+      // The stubs' accesses, after the token operands: a rewrite may name
+      // another MemberRef.
+      if (auto it = managedAccesses.find(im); it != managedAccesses.end())
+        applyManagedCallAccessRewrites(it->second, code);
       if (uint32_t sig = im->body.LocalVarSigToken) {
         Expected<uint32_t> token = lookup(sig);
         if (!token) {
@@ -1284,12 +1293,18 @@ void Writer::run() {
   symbols.collectReferences();
   symbols.reportUnresolved();
   calls.checkNativeReferences();
+  // The managed calls' type checks (5.20.7 MK2-MK4, MK7), before binding.
+  checkManagedCallStubs(binder);
 
   // 5: the trailer definitions' methods, the tokens, then a library's export
   // class.
   RowTrailerSink sink(out, /*twoPhase=*/ctx.arg.shared);
   std::vector<TrailerDefRequest> trailerDefs = declareTrailerDefs(sink);
   bindTokens();
+  // The access of each 'this-val' or 'this-gch' instance method managed call,
+  // and of each static one through a value type or an enum that only inherits
+  // the member, by the member's declaring type, now that its tokens are bound.
+  managedAccesses = bindManagedCallAccesses(out, binder);
   if (ctx.arg.shared) {
     addExportMembers();
     addSymbolTableClass();

@@ -189,6 +189,7 @@ check_msil=("$MSIL_REPO/llvm/test/CodeGen/MSIL" "$MSIL_REPO/clang/test/CodeGen/M
   "$MSIL_REPO/clang/test/Driver/msil-header-search.c" "$MSIL_REPO/clang/test/Driver/msil-object.c"
   "$MSIL_REPO/clang/test/Driver/msil-shared.c" "$MSIL_REPO/lld/test/MSIL" "$MSIL_REPO/llvm/test/tools/llvm-cil-dump"
   "$MSIL_REPO/llvm/test/tools/llvm-cil-copy" "$MSIL_REPO/llvm/test/MC/MSIL"
+  "$MSIL_REPO/clang/test/Sema/attr-msil-method.c" "$MSIL_REPO/clang/test/SemaCXX/attr-msil-method.cpp"
   "$MSIL_REPO/clang/test/Sema/msil-long-double-format.c"
   "$MSIL_REPO/llvm/test/Transforms/ExpandVariadics/msil-abi.ll" "$MSIL_REPO/msil/test")
 m1=("$MSIL_REPO/msil/test/M1")

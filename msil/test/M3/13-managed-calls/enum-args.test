@@ -1,0 +1,173 @@
+# Enum parameters as integers: FileStream's constructor takes FileMode, FileAccess and FileShare as C ints (Create, Append, Open; Write, Read, ReadWrite; None, Read), Stream::Seek takes SeekOrigin (Begin, Current, End), and WriteByte, ReadByte, get_Length and Dispose act on the stream through its handle; C stdio reads the file the managed calls wrote.
+# Plan 5.20.3 MS5 (the 'enum' row: a 'valuetype E' parameter accepts any
+# integer type, passed as it is; msil-ld checks against the referenced
+# TypeDef that E is an enum of that width, 5.20.7 MK2: FileMode,
+# FileAccess, FileShare and SeekOrigin are int32 enums; 'val' for uint8
+# from unsigned char, int32 and int64 results; 'this-obj' for the Stream
+# members, callvirt), 5.20.9 MH2 (the stream handle is freed once through
+# GCHandle::Free after Dispose). The program links against the .NET
+# Framework 4.8 implementation assemblies (%{msil_refs_netfx}), because the
+# IO types are no built-in table entries; the image runs on the Framework,
+# .NET 10 and WSL .NET 10. The enum values are .NET's (FileMode CreateNew 1,
+# Create 2, Open 3, OpenOrCreate 4, Truncate 5, Append 6; FileAccess Read 1,
+# Write 2, ReadWrite 3; FileShare None 0, Read 1; SeekOrigin Begin 0,
+# Current 1, End 2). Each managed declaration sits under
+# '#if defined(__MSIL__)' with a C fallback in '#else' over FILE * (fopen
+# modes "wb", "ab", "rb" and "r+b" for the pairs of mode and access the
+# program uses, fputc, fgetc, fseek and ftell), and the native oracle builds
+# the fallbacks (plan 5.20.11 MT3). Every run starts in a private directory
+# of its own (msil-run.py), so the relative name cannot collide.
+# _CRT_SECURE_NO_WARNINGS turns off the UCRT's deprecation warning for
+# fopen. Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdio.h>
+#include <stdlib.h>
+
+enum { MODE_CREATE = 2, MODE_OPEN = 3, MODE_APPEND = 6 };
+enum { ACCESS_READ = 1, ACCESS_WRITE = 2, ACCESS_READ_WRITE = 3 };
+enum { SHARE_NONE = 0, SHARE_READ = 1 };
+enum { ORIGIN_BEGIN = 0, ORIGIN_CURRENT = 1, ORIGIN_END = 2 };
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#if defined(__MSIL__)
+__attribute__((msil_method("System.IO.FileStream", ".ctor",
+                           "instance void(string, valuetype System.IO.FileMode, "
+                           "valuetype System.IO.FileAccess, valuetype "
+                           "System.IO.FileShare, int32)")))
+mc_handle fs_open(const char *path, int mode, int access, int share,
+                  int buffer_size);
+
+__attribute__((msil_method("System.IO.Stream", "WriteByte",
+                           "instance void(uint8)")))
+void fs_write_byte(mc_handle s, unsigned char value);
+
+__attribute__((msil_method("System.IO.Stream", "ReadByte",
+                           "instance int32()")))
+int fs_read_byte(mc_handle s);
+
+__attribute__((msil_method("System.IO.Stream", "get_Length",
+                           "instance int64()")))
+long long fs_length(mc_handle s);
+
+__attribute__((msil_method("System.IO.Stream", "Seek",
+                           "instance int64(int64, valuetype "
+                           "System.IO.SeekOrigin)")))
+long long fs_seek(mc_handle s, long long offset, int origin);
+
+__attribute__((msil_method("System.IO.Stream", "Dispose", "instance void()")))
+void fs_dispose(mc_handle s);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle h);
+#else
+struct mc_object {
+  FILE *f;
+};
+static mc_handle fs_open(const char *path, int mode, int access, int share,
+                         int buffer_size) {
+  (void)share;
+  (void)buffer_size;
+  const char *how = mode == MODE_CREATE && access == ACCESS_WRITE   ? "wb"
+                    : mode == MODE_APPEND && access == ACCESS_WRITE ? "ab"
+                    : mode == MODE_OPEN && access == ACCESS_READ    ? "rb"
+                    : mode == MODE_OPEN && access == ACCESS_READ_WRITE
+                        ? "r+b"
+                        : NULL;
+  mc_handle h = malloc(sizeof *h);
+  h->f = how ? fopen(path, how) : NULL;
+  return h;
+}
+/* fflush after each byte, so a read may follow a write (C17 7.21.5.3p7). */
+static void fs_write_byte(mc_handle s, unsigned char value) {
+  fputc(value, s->f);
+  fflush(s->f);
+}
+static int fs_read_byte(mc_handle s) { return fgetc(s->f); }
+static long long fs_length(mc_handle s) {
+  long here = ftell(s->f);
+  fseek(s->f, 0, SEEK_END);
+  long end = ftell(s->f);
+  fseek(s->f, here, SEEK_SET);
+  return end;
+}
+static long long fs_seek(mc_handle s, long long offset, int origin) {
+  fseek(s->f, (long)offset,
+        origin == ORIGIN_BEGIN     ? SEEK_SET
+        : origin == ORIGIN_CURRENT ? SEEK_CUR
+                                   : SEEK_END);
+  return ftell(s->f);
+}
+static void fs_dispose(mc_handle s) { fclose(s->f); }
+static void handle_free(mc_handle h) { free(h); }
+#endif
+
+#define NAME "enum-args.bin"
+
+static void close_stream(mc_handle s) {
+  fs_dispose(s);
+  handle_free(s);
+}
+
+/* What C stdio reads from the file. */
+static void show_file(const char *what) {
+  char buf[32];
+  FILE *f = fopen(NAME, "rb");
+  size_t n = f ? fread(buf, 1, sizeof buf - 1, f) : 0;
+  if (f)
+    fclose(f);
+  buf[n] = 0;
+  printf("%s: %u bytes \"%s\"\n", what, (unsigned)n, buf);
+}
+
+int main(void) {
+  /* FileMode.Create, FileAccess.Write, FileShare.None. */
+  mc_handle s = fs_open(NAME, MODE_CREATE, ACCESS_WRITE, SHARE_NONE, 4096);
+  for (int c = 'A'; c <= 'E'; ++c)
+    fs_write_byte(s, (unsigned char)c);
+  printf("Create, Write: length %lld\n", fs_length(s));
+  close_stream(s);
+  show_file("after Create");
+
+  /* FileMode.Append, FileAccess.Write, FileShare.Read. */
+  s = fs_open(NAME, MODE_APPEND, ACCESS_WRITE, SHARE_READ, 4096);
+  fs_write_byte(s, 'F');
+  fs_write_byte(s, 'G');
+  printf("Append, Write: length %lld\n", fs_length(s));
+  close_stream(s);
+  show_file("after Append");
+
+  /* FileMode.Open, FileAccess.Read: SeekOrigin Begin, Current and End. */
+  s = fs_open(NAME, MODE_OPEN, ACCESS_READ, SHARE_READ, 4096);
+  printf("Open, Read:");
+  for (int c; (c = fs_read_byte(s)) >= 0;)
+    printf(" %c", c);
+  printf("; then ReadByte gives %d\n", fs_read_byte(s));
+  long long at = fs_seek(s, 2, ORIGIN_BEGIN);
+  int c = fs_read_byte(s);
+  printf("Seek(2, Begin): position %lld, byte %c\n", at, c);
+  at = fs_seek(s, -1, ORIGIN_END);
+  c = fs_read_byte(s);
+  printf("Seek(-1, End): position %lld, byte %c\n", at, c);
+  at = fs_seek(s, -3, ORIGIN_CURRENT);
+  c = fs_read_byte(s);
+  printf("Seek(-3, Current): position %lld, byte %c\n", at, c);
+  close_stream(s);
+
+  /* FileMode.Open, FileAccess.ReadWrite: overwrite the first byte. */
+  s = fs_open(NAME, MODE_OPEN, ACCESS_READ_WRITE, SHARE_NONE, 4096);
+  fs_seek(s, 0, ORIGIN_BEGIN);
+  fs_write_byte(s, 'a');
+  c = fs_read_byte(s);
+  printf("Open, ReadWrite: the byte after the one written is %c\n", c);
+  close_stream(s);
+  show_file("after ReadWrite");
+  return 0;
+}

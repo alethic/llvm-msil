@@ -132,11 +132,63 @@
 # none of them an input before; 14 pass on the development host (aix, amdlibm, basic, bsd,
 # emscripten, libmvec, long-double-module-flag, merge_attributes, ps, sincos_stret, svml, windows,
 # wrong_declaration and xcore) and 22 are UNSUPPORTED (their targets are not built):
-# 337 = 323 + 14, for 380 inputs in all (--list-lit; 344 before P-1a).
-min-pass 337
+# 337 = 323 + 14, for 380 inputs in all (--list-lit; 344 before P-1a). MC-1 (plan 5.20.12
+# item 1) adds 10 inputs, none of them an input before, which passed on the development host
+# with the build before MC-1's changes: for Attr.td clang/test/Misc/
+# pragma-attribute-supported-attributes-list.test, clang/test/Preprocessor/has_attribute.c and
+# has_attribute.cpp, and clang/test/Sema/attr-unknown.c and unknown-attributes.c; for
+# SemaDecl.cpp clang/test/Sema/attr-section.c, dllimport.c and internal_linkage.c; for
+# CodeGenModule.cpp clang/test/CodeGen/asm-label.c and attr-target-mv.c (attr-wasm.c, which
+# the SemaDeclAttr.cpp and SemaDecl.cpp blocks also name, was already an input):
+# 347 = 337 + 10, for 390 inputs in all. MC-1's review fix (the section 12 row '5.20.3 amended
+# (... internal linkage ...)') adds 4 more for clang/lib/Sema/Sema.cpp, none of them an input
+# before, which passed on the development host with the build before the fix:
+# clang/test/SemaCXX/undefined-internal.cpp and undefined-inline.cpp, and
+# clang/test/Sema/undefined-internal-basic.c and undefined-internal-typeof-c23.c:
+# 351 = 347 + 4, for 394 inputs in all. MC-1's leftover-audit fixes D2, D5 and D6 (section 12
+# rows added with MC-1's commit) add 4 inputs for CodeGenModule.cpp, and fix D11 (the
+# section 12 row '5.20.3's hook list, 5.13.5's MC-1 exemption text and MC-1's review focus
+# 'Hooks only (L2)' amended again (MC-1's leftover-audit fix D11, with review-r4's items 1 and
+# 8)') adds 3 for SemaDecl.cpp's two checkMSILAsmLabel calls, none of them an input before,
+# which passed on the development host with the build before the fixes: for CodeGenModule.cpp
+# clang/test/CodeGen/constructor-attribute.c, dllexport.c, dllexport-1.c and global-init.c; for
+# SemaDecl.cpp clang/test/Sema/asm-label.c and redefine_extname.c, and
+# clang/test/CodeGen/redefine_extname.c: 358 = 351 + 7, for 401 inputs in all. The other hooks
+# that the same row records, in SemaDecl.cpp (ActOnPragmaWeakID and checkNewAttributesAfterDef)
+# and in the two Serialization files, add 15 inputs, none of them an input before, which passed
+# on the development host with the build before those hooks: for SemaDecl.cpp
+# clang/test/Sema/pragma-weak.c, attr-decl-after-definition.c,
+# attr-decl-after-definition-std.c and alias-redefinition.c, clang/test/CodeGen/pragma-weak.c
+# and clang/test/SemaCXX/pragma-weak.cpp; for clang/lib/Serialization/ASTReaderDecl.cpp and
+# ASTWriterDecl.cpp nine tests of clang/test/PCH, external-defs.c, chain-external-defs.c,
+# functions.c, cxx-functions.cpp, asm.c, attrs.c, pragma-weak.c,
+# dllexport-default-arg-closure.cpp and dllexport-ctor-closure-copy.cpp: 373 = 358 + 15, for
+# 416 inputs in all. The section 12 row '... amended (D6 forwarders through modules)' (the
+# isRequiredDecl hook also for a header module, and a second ASTWriterDecl.cpp hook, in
+# ASTWriter::WriteDecl, for a C++20 named module) adds 7 inputs for the two Serialization
+# files, none of them an input before, which passed on the development host with the build
+# before those hooks, whose isRequiredDecl hook covered a PCH only: seven tests of
+# clang/test/Modules, irgen.c, cxx-irgen.cpp and initializers.cpp, which write header modules,
+# and module-init-duplicated-import.cppm, no-duplicate-codegen-in-GMF.cppm,
+# static-initializer.cppm and compile-pcm-with-pic.cppm, which write named modules' BMIs:
+# 380 = 373 + 7, for 423 inputs in all. The hook that Sema::ShouldWarnIfUnusedFileScopedDecl
+# gains in SemaDecl.cpp for a managed call with constructor or destructor (a section 12 row
+# added with MC-1's commit) adds 3 inputs, none of them an input before, which passed on the
+# development host with the build before that hook: clang/test/Sema/warn-unused-function.c,
+# clang/test/SemaCXX/warn-unused-filescoped.cpp and warn-func-not-needed.cpp:
+# 383 = 380 + 3, for 426 inputs in all.
+min-pass 383
 
 fork-only .github/workflows/msil-ci.yml
 fork-only clang/lib/Basic/Targets/MSIL.h
+# Managed calls from C and C++ in clang CodeGen (plan 5.20.4, MC-1; the section 12 row
+# '5.20.4 MR1, MR2 and MR4 and 5.20.12 item 1 amended (CGMSILManagedCalls)'): MR1's IR
+# attributes, MR2's IR name with its '.__uniq.<n>' postfix, MR4's !msil.managed.calls
+# operands, the D6 forwarders with their eighth operand, and the errors T-M24 and T-M25, all
+# called from the hooks in CodeGenModule.cpp (its hook block names the tests). The header is
+# private to clangCodeGen, and clangCodeGen's CMakeLists.txt lists the .cpp.
+fork-only clang/lib/CodeGen/CGMSILManagedCalls.cpp
+fork-only clang/lib/CodeGen/CGMSILManagedCalls.h
 # The portable target's ABI (plan 5.18.2 PC4; P-1a): MSILPortableABIInfo and its TargetCodeGenInfo.
 fork-only clang/lib/CodeGen/Targets/MSIL.cpp
 # The clang MSIL toolchain (plan 5.10.1, M14) and its driver tests (5.6.4); msil-object.c
@@ -157,6 +209,23 @@ fork-only clang/test/Preprocessor/init-msil-portable.c
 fork-only clang/test/Preprocessor/init-msil.c
 # The %L format diagnostics of MSIL triples (plan 5.13.5, R15; M26).
 fork-only clang/test/Sema/msil-long-double-format.c
+# Managed calls from C and C++ (plan 5.20, MC-1): the Sema checks of msil_method and msil_catch
+# (SemaMSILManagedCall.cpp with its file-private header, which only SemaDeclAttr.cpp and
+# SemaDecl.cpp include; clang CodeGen copies the conversion text that Sema records on
+# MSILMethodAttr's fake argument into the IR, per section 12 "5.20.3 and 5.20.4 MR1 amended")
+# and their tests, which pin T-M1 to T-M6, T-M11 to T-M15, T-M19, T-M20 and T-M22 (5.20.3);
+# and MSILManagedCallDecls.h, the header-only predicate that the hooks of ASTWriterDecl.cpp
+# (isRequiredDecl, for a PCH or a header module, and ASTWriter::WriteDecl, for a C++20 named
+# module) and of ASTReaderDecl.cpp (ASTReader::isConsumerInterestedIn, for a PCH or a module)
+# call (the section 12 rows '5.20.3's hook list, 5.13.5's MC-1 exemption text and MC-1's
+# review focus 'Hooks only (L2)' amended again (MC-1's leftover-audit fix D11, with
+# review-r4's items 1 and 8)' and '... amended (D6 forwarders through modules)'; their hook
+# blocks name the tests).
+fork-only clang/lib/Sema/SemaMSILManagedCall.cpp
+fork-only clang/lib/Sema/SemaMSILManagedCall.h
+fork-only clang/lib/Serialization/MSILManagedCallDecls.h
+fork-only clang/test/Sema/attr-msil-method.c
+fork-only clang/test/SemaCXX/attr-msil-method.cpp
 # The portable C library (P-1b, plan 5.19.3, 5.19.14): llvm-libc's dotnet configuration (entry
 # points, headers, config.json with errno EXTERNAL), its OS layer (the dotnet_util library, the
 # errno provider __llvm_libc_errno, io.h's declaration of write_to_stderr) and the dotnet
@@ -204,10 +273,27 @@ hook clang/include/clang/Basic/Attr.td
   lit clang/test/CodeGen/WebAssembly/wasm-import-error.c
   lit clang/test/AST/ast-dump-wasm-attr-import.c
   fork clang/test/CodeGen/MSIL/import-attributes.c
+  # MC-1 (plan 5.20.2): the TargetSpec TargetMSIL (T.isOSBinFormatMSIL()) and the records
+  # MSILMethod and MSILCatch (Clang<> spellings, function subjects with ErrorDiag), and a
+  # third parameter 'bit fake = 0' of the class StringArgument (as BoolArgument has) for
+  # MSILMethod's fake Conversions argument, which no other attribute uses. The
+  # '#pragma clang attribute' list must not change (neither record supports the pragma); the
+  # __has_attribute and unknown-attribute tests show that other targets see neither
+  # attribute. attr-msil-method.c and .cpp pin both spellings and __has_attribute on MSIL
+  # triples, msil-method.c the IR attributes.
+  lit clang/test/Misc/pragma-attribute-supported-attributes-list.test
+  lit clang/test/Preprocessor/has_attribute.c
+  lit clang/test/Preprocessor/has_attribute.cpp
+  lit clang/test/Sema/attr-unknown.c
+  lit clang/test/Sema/unknown-attributes.c
+  fork clang/test/Sema/attr-msil-method.c
+  fork clang/test/SemaCXX/attr-msil-method.cpp
+  fork clang/test/CodeGen/MSIL/msil-method.c
 
 hook clang/include/clang/Basic/AttrDocs.td
-  none documentation only: an MSIL paragraph in the import_module and import_name documentation
+  none documentation only: an MSIL paragraph in the import_module and import_name documentation, and (MC-1, plan 5.20.2) the documentation of msil_method and msil_catch
   fork clang/test/CodeGen/MSIL/import-attributes.c
+  fork clang/test/Sema/attr-msil-method.c
 
 hook clang/include/clang/Basic/DiagnosticCommonKinds.td
   none adds the error err_msil_asm_unsupported only; every clang build regenerates the diagnostic tables, and upstream's Misc/warning-flags.c needs diagtool (not built) and lists warnings only
@@ -222,8 +308,29 @@ hook clang/include/clang/Basic/DiagnosticDriverKinds.td
 hook clang/include/clang/Basic/DiagnosticSemaKinds.td
   # M26 (plan 5.13.5, R15): warn_msil_printf_long_double and warn_msil_scanf_long_double, which
   # SemaChecking.cpp reports for a format's 'L' length modifier on MSIL triples.
-  none adds two diagnostics (warn_msil_printf_long_double, and warn_msil_scanf_long_double with DefaultError) in the existing group Format only; no new group, so Misc/warning-flags.c (which needs diagtool, not built) and the group tables are unchanged, and SemaChecking.cpp's block runs the format tests that report the group's other diagnostics
+  # MC-1 (plan 5.20.3 MS7): the err_msil_* errors of the managed-call checks (T-M1 to T-M6 and
+  # T-M11 to T-M15) in one block after M26's two warnings, without InGroup. MC-1's
+  # leftover-audit fixes D6 and D11 (the section 12 row '5.20.3's text table gains T-M19 to
+  # T-M23 (MC-1's leftover-audit fixes D6 and D11, with review-r4's items 13 and 14)') add to
+  # that block, also without InGroup, err_msil_method_ctor_args and err_msil_catch_incompatible
+  # (T-M19 and T-M20: a constructor or destructor managed call that takes parameters, or that
+  # has msil_catch) and err_msil_reserved_asm_label (T-M22: an asm label that starts with a
+  # toolchain prefix, '__msil_mc.' for a managed-call stub or '__msil_mc_ctor.' or
+  # '__msil_mc_dtor.' for a managed-call forwarder), and MC-1's leftover-audit fix D5 (a
+  # section 12 row added with MC-1's commit) adds two kinds of err_msil_method_cxx (T-M13: the
+  # replaceable global allocation and deallocation functions). MC-1's review fixes (the
+  # section 12 row '5.20.3's text table gains T-M24 and T-M25, and 5.20.4 MR4 amended') add
+  # after err_msil_reserved_asm_label, also without InGroup, err_msil_method_symbol_clash and
+  # err_msil_method_forwarder_clash (T-M24 and T-M25, which clang CodeGen reports: two managed
+  # calls that share one IR name but differ, and a forwarder name that is already a variable
+  # or a definition; the CodeGenModule.cpp block), pinned whole by msil-method-clash.c and
+  # msil-method-forwarders-clash.c.
+  none adds two diagnostics (warn_msil_printf_long_double, and warn_msil_scanf_long_double with DefaultError) in the existing group Format, and MC-1's managed-call errors in no group; no new group, so Misc/warning-flags.c (which needs diagtool, not built; it lists warnings without a group, never errors) and the group tables are unchanged, and SemaChecking.cpp's block runs the format tests that report the group's other diagnostics
   fork clang/test/Sema/msil-long-double-format.c
+  fork clang/test/Sema/attr-msil-method.c
+  fork clang/test/SemaCXX/attr-msil-method.cpp
+  fork clang/test/CodeGen/MSIL/msil-method-clash.c
+  fork clang/test/CodeGen/MSIL/msil-method-forwarders-clash.c
 
 hook clang/lib/Basic/Targets.cpp
   # init.c (112 s) and predefined-arch-macros.c (174 s) also pass, but are too slow for the
@@ -244,9 +351,13 @@ hook clang/lib/CodeGen/CMakeLists.txt
   # P-1a (plan 5.18.2 PC4, 5.18.13): the fork's Targets/MSIL.cpp in clangCodeGen, after
   # Targets/M68k.cpp. Plan 5.18.13 names a 'compile' line here, but the compile leg
   # accepts it only on its translation units and the files they include (COMPILE_FILES of
-  # check-upstream-hooks.py), so the block has a 'none' line instead.
-  none CMake list: the fork's Targets/MSIL.cpp (MSILPortableABIInfo) in clangCodeGen; every build of clang compiles it
+  # check-upstream-hooks.py), so the block has a 'none' line instead. MC-1 (plan 5.20.4; the
+  # section 12 row '5.20.4 MR1, MR2 and MR4 and 5.20.12 item 1 amended (CGMSILManagedCalls)'):
+  # the fork's CGMSILManagedCalls.cpp in clangCodeGen, after CGLoopInfo.cpp: the managed-call
+  # logic that the hooks in CodeGenModule.cpp call, which msil-method.c runs.
+  none CMake list: the fork's Targets/MSIL.cpp (MSILPortableABIInfo) and CGMSILManagedCalls.cpp (managed calls, plan 5.20.4) in clangCodeGen; every build of clang compiles them
   fork clang/test/CodeGen/MSIL/portable-abi.c
+  fork clang/test/CodeGen/MSIL/msil-method.c
 
 hook clang/lib/CodeGen/TargetInfo.h
   # P-1a (plan 5.18.2 PC4, 5.18.13): the declaration of createMSILPortableTargetCodeGenInfo next
@@ -326,6 +437,61 @@ hook clang/lib/CodeGen/CodeGenModule.cpp
   fork clang/test/CodeGen/MSIL/pragma-comment-lib.c
   # P-1a (plan 5.18.2 PC4): createTargetCodeGenInfo's case for the portable architectures.
   fork clang/test/CodeGen/MSIL/portable-abi.c
+  # MC-1 (plan 5.20.4 MR1, MR2, MR4): the msil-managed-* IR attributes beside the import
+  # attributes, the !msil.managed.calls operands, and getMangledName's '__msil_mc.' name for a
+  # declaration with msil_method ('__msil_mc.<symbol>.__uniq.<n>' for one with internal
+  # linkage, the section 12 row '5.20.4 (IR name, MR4) and T-M17 amended'); asm-label.c and
+  # attr-target-mv.c keep getMangledName's asm labels and multiversioned names on other
+  # targets. MC-1's leftover-audit fixes D2, D5 and D6 (section 12 rows added with MC-1's
+  # commit), each on MSIL triples only and through the hooks that the row '5.20.4 MR1, MR2 and
+  # MR4 and 5.20.12 item 1 amended (CGMSILManagedCalls)' lists (see below): a managed call is
+  # a function whose first declaration that the source wrote (not a library builtin's
+  # implicit one) has msil_method; that '.__uniq.<n>' postfix hashes the declaration's
+  # !msil.managed.calls operands 1-6 and its function type, as canonical C types and as the
+  # IR types and extensions (signext, zeroext) that the target's C ABI gives them
+  # (llvm::cli::getManagedCallUniqPostfix), instead of the main file's name, after dropping
+  # the postfix that -funique-internal-linkage-names gave <symbol>, so two internal
+  # declarations share an IR name only when their stubs are the same; EmitGlobal's MSIL step
+  # also declares a managed call with dllexport, constructor or destructor, whether or not
+  # the unit calls it; and Release(), before EmitCtorList, defines the forwarders that call
+  # such a managed call (for dllexport one named <symbol>, weak_odr dllexport in a COMDAT of
+  # that name; for constructor and destructor '__msil_mc_ctor.<symbol>' or
+  # '__msil_mc_dtor.<symbol>', added to llvm.global_ctors or llvm.global_dtors: linkonce_odr
+  # and hidden in a COMDAT of its name that keys its entry, or internal and unkeyed for a
+  # 'static' declaration), and the !msil.managed.calls operand of an external declaration
+  # with any of the three gains an eighth field that lists them (constructor and destructor
+  # with their priorities). MC-1's review fixes (the section 12 row '5.20.3's text table gains
+  # T-M24 and T-M25, and 5.20.4 MR4 amended'), also on MSIL triples only: two managed calls of
+  # different functions that get one IR name (asm labels, '#pragma redefine_extname', a C++
+  # asm label equal to another function's mangled name) but differ in their
+  # !msil.managed.calls operands 1-6, function types or eighth fields are an error (T-M24;
+  # equal ones stay one call), and so is a forwarder whose name is already a variable or a
+  # definition of the unit (T-M25; a function declaration of that name is still replaced by
+  # the forwarder).
+  # CodeGenModule.cpp holds hooks only (the row '5.20.4 MR1, MR2 and MR4 and 5.20.12 item 1
+  # amended (CGMSILManagedCalls)'): the include of CGMSILManagedCalls.h, MR1's call beside
+  # addMSILImportAttributes, MR2's call in getMangledName, EmitGlobal's MSIL step and
+  # Release()'s two calls (the first checks T-M24 among the managed calls that the unit uses
+  # or declares with dllexport, constructor or destructor, then defines the forwarders; the
+  # second writes !msil.managed.calls); the logic, T-M24 and T-M25 are in the fork-only
+  # CGMSILManagedCalls.cpp.
+  # constructor-attribute.c, dllexport.c, dllexport-1.c and global-init.c keep the
+  # constructor and destructor lists, dllexport functions and variables, and the globals
+  # that Release() emits on other targets; msil-method.c pins MR1's attributes, MR2's names
+  # and MR4's operands, msil-method-uniq.c the postfix, msil-method-forwarders.c the
+  # forwarders and the eighth operand, msil-method-clash.c T-M24 and
+  # msil-method-forwarders-clash.c T-M25.
+  lit clang/test/CodeGen/asm-label.c
+  lit clang/test/CodeGen/attr-target-mv.c
+  lit clang/test/CodeGen/constructor-attribute.c
+  lit clang/test/CodeGen/dllexport.c
+  lit clang/test/CodeGen/dllexport-1.c
+  lit clang/test/CodeGen/global-init.c
+  fork clang/test/CodeGen/MSIL/msil-method.c
+  fork clang/test/CodeGen/MSIL/msil-method-uniq.c
+  fork clang/test/CodeGen/MSIL/msil-method-forwarders.c
+  fork clang/test/CodeGen/MSIL/msil-method-clash.c
+  fork clang/test/CodeGen/MSIL/msil-method-forwarders-clash.c
 
 hook clang/lib/CodeGen/TargetBuiltins/X86.cpp
   lit clang/test/CodeGen/ms-intrinsics-cpuid.c
@@ -414,6 +580,26 @@ hook clang/lib/Parse/ParseStmtAsm.cpp
   lit clang/test/CodeGen/ms-inline-asm*.cpp
   fork clang/test/CodeGen/MSIL/ms-inline-asm.c
 
+hook clang/lib/Sema/CMakeLists.txt
+  # MC-1 (plan 5.20.3): the fork's SemaMSILManagedCall.cpp in clangSema.
+  none CMake list: the fork's SemaMSILManagedCall.cpp (the msil_method and msil_catch checks) in clangSema; every build of clang compiles it
+  fork clang/test/Sema/attr-msil-method.c
+  fork clang/test/SemaCXX/attr-msil-method.cpp
+
+hook clang/lib/Sema/Sema.cpp
+  # MC-1 (plan 5.20.3; the section 12 row '5.20.3 amended (... internal linkage ...)'):
+  # Sema::getUndefinedButUsed skips a function whose first declaration has MSILMethodAttr,
+  # because the K5 stub that the backend emits defines it, so -Wundefined-internal and
+  # -Wundefined-inline do not report a used static or inline msil_method declaration; the
+  # tests show that every other undefined-but-used internal or inline function keeps its
+  # diagnostic.
+  lit clang/test/SemaCXX/undefined-internal.cpp
+  lit clang/test/SemaCXX/undefined-inline.cpp
+  lit clang/test/Sema/undefined-internal-basic.c
+  lit clang/test/Sema/undefined-internal-typeof-c23.c
+  fork clang/test/Sema/attr-msil-method.c
+  fork clang/test/SemaCXX/attr-msil-method.cpp
+
 hook clang/lib/Sema/SemaChecking.cpp
   # M26 (plan 5.13.5, R15): the format checker's 'L' length modifier on MSIL triples (printf
   # and scanf families); the format tests show that other targets keep their diagnostics.
@@ -424,11 +610,168 @@ hook clang/lib/Sema/SemaChecking.cpp
   fork clang/test/CodeGen/MSIL/triples.c
   fork clang/test/Sema/msil-long-double-format.c
 
+hook clang/lib/Sema/SemaDecl.cpp
+  # MC-1 (plan 5.20.3 MS2): one mergeDeclAttribute case that merges msil_method and msil_catch
+  # across redeclarations, beside the WebAssembly import attributes' merge, and one call in
+  # ActOnFunctionDeclarator, after checkAttributesAfterMerging, of
+  # msil::checkMSILManagedCallDecl for a declaration with msil_method or msil_catch (the
+  # section 12 row '5.20.3's hook list, 5.13.5's MC-1 exemption text for
+  # `clang/lib/Sema/SemaDecl.cpp` and MC-1's review focus 'Hooks only (L2)' amended'); the
+  # tests show that the other merged attributes keep their behaviour. The section 12 row
+  # '5.20.3's hook list, 5.13.5's MC-1 exemption text and MC-1's review focus 'Hooks only (L2)'
+  # amended again (MC-1's leftover-audit fix D11, with review-r4's items 1 and 8)' records
+  # these hooks, each with its logic in SemaMSILManagedCall.cpp and each acting on MSIL
+  # triples only. (1) ActOnVariableDeclarator and ActOnFunctionDeclarator each call
+  # msil::checkMSILAsmLabel where they attach an asm label written with __asm__, which
+  # reports a label that starts with a toolchain prefix (plan 5.14.2 N3), '__msil_mc.' for a
+  # managed-call stub or '__msil_mc_ctor.' or '__msil_mc_dtor.' for a managed-call
+  # forwarder, as T-M22 ('#pragma redefine_extname' needs no call: its new name is an
+  # identifier, which has no '.'); asm-label.c keeps the written labels, and the two
+  # redefine_extname.c tests the pragma's labels that the branch beside each call attaches,
+  # on other targets. (2) The branch of Sema::ActOnPragmaWeakID for a declared name reports
+  # T-M6 ('msil_method' cannot be combined with 'weak') at the pragma's identifier for a
+  # managed call and then adds no WeakAttr (one diagnostic, in C and C++); the three
+  # pragma-weak tests keep '#pragma weak' (the implicit WeakAttr, the weak aliases and their
+  # diagnostics) on other targets. (3) checkNewAttributesAfterDef keeps msil_method and
+  # msil_catch written on a redeclaration after a definition (a body, an 'alias' attribute,
+  # or the alias that '#pragma weak <f> = <g>' declares), so that MS2 reports T-M14's first
+  # form with its note where clang dropped them with warn_attribute_precede_definition;
+  # attr-decl-after-definition.c and attr-decl-after-definition-std.c keep that warning, and
+  # alias-redefinition.c the alias redefinitions that its alias branch reports, on other
+  # targets. (4) Sema::ShouldWarnIfUnusedFileScopedDecl calls msil::isStartupManagedCall
+  # beside its check 'FD->doesThisDeclarationHaveABody() && Context.DeclMustBeEmitted(FD)',
+  # which exempts a definition that must be emitted, a constructor or destructor definition
+  # among them (ASTContext::DeclMustBeEmitted), but no declaration without a body; a section 12
+  # row added with MC-1's commit records this hook, which also has its logic in
+  # SemaMSILManagedCall.cpp and acts on MSIL triples only. A managed call with 'constructor' or
+  # 'destructor' (written on it or inherited from an earlier declaration) has no body in the
+  # source, but its K5 stub defines it and CodeGen calls it from its forwarder, so neither
+  # -Wunused-function nor -Wunneeded-internal-declaration (both from Sema's
+  # UnusedFileScopedDecls) reports it, in C or in C++ (an anonymous namespace); a static
+  # managed call with neither attribute that nothing calls keeps the warning, as a static
+  # function declaration without a definition does. warn-unused-function.c keeps both warnings
+  # in C, with the exemption of constructor and destructor definitions and the warning for a
+  # static declaration without a definition, and warn-unused-filescoped.cpp and
+  # warn-func-not-needed.cpp keep them in C++, on other targets.
+  lit clang/test/Sema/attr-wasm.c
+  lit clang/test/Sema/attr-section.c
+  lit clang/test/Sema/dllimport.c
+  lit clang/test/Sema/internal_linkage.c
+  lit clang/test/Sema/asm-label.c
+  lit clang/test/Sema/redefine_extname.c
+  lit clang/test/CodeGen/redefine_extname.c
+  lit clang/test/Sema/pragma-weak.c
+  lit clang/test/CodeGen/pragma-weak.c
+  lit clang/test/SemaCXX/pragma-weak.cpp
+  lit clang/test/Sema/attr-decl-after-definition.c
+  lit clang/test/Sema/attr-decl-after-definition-std.c
+  lit clang/test/Sema/alias-redefinition.c
+  lit clang/test/Sema/warn-unused-function.c
+  lit clang/test/SemaCXX/warn-unused-filescoped.cpp
+  lit clang/test/SemaCXX/warn-func-not-needed.cpp
+  fork clang/test/Sema/attr-msil-method.c
+  fork clang/test/SemaCXX/attr-msil-method.cpp
+
 hook clang/lib/Sema/SemaDeclAttr.cpp
   lit clang/test/Sema/MicrosoftCompatibility.c
   lit clang/test/Sema/attr-aligned.c
   fork clang/test/CodeGen/MSIL/triples.c
   fork clang/test/CodeGen/MSIL/datalayout.c
+  # MC-1 (plan 5.20.3): two ProcessDeclAttribute cases for msil_method and msil_catch, beside
+  # the WebAssembly import attributes' cases.
+  lit clang/test/Sema/attr-wasm.c
+  fork clang/test/Sema/attr-msil-method.c
+  fork clang/test/SemaCXX/attr-msil-method.cpp
+
+# Managed calls through a PCH or a module (plan 5.20.4; the section 12 rows '5.20.3's hook
+# list, 5.13.5's MC-1 exemption text and MC-1's review focus 'Hooks only (L2)' amended again
+# (MC-1's leftover-audit fix D11, with review-r4's items 1 and 8)' and '... amended (D6
+# forwarders through modules)'): two hooks in ASTWriterDecl.cpp and one in ASTReaderDecl.cpp,
+# each calling the predicate of the fork-only header MSILManagedCallDecls.h. The
+# ASTWriterDecl.cpp hooks list a managed call with dllexport, constructor or destructor among
+# the eagerly deserialized declarations when a PCH or a header module (a module-map module or
+# a header unit) is written (isRequiredDecl), and for a C++20 named module's own object
+# (ASTWriter::WriteDecl, through its modular-codegen declarations); the reader passes the
+# declaration to the consumer from any AST file (ASTReader::isConsumerInterestedIn). So a
+# unit built with -include-pch (clang-cl /Yc and /Yu included) or with a module gets the
+# forwarders, the keyed llvm.global_ctors entry and the eighth !msil.managed.calls field that
+# an -include build gets: with a PCH or a header module whether or not it calls the managed
+# call (every unit that loads a header module's file gets them, for every submodule, an
+# explicit one included), and with a named module in the module unit's object compiled from
+# its BMI, as in the one-phase compile of its source (an importer gets them when it names the
+# managed call). Each PCH test writes a PCH and reads it back, and each Modules test writes a
+# header module or a named module's BMI and generates IR from a unit that loads it, so each
+# runs the hooks of both files. On other targets they keep the eagerly deserialized
+# declarations of a PCH, which the reading unit gets (external-defs.c and
+# chain-external-defs.c its tentative definitions, asm.c its function definitions, the two
+# dllexport tests the members of dllexport classes), its body-less function declarations with
+# their attributes, which the writer does not list and the reader does not pass to the
+# consumer (functions.c, cxx-functions.cpp and attrs.c), and '#pragma weak' through a PCH
+# (pragma-weak.c); what a unit gets from a header module: the definitions that it uses
+# (irgen.c a static inline function; cxx-irgen.cpp C++ inline, template and implicit member
+# definitions, and a body-less member function that stays a declaration), and the global
+# initializers of the submodules that it imports (the unordered ones whenever it loads the
+# module) but no unused variable (initializers.cpp); and what a named module gives: the
+# module unit's object compiled from its BMI defines the module initializer, which calls the
+# initializer of a module that it imports twice (module-init-duplicated-import.cppm), defines
+# no global-module-fragment declaration merged with an imported module's
+# (no-duplicate-codegen-in-GMF.cppm) and takes the PIC level of that compile
+# (compile-pcm-with-pic.cppm), and an importer emits neither the module's internal variable
+# nor its initializer (static-initializer.cppm). msil-method-forwarders-pch.c pins the
+# forwarders, the entry and the eighth field through a PCH, through a header module (loaded
+# with -fmodule-file=<name>=<file>, by implicit modules and with an unnamed -fmodule-file, and
+# an explicit submodule that the unit does not import) and through a named module (its object
+# compiled from its BMI, with an importer that names the managed calls and one that does not).
+hook clang/lib/Serialization/ASTReaderDecl.cpp
+  # The FunctionDecl branch of ASTReader::isConsumerInterestedIn passes such a managed-call
+  # declaration to the consumer from a PCH or a module (any AST file), although it has no
+  # body.
+  lit clang/test/PCH/external-defs.c
+  lit clang/test/PCH/chain-external-defs.c
+  lit clang/test/PCH/functions.c
+  lit clang/test/PCH/cxx-functions.cpp
+  lit clang/test/PCH/asm.c
+  lit clang/test/PCH/attrs.c
+  lit clang/test/PCH/pragma-weak.c
+  lit clang/test/PCH/dllexport-default-arg-closure.cpp
+  lit clang/test/PCH/dllexport-ctor-closure-copy.cpp
+  lit clang/test/Modules/irgen.c
+  lit clang/test/Modules/cxx-irgen.cpp
+  lit clang/test/Modules/initializers.cpp
+  lit clang/test/Modules/module-init-duplicated-import.cppm
+  lit clang/test/Modules/no-duplicate-codegen-in-GMF.cppm
+  lit clang/test/Modules/static-initializer.cppm
+  lit clang/test/Modules/compile-pcm-with-pic.cppm
+  fork clang/test/CodeGen/MSIL/msil-method-forwarders-pch.c
+
+hook clang/lib/Serialization/ASTWriterDecl.cpp
+  # Two hooks. isRequiredDecl, before its ASTContext::DeclMustBeEmitted call, takes such a
+  # managed-call declaration as required when a PCH or a module other than a C++20 named one
+  # is written (for a named module it has returned false earlier), so the PCH or the header
+  # module lists it among its eagerly deserialized declarations, as it lists a constructor,
+  # destructor or external function definition of the same header. A statement of its own in
+  # ASTWriter::WriteDecl, after the isRequiredDecl call, lists it among a named module's
+  # modular-codegen declarations (ASTWriter::ModularCodegenDecls, which the AST reader
+  # deserializes eagerly only when the module file is the main file), so that the module
+  # unit's object compiled from its BMI (--precompile, then -c of the .pcm) defines the
+  # forwarders as the driver's one-phase compile of its source does.
+  lit clang/test/PCH/external-defs.c
+  lit clang/test/PCH/chain-external-defs.c
+  lit clang/test/PCH/functions.c
+  lit clang/test/PCH/cxx-functions.cpp
+  lit clang/test/PCH/asm.c
+  lit clang/test/PCH/attrs.c
+  lit clang/test/PCH/pragma-weak.c
+  lit clang/test/PCH/dllexport-default-arg-closure.cpp
+  lit clang/test/PCH/dllexport-ctor-closure-copy.cpp
+  lit clang/test/Modules/irgen.c
+  lit clang/test/Modules/cxx-irgen.cpp
+  lit clang/test/Modules/initializers.cpp
+  lit clang/test/Modules/module-init-duplicated-import.cppm
+  lit clang/test/Modules/no-duplicate-codegen-in-GMF.cppm
+  lit clang/test/Modules/static-initializer.cppm
+  lit clang/test/Modules/compile-pcm-with-pic.cppm
+  fork clang/test/CodeGen/MSIL/msil-method-forwarders-pch.c
 
 hook compiler-rt/lib/builtins/int_lib.h
   # P-1a (plan 5.18.8 PH2, 5.18.13): '|| defined(__dotnet__)' on the first COMPILER_RT_ALIAS

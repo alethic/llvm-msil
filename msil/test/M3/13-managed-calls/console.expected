@@ -1,0 +1,6 @@
+printf before the managed stream
+Stream.Write: a line from a uint8[]
+printf between the managed writes
+slice]
+printf after the managed stream
+[exit 0]

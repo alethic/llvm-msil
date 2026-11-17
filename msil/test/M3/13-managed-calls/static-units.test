@@ -1,0 +1,82 @@
+# Two translation units that each declare a static managed-call function of the same name: a.c's 'static int get(int)' is System.Math::Abs and b.c's 'static int get(int, int)' is Math::Max, a.c's 'static int pick(int)' is Math::Abs and b.c's 'static int pick(int)', with the same C prototype, is Math::Sign; each unit calls its own, and the program prints every result, through objects and through LTO.
+# Plan 5.20.3 as amended for MC-1 (section 12 row '5.20.3 amended (...
+# internal linkage ...)': a managed-call declaration may have internal
+# linkage, because its K5 stub defines it) and 5.20.4 (IR name, MR4) and
+# T-M17 as amended for MC-1 (section 12 rows '5.20.4 (IR name, MR4) and
+# T-M17 amended (...)' and '5.20.4 (IR name, MR4) amended again (...)'): a
+# managed-call declaration with internal linkage gets the IR name
+# '__msil_mc.<symbol>.__uniq.<n>', where <n> hashes the declaration's
+# !msil.managed.calls operands (TYPE, MEMBER, SIGNATURE, ASSEMBLY, the
+# conversion and catch lists) and its function type, never the name of the
+# translation unit's main file, and its !msil.managed.calls entry uses that
+# name. Two internal declarations therefore share an IR name only when they
+# are interchangeable, so the IR linker never merges two different ones,
+# MR4 never compares them, and no false T-M17 or T-M10 is given. Here every
+# pair differs: 'get' in MEMBER, SIGNATURE and function type, and 'pick',
+# with the same C prototype in both units, in MEMBER alone, so a merge by
+# name would also bind the wrong member. Each unit's stub is internal to it
+# (5.20.4), so under msil_pipeline=obj the two objects never meet, and under
+# msil_pipeline=lto (the lto legs and the MC-1 gate's steps 18 and 18b) the
+# one LTO module keeps four distinct stubs. static-same-file-name.test
+# covers two units whose main files have the same name, which the earlier
+# rule (the postfix of the main file's name) gave one IR name and a false
+# T-M17 under LTO. System.Math is no built-in table type, so the program
+# links against the .NET Framework 4.8 implementation assemblies
+# (%{msil_refs_netfx}); the image runs on the Framework, .NET 10 and WSL
+# .NET 10. Each managed declaration sits under '#if defined(__MSIL__)' with
+# a C fallback in '#else' (abs(x), x > y ? x : y and (x > 0) - (x < 0)),
+# and the native oracle builds the fallbacks, so the expected file is
+# update-expected.py's (plan 5.20.11 MT3, 5.17.4). Plan 5.17.13 (MC-1,
+# M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+/* a.c: its own static managed calls named get and pick. */
+#include <stdlib.h>
+
+#if defined(__MSIL__)
+static int get(int x)
+    __attribute__((msil_method("System.Math", "Abs", "int32(int32)")));
+
+static int pick(int x)
+    __attribute__((msil_method("System.Math", "Abs", "int32(int32)")));
+#else
+static int get(int x) { return abs(x); }
+
+static int pick(int x) { return abs(x); }
+#endif
+
+int a_get(int x) { return get(x); }
+
+int a_pick(int x) { return pick(x); }
+#--- b.c
+/* b.c: static managed calls with the same names as a.c's, other members. */
+#include <stdio.h>
+
+#if defined(__MSIL__)
+static int get(int x, int y)
+    __attribute__((msil_method("System.Math", "Max", "int32(int32, int32)")));
+
+static int pick(int x)
+    __attribute__((msil_method("System.Math", "Sign", "int32(int32)")));
+#else
+static int get(int x, int y) { return x > y ? x : y; }
+
+static int pick(int x) { return (x > 0) - (x < 0); }
+#endif
+
+int a_get(int x);
+int a_pick(int x);
+
+int main(void) {
+  volatile int minus_seven = -7, two = 2, minus_thirty = -30;
+  printf("a.c get(-7), Math::Abs: %d\n", a_get(minus_seven));
+  printf("b.c get(-7, 2), Math::Max: %d\n", get(minus_seven, two));
+  printf("a.c pick(-30), Math::Abs: %d\n", a_pick(minus_thirty));
+  printf("b.c pick(-30), Math::Sign: %d\n", pick(minus_thirty));
+  printf("b.c get(a.c get(-7), 2): %d\n", get(a_get(minus_seven), two));
+  return 0;
+}

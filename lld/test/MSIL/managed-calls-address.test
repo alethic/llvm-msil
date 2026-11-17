@@ -1,0 +1,1394 @@
+## T-M10 in LTO links, before LTO's optimizer (ImplementationPlan.md 5.20.3
+## T-M10 and 5.20.5 ML2 (1) as amended in section 12; milestone MC-1).
+## msil-ld reports
+##   'taking the address of the managed-call function '<f>' is not supported for MSIL yet'
+## for each use of a managed-call declaration (one with the attribute
+## "msil-managed-type") that a bitcode input holds, other than the callee
+## of a direct call with the declaration's own function type: each such
+## use that the unit's own optimizer left. It reports them before LTO's
+## optimizer can internalize a global or fold a use, in full LTO, under
+## --lto-partitions, under --lto-emit-asm and as ThinLTO modules (before
+## import). After msil-ld's 'error: ', the line names the input that holds
+## the use as the link names it ('<input>: ', or '<archive>(<member>): '
+## for an archive member), then what holds the use there: 'function @<h>: '
+## for a function whose code holds it, and 'global variable @<g>: ' for a
+## global variable whose initializer holds it, as slot P0 names such a
+## global for clang -c and llc. A function with available_externally
+## linkage, a body for inlining only (C99 'inline', GNU 'extern inline'),
+## holds none: no output compiles such a body (clang -c's slot P0 still
+## meets it at -O0 when always_inline keeps it), and the link keeps
+## another unit's definition. Each distinct line comes once per link, so
+## each input prints its own lines (in the inputs' order, and for each
+## declaration its functions before its globals), and the link writes no
+## output. So at one -O level an LTO link refuses what clang -c refuses for
+## the same units, except for such a body at -O0.
+## The units are the IR that clang -flto -S -emit-llvm writes for
+## x86_64-pc-windows-msvc-msil at -O2 (the *-o0.ll files at -O0), without
+## debug information, guids, the summary and the target attributes;
+## llvm-as makes full LTO bitcode, and opt -module-summary ThinLTO modules.
+## pa.ll, a.ll, b.ll, ac.ll, bc.ll and extaddr.ll are bodies, each linked
+## after the head of x86_64-pc-windows-msvc-msil (win.head) and of
+## msil64-unknown-dotnet (net.head) as <unit>-win and <unit>-net (clang
+## writes the same bodies for both triples, but for extaddr.ll's char,
+## which has neither signext nor zeroext on the Windows triple; the IR
+## behaves the same); ea.ll, eb.ll, ya.ll, ya-o2.ll and yb.ll are
+## msil64-unknown-dotnet's. f is Contoso.Widget::Guarded(int32) of
+## Inputs/fakepack (managed-calls.test) unless an item says otherwise.
+## Every link that fails counts its error lines.
+## - One unit's global pointer (pa.ll: 'static int f(int v)' with the
+##   attribute, 'int (*pa)(int) = &f;' and 'int main(void) { return
+##   pa(-3); }'): one line, for pa.ll's input and global variable @pa, in
+##   full LTO, as a ThinLTO module, under --lto-partitions=2 and under
+##   --lto-emit-asm, on each triple, as clang -c gives it. These links used
+##   to succeed: LTO internalized pa and turned main's call through it into
+##   a direct call before slot P0 ran.
+## - Two units, each with its own static f (a.ll: 'int (*pa)(int) = &f;';
+##   b.ll: 'extern int (*pa)(int); int main(void) { return pa == &f ? 1 :
+##   2; }'). In C the two f's are two functions, so main must return 2, but
+##   both units name f '__msil_mc.f.__uniq.<n>' with one <n> (the
+##   declarations would make equal stubs), so LTO took them for one
+##   function. The link fails with two lines, a.ll's input's for global
+##   variable @pa and b.ll's input's for function @main, each once (sorted,
+##   as their order follows the inputs), in full LTO and as ThinLTO modules
+##   in both input orders, under --lto-partitions=2 and under
+##   --lto-emit-asm, on each triple, and at -O0 (a-o0.ll and b-o0.ll) in
+##   full LTO and as ThinLTO modules. Each of those links used to succeed
+##   with a main that returns 1.
+## - The same two units, each with a function that nothing calls, which
+##   calls f through a cast pointer (ac.ll: 'long long unusedA(void) {
+##   return ((long long (*)(long long))f)(1); }'; bc.ll: unusedB, the
+##   same): a direct call with another function type, which slot P0 refuses
+##   with T-M17 for clang -c,
+##   'managed call '<f>' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units'.
+##   msil-ld reports T-M17 before LTO, once per name, for a declaration of
+##   a bitcode input that its own unit calls with another function type, or
+##   with a signext or zeroext of its own that would change the
+##   declaration's stub (the calls in available_externally functions
+##   aside), and gives that declaration no T-M10 line: the pair fails with
+##   the T-M17 line alone in full LTO, as ThinLTO modules, under
+##   --lto-partitions=2 and under --lto-emit-asm, on each triple. These
+##   links used to succeed with a main that returns 1: msil-ld left the
+##   declarations to slot P0, and LTO's optimizer deleted unusedA and
+##   unusedB with their calls and folded main's comparison. Beside the
+##   other unit without its cast call (ac.ll with b.ll, a.ll with bc.ll),
+##   each unit gets its own line, as clang -c gives them: T-M17 for the
+##   unit with the cast call, T-M10 for the other one's holder. ea.ll and eb.ll
+##   are the pair as 'static short f(short v)', bound to System.Math::Abs
+##   'int16(int16)' (these links stop before binding), each with a function
+##   that nothing calls, which calls f through '(unsigned short
+##   (*)(short))f', a zeroext result of its own against the declaration's
+##   signext: the T-M17 line alone, in full LTO, as ThinLTO modules and
+##   under --lto-emit-asm; they used to link. deadcast.ll is one unit with
+##   such a call to another function type in a function that nothing calls
+##   ('long long unusedA(void) { return ((long long (*)(long long))f)(1);
+##   }'), a direct call in main ('int main(void) { return f(-3); }') and no
+##   address: the T-M17 line alone in full LTO, as a ThinLTO module and
+##   under --lto-emit-asm, as clang -c gives it; it used to link.
+## - A static pointer that the unit's own optimizer folds into a direct
+##   call (sp.ll: 'static int (*sp)(int) = &f;' and 'int main(void) {
+##   return sp(-3); }', where main calls f directly) links in full LTO and
+##   as a ThinLTO module, and main calls the stub, which calls Guarded. At
+##   -O0 (sp-o0.ll, which keeps sp) the unit fails with one line, for
+##   sp-o0.ll's input and global variable @sp, in both, as clang -c -O0
+##   does; it used to link.
+## - An address in a branch that the unit's own optimizer deletes, f
+##   external: s1.ll's 'int g(int x) { return f(x); }', s2.ll's 'static long
+##   long h(int y) { return y ? (long long)(__INTPTR_TYPE__)&f : 0; }' and
+##   'int k(int x) { return (int)h(0) + 0 * x; }', and sm.ll's 'int
+##   main(void) { return 100 + g(-3) * 10 + k(-4); }'. At -O2 s2.ll's k
+##   returns 0 and no use of f is left, and the units link in full LTO and
+##   as ThinLTO modules. At -O0 (s1-o0.ll, s2-o0.ll and sm-o0.ll) h keeps
+##   the address, and the units fail with one line, for s2-o0.ll's input and
+##   function @h, in full LTO, as ThinLTO modules, under --lto-partitions=2,
+##   under --lto-emit-asm, and in a mixed link of s2-o0.ll's bitcode with
+##   llc's objects of s1-o0.ll and sm-o0.ll. Those links used to stop with
+##   slot P0's line from LTO's code generation,
+##   'msil-ld: error: <unknown>:0:0: in function h i64 (i32): taking the address ...'.
+## - a.ll's bitcode beside llc's object of pm.ll ('extern int (*pa)(int);
+##   int main(void) { return pa(-3); }') fails with a.ll's input's line,
+##   once.
+## - Two inputs whose holders have one name, f external, at -O0 (ha.ll and
+##   hb.ll: 'static void hold(void) { reg(&f); }', with 'void a_init(void)
+##   { hold(); }' and b_init; hm.ll: 'void reg(int (*cb)(int)) { saved =
+##   cb; }' and a main that calls a_init and b_init): two lines, function
+##   @hold for each input, in full LTO, as ThinLTO modules and under
+##   --lto-partitions=2, in the inputs' order when they are not sorted. ga.ll
+##   and gb.ll ('static int (*sp)(int) = &f;', with a_use and b_use, which
+##   call sp, and gm.ll's main, which calls both): two lines, global
+##   variable @sp for each input, in full LTO and as ThinLTO modules. ha.ll's
+##   bitcode as a member of libha.a gives 'libha.a(ha.bc): function @hold:
+##   ...'. These links used to print one line, which named no input.
+## - A use in an available_externally function: xa.ll's 'extern inline
+##   __attribute__((gnu_inline)) int g(int x) { if (x == 12345) keep(f);
+##   return x; }' and its '__attribute__((optnone, noinline)) int use(int
+##   x) { return g(x) + f(x); }', whose -flto IR keeps g's body for
+##   inlining; xb.ll defines g, keep and main. The pair links without a
+##   diagnostic in full LTO, as ThinLTO modules and as xa.ll's bitcode with
+##   llc's object of xb.ll, as llc's objects of xa-o2.ll (xa.ll's unit at
+##   -O2 without -flto, where clang dropped g's body, as clang -c compiles
+##   it) and xb.ll do, and in each image use calls g, xb.ll's.
+##   ya.ll, ya-o2.ll and yb.ll are the same units with a
+##   C99 inline definition ('inline int g(int x)') on msil64-unknown-dotnet,
+##   and link the same way. Those LTO links used to fail with T-M10 for
+##   function @g. When the definition that the link keeps takes the address
+##   itself (xc.ll's external g, whose noinline keep stores the pointer),
+##   xc.ll's input gets its line, once, in full LTO and as ThinLTO modules.
+##   A call with another function type there gets no T-M17 either: xd.ll's
+##   GNU inline g calls f only through a cast pointer ('return (int)((long
+##   long (*)(long long))f)(x);'), and xd.ll with xb.ll links without a
+##   diagnostic in full LTO, as ThinLTO modules and as xd.ll's bitcode with
+##   llc's object of xb.ll.
+## - A declaration that T-M17 refuses gets no T-M10 line. t17a.ll binds an
+##   external f to Guarded and takes its address ('int (*keep)(int) =
+##   &f;'), and t17b.ll binds f to Contoso.Point::Twice(int32) and calls it:
+##   T-M17 alone, before LTO, in full LTO, as ThinLTO modules and under
+##   --lto-emit-asm. castaddr.ll calls an external f through a cast to 'long
+##   long (*)(long long)' and takes its address ('int (*keep)(int) = &f;'):
+##   msil-ld's T-M17 for that call, before LTO, is the link's one line in
+##   those modes, as slot P0's is clang -c's one line. extaddr.ll binds f to
+##   Contoso.Widget::Octet(uint8) as 'unsigned char f(unsigned char)', takes
+##   its address ('unsigned char (*keep)(unsigned char) = &f;') and calls it
+##   through '(signed char (*)(unsigned char))f', a signext result of its
+##   own that would end the stub in conv.i1 where the declaration's zeroext
+##   ends it in conv.u1: the T-M17 line alone, in full LTO, as a ThinLTO
+##   module and under --lto-emit-asm, on each triple, and no output.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+## A failed link's error lines (err.txt), counted, then each pinned whole;
+## two lines are sorted first.
+# DEFINE: %{one} = grep error: err.txt | count 1 && %{err} --input-file=err.txt
+# DEFINE: %{two} = grep error: err.txt | count 2 && sort err.txt | %{err}
+
+## Each T-M10 line names its input: IN, or A and B (A's line sorts first).
+# TM10-PA:   {{^}}msil-ld: error: [[IN]]: global variable @pa: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-PAIR: {{^}}msil-ld: error: [[A]]: global variable @pa: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-PAIR: {{^}}msil-ld: error: [[B]]: function @main: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-MAIN: {{^}}msil-ld: error: [[IN]]: function @main: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-SP:   {{^}}msil-ld: error: [[IN]]: global variable @sp: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-H:    {{^}}msil-ld: error: [[IN]]: function @h: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-HOLD: {{^}}msil-ld: error: [[A]]: function @hold: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-HOLD: {{^}}msil-ld: error: [[B]]: function @hold: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-SPS:  {{^}}msil-ld: error: [[A]]: global variable @sp: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-SPS:  {{^}}msil-ld: error: [[B]]: global variable @sp: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM10-G:    {{^}}msil-ld: error: [[IN]]: function @g: taking the address of the managed-call function 'f' is not supported for MSIL yet{{$}}
+# TM17:      {{^}}msil-ld: error: managed call 'f' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units{{$}}
+
+## The units of both triples: on the triple %{tr}, each body after the
+## triple's head (<unit>-%{tr}.ll), as full LTO bitcode and as a ThinLTO
+## module.
+# DEFINE: %{tr} =
+# DEFINE: %{units} = \
+# DEFINE:   cat %{tr}.head pa.ll > pa-%{tr}.ll && cat %{tr}.head a.ll > a-%{tr}.ll && \
+# DEFINE:   cat %{tr}.head b.ll > b-%{tr}.ll && cat %{tr}.head ac.ll > ac-%{tr}.ll && \
+# DEFINE:   cat %{tr}.head bc.ll > bc-%{tr}.ll && cat %{tr}.head extaddr.ll > extaddr-%{tr}.ll && \
+# DEFINE:   llvm-as pa-%{tr}.ll -o pa-%{tr}.bc && opt -module-summary pa-%{tr}.ll -o pa-%{tr}.thin.bc && \
+# DEFINE:   llvm-as a-%{tr}.ll -o a-%{tr}.bc && opt -module-summary a-%{tr}.ll -o a-%{tr}.thin.bc && \
+# DEFINE:   llvm-as b-%{tr}.ll -o b-%{tr}.bc && opt -module-summary b-%{tr}.ll -o b-%{tr}.thin.bc && \
+# DEFINE:   llvm-as ac-%{tr}.ll -o ac-%{tr}.bc && opt -module-summary ac-%{tr}.ll -o ac-%{tr}.thin.bc && \
+# DEFINE:   llvm-as bc-%{tr}.ll -o bc-%{tr}.bc && opt -module-summary bc-%{tr}.ll -o bc-%{tr}.thin.bc && \
+# DEFINE:   llvm-as extaddr-%{tr}.ll -o extaddr-%{tr}.bc && \
+# DEFINE:   opt -module-summary extaddr-%{tr}.ll -o extaddr-%{tr}.thin.bc
+## One unit's global pointer: one line in every LTO mode, and no output.
+# DEFINE: %{pa} = \
+# DEFINE:   not msil-ld pa-%{tr}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM10-PA -DIN=pa-%{tr}.bc && \
+# DEFINE:   not msil-ld pa-%{tr}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM10-PA -DIN=pa-%{tr}.thin.bc && \
+# DEFINE:   not msil-ld pa-%{tr}.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM10-PA -DIN=pa-%{tr}.bc && \
+# DEFINE:   not msil-ld --lto-emit-asm pa-%{tr}.bc -o x.il 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM10-PA -DIN=pa-%{tr}.bc && \
+# DEFINE:   not ls x.exe && not ls x.il
+## Two units' static f: two lines, each once, in every LTO mode and order.
+# DEFINE: %{pair} = \
+# DEFINE:   not msil-ld a-%{tr}.bc b-%{tr}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{two} --check-prefix=TM10-PAIR -DA=a-%{tr}.bc -DB=b-%{tr}.bc && \
+# DEFINE:   not msil-ld b-%{tr}.bc a-%{tr}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{two} --check-prefix=TM10-PAIR -DA=a-%{tr}.bc -DB=b-%{tr}.bc && \
+# DEFINE:   not msil-ld a-%{tr}.thin.bc b-%{tr}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{two} --check-prefix=TM10-PAIR -DA=a-%{tr}.thin.bc -DB=b-%{tr}.thin.bc && \
+# DEFINE:   not msil-ld b-%{tr}.thin.bc a-%{tr}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{two} --check-prefix=TM10-PAIR -DA=a-%{tr}.thin.bc -DB=b-%{tr}.thin.bc && \
+# DEFINE:   not msil-ld a-%{tr}.bc b-%{tr}.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{two} --check-prefix=TM10-PAIR -DA=a-%{tr}.bc -DB=b-%{tr}.bc && \
+# DEFINE:   not msil-ld --lto-emit-asm a-%{tr}.bc b-%{tr}.bc -o x.il 2> err.txt && \
+# DEFINE:     %{two} --check-prefix=TM10-PAIR -DA=a-%{tr}.bc -DB=b-%{tr}.bc && \
+# DEFINE:   not ls x.exe && not ls x.il
+## The same units with their calls through a cast pointer: T-M17 alone,
+## before LTO, in every LTO mode, and no output; beside a unit without it,
+## each unit's own line (sorted: the T-M10 line first).
+# DEFINE: %{cast} = \
+# DEFINE:   not msil-ld ac-%{tr}.bc bc-%{tr}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld ac-%{tr}.thin.bc bc-%{tr}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld ac-%{tr}.bc bc-%{tr}.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld --lto-emit-asm ac-%{tr}.bc bc-%{tr}.bc -o x.il 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld ac-%{tr}.bc b-%{tr}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{two} --check-prefixes=TM10-MAIN,TM17 -DIN=b-%{tr}.bc && \
+# DEFINE:   not msil-ld a-%{tr}.bc bc-%{tr}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{two} --check-prefixes=TM10-PA,TM17 -DIN=a-%{tr}.bc && \
+# DEFINE:   not ls x.exe && not ls x.il
+## An address beside a call with an extension of its own: T-M17 alone.
+# DEFINE: %{ext} = \
+# DEFINE:   not msil-ld extaddr-%{tr}.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld extaddr-%{tr}.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not msil-ld --lto-emit-asm extaddr-%{tr}.bc -o x.il 2> err.txt && \
+# DEFINE:     %{one} --check-prefix=TM17 && \
+# DEFINE:   not ls x.exe && not ls x.il
+# REDEFINE: %{tr} = win
+# RUN: %{units}
+# RUN: %{pa}
+# RUN: %{pair}
+# RUN: %{cast}
+# RUN: %{ext}
+# REDEFINE: %{tr} = net
+# RUN: %{units}
+# RUN: %{pa}
+# RUN: %{pair}
+# RUN: %{cast}
+# RUN: %{ext}
+
+## The other units, as full LTO bitcode and as ThinLTO modules.
+# RUN: llvm-as a-o0.ll -o a-o0.bc && opt -module-summary a-o0.ll -o a-o0.thin.bc
+# RUN: llvm-as b-o0.ll -o b-o0.bc && opt -module-summary b-o0.ll -o b-o0.thin.bc
+# RUN: llvm-as sp.ll -o sp.bc && opt -module-summary sp.ll -o sp.thin.bc
+# RUN: llvm-as sp-o0.ll -o sp-o0.bc && opt -module-summary sp-o0.ll -o sp-o0.thin.bc
+# RUN: llvm-as s1.ll -o s1.bc && opt -module-summary s1.ll -o s1.thin.bc
+# RUN: llvm-as s2.ll -o s2.bc && opt -module-summary s2.ll -o s2.thin.bc
+# RUN: llvm-as sm.ll -o sm.bc && opt -module-summary sm.ll -o sm.thin.bc
+# RUN: llvm-as s1-o0.ll -o s1-o0.bc && opt -module-summary s1-o0.ll -o s1-o0.thin.bc
+# RUN: llvm-as s2-o0.ll -o s2-o0.bc && opt -module-summary s2-o0.ll -o s2-o0.thin.bc
+# RUN: llvm-as sm-o0.ll -o sm-o0.bc && opt -module-summary sm-o0.ll -o sm-o0.thin.bc
+# RUN: llvm-as ha.ll -o ha.bc && opt -module-summary ha.ll -o ha.thin.bc
+# RUN: llvm-as hb.ll -o hb.bc && opt -module-summary hb.ll -o hb.thin.bc
+# RUN: llvm-as hm.ll -o hm.bc && opt -module-summary hm.ll -o hm.thin.bc
+# RUN: llvm-as ga.ll -o ga.bc && opt -module-summary ga.ll -o ga.thin.bc
+# RUN: llvm-as gb.ll -o gb.bc && opt -module-summary gb.ll -o gb.thin.bc
+# RUN: llvm-as gm.ll -o gm.bc && opt -module-summary gm.ll -o gm.thin.bc
+# RUN: llvm-as xa.ll -o xa.bc && opt -module-summary xa.ll -o xa.thin.bc
+# RUN: llvm-as xb.ll -o xb.bc && opt -module-summary xb.ll -o xb.thin.bc
+# RUN: llvm-as xc.ll -o xc.bc && opt -module-summary xc.ll -o xc.thin.bc
+# RUN: llvm-as xd.ll -o xd.bc && opt -module-summary xd.ll -o xd.thin.bc
+# RUN: llvm-as ya.ll -o ya.bc && opt -module-summary ya.ll -o ya.thin.bc
+# RUN: llvm-as yb.ll -o yb.bc && opt -module-summary yb.ll -o yb.thin.bc
+# RUN: llvm-as t17a.ll -o t17a.bc && opt -module-summary t17a.ll -o t17a.thin.bc
+# RUN: llvm-as t17b.ll -o t17b.bc && opt -module-summary t17b.ll -o t17b.thin.bc
+# RUN: llvm-as castaddr.ll -o castaddr.bc && opt -module-summary castaddr.ll -o castaddr.thin.bc
+# RUN: llvm-as deadcast.ll -o deadcast.bc && opt -module-summary deadcast.ll -o deadcast.thin.bc
+# RUN: llvm-as ea.ll -o ea.bc && opt -module-summary ea.ll -o ea.thin.bc
+# RUN: llvm-as eb.ll -o eb.bc && opt -module-summary eb.ll -o eb.thin.bc
+
+## The pair at -O0: two lines, each once.
+# RUN: not msil-ld a-o0.bc b-o0.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-PAIR -DA=a-o0.bc -DB=b-o0.bc
+# RUN: not msil-ld a-o0.thin.bc b-o0.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-PAIR -DA=a-o0.thin.bc -DB=b-o0.thin.bc
+# RUN: not ls x.exe
+
+## The pair as 'static short f(short)', its calls through a cast pointer
+## with a zeroext result of their own: T-M17 alone. One unit's call through
+## a cast pointer in a function that nothing calls: T-M17 alone.
+# RUN: not msil-ld ea.bc eb.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld ea.thin.bc eb.thin.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm ea.bc eb.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld deadcast.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld deadcast.thin.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm deadcast.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+## The static pointer: folded at -O2, it links; kept at -O0, it fails.
+# RUN: msil-ld sp.bc --reference=refs -o sp.exe 2>&1 | count 0
+# RUN: llvm-cil-dump sp.exe | FileCheck %s --check-prefix=FOLDED
+# RUN: msil-ld sp.thin.bc --reference=refs -o sp-thin.exe 2>&1 | count 0
+# RUN: llvm-cil-dump sp-thin.exe | FileCheck %s --check-prefix=FOLDED
+# FOLDED-DAG: {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Widget::'Guarded'{{$}}
+# FOLDED-DAG: {{^    L[0-9]+: }}call int32(int32) '<Module>'::'__msil_mc.f.__uniq.319731259292597790514256075369600750650'{{$}}
+# RUN: not msil-ld sp-o0.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM10-SP -DIN=sp-o0.bc
+# RUN: not msil-ld sp-o0.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-SP -DIN=sp-o0.thin.bc
+# RUN: not ls x.exe
+
+## The address in a deleted branch: -O2 links; -O0 fails, mixed link too.
+# RUN: msil-ld s1.bc s2.bc sm.bc --reference=refs -o s.exe 2>&1 | count 0
+# RUN: msil-ld s1.thin.bc s2.thin.bc sm.thin.bc --reference=refs -o s-thin.exe 2>&1 | count 0
+# RUN: not msil-ld s1-o0.bc s2-o0.bc sm-o0.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-H -DIN=s2-o0.bc
+# RUN: not msil-ld s1-o0.thin.bc s2-o0.thin.bc sm-o0.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-H -DIN=s2-o0.thin.bc
+# RUN: not msil-ld s1-o0.bc s2-o0.bc sm-o0.bc --lto-partitions=2 --reference=refs -o x.exe \
+# RUN:   2> err.txt && %{one} --check-prefix=TM10-H -DIN=s2-o0.bc
+# RUN: not msil-ld --lto-emit-asm s1-o0.bc s2-o0.bc sm-o0.bc -o x.il 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-H -DIN=s2-o0.bc
+# RUN: llc -filetype=obj s1-o0.ll -o s1-o0.o && llc -filetype=obj sm-o0.ll -o sm-o0.o
+# RUN: not msil-ld s1-o0.o s2-o0.bc sm-o0.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-H -DIN=s2-o0.bc
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+## A global holder in bitcode beside an object: the line once.
+# RUN: llc -filetype=obj pm.ll -o pm.o
+# RUN: not msil-ld a-win.bc pm.o --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-PA -DIN=a-win.bc
+# RUN: not msil-ld pm.o a-win.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-PA -DIN=a-win.bc
+# RUN: not ls x.exe
+
+## Holders of one name in two inputs: one line for each input.
+# RUN: not msil-ld ha.bc hb.bc hm.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-HOLD -DA=ha.bc -DB=hb.bc
+# RUN: not msil-ld ha.thin.bc hb.thin.bc hm.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-HOLD -DA=ha.thin.bc -DB=hb.thin.bc
+# RUN: not msil-ld ha.bc hb.bc hm.bc --lto-partitions=2 --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-HOLD -DA=ha.bc -DB=hb.bc
+## Unsorted, in the inputs' order.
+# RUN: not msil-ld hb.bc ha.bc hm.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   grep error: err.txt | count 2 && %{err} --input-file=err.txt --check-prefix=TM10-HOLD -DA=hb.bc -DB=ha.bc
+## An archive member's line names it as lld does.
+# RUN: llvm-ar rc libha.a ha.bc
+# RUN: not msil-ld hm.bc libha.a hb.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-HOLD -DA=hb.bc '-DB=libha.a(ha.bc)'
+# RUN: not msil-ld ga.bc gb.bc gm.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-SPS -DA=ga.bc -DB=gb.bc
+# RUN: not msil-ld ga.thin.bc gb.thin.bc gm.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{two} --check-prefix=TM10-SPS -DA=ga.thin.bc -DB=gb.thin.bc
+# RUN: not ls x.exe
+
+## Available_externally holders: no line in any link, as for objects, and
+## in each image use calls g, the kept definition, and the stub calls
+## Guarded; a call with another function type there: no line either. The
+## kept definition's own use gets its line.
+# DEFINE: %{kept} = FileCheck %s --check-prefix=KEPT
+# RUN: llc -filetype=obj xa-o2.ll -o xa-o2.o && llc -filetype=obj xb.ll -o xb.o
+# RUN: msil-ld xa-o2.o xb.o --reference=refs -o x-obj.exe 2>&1 | count 0
+# RUN: llvm-cil-dump x-obj.exe | %{kept}
+# RUN: msil-ld xa.bc xb.bc --reference=refs -o x-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump x-lto.exe | %{kept}
+# RUN: msil-ld xa.thin.bc xb.thin.bc --reference=refs -o x-thin.exe 2>&1 | count 0
+# RUN: llvm-cil-dump x-thin.exe | %{kept}
+# RUN: msil-ld xa.bc xb.o --reference=refs -o x-mixed.exe 2>&1 | count 0
+# RUN: llvm-cil-dump x-mixed.exe | %{kept}
+# RUN: llc -filetype=obj ya-o2.ll -o ya-o2.o && llc -filetype=obj yb.ll -o yb.o
+# RUN: msil-ld ya-o2.o yb.o --reference=refs -o y-obj.exe 2>&1 | count 0
+# RUN: llvm-cil-dump y-obj.exe | %{kept}
+# RUN: msil-ld ya.bc yb.bc --reference=refs -o y-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump y-lto.exe | %{kept}
+# RUN: msil-ld ya.thin.bc yb.thin.bc --reference=refs -o y-thin.exe 2>&1 | count 0
+# RUN: llvm-cil-dump y-thin.exe | %{kept}
+# RUN: msil-ld ya.bc yb.o --reference=refs -o y-mixed.exe 2>&1 | count 0
+# RUN: llvm-cil-dump y-mixed.exe | %{kept}
+# KEPT-DAG: {{^  }}.method 'g' int32(int32) {{.+$}}
+# KEPT-DAG: {{^    L[0-9]+: }}call int32(int32) '<Module>'::'g'{{$}}
+# KEPT-DAG: {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Widget::'Guarded'{{$}}
+# RUN: msil-ld xd.bc xb.bc --reference=refs -o xd-lto.exe 2>&1 | count 0
+# RUN: msil-ld xd.thin.bc xb.thin.bc --reference=refs -o xd-thin.exe 2>&1 | count 0
+# RUN: msil-ld xd.bc xb.o --reference=refs -o xd-mixed.exe 2>&1 | count 0
+# RUN: not msil-ld xa.bc xc.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM10-G -DIN=xc.bc
+# RUN: not msil-ld xa.thin.bc xc.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM10-G -DIN=xc.thin.bc
+# RUN: not ls x.exe
+
+## T-M17 first: no T-M10 line for a declaration that T-M17 refuses.
+# RUN: not msil-ld t17a.bc t17b.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld t17b.thin.bc t17a.thin.bc --reference=refs -o x.exe 2> err.txt && \
+# RUN:   %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm t17a.bc t17b.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld castaddr.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld castaddr.thin.bc --reference=refs -o x.exe 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not msil-ld --lto-emit-asm castaddr.bc -o x.il 2> err.txt && %{one} --check-prefix=TM17
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+#--- win.head
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+#--- net.head
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+#--- pa.ll
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; static int f(int v); int (*pa)(int) = &f;
+;; int main(void) { return pa(-3); }
+@pa = local_unnamed_addr global ptr @__msil_mc.f.__uniq.319731259292597790514256075369600750650, align 8
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #0
+
+define i32 @main() local_unnamed_addr #1 {
+entry:
+  %0 = load ptr, ptr @pa, align 8
+  %call = tail call i32 %0(i32 noundef -3) #1
+  ret i32 %call
+}
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+attributes #1 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- a.ll
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; static int f(int v); int (*pa)(int) = &f;
+@pa = local_unnamed_addr global ptr @__msil_mc.f.__uniq.319731259292597790514256075369600750650, align 8
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #0
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- b.ll
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; static int f(int v); extern int (*pa)(int);
+;; int main(void) { return pa == &f ? 1 : 2; }
+@pa = external local_unnamed_addr global ptr, align 8
+
+define range(i32 1, 3) i32 @main() local_unnamed_addr #0 {
+entry:
+  %0 = load ptr, ptr @pa, align 8
+  %cmp = icmp eq ptr %0, @__msil_mc.f.__uniq.319731259292597790514256075369600750650
+  %cond = select i1 %cmp, i32 1, i32 2
+  ret i32 %cond
+}
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #1
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- ac.ll
+
+;; a.ll's unit with a function that nothing calls, which calls f through a
+;; cast pointer:
+;; long long unusedA(void) { return ((long long (*)(long long))f)(1); }
+@pa = local_unnamed_addr global ptr @__msil_mc.f.__uniq.319731259292597790514256075369600750650, align 8
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #0
+
+define i64 @unusedA() local_unnamed_addr #1 {
+entry:
+  %call = tail call i64 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i64 noundef 1) #1
+  ret i64 %call
+}
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+attributes #1 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- bc.ll
+
+;; b.ll's unit with a function that nothing calls, which calls f through a
+;; cast pointer:
+;; long long unusedB(void) { return ((long long (*)(long long))f)(1); }
+@pa = external local_unnamed_addr global ptr, align 8
+
+define i64 @unusedB() local_unnamed_addr #0 {
+entry:
+  %call = tail call i64 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i64 noundef 1) #0
+  ret i64 %call
+}
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #1
+
+define range(i32 1, 3) i32 @main() local_unnamed_addr #0 {
+entry:
+  %0 = load ptr, ptr @pa, align 8
+  %cmp = icmp eq ptr %0, @__msil_mc.f.__uniq.319731259292597790514256075369600750650
+  %cond = select i1 %cmp, i32 1, i32 2
+  ret i32 %cond
+}
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- extaddr.ll
+
+;; unsigned char f(unsigned char) __attribute__((msil_method("Contoso.Widget",
+;; "Octet", "uint8(uint8)"))); unsigned char (*keep)(unsigned char) = &f;
+;; int main(void) { return ((signed char (*)(unsigned char))f)(5) + (keep != 0); }
+;; as clang writes it for msil64-unknown-dotnet: main's call has a signext
+;; result of its own beside the declaration's zeroext.
+@keep = local_unnamed_addr global ptr @__msil_mc.f, align 8
+
+declare zeroext i8 @__msil_mc.f(i8 noundef zeroext) #0
+
+define range(i32 -128, 129) i32 @main() local_unnamed_addr #1 {
+entry:
+  %call = tail call signext i8 @__msil_mc.f(i8 noundef zeroext 5) #1
+  %conv = sext i8 %call to i32
+  %0 = load ptr, ptr @keep, align 8
+  %cmp = icmp ne ptr %0, null
+  %conv1 = zext i1 %cmp to i32
+  %add = add nsw i32 %conv1, %conv
+  ret i32 %add
+}
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Octet" "msil-managed-sig"="uint8(uint8)" "msil-managed-type"="Contoso.Widget" }
+attributes #1 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Octet", !"uint8(uint8)", !"", !"val;val", !""}
+#--- a-o0.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; a.ll at -O0
+@pa = global ptr @__msil_mc.f.__uniq.319731259292597790514256075369600750650, align 8
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #0
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- b-o0.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; b.ll at -O0
+@pa = external global ptr, align 8
+
+define i32 @main() #0 {
+entry:
+  %retval = alloca i32, align 4
+  store i32 0, ptr %retval, align 4
+  %0 = load ptr, ptr @pa, align 8
+  %cmp = icmp eq ptr %0, @__msil_mc.f.__uniq.319731259292597790514256075369600750650
+  %1 = zext i1 %cmp to i64
+  %cond = select i1 %cmp, i32 1, i32 2
+  ret i32 %cond
+}
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- deadcast.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; static int f(int v);
+;; long long unusedA(void) { return ((long long (*)(long long))f)(1); }
+;; int main(void) { return f(-3); }
+define i64 @unusedA() local_unnamed_addr #0 {
+entry:
+  %call = tail call i64 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i64 noundef 1) #0
+  ret i64 %call
+}
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) local_unnamed_addr #1
+
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef -3) #0
+  ret i32 %call
+}
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- ea.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; __attribute__((msil_method("System.Math", "Abs", "int16(int16)")))
+;; static short f(short v); short (*pa)(short) = &f;
+;; unsigned short unusedA(void) { return ((unsigned short (*)(short))f)(1); }
+@pa = local_unnamed_addr global ptr @__msil_mc.f.__uniq.158898912408238665897862514899875489548, align 8
+
+declare signext i16 @__msil_mc.f.__uniq.158898912408238665897862514899875489548(i16 noundef signext) #0
+
+define zeroext i16 @unusedA() local_unnamed_addr #1 {
+entry:
+  %call = tail call zeroext i16 @__msil_mc.f.__uniq.158898912408238665897862514899875489548(i16 noundef signext 1) #1
+  ret i16 %call
+}
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Abs" "msil-managed-sig"="int16(int16)" "msil-managed-type"="System.Math" }
+attributes #1 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.158898912408238665897862514899875489548", !"System.Math", !"Abs", !"int16(int16)", !"", !"val;val", !""}
+#--- eb.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; __attribute__((msil_method("System.Math", "Abs", "int16(int16)")))
+;; static short f(short v); extern short (*pa)(short);
+;; unsigned short unusedB(void) { return ((unsigned short (*)(short))f)(1); }
+;; int main(void) { return pa == &f ? 1 : 2; }
+@pa = external local_unnamed_addr global ptr, align 8
+
+define zeroext i16 @unusedB() local_unnamed_addr #0 {
+entry:
+  %call = tail call zeroext i16 @__msil_mc.f.__uniq.158898912408238665897862514899875489548(i16 noundef signext 1) #0
+  ret i16 %call
+}
+
+declare signext i16 @__msil_mc.f.__uniq.158898912408238665897862514899875489548(i16 noundef signext) #1
+
+define range(i32 1, 3) i32 @main() local_unnamed_addr #0 {
+entry:
+  %0 = load ptr, ptr @pa, align 8
+  %cmp = icmp eq ptr %0, @__msil_mc.f.__uniq.158898912408238665897862514899875489548
+  %cond = select i1 %cmp, i32 1, i32 2
+  ret i32 %cond
+}
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Abs" "msil-managed-sig"="int16(int16)" "msil-managed-type"="System.Math" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.158898912408238665897862514899875489548", !"System.Math", !"Abs", !"int16(int16)", !"", !"val;val", !""}
+#--- sp.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; static int f(int v); static int (*sp)(int) = &f;
+;; int main(void) { return sp(-3); }
+;; at -O2: the unit's optimizer folded sp, and main calls f directly.
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef -3) #0
+  ret i32 %call
+}
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) local_unnamed_addr #1
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- sp-o0.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; sp.ll's unit at -O0: sp is kept.
+@sp = internal global ptr @__msil_mc.f.__uniq.319731259292597790514256075369600750650, align 8
+
+define i32 @main() #0 {
+entry:
+  %retval = alloca i32, align 4
+  store i32 0, ptr %retval, align 4
+  %0 = load ptr, ptr @sp, align 8
+  %call = call i32 %0(i32 noundef -3)
+  ret i32 %call
+}
+
+declare i32 @__msil_mc.f.__uniq.319731259292597790514256075369600750650(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f.__uniq.319731259292597790514256075369600750650", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- s1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int g(int x) { return f(x); }
+define i32 @g(i32 noundef %x) local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @__msil_mc.f(i32 noundef %x) #0
+  ret i32 %call
+}
+
+declare i32 @__msil_mc.f(i32 noundef) local_unnamed_addr #1
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- s2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)")));
+;; static long long h(int y) { return y ? (long long)(__INTPTR_TYPE__)&f : 0; }
+;; int k(int x) { return (int)h(0) + 0 * x; }
+;; at -O2: h(0) is inlined into k and folded; f's declaration is gone, and
+;; its entry is left.
+define noundef i32 @k(i32 noundef %x) local_unnamed_addr #0 {
+entry:
+  ret i32 0
+}
+
+attributes #0 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- sm.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int g(int), k(int);
+;; int main(void) { return 100 + g(-3) * 10 + k(-4); }
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @g(i32 noundef -3) #0
+  %mul = mul i32 %call, 10
+  %add = add i32 %mul, 100
+  %call1 = tail call i32 @k(i32 noundef -4) #0
+  %add2 = add i32 %add, %call1
+  ret i32 %add2
+}
+
+declare i32 @g(i32 noundef) local_unnamed_addr
+
+declare i32 @k(i32 noundef) local_unnamed_addr
+
+attributes #0 = { nounwind }
+#--- s1-o0.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; s1.ll's unit at -O0
+define i32 @g(i32 noundef %x) #0 {
+entry:
+  %x.addr = alloca i32, align 4
+  store i32 %x, ptr %x.addr, align 4
+  %0 = load i32, ptr %x.addr, align 4
+  %call = call i32 @__msil_mc.f(i32 noundef %0)
+  ret i32 %call
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- s2-o0.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; s2.ll's unit at -O0: h keeps the address of f, and optnone keeps LTO's
+;; optimizer from inlining h.
+define i32 @k(i32 noundef %x) #0 {
+entry:
+  %x.addr = alloca i32, align 4
+  store i32 %x, ptr %x.addr, align 4
+  %call = call i64 @h(i32 noundef 0)
+  %conv = trunc i64 %call to i32
+  %0 = load i32, ptr %x.addr, align 4
+  %mul = mul i32 0, %0
+  %add = add i32 %conv, %mul
+  ret i32 %add
+}
+
+define internal i64 @h(i32 noundef %y) #0 {
+entry:
+  %y.addr = alloca i32, align 4
+  store i32 %y, ptr %y.addr, align 4
+  %0 = load i32, ptr %y.addr, align 4
+  %tobool = icmp ne i32 %0, 0
+  %1 = zext i1 %tobool to i64
+  %cond = select i1 %tobool, i64 ptrtoint (ptr @__msil_mc.f to i64), i64 0
+  ret i64 %cond
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- sm-o0.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; sm.ll's unit at -O0
+define i32 @main() #0 {
+entry:
+  %retval = alloca i32, align 4
+  store i32 0, ptr %retval, align 4
+  %call = call i32 @g(i32 noundef -3)
+  %mul = mul i32 %call, 10
+  %add = add i32 100, %mul
+  %call1 = call i32 @k(i32 noundef -4)
+  %add2 = add i32 %add, %call1
+  ret i32 %add2
+}
+
+declare i32 @g(i32 noundef)
+
+declare i32 @k(i32 noundef)
+
+attributes #0 = { noinline nounwind optnone }
+#--- pm.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; extern int (*pa)(int); int main(void) { return pa(-3); }
+@pa = external local_unnamed_addr global ptr, align 8
+
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  %0 = load ptr, ptr @pa, align 8
+  %call = tail call i32 %0(i32 noundef -3) #0
+  ret i32 %call
+}
+
+attributes #0 = { nounwind }
+#--- ha.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int); void reg(int (*cb)(int));
+;; static void hold(void) { reg(&f); }
+;; void a_init(void) { hold(); }
+define void @a_init() #0 {
+entry:
+  call void @hold()
+  ret void
+}
+
+define internal void @hold() #0 {
+entry:
+  call void @reg(ptr noundef @__msil_mc.f)
+  ret void
+}
+
+declare void @reg(ptr noundef)
+
+declare i32 @__msil_mc.f(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- hb.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int); void reg(int (*cb)(int));
+;; static void hold(void) { reg(&f); }
+;; void b_init(void) { hold(); }
+define void @b_init() #0 {
+entry:
+  call void @hold()
+  ret void
+}
+
+define internal void @hold() #0 {
+entry:
+  call void @reg(ptr noundef @__msil_mc.f)
+  ret void
+}
+
+declare void @reg(ptr noundef)
+
+declare i32 @__msil_mc.f(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- hm.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; void a_init(void); void b_init(void); int (*saved)(int);
+;; void reg(int (*cb)(int)) { saved = cb; }
+;; int main(void) { a_init(); b_init(); return 0; }
+@saved = global ptr null, align 8
+
+define void @reg(ptr noundef %cb) #0 {
+entry:
+  %cb.addr = alloca ptr, align 8
+  store ptr %cb, ptr %cb.addr, align 8
+  %0 = load ptr, ptr %cb.addr, align 8
+  store ptr %0, ptr @saved, align 8
+  ret void
+}
+
+define i32 @main() #0 {
+entry:
+  %retval = alloca i32, align 4
+  store i32 0, ptr %retval, align 4
+  call void @a_init()
+  call void @b_init()
+  ret i32 0
+}
+
+declare void @a_init()
+
+declare void @b_init()
+
+attributes #0 = { noinline nounwind optnone }
+#--- ga.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int); static int (*sp)(int) = &f;
+;; int a_use(int v) { return sp(v); }
+@sp = internal global ptr @__msil_mc.f, align 8
+
+define i32 @a_use(i32 noundef %v) #0 {
+entry:
+  %v.addr = alloca i32, align 4
+  store i32 %v, ptr %v.addr, align 4
+  %0 = load ptr, ptr @sp, align 8
+  %1 = load i32, ptr %v.addr, align 4
+  %call = call i32 %0(i32 noundef %1)
+  ret i32 %call
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- gb.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int); static int (*sp)(int) = &f;
+;; int b_use(int v) { return sp(v); }
+@sp = internal global ptr @__msil_mc.f, align 8
+
+define i32 @b_use(i32 noundef %v) #0 {
+entry:
+  %v.addr = alloca i32, align 4
+  store i32 %v, ptr %v.addr, align 4
+  %0 = load ptr, ptr @sp, align 8
+  %1 = load i32, ptr %v.addr, align 4
+  %call = call i32 %0(i32 noundef %1)
+  ret i32 %call
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #1
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- gm.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int a_use(int), b_use(int);
+;; int main(void) { return a_use(-1) + b_use(-2); }
+define i32 @main() #0 {
+entry:
+  %retval = alloca i32, align 4
+  store i32 0, ptr %retval, align 4
+  %call = call i32 @a_use(i32 noundef -1)
+  %call1 = call i32 @b_use(i32 noundef -2)
+  %add = add i32 %call, %call1
+  ret i32 %add
+}
+
+declare i32 @a_use(i32 noundef)
+
+declare i32 @b_use(i32 noundef)
+
+attributes #0 = { noinline nounwind optnone }
+#--- xa.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int v); void keep(int (*p)(int));
+;; extern inline __attribute__((gnu_inline)) int g(int x) {
+;;   if (x == 12345)
+;;     keep(f);
+;;   return x;
+;; }
+;; __attribute__((optnone, noinline)) int use(int x) { return g(x) + f(x); }
+;; g's body is for inlining only (available_externally): xb.ll defines g.
+define i32 @use(i32 noundef %x) local_unnamed_addr #0 {
+entry:
+  %x.addr = alloca i32, align 4
+  store i32 %x, ptr %x.addr, align 4
+  %0 = load i32, ptr %x.addr, align 4
+  %call = call i32 @g(i32 noundef %0) #2
+  %1 = load i32, ptr %x.addr, align 4
+  %call1 = call i32 @__msil_mc.f(i32 noundef %1) #2
+  %add = add i32 %call, %call1
+  ret i32 %add
+}
+
+define available_externally i32 @g(i32 noundef %x) local_unnamed_addr #1 {
+entry:
+  %cmp = icmp eq i32 %x, 12345
+  br i1 %cmp, label %if.then, label %if.end
+
+if.then:
+  tail call void @keep(ptr noundef nonnull @__msil_mc.f) #2
+  br label %if.end
+
+if.end:
+  ret i32 %x
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #3
+
+declare void @keep(ptr noundef) local_unnamed_addr
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { inlinehint nounwind }
+attributes #2 = { nounwind }
+attributes #3 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- xa-o2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; xa.ll's unit at -O2 without -flto: clang has dropped g's body.
+define i32 @use(i32 noundef %x) local_unnamed_addr #0 {
+entry:
+  %x.addr = alloca i32, align 4
+  store i32 %x, ptr %x.addr, align 4
+  %0 = load i32, ptr %x.addr, align 4
+  %call = call i32 @g(i32 noundef %0) #2
+  %1 = load i32, ptr %x.addr, align 4
+  %call1 = call i32 @__msil_mc.f(i32 noundef %1) #2
+  %add = add i32 %call, %call1
+  ret i32 %add
+}
+
+declare i32 @g(i32 noundef) local_unnamed_addr #1
+
+declare i32 @__msil_mc.f(i32 noundef) #3
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { inlinehint nounwind }
+attributes #2 = { nounwind }
+attributes #3 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- xb.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int g(int x) { return x; } void keep(int (*p)(int)) { (void)p; }
+;; int use(int); int main(void) { return use(-3) == 0 ? 0 : 1; }
+define noundef i32 @g(i32 noundef returned %x) local_unnamed_addr #0 {
+entry:
+  ret i32 %x
+}
+
+define void @keep(ptr noundef %p) local_unnamed_addr #0 {
+entry:
+  ret void
+}
+
+define range(i32 0, 2) i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @use(i32 noundef -3) #0
+  %cmp = icmp ne i32 %call, 0
+  %cond = zext i1 %cmp to i32
+  ret i32 %cond
+}
+
+declare i32 @use(i32 noundef) local_unnamed_addr
+
+attributes #0 = { nounwind }
+#--- xc.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int v); int (*volatile kept)(int);
+;; __attribute__((noinline)) void keep(int (*p)(int)) { kept = p; }
+;; int g(int x) {
+;;   if (x == 12345)
+;;     keep(f);
+;;   return x;
+;; }
+;; int use(int); int main(void) { return use(-3) == 0 ? 0 : 1; }
+@kept = global ptr null, align 8
+
+define void @keep(ptr noundef %p) local_unnamed_addr #0 {
+entry:
+  store volatile ptr %p, ptr @kept, align 8
+  ret void
+}
+
+define noundef i32 @g(i32 noundef returned %x) local_unnamed_addr #1 {
+entry:
+  %cmp = icmp eq i32 %x, 12345
+  br i1 %cmp, label %if.then, label %if.end
+
+if.then:
+  tail call void @keep(ptr noundef nonnull @__msil_mc.f) #1
+  br label %if.end
+
+if.end:
+  ret i32 %x
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #2
+
+define range(i32 0, 2) i32 @main() local_unnamed_addr #1 {
+entry:
+  %call = tail call i32 @use(i32 noundef -3) #1
+  %cmp = icmp ne i32 %call, 0
+  %cond = zext i1 %cmp to i32
+  ret i32 %cond
+}
+
+declare i32 @use(i32 noundef) local_unnamed_addr
+
+attributes #0 = { noinline nounwind }
+attributes #1 = { nounwind }
+attributes #2 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- xd.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int v);
+;; extern inline __attribute__((gnu_inline)) int g(int x) {
+;;   return (int)((long long (*)(long long))f)(x);
+;; }
+;; __attribute__((optnone, noinline)) int use(int x) { return g(x) + f(x); }
+;; g's body, for inlining only, calls f with another function type.
+define i32 @use(i32 noundef %x) local_unnamed_addr #0 {
+entry:
+  %x.addr = alloca i32, align 4
+  store i32 %x, ptr %x.addr, align 4
+  %0 = load i32, ptr %x.addr, align 4
+  %call = call i32 @g(i32 noundef %0) #2
+  %1 = load i32, ptr %x.addr, align 4
+  %call1 = call i32 @__msil_mc.f(i32 noundef %1) #2
+  %add = add i32 %call, %call1
+  ret i32 %add
+}
+
+define available_externally i32 @g(i32 noundef %x) local_unnamed_addr #1 {
+entry:
+  %conv = sext i32 %x to i64
+  %call = tail call i64 @__msil_mc.f(i64 noundef %conv) #2
+  %conv1 = trunc i64 %call to i32
+  ret i32 %conv1
+}
+
+declare i32 @__msil_mc.f(i32 noundef) local_unnamed_addr #3
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { inlinehint nounwind }
+attributes #2 = { nounwind }
+attributes #3 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- ya.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; __attribute__((msil_method("Contoso.Widget", "Guarded", "int32(int32)")))
+;; int f(int v); void keep(int (*p)(int));
+;; inline int g(int x) {
+;;   if (x == 12345)
+;;     keep(f);
+;;   return x;
+;; }
+;; __attribute__((optnone, noinline)) int use(int x) { return g(x) + f(x); }
+;; g is a C99 inline definition (available_externally): yb.ll defines g.
+define i32 @use(i32 noundef %x) local_unnamed_addr #0 {
+entry:
+  %x.addr = alloca i32, align 4
+  store i32 %x, ptr %x.addr, align 4
+  %0 = load i32, ptr %x.addr, align 4
+  %call = call i32 @g(i32 noundef %0) #2
+  %1 = load i32, ptr %x.addr, align 4
+  %call1 = call i32 @__msil_mc.f(i32 noundef %1) #2
+  %add = add nsw i32 %call, %call1
+  ret i32 %add
+}
+
+define available_externally i32 @g(i32 noundef %x) local_unnamed_addr #1 {
+entry:
+  %cmp = icmp eq i32 %x, 12345
+  br i1 %cmp, label %if.then, label %if.end
+
+if.then:
+  tail call void @keep(ptr noundef nonnull @__msil_mc.f) #2
+  br label %if.end
+
+if.end:
+  ret i32 %x
+}
+
+declare i32 @__msil_mc.f(i32 noundef) #3
+
+declare void @keep(ptr noundef) local_unnamed_addr
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { inlinehint nounwind }
+attributes #2 = { nounwind }
+attributes #3 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- ya-o2.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; ya.ll's unit at -O2 without -flto: clang has dropped g's body.
+define i32 @use(i32 noundef %x) local_unnamed_addr #0 {
+entry:
+  %x.addr = alloca i32, align 4
+  store i32 %x, ptr %x.addr, align 4
+  %0 = load i32, ptr %x.addr, align 4
+  %call = call i32 @g(i32 noundef %0) #2
+  %1 = load i32, ptr %x.addr, align 4
+  %call1 = call i32 @__msil_mc.f(i32 noundef %1) #2
+  %add = add nsw i32 %call, %call1
+  ret i32 %add
+}
+
+declare i32 @g(i32 noundef) local_unnamed_addr #1
+
+declare i32 @__msil_mc.f(i32 noundef) #3
+
+attributes #0 = { noinline nounwind optnone }
+attributes #1 = { inlinehint nounwind }
+attributes #2 = { nounwind }
+attributes #3 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- yb.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; int g(int x) { return x; } void keep(int (*p)(int)) { (void)p; }
+;; int use(int); int main(void) { return use(-3) == 0 ? 0 : 1; }
+define noundef i32 @g(i32 noundef returned %x) local_unnamed_addr #0 {
+entry:
+  ret i32 %x
+}
+
+define void @keep(ptr noundef %p) local_unnamed_addr #0 {
+entry:
+  ret void
+}
+
+define range(i32 0, 2) i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @use(i32 noundef -3) #0
+  %cmp = icmp ne i32 %call, 0
+  %cond = zext i1 %cmp to i32
+  ret i32 %cond
+}
+
+declare i32 @use(i32 noundef) local_unnamed_addr
+
+attributes #0 = { nounwind }
+#--- t17a.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int (*keep)(int) = &f;
+@keep = local_unnamed_addr global ptr @__msil_mc.f, align 8
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- t17b.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Point", "Twice",
+;; "int32(int32)"))); int main(void) { return f(-3); }
+define i32 @main() local_unnamed_addr #0 {
+entry:
+  %call = tail call i32 @__msil_mc.f(i32 noundef -3) #0
+  ret i32 %call
+}
+
+declare i32 @__msil_mc.f(i32 noundef) local_unnamed_addr #1
+
+attributes #0 = { nounwind }
+attributes #1 = { "msil-managed-conv"="val;val" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Point" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+#--- castaddr.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int f(int) __attribute__((msil_method("Contoso.Widget", "Guarded",
+;; "int32(int32)"))); int (*keep)(int) = &f;
+;; long long viacast(long long x) { return ((long long (*)(long long))f)(x); }
+;; int main(void) { return (int)viacast(-3) + (keep != 0); }
+@keep = local_unnamed_addr global ptr @__msil_mc.f, align 8
+
+declare i32 @__msil_mc.f(i32 noundef) #0
+
+define i64 @viacast(i64 noundef %x) local_unnamed_addr #1 {
+entry:
+  %call = tail call i64 @__msil_mc.f(i64 noundef %x) #1
+  ret i64 %call
+}
+
+define i32 @main() local_unnamed_addr #1 {
+entry:
+  %call.i = tail call i64 @__msil_mc.f(i64 noundef -3) #1
+  %conv = trunc i64 %call.i to i32
+  %0 = load ptr, ptr @keep, align 8
+  %cmp = icmp ne ptr %0, null
+  %conv1 = zext i1 %cmp to i32
+  %add = add i32 %conv1, %conv
+  ret i32 %add
+}
+
+attributes #0 = { "msil-managed-conv"="val;val" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-type"="Contoso.Widget" }
+attributes #1 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.f", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}

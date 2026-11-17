@@ -10,6 +10,7 @@ add_lld_library(lldMSIL
   InputChunks.cpp
   InputFiles.cpp
   LTO.cpp
+  ManagedCalls.cpp
   MapFile.cpp
   MarkLive.cpp
   NativeLibraries.cpp

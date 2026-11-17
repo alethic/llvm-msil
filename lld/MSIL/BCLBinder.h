@@ -96,6 +96,17 @@ struct BCLRequest {
   // 5.7.2), such as the binder returned for earlier requests.
 };
 
+// What msil-ld's checks of managed calls need to know of a type of the
+// references (plan 5.20.7 MK2-MK4).
+enum class BCLTypeKind : uint8_t {
+  // A class or an interface, System.ValueType and System.Enum included.
+  Reference,
+  // A value type that is not an enum: its base type is System.ValueType.
+  ValueType,
+  // An enum: its base type is System.Enum.
+  Enum,
+};
+
 class BCLBinder {
 public:
   /// Binds against Refs, or against the built-in [mscorlib] table when
@@ -116,6 +127,49 @@ public:
                              llvm::SmallVectorImpl<uint8_t> &Out);
   /// --print-bcl-binding.
   void printBinding(StringRef Request, llvm::raw_ostream &OS);
+
+  // The type queries of msil-ld's managed-call checks (plan 5.20.7 MK2-MK4,
+  // MK7).
+  // They resolve against the references and emit no row. A type that does
+  // not resolve gives the binder's error for it (not defined, defined twice,
+  // forwarded to a missing assembly), and every query is an Error in a link
+  // without references, whose built-in table records no type's kind.
+
+  /// True if the link binds against references, false for the built-in
+  /// [mscorlib] table (5.11.7).
+  bool hasReferences() const;
+  /// The kind of the type \p Ns.\p Name (a nested type's Name as
+  /// 'Outer/Inner'), from its TypeDef's flags and base type.
+  Expected<BCLTypeKind> getTypeKind(StringRef Ns, StringRef Name);
+  /// The underlying type of the enum \p Ns.\p Name: the element type of its
+  /// instance field value__ (ELEMENT_TYPE_BOOLEAN to ELEMENT_TYPE_U8,
+  /// ELEMENT_TYPE_I or ELEMENT_TYPE_U). An Error if the type is not an enum.
+  Expected<llvm::cli::ElementType> getEnumUnderlyingType(StringRef Ns,
+                                                         StringRef Name);
+  /// The full names ("Ns.Name", nested parts 'Outer/Inner') of the base types
+  /// of \p Ns.\p Name, nearest first, through every reference of the set:
+  /// for a class, up to System.Object. A generic base type counts as its
+  /// generic type; the walk ends at a base that is neither a TypeDef, a
+  /// TypeRef nor a generic instance of one.
+  Expected<SmallVector<std::string, 4>> getBaseTypes(StringRef Ns,
+                                                     StringRef Name);
+  /// The flags of the public field \p Field that \p Ns.\p Name itself
+  /// declares (a field request binds in that type only, 5.11.4): MK7 reads
+  /// its Literal flag. With several public fields of that name, which only
+  /// hand-written IL declares, the first one's. An Error if the type does
+  /// not resolve or declares no such public field (binding the member
+  /// reports that).
+  Expected<llvm::cli::FieldAttributes>
+  getFieldFlags(StringRef Ns, StringRef Name, StringRef Field);
+  /// The full name of the type that declares the method that the Method
+  /// request \p R binds to (plan 5.20.3 MS5, 5.20.5 ML2 (2)): R's own type,
+  /// spelled as R spells it, when that type declares the method, else the
+  /// base type in which the member search (5.11.4) found it. In a link
+  /// without references, R's own type when the built-in table has the row
+  /// (its rows are declared by their owners). The request's signature holds
+  /// output tokens of this binder, as for bind(). An Error when the request
+  /// does not bind, with the text bind() would give; no row is emitted.
+  Expected<std::string> getDeclaringType(const BCLRequest &R);
 
 private:
   struct Impl; // defined in BCLBinder.cpp

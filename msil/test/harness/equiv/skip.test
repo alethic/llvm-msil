@@ -46,9 +46,14 @@
 #     (its printf family comes from the helper archive's CIL member, plan
 #     5.14.3 A9), for 05-variadics/shared-variadic.test on every triple and
 #     M27's for 07-sjlj/sjlj-xasm.test and sjlj-xasm-callback.test on every
-#     triple (-shared libraries and their programs; none of these lines is
-#     checked here). O6
-#     is msil-verify.py's
+#     triple and MC-1's for 13-managed-calls/shared.test and exported.test on
+#     every triple (-shared libraries and their programs) and for ten more
+#     13-managed-calls tests on every triple (arrays, console, conversions,
+#     enum-args, field-read, inherited, interfaces, null-handles,
+#     static-value-members and value-types: their --lto-emit-asm text's stubs
+#     check the declarations when they run and their LTO image's stubs do
+#     not, plan 5.20.6 MW2); none of these lines is checked here. O6 is
+#     msil-verify.py's
 #     (--equiv-skip <the real file> --test <path> --md-baseline): b.exe has a
 #     metadata message that its baseline a.exe lacks (a literal field without
 #     a constant, 0x80131B17 on Field 'D'::'w'; the images of

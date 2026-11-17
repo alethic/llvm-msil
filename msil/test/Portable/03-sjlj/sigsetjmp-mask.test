@@ -1,0 +1,108 @@
+# sigsetjmp with a signal mask fails to link on msil64-unknown-dotnet: a site whose mask is the constant 1, and one whose mask is known only at run time, reference sigprocmask, which c.dll does not provide, so msil-ld reports the undefined symbol with N6's line naming c.dll and the function that holds the site; the same program with the constant mask 0 links and runs.
+# P-1r row R1 (5.15.4's step 2 as amended: MSILLowerSjLj saves and restores
+# the mask at a sigsetjmp or __sigsetjmp site on Linux and *-unknown-dotnet
+# triples alike, through sigprocmask(SIG_BLOCK, NULL, buf + 72) at the site
+# and sigprocmask(SIG_SETMASK, buf + 72, NULL) in its restore block, unless
+# the mask argument is the constant 0). On dotnet, c.dll does not export
+# sigprocmask until the signal design (lld/MSIL/CLibraryNames.def lists it
+# as a C library name), so an object link fails with msil-ld's
+# undefined-symbol report and N6's line '>>> a C library function that the
+# C library c.dll (msil64-unknown-dotnet) does not provide' (5.18.6 PL3,
+# 5.14.2), because c.dll takes part in the link (the driver's default -lc
+# from the sysroot). One report per program: the site and its restore
+# block are in one function. Without the condition, the lowering would skip
+# the mask silently on dotnet. The loud failure is a link error, so this is
+# a %{msil_prog_fail_<L>} test (plan 5.17.4); the zero-mask program runs and
+# checks itself.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il; that path stops in code generation instead, which
+# lld/test/MSIL/lto-sjlj.test pins), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{mask_check} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: error" --implicit-check-not=">>> referenced by"
+#
+# The constant mask 1.
+# REDEFINE: %{msil_srcs} = %t/one.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{mask_check} --check-prefixes=ONE,LINK
+# RUN: %{msil_prog_fail_O2} 2>&1 | %{mask_check} --check-prefixes=ONE,LINK
+# ONE:      {{^}}msil-ld: error: undefined symbol: sigprocmask{{$}}
+# ONE-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# ONE-NEXT: {{^}}>>> referenced by {{.+}}:(site_one){{$}}
+#
+# A mask known only at run time (a volatile that holds 1).
+# REDEFINE: %{msil_srcs} = %t/var.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | %{mask_check} --check-prefixes=VAR,LINK
+# RUN: %{msil_prog_fail_O2} 2>&1 | %{mask_check} --check-prefixes=VAR,LINK
+# VAR:      {{^}}msil-ld: error: undefined symbol: sigprocmask{{$}}
+# VAR-NEXT: {{^}}>>> a C library function that the C library c.dll (msil64-unknown-dotnet) does not provide{{$}}
+# VAR-NEXT: {{^}}>>> referenced by {{.+}}:(site_var){{$}}
+#
+# LINK:     {{^}}clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation){{$}}
+# LINK:     {{^}}msil-prog: error: the link failed (exit status 1){{$}}
+#
+# The constant mask 0: no sigprocmask, so the program links, runs and
+# checks itself (sigsetjmp-mask.expected).
+# REDEFINE: %{msil_srcs} = %t/zero.c
+# RUN: %{msil_prog}
+#--- one.c
+#include <setjmp.h>
+
+static sigjmp_buf sb;
+
+__attribute__((noinline)) static void sjump(sigjmp_buf b, int v) {
+  siglongjmp(b, v);
+}
+
+__attribute__((noinline)) int site_one(void) {
+  int r = sigsetjmp(sb, 1);
+  if (r == 0)
+    sjump(sb, 1);
+  return r;
+}
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return site_one() != 1;
+}
+#--- var.c
+#include <setjmp.h>
+
+static sigjmp_buf sb;
+static volatile int mask_one = 1;
+
+__attribute__((noinline)) static void sjump(sigjmp_buf b, int v) {
+  siglongjmp(b, v);
+}
+
+__attribute__((noinline)) int site_var(void) {
+  int r = sigsetjmp(sb, mask_one);
+  if (r == 0)
+    sjump(sb, 2);
+  return r;
+}
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return site_var() != 2;
+}
+#--- zero.c
+#include <setjmp.h>
+
+static sigjmp_buf sb;
+
+__attribute__((noinline)) static void sjump(sigjmp_buf b, int v) {
+  siglongjmp(b, v);
+}
+
+__attribute__((noinline)) int site_zero(void) {
+  int r = sigsetjmp(sb, 0);
+  if (r == 0)
+    sjump(sb, 3);
+  return r;
+}
+
+int main(void) {
+  /* 0: the zero-mask site is reached again with the jump's value. */
+  return site_zero() == 3 ? 0 : 1;
+}

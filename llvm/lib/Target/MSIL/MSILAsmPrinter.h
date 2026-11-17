@@ -43,6 +43,7 @@
 #include "MSILDataSegment.h"
 #include "MSILEHClauses.h"
 #include "MSILMCInstLower.h"
+#include "MSILManagedCalls.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
@@ -65,6 +66,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace llvm {
 class AttributeList;
@@ -154,10 +156,14 @@ private:
   /// function being printed.
   std::unique_ptr<MSILMCInstLower> MCInstLowering;
   /// The whole-body clause of the function being printed (plan 5.15.4,
-  /// MSILEHClauses.h), and whether its body is the throw helper's, which the
-  /// printer writes instead of its machine instructions.
+  /// MSILEHClauses.h), and whether its body is the throw helper's or a
+  /// managed-call stub's (plan 5.20.5 ML2 (2)), which the printer writes
+  /// instead of its machine instructions.
   std::optional<MSILWholeBodyTry> WholeBody;
   bool WritesBody = false;
+  /// The managed calls of the stubs printed so far: the tokens of their
+  /// bodies point into them, so they live until the module is done.
+  std::vector<std::unique_ptr<MSIL::ManagedCall>> ManagedCalls;
 
   /// Owns every signature handed out by the services below. They outlive the
   /// MCInsts and MSILMemberRefExprs that point to them.
@@ -380,12 +386,19 @@ public:
   /// Emits .maxstack and .locals, and chooses the branch forms of the
   /// function (MSILMCInstLower::computeBranchForms). A whole-body clause
   /// (MSILEHClauses.h) adds its result local R and its clause event, and
-  /// puts the lowering in return-as-leave mode; the throw helper's body is
-  /// written here.
+  /// puts the lowering in return-as-leave mode; the throw helper's body and
+  /// a managed-call stub's body (MSILManagedCalls.h, with its locals after
+  /// the method's own) are written here.
   void emitFunctionBodyStart() override;
+  /// Emits nothing for a block of the throw helper or a managed-call stub,
+  /// whose body emitFunctionBodyStart wrote (plan 5.20.5 ML2 (2)): neither a
+  /// label nor the verbose block comment follows the written 'ret' or
+  /// 'throw', so the closing brace does.
+  void emitBasicBlockStart(const MachineBasicBlock &MBB) override;
   /// Emits the CIL_ MCInsts of \p MI (MSILMCInstLower::lower), which exist
   /// for exactly the instructions that computeBranchForms laid out; nothing
-  /// for the throw helper, whose body emitFunctionBodyStart wrote.
+  /// for the throw helper or a managed-call stub, whose body
+  /// emitFunctionBodyStart wrote.
   void emitInstruction(const MachineInstr *MI) override;
   /// Emits the filter, the handler and the tail of a whole-body clause.
   void emitFunctionBodyEnd() override;

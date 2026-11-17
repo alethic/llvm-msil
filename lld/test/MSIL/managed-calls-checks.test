@@ -1,0 +1,959 @@
+## msil-ld's checks of managed calls (ImplementationPlan.md 5.20.7 MK2-MK4
+## and MK7, milestone MC-1; texts T-M7, T-M8, T-M9, T-M16, T-M18 and
+## T-M23 of 5.20.3, pinned whole; '<f>' is the C name, without the
+## '__msil_mc.' prefix). Most inputs have one managed call; the references
+## are Inputs/fakepack/FakeWidgets.il over FakeRuntime.il (see
+## managed-calls.test).
+## - T-M7 (MK2): an integer passed for a 'valuetype E' parameter needs an
+##   enum E whose value__ has that integer's width:
+##   'managed call '<f>': parameter <i> passes <n> bits for '<E>', which is not an enum of that width',
+##   <i> being the member's 1-based CIL parameter position: an int32 for an
+##   int64-backed enum (wide.ll) and for a uint8-backed enum (small.ll), a
+##   struct passed as an integer (struct.ll: Contoso.Point), the third CIL
+##   parameter (third.ll), and the first CIL parameter after a 'this' handle
+##   (tune.ll), on a host triple and on msil64-unknown-dotnet. The widths
+##   that match (an int64 for WideMode, a signed char for SmallMode, an int
+##   for Mode) link: managed-calls.test.
+## - T-M7 for each parameter on its own (MK2; MC-1's fix of D1): a
+##   'boxed' handle of a value type V exempts only its own parameter,
+##   never another parameter of V that C passes as an integer. pairs.ll
+##   calls Pair(Point, Point) and SetPair(Mode, Mode) with a handle beside a
+##   long long, in both orders: T-M7 for the integer's parameter (2, or 1),
+##   64 bits for the struct Contoso.Point and for the int32-backed enum
+##   Contoso.Mode, on x86_64-pc-windows-msvc-msil,
+##   x86_64-unknown-linux-gnu-msil and msil64-unknown-dotnet. These links
+##   used to succeed silently, the integer reaching the value-type parameter
+##   unchecked (a stub that PEVerify refuses). Two handles, and a handle
+##   beside an int for the enum, link (pairs-ok.ll).
+## - T-M7 in its result form (MK2 as amended in section 12, 2026-11-04): a
+##   'valuetype E' result (for a field member, the field's type) that the C
+##   result takes as an integer ('enum') needs an enum E whose value__ has
+##   the width of the stub's return type:
+##   'managed call '<f>': the result has <n> bits for '<E>', which is not an enum of that width':
+##   a struct result taken as an int (origin-int.ll: Contoso.Point), an
+##   int64-backed enum result read into an int (wide-res.ll, on a host
+##   triple and on msil64-unknown-dotnet) and an int64-backed enum field
+##   read into an int (wide-field.ll). The widths that match link
+##   (res-ok.ll: an int32-backed enum result into an int; field-ok.ll: the
+##   int64-backed field into a long long).
+## - The same check for C 'char' and 'short' results (the row 'fix-loop
+##   ownership: ... MSILMCTypeUtilities.h -> fix-6' of section 12,
+##   2026-11-04: the stub's MethodDef has the exact return type int8 or
+##   int16, so the object check and the --lto-emit-asm check of
+##   managed-calls-lto.test read the same width): an int32-backed enum
+##   result read into a short (res16.ll, Contoso.Mode, as a
+##   Console::get_ForegroundColor() read into a short would be) is T-M7's
+##   result form with 16 bits, on a host triple and on msil64-unknown-dotnet;
+##   a uint8-backed enum result read into a signed char (res8-ok.ll,
+##   Contoso.SmallMode) and an int16-backed one read into a short
+##   (res16-ok.ll, Contoso.ShortMode) link, and their stubs return int8 and
+##   int16.
+## - MK2's stub shape (5.20.7 MK2 as amended in section 12, 2026-11-04): the
+##   access of a 'this-val' method is 'call V::M', 'constrained. V' then
+##   'callvirt V::M' (llc's placeholder, which msil-ld rewrites), or
+##   'constrained. V' then 'callvirt D::M' with D the bound member's
+##   declaring type. patch-access.py turns the placeholder of shape.ll's stub
+##   (point_sum: Contoso.Point::Sum()) into 'constrained. GCHandle' then
+##   'callvirt Contoso.Point::Sum()', in none of the three shapes, which
+##   MK2 reports as an internal error (an object that needs a matching
+##   toolchain) instead of linking or rewriting it:
+##   '<file>: managed call '<f>': the stub calls '<X>::<M>' through 'constrained. <V>', but '<V>' has no such member; the object needs a matching toolchain'.
+## - T-M8 (MK2, MK3): without references nothing tells an enum from a
+##   struct, so an enum conversion or a value type other than GCHandle is
+##   'managed call '<f>': '<V>' is a value type, which msil-ld checks only against references; pass --reference=<reference assemblies>':
+##   an enum parameter (mode.ll; its member is outside the table, so the
+##   binder's '.NET member 'Contoso.Widget' is not in msil-ld's built-in
+##   mscorlib table' line follows it, the next line, and no other error), a
+##   value-type TYPE (point.ll, likewise, naming 'Contoso.Point'), and a
+##   value-type TYPE whose member the table binds (exc-val.ll:
+##   'valuetype System.Exception' with get_HResult(), only T-M8), static
+##   members included (MC-1's fix of MK3: vt-table.ll,
+##   'valuetype System.Threading.Interlocked' with the table's static
+##   MemoryBarrier(), only T-M8; it used to link). GCHandle is exempt:
+##   managed-calls.test's table.ll links GCHandle::Free() without
+##   references, and gch-static.ll links the static GCHandle::Alloc(object)
+##   on a 'valuetype' TYPE without references.
+## - T-M9 (MK4): with references, an msil_catch type must derive from
+##   System.Exception:
+##   'managed call '<f>': 'msil_catch' type '<T>' does not derive from System.Exception'
+##   (notexc.ll: Contoso.NotAnException). Types that derive through other
+##   types (Contoso.BrokenWidgetException through WidgetException,
+##   DecoderFallbackException through ArgumentException and
+##   SystemException) link: managed-calls.test.
+## - T-M16 (MK3): with references, the 'valuetype' prefix and the boxed and
+##   'this' conversions must agree with the TypeDef:
+##   'managed call '<f>': '<T>' is a <value|reference> type, but the declaration uses it as a <reference|value> type'
+##   (refval.ll: 'valuetype Contoso.Widget' with a 'this-val' get_Size();
+##   valref.ll: 'Contoso.Point' with a 'this-obj' Sum()), and for the
+##   conversions of parameters and constructors: a 'boxed' parameter of a
+##   class spelled 'valuetype' (boxedref.ll: unbox.any Contoso.Widget), an
+##   'obj' parameter of a struct spelled 'class' (objval.ll: castclass
+##   Contoso.Point), a struct's constructor whose TYPE is spelled as a class
+##   (ctorval.ll: Contoso.Point, 'val,val;obj', newobj without box, on a
+##   host triple and on msil64-unknown-dotnet) and a class's constructor
+##   whose TYPE is spelled as a value type (ctorref.ll: 'valuetype
+##   Contoso.Widget', 'utf8,val;boxed', newobj then box). A parameter's
+##   spelling is part of the member's signature, so for boxedref.ll and
+##   objval.ll the binder's undefined-member error follows. A class spelled
+##   'valuetype' as the TYPE of a static method or a static field is T-M16
+##   too (MK3, checked for every member kind; these used to link):
+##   vt-static.ll ('valuetype Contoso.Widget' with Guarded(int32)),
+##   vt-field.ll (with the static field Count), on a host triple and on
+##   msil64-unknown-dotnet, and vt-table.ll (the FakeRuntime class
+##   System.Threading.Interlocked with MemoryBarrier()).
+## - MK3's parents (MC-1's fix of MK3): a static member of a
+##   'valuetype' TYPE is a MemberRef whose parent is a TypeSpec in the object
+##   ('valuetype [msil.bcl]Contoso.Point::Twice'), which msil-ld writes in
+##   the image as the TypeRef parent that IL and C# use
+##   ('[FakeWidgets]Contoso.Point::Twice'): pt-static.ll, the static method
+##   Twice(int32) and the static field Total of the struct Contoso.Point, on
+##   a host triple and on msil64-unknown-dotnet. GCHandle keeps a TypeRef
+##   parent in the object too (gch-static.ll). A value type named without
+##   'valuetype' as the TYPE of a static member keeps its TypeRef parent and
+##   links (pt-plain.ll), as in IL: the prefix matters where the kind
+##   changes the code (an instance member's 'this', a constructor's result).
+## - T-M18 (MK7, section 12, 2026-11-04): with references, a field member
+##   whose FieldDef is a literal has no storage:
+##   'managed call '<f>': reading the literal field '<T>::<F>' is not supported for MSIL yet'
+##   (literal.ll: 'field int32' Contoso.Widget::Max, on a host triple and
+##   on msil64-unknown-dotnet).
+## - T-M23 (MC-1's fix of D11): a managed-call stub
+##   '__msil_mc.<symbol>' is a name that only the toolchain defines, as an
+##   internal function (a LOCAL FUNCTION symbol of the object), so an input
+##   that defines it otherwise is refused:
+##   '<file>: defines '__msil_mc.<symbol>', which is reserved for the MSIL toolchain (a managed-call stub)':
+##   t23b.ll defines a GLOBAL '__msil_mc.widget_count' (a C function with
+##   that asm label) beside t23a.ll's managed call widget_count, which linked
+##   silently, and t23b2.ll's definition calls ext1() and ext2() (t23c2.ll),
+##   which msil-ld used to check as the object's stub ('the stub's body
+##   makes more than one member access'), on x86_64-pc-windows-msvc-msil
+##   and msil64-unknown-dotnet. A hand-written internal stub (t23ok.ll, an
+##   "msil-managed-stub" definition as slot P0 makes one) is a LOCAL symbol
+##   and links. managed-calls-lto.test has the bitcode cases, and
+##   managed-calls-forwarders.test the forwarder form, for definitions of
+##   '__msil_mc_ctor.<s>' and '__msil_mc_dtor.<s>'.
+## msil-ld prints each text right after 'msil-ld: error: ': T-M7, T-M8,
+## T-M9, T-M16 and T-M18 with no file prefix, T-M23 and the stub-shape
+## error after the object's name as the RUN line gives it.
+## A failed link writes no output. The same checks under LTO are
+## managed-calls-lto.test's.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+
+## T-M7.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil wide.ll -o wide.o
+# RUN: not msil-ld wide.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7 \
+# RUN:   -DF=set_wide -DI=1 -DN=32 -DE=Contoso.WideMode
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil small.ll -o small.o
+# RUN: not msil-ld small.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7 \
+# RUN:   -DF=set_small -DI=1 -DN=32 -DE=Contoso.SmallMode
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil struct.ll -o struct.o
+# RUN: not msil-ld struct.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7 \
+# RUN:   -DF=place -DI=1 -DN=32 -DE=Contoso.Point
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil third.ll -o third.o
+# RUN: not msil-ld third.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7 \
+# RUN:   -DF=set_modes -DI=3 -DN=32 -DE=Contoso.WideMode
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil tune.ll -o tune.o
+# RUN: not msil-ld tune.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7 \
+# RUN:   -DF=tune -DI=1 -DN=32 -DE=Contoso.SmallMode
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet wide.ll -o wide-net.o
+# RUN: not msil-ld wide-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7 \
+# RUN:   -DF=set_wide -DI=1 -DN=32 -DE=Contoso.WideMode
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet third.ll -o third-net.o
+# RUN: not msil-ld third-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7 \
+# RUN:   -DF=set_modes -DI=3 -DN=32 -DE=Contoso.WideMode
+# RUN: not ls x.exe
+# TM7: {{^}}msil-ld: error: managed call '[[F]]': parameter [[I]] passes [[N]] bits for '[[E]]', which is not an enum of that width{{$}}
+
+## T-M7 for each parameter on its own: a handle beside an integer. msil-ld's
+## lines are sorted, so that the pins hold whatever order the stubs are
+## checked in, and any other line fails.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil pairs.ll -o pairs.o
+# RUN: not msil-ld pairs.o --reference=refs -o x.exe 2>&1 | sort | %{err} --check-prefix=PAIRS
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil pairs.ll -o pairs-lnx.o
+# RUN: not msil-ld pairs-lnx.o --reference=refs -o x.exe 2>&1 | sort | %{err} --check-prefix=PAIRS
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet pairs.ll -o pairs-net.o
+# RUN: not msil-ld pairs-net.o --reference=refs -o x.exe 2>&1 | sort | %{err} --check-prefix=PAIRS
+# RUN: not ls x.exe
+# PAIRS:      {{^}}msil-ld: error: managed call 'mode_pair': parameter 2 passes 64 bits for 'Contoso.Mode', which is not an enum of that width{{$}}
+# PAIRS-NEXT: {{^}}msil-ld: error: managed call 'mode_rev': parameter 1 passes 64 bits for 'Contoso.Mode', which is not an enum of that width{{$}}
+# PAIRS-NEXT: {{^}}msil-ld: error: managed call 'pair_cmp': parameter 2 passes 64 bits for 'Contoso.Point', which is not an enum of that width{{$}}
+# PAIRS-NEXT: {{^}}msil-ld: error: managed call 'pair_rev': parameter 1 passes 64 bits for 'Contoso.Point', which is not an enum of that width{{$}}
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil pairs-ok.ll -o pairs-ok.o
+# RUN: msil-ld pairs-ok.o --reference=refs -o pairs-ok.exe 2>&1 | count 0
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet pairs-ok.ll -o pairs-ok-net.o
+# RUN: msil-ld pairs-ok-net.o --reference=refs -o pairs-ok-net.exe 2>&1 | count 0
+
+## T-M8, without references.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil mode.ll -o mode.o
+# RUN: not msil-ld mode.o -o x.exe > mode.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefixes=TM8,TM8TAB --input-file=mode.txt -DF=set_mode -DV=Contoso.Mode \
+# RUN:   -DT=Contoso.Widget --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil point.ll -o point.o
+# RUN: not msil-ld point.o -o x.exe > point.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefixes=TM8,TM8TAB --input-file=point.txt -DF=point_new -DV=Contoso.Point \
+# RUN:   -DT=Contoso.Point --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil exc-val.ll -o exc-val.o
+# RUN: not msil-ld exc-val.o -o x.exe 2>&1 | %{err} --check-prefix=TM8 -DF=exc_hresult -DV=System.Exception
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet exc-val.ll -o exc-val-net.o
+# RUN: not msil-ld exc-val-net.o -o x.exe 2>&1 | %{err} --check-prefix=TM8 -DF=exc_hresult -DV=System.Exception
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil vt-table.ll -o vt-table.o
+# RUN: not msil-ld vt-table.o -o x.exe 2>&1 | %{err} --check-prefix=TM8 \
+# RUN:   -DF=vt_barrier -DV=System.Threading.Interlocked
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet vt-table.ll -o vt-table-net.o
+# RUN: not msil-ld vt-table-net.o -o x.exe 2>&1 | %{err} --check-prefix=TM8 \
+# RUN:   -DF=vt_barrier -DV=System.Threading.Interlocked
+# RUN: not ls x.exe
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil gch-static.ll -o gch-static.o
+# RUN: msil-ld gch-static.o -o gch-static.exe 2>&1 | count 0
+# RUN: llvm-cil-dump gch-static.o | FileCheck %s --check-prefix=GCH-OBJ
+# RUN: llvm-cil-dump gch-static.exe | FileCheck %s --check-prefix=GCH-IMAGE
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet gch-static.ll -o gch-static-net.o
+# RUN: msil-ld gch-static-net.o -o gch-static-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump gch-static-net.exe | FileCheck %s --check-prefix=GCH-IMAGE
+# GCH-OBJ:   {{^    L[0-9]+: }}call valuetype [msil.bcl]System.Runtime.InteropServices.GCHandle(object) [msil.bcl]System.Runtime.InteropServices.GCHandle::'Alloc'{{$}}
+# GCH-IMAGE: {{^    L[0-9]+: }}call valuetype [mscorlib]System.Runtime.InteropServices.GCHandle(object) [mscorlib]System.Runtime.InteropServices.GCHandle::'Alloc'{{$}}
+# TM8: {{^}}msil-ld: error: managed call '[[F]]': '[[V]]' is a value type, which msil-ld checks only against references; pass --reference=<reference assemblies>{{$}}
+# TM8TAB-NEXT: {{^}}msil-ld: error: .NET member '[[T]]' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+
+## T-M9.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil notexc.ll -o notexc.o
+# RUN: not msil-ld notexc.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM9 -DF=guarded_bad -DT=Contoso.NotAnException
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet notexc.ll -o notexc-net.o
+# RUN: not msil-ld notexc-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM9 -DF=guarded_bad -DT=Contoso.NotAnException
+# RUN: not ls x.exe
+# TM9: {{^}}msil-ld: error: managed call '[[F]]': 'msil_catch' type '[[T]]' does not derive from System.Exception{{$}}
+
+## T-M16.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil refval.ll -o refval.o
+# RUN: not msil-ld refval.o --reference=refs -o x.exe > refval.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=TM16 --input-file=refval.txt -DF=size_val -DT=Contoso.Widget -DK=reference -DU=value \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil valref.ll -o valref.o
+# RUN: not msil-ld valref.o --reference=refs -o x.exe > valref.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefix=TM16 --input-file=valref.txt -DF=sum_obj -DT=Contoso.Point -DK=value -DU=reference \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls x.exe
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil boxedref.ll -o boxedref.o
+# RUN: not msil-ld boxedref.o --reference=refs -o x.exe > boxedref.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefixes=TM16,UNDEF --input-file=boxedref.txt -DF=wrap_widget -DT=Contoso.Widget \
+# RUN:   -DK=reference -DU=value "-DM=object Contoso.Widget::Wrap(valuetype Contoso.Widget)" -DO=boxedref.o \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil objval.ll -o objval.o
+# RUN: not msil-ld objval.o --reference=refs -o x.exe > objval.txt 2>&1
+# RUN: FileCheck %s %{crash} --check-prefixes=TM16,UNDEF --input-file=objval.txt -DF=place_obj -DT=Contoso.Point \
+# RUN:   -DK=value -DU=reference "-DM=void Contoso.Widget::Place(class Contoso.Point)" -DO=objval.o \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil ctorval.ll -o ctorval.o
+# RUN: not msil-ld ctorval.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=point_obj -DT=Contoso.Point -DK=value -DU=reference
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet ctorval.ll -o ctorval-net.o
+# RUN: not msil-ld ctorval-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=point_obj -DT=Contoso.Point -DK=value -DU=reference
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil ctorref.ll -o ctorref.o
+# RUN: not msil-ld ctorref.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=widget_boxed -DT=Contoso.Widget -DK=reference -DU=value
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil vt-static.ll -o vt-static.o
+# RUN: not msil-ld vt-static.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=vt_guarded -DT=Contoso.Widget -DK=reference -DU=value
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet vt-static.ll -o vt-static-net.o
+# RUN: not msil-ld vt-static-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=vt_guarded -DT=Contoso.Widget -DK=reference -DU=value
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil vt-field.ll -o vt-field.o
+# RUN: not msil-ld vt-field.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=vt_count -DT=Contoso.Widget -DK=reference -DU=value
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet vt-field.ll -o vt-field-net.o
+# RUN: not msil-ld vt-field-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=vt_count -DT=Contoso.Widget -DK=reference -DU=value
+# RUN: not msil-ld vt-table.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM16 \
+# RUN:   -DF=vt_barrier -DT=System.Threading.Interlocked -DK=reference -DU=value
+# RUN: not ls x.exe
+# TM16: {{^}}msil-ld: error: managed call '[[F]]': '[[T]]' is a [[K]] type, but the declaration uses it as a [[U]] type{{$}}
+# UNDEF: {{^}}msil-ld: error: undefined .NET member '[[M]]' (requested by [[O]]); 'Contoso.Widget' is defined in FakeWidgets 1.0.0.0 [null] (refs{{[/\\]}}FakeWidgets.dll) but has no such member; overloads present: {{.+$}}
+
+## MK3's parents: a TypeSpec in the object, the TypeRef in the image; the
+## plain spelling of a value type's static members links.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil pt-static.ll -o pt-static.o
+# RUN: llvm-cil-dump pt-static.o | FileCheck %s --check-prefix=PT-OBJ
+# RUN: msil-ld pt-static.o --reference=refs -o pt-static.exe 2>&1 | count 0
+# RUN: llvm-cil-dump pt-static.exe | FileCheck %s --check-prefix=PT-IMAGE
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet pt-static.ll -o pt-static-net.o
+# RUN: msil-ld pt-static-net.o --reference=refs -o pt-static-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump pt-static-net.exe | FileCheck %s --check-prefix=PT-IMAGE
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil pt-plain.ll -o pt-plain.o
+# RUN: llvm-cil-dump pt-plain.o | FileCheck %s --check-prefix=PLAIN-OBJ
+# RUN: msil-ld pt-plain.o --reference=refs -o pt-plain.exe 2>&1 | count 0
+# RUN: llvm-cil-dump pt-plain.exe | FileCheck %s --check-prefix=PT-IMAGE
+# PT-OBJ-DAG:    {{^    L[0-9]+: }}call int32(int32) valuetype [msil.bcl]Contoso.Point::'Twice'{{$}}
+# PT-OBJ-DAG:    {{^    L[0-9]+: }}ldsfld int32 valuetype [msil.bcl]Contoso.Point::'Total'{{$}}
+# PLAIN-OBJ-DAG: {{^    L[0-9]+: }}call int32(int32) [msil.bcl]Contoso.Point::'Twice'{{$}}
+# PLAIN-OBJ-DAG: {{^    L[0-9]+: }}ldsfld int32 [msil.bcl]Contoso.Point::'Total'{{$}}
+# PT-IMAGE-DAG:  {{^    L[0-9]+: }}call int32(int32) [FakeWidgets]Contoso.Point::'Twice'{{$}}
+# PT-IMAGE-DAG:  {{^    L[0-9]+: }}ldsfld int32 [FakeWidgets]Contoso.Point::'Total'{{$}}
+
+## T-M7, the result form; the matching widths link.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil origin-int.ll -o origin-int.o
+# RUN: not msil-ld origin-int.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7R \
+# RUN:   -DF=origin_int -DN=32 -DE=Contoso.Point
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil wide-res.ll -o wide-res.o
+# RUN: not msil-ld wide-res.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7R \
+# RUN:   -DF=get_wide -DN=32 -DE=Contoso.WideMode
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet wide-res.ll -o wide-res-net.o
+# RUN: not msil-ld wide-res-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7R \
+# RUN:   -DF=get_wide -DN=32 -DE=Contoso.WideMode
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil wide-field.ll -o wide-field.o
+# RUN: not msil-ld wide-field.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7R \
+# RUN:   -DF=wide_default -DN=32 -DE=Contoso.WideMode
+# RUN: not ls x.exe
+# TM7R: {{^}}msil-ld: error: managed call '[[F]]': the result has [[N]] bits for '[[E]]', which is not an enum of that width{{$}}
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil res-ok.ll -o res-ok.o
+# RUN: msil-ld res-ok.o --reference=refs -o res-ok.exe 2>&1 | count 0
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet res-ok.ll -o res-ok-net.o
+# RUN: msil-ld res-ok-net.o --reference=refs -o res-ok-net.exe 2>&1 | count 0
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil field-ok.ll -o field-ok.o
+# RUN: msil-ld field-ok.o --reference=refs -o field-ok.exe 2>&1 | count 0
+
+## char and short results.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil res16.ll -o res16.o
+# RUN: not msil-ld res16.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7R \
+# RUN:   -DF=get_mode16 -DN=16 -DE=Contoso.Mode
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet res16.ll -o res16-net.o
+# RUN: not msil-ld res16-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM7R \
+# RUN:   -DF=get_mode16 -DN=16 -DE=Contoso.Mode
+# RUN: not ls x.exe
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil res8-ok.ll -o res8-ok.o
+# RUN: msil-ld res8-ok.o --reference=refs -o res8-ok.exe 2>&1 | count 0
+# RUN: llvm-cil-dump res8-ok.exe | FileCheck %s --check-prefix=RES8
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet res8-ok.ll -o res8-ok-net.o
+# RUN: msil-ld res8-ok-net.o --reference=refs -o res8-ok-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump res8-ok-net.exe | FileCheck %s --check-prefix=RES8
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil res16-ok.ll -o res16-ok.o
+# RUN: msil-ld res16-ok.o --reference=refs -o res16-ok.exe 2>&1 | count 0
+# RUN: llvm-cil-dump res16-ok.exe | FileCheck %s --check-prefix=RES16
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet res16-ok.ll -o res16-ok-net.o
+# RUN: msil-ld res16-ok-net.o --reference=refs -o res16-ok-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump res16-ok-net.exe | FileCheck %s --check-prefix=RES16
+# RES8:  {{^  }}.method '__msil_mc.get_small8' int8() {{.+$}}
+# RES8:  {{^    L[0-9]+: }}call valuetype [FakeWidgets]Contoso.SmallMode() [FakeWidgets]Contoso.Widget::'GetSmall'{{$}}
+# RES16: {{^  }}.method '__msil_mc.get_short16' int16() {{.+$}}
+# RES16: {{^    L[0-9]+: }}call valuetype [FakeWidgets]Contoso.ShortMode() [FakeWidgets]Contoso.Widget::'GetShort'{{$}}
+
+## MK2's stub shape: an access in none of the three shapes.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil shape.ll -o shape.o
+# RUN: %python patch-access.py shape.o bad-shape.o
+# RUN: not msil-ld bad-shape.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=SHAPE
+# RUN: not ls x.exe
+# SHAPE: {{^}}msil-ld: error: bad-shape.o: managed call 'point_sum': the stub calls 'Contoso.Point::Sum' through 'constrained. System.Runtime.InteropServices.GCHandle', but 'System.Runtime.InteropServices.GCHandle' has no such member; the object needs a matching toolchain{{$}}
+
+## T-M18.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil literal.ll -o literal.o
+# RUN: not msil-ld literal.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM18
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet literal.ll -o literal-net.o
+# RUN: not msil-ld literal-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM18
+# RUN: not ls x.exe
+# TM18: {{^}}msil-ld: error: managed call 'widget_max': reading the literal field 'Contoso.Widget::Max' is not supported for MSIL yet{{$}}
+
+## T-M23: a definition of a stub's name.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil t23a.ll -o t23a.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil t23b.ll -o t23b.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil t23b2.ll -o t23b2.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil t23c2.ll -o t23c2.o
+# RUN: not msil-ld t23a.o t23b.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM23 -DO=t23b.o
+# RUN: not msil-ld t23a.o t23b2.o t23c2.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM23 -DO=t23b2.o
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet t23a.ll -o t23a-net.o
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet t23b.ll -o t23b-net.o
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet t23b2.ll -o t23b2-net.o
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet t23c2.ll -o t23c2-net.o
+# RUN: not msil-ld t23a-net.o t23b-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM23 \
+# RUN:   -DO=t23b-net.o
+# RUN: not msil-ld t23a-net.o t23b2-net.o t23c2-net.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TM23 \
+# RUN:   -DO=t23b2-net.o
+# RUN: not ls x.exe
+# TM23: {{^}}msil-ld: error: [[O]]: defines '__msil_mc.widget_count', which is reserved for the MSIL toolchain (a managed-call stub){{$}}
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil t23ok.ll -o t23ok.o
+# RUN: msil-ld t23ok.o --reference=refs -o t23ok.exe 2>&1 | count 0
+# RUN: llvm-cil-dump t23ok.exe | FileCheck %s --check-prefix=T23OK
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet t23ok.ll -o t23ok-net.o
+# RUN: msil-ld t23ok-net.o --reference=refs -o t23ok-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump t23ok-net.exe | FileCheck %s --check-prefix=T23OK
+# T23OK: {{^    L[0-9]+: }}ldsfld int32 [FakeWidgets]Contoso.Widget::'Count'{{$}}
+
+#--- wide.ll
+;; void set_wide(int); an int for an int64-backed enum
+declare void @__msil_mc.set_wide(i32) #0
+
+define i32 @main() {
+  call void @__msil_mc.set_wide(i32 1)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetWide" "msil-managed-sig"="void(valuetype Contoso.WideMode)" "msil-managed-conv"="enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.set_wide", !"Contoso.Widget", !"SetWide", !"void(valuetype Contoso.WideMode)", !"", !"enum;void", !""}
+#--- small.ll
+;; void set_small(int); an int for a uint8-backed enum
+declare void @__msil_mc.set_small(i32) #0
+
+define i32 @main() {
+  call void @__msil_mc.set_small(i32 1)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetSmall" "msil-managed-sig"="void(valuetype Contoso.SmallMode)" "msil-managed-conv"="enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.set_small", !"Contoso.Widget", !"SetSmall", !"void(valuetype Contoso.SmallMode)", !"", !"enum;void", !""}
+#--- struct.ll
+;; void place(int); an int for a struct
+declare void @__msil_mc.place(i32) #0
+
+define i32 @main() {
+  call void @__msil_mc.place(i32 1)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Place" "msil-managed-sig"="void(valuetype Contoso.Point)" "msil-managed-conv"="enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.place", !"Contoso.Widget", !"Place", !"void(valuetype Contoso.Point)", !"", !"enum;void", !""}
+#--- third.ll
+;; void set_modes(int, int, int); the third CIL parameter is the int64-backed enum
+declare void @__msil_mc.set_modes(i32, i32, i32) #0
+
+define i32 @main() {
+  call void @__msil_mc.set_modes(i32 0, i32 1, i32 2)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetModes" "msil-managed-sig"="void(int32, valuetype Contoso.Mode, valuetype Contoso.WideMode)" "msil-managed-conv"="val,enum,enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.set_modes", !"Contoso.Widget", !"SetModes", !"void(int32, valuetype Contoso.Mode, valuetype Contoso.WideMode)", !"", !"val,enum,enum;void", !""}
+#--- tune.ll
+;; void tune(dn_handle, int); after the 'this' handle, CIL parameter 1
+declare void @__msil_mc.tune(ptr, i32) #0
+
+define i32 @main() {
+  call void @__msil_mc.tune(ptr null, i32 1)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Tune" "msil-managed-sig"="instance void(valuetype Contoso.SmallMode)" "msil-managed-conv"="this-obj,enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.tune", !"Contoso.Widget", !"Tune", !"instance void(valuetype Contoso.SmallMode)", !"", !"this-obj,enum;void", !""}
+#--- mode.ll
+;; void set_mode(int); an enum over int32
+declare void @__msil_mc.set_mode(i32) #0
+
+define i32 @main() {
+  call void @__msil_mc.set_mode(i32 1)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetMode" "msil-managed-sig"="void(valuetype Contoso.Mode)" "msil-managed-conv"="enum;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.set_mode", !"Contoso.Widget", !"SetMode", !"void(valuetype Contoso.Mode)", !"", !"enum;void", !""}
+#--- point.ll
+;; dn_handle point_new(int, int); a value-type constructor: newobj, then box
+declare ptr @__msil_mc.point_new(i32, i32) #0
+
+define i32 @main() {
+  %r0 = call ptr @__msil_mc.point_new(i32 1, i32 2)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32, int32)" "msil-managed-conv"="val,val;boxed" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.point_new", !"valuetype Contoso.Point", !".ctor", !"instance void(int32, int32)", !"", !"val,val;boxed", !""}
+#--- exc-val.ll
+;; int exc_hresult(dn_handle); a table member, a value-type TYPE
+declare i32 @__msil_mc.exc_hresult(ptr) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.exc_hresult(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype System.Exception" "msil-managed-member"="get_HResult" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.exc_hresult", !"valuetype System.Exception", !"get_HResult", !"instance int32()", !"", !"this-val;val", !""}
+#--- notexc.ll
+;; int guarded_bad(int, int *); Contoso.NotAnException derives from System.Object
+declare i32 @__msil_mc.guarded_bad(i32, ptr) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.guarded_bad(i32 9, ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val,err;val" "msil-managed-catch"="Contoso.WidgetException=5;Contoso.NotAnException=6" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.guarded_bad", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val,err;val", !"Contoso.WidgetException=5;Contoso.NotAnException=6"}
+#--- refval.ll
+;; int size_val(dn_handle); Contoso.Widget is a class
+declare i32 @__msil_mc.size_val(ptr) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.size_val(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Widget" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.size_val", !"valuetype Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-val;val", !""}
+#--- valref.ll
+;; int sum_obj(dn_handle); Contoso.Point is a struct
+declare i32 @__msil_mc.sum_obj(ptr) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.sum_obj(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Sum" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-obj;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.sum_obj", !"Contoso.Point", !"Sum", !"instance int32()", !"", !"this-obj;val", !""}
+#--- boxedref.ll
+;; dn_handle wrap_widget(dn_handle); a boxed handle for a class
+declare ptr @__msil_mc.wrap_widget(ptr) #0
+
+define i32 @main() {
+  %r0 = call ptr @__msil_mc.wrap_widget(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Wrap" "msil-managed-sig"="object(valuetype Contoso.Widget)" "msil-managed-conv"="boxed;obj" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wrap_widget", !"Contoso.Widget", !"Wrap", !"object(valuetype Contoso.Widget)", !"", !"boxed;obj", !""}
+#--- objval.ll
+;; void place_obj(dn_handle); an object handle for a struct
+declare void @__msil_mc.place_obj(ptr) #0
+
+define i32 @main() {
+  call void @__msil_mc.place_obj(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Place" "msil-managed-sig"="void(class Contoso.Point)" "msil-managed-conv"="obj;void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.place_obj", !"Contoso.Widget", !"Place", !"void(class Contoso.Point)", !"", !"obj;void", !""}
+#--- ctorval.ll
+;; dn_handle point_obj(int, int); a struct's constructor, TYPE spelled as a class
+declare ptr @__msil_mc.point_obj(i32, i32) #0
+
+define i32 @main() {
+  %r0 = call ptr @__msil_mc.point_obj(i32 1, i32 2)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32, int32)" "msil-managed-conv"="val,val;obj" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.point_obj", !"Contoso.Point", !".ctor", !"instance void(int32, int32)", !"", !"val,val;obj", !""}
+#--- ctorref.ll
+;; dn_handle widget_boxed(const char *, int); a class's constructor, TYPE spelled as a value type
+declare ptr @__msil_mc.widget_boxed(ptr, i32) #0
+
+define i32 @main() {
+  %r0 = call ptr @__msil_mc.widget_boxed(ptr null, i32 3)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="utf8,val;boxed" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_boxed", !"valuetype Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"utf8,val;boxed", !""}
+#--- origin-int.ll
+;; int origin_int(void); a struct result taken as an int
+declare i32 @__msil_mc.origin_int() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.origin_int()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Origin" "msil-managed-sig"="valuetype Contoso.Point()" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.origin_int", !"Contoso.Widget", !"Origin", !"valuetype Contoso.Point()", !"", !";enum", !""}
+#--- wide-res.ll
+;; int get_wide(void); an int64-backed enum result read into an int
+declare i32 @__msil_mc.get_wide() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.get_wide()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="GetWide" "msil-managed-sig"="valuetype Contoso.WideMode()" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.get_wide", !"Contoso.Widget", !"GetWide", !"valuetype Contoso.WideMode()", !"", !";enum", !""}
+#--- wide-field.ll
+;; int wide_default(void); an int64-backed enum field read into an int
+declare i32 @__msil_mc.wide_default() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.wide_default()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Default" "msil-managed-sig"="field valuetype Contoso.WideMode" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wide_default", !"Contoso.Widget", !"Default", !"field valuetype Contoso.WideMode", !"", !";enum", !""}
+#--- res-ok.ll
+;; int get_mode(void); an int32-backed enum result read into an int
+declare i32 @__msil_mc.get_mode() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.get_mode()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="GetMode" "msil-managed-sig"="valuetype Contoso.Mode()" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.get_mode", !"Contoso.Widget", !"GetMode", !"valuetype Contoso.Mode()", !"", !";enum", !""}
+#--- field-ok.ll
+;; long long wide_default64(void); the int64-backed enum field read into a long long
+declare i64 @__msil_mc.wide_default64() #0
+
+define i32 @main() {
+  %r0 = call i64 @__msil_mc.wide_default64()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Default" "msil-managed-sig"="field valuetype Contoso.WideMode" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.wide_default64", !"Contoso.Widget", !"Default", !"field valuetype Contoso.WideMode", !"", !";enum", !""}
+#--- literal.ll
+;; int widget_max(void); Max is a literal field: it has no storage
+declare i32 @__msil_mc.widget_max() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.widget_max()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Max" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_max", !"Contoso.Widget", !"Max", !"field int32", !"", !";val", !""}
+#--- res16.ll
+;; short get_mode16(void); an int32-backed enum result read into a short
+declare i16 @__msil_mc.get_mode16() #0
+
+define i32 @main() {
+  %r0 = call i16 @__msil_mc.get_mode16()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="GetMode" "msil-managed-sig"="valuetype Contoso.Mode()" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.get_mode16", !"Contoso.Widget", !"GetMode", !"valuetype Contoso.Mode()", !"", !";enum", !""}
+#--- res8-ok.ll
+;; signed char get_small8(void); a uint8-backed enum result read into a
+;; signed char (signedness is not checked)
+declare i8 @__msil_mc.get_small8() #0
+
+define i32 @main() {
+  %r0 = call i8 @__msil_mc.get_small8()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="GetSmall" "msil-managed-sig"="valuetype Contoso.SmallMode()" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.get_small8", !"Contoso.Widget", !"GetSmall", !"valuetype Contoso.SmallMode()", !"", !";enum", !""}
+#--- res16-ok.ll
+;; short get_short16(void); an int16-backed enum result read into a short
+declare i16 @__msil_mc.get_short16() #0
+
+define i32 @main() {
+  %r0 = call i16 @__msil_mc.get_short16()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="GetShort" "msil-managed-sig"="valuetype Contoso.ShortMode()" "msil-managed-conv"=";enum" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.get_short16", !"Contoso.Widget", !"GetShort", !"valuetype Contoso.ShortMode()", !"", !";enum", !""}
+#--- shape.ll
+;; int point_sum(dn_handle); Contoso.Point declares Sum(): llc writes the
+;; placeholder 'constrained. Contoso.Point' then 'callvirt Contoso.Point::Sum()'
+declare i32 @__msil_mc.point_sum(ptr) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.point_sum(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="Sum" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.point_sum", !"valuetype Contoso.Point", !"Sum", !"instance int32()", !"", !"this-val;val", !""}
+#--- pairs.ll
+;; Two parameters of one value type, a handle beside a long long, in both
+;; orders: int pair_cmp(dn_handle, long long), int pair_rev(long long,
+;; dn_handle) (Contoso.Point, a struct), void mode_pair(dn_handle, long
+;; long), void mode_rev(long long, dn_handle) (Contoso.Mode, an enum over
+;; int32)
+declare i32 @__msil_mc.pair_cmp(ptr, i64) #0
+declare i32 @__msil_mc.pair_rev(i64, ptr) #1
+declare void @__msil_mc.mode_pair(ptr, i64) #2
+declare void @__msil_mc.mode_rev(i64, ptr) #3
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.pair_cmp(ptr null, i64 1)
+  %r1 = call i32 @__msil_mc.pair_rev(i64 1, ptr null)
+  call void @__msil_mc.mode_pair(ptr null, i64 1)
+  call void @__msil_mc.mode_rev(i64 1, ptr null)
+  %r = add i32 %r0, %r1
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Pair" "msil-managed-sig"="int32(valuetype Contoso.Point, valuetype Contoso.Point)" "msil-managed-conv"="boxed,enum;val" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Pair" "msil-managed-sig"="int32(valuetype Contoso.Point, valuetype Contoso.Point)" "msil-managed-conv"="enum,boxed;val" }
+attributes #2 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetPair" "msil-managed-sig"="void(valuetype Contoso.Mode, valuetype Contoso.Mode)" "msil-managed-conv"="boxed,enum;void" }
+attributes #3 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetPair" "msil-managed-sig"="void(valuetype Contoso.Mode, valuetype Contoso.Mode)" "msil-managed-conv"="enum,boxed;void" }
+
+!msil.managed.calls = !{!0, !1, !2, !3}
+!0 = !{!"__msil_mc.pair_cmp", !"Contoso.Widget", !"Pair", !"int32(valuetype Contoso.Point, valuetype Contoso.Point)", !"", !"boxed,enum;val", !""}
+!1 = !{!"__msil_mc.pair_rev", !"Contoso.Widget", !"Pair", !"int32(valuetype Contoso.Point, valuetype Contoso.Point)", !"", !"enum,boxed;val", !""}
+!2 = !{!"__msil_mc.mode_pair", !"Contoso.Widget", !"SetPair", !"void(valuetype Contoso.Mode, valuetype Contoso.Mode)", !"", !"boxed,enum;void", !""}
+!3 = !{!"__msil_mc.mode_rev", !"Contoso.Widget", !"SetPair", !"void(valuetype Contoso.Mode, valuetype Contoso.Mode)", !"", !"enum,boxed;void", !""}
+#--- pairs-ok.ll
+;; The forms that fit: int pair_ok(dn_handle, dn_handle), and an int for the
+;; int32-backed enum beside a handle, in both orders: void mode_mix(dn_handle,
+;; int), void mode_mix_rev(int, dn_handle)
+declare i32 @__msil_mc.pair_ok(ptr, ptr) #0
+declare void @__msil_mc.mode_mix(ptr, i32) #1
+declare void @__msil_mc.mode_mix_rev(i32, ptr) #2
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.pair_ok(ptr null, ptr null)
+  call void @__msil_mc.mode_mix(ptr null, i32 1)
+  call void @__msil_mc.mode_mix_rev(i32 1, ptr null)
+  ret i32 %r0
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Pair" "msil-managed-sig"="int32(valuetype Contoso.Point, valuetype Contoso.Point)" "msil-managed-conv"="boxed,boxed;val" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetPair" "msil-managed-sig"="void(valuetype Contoso.Mode, valuetype Contoso.Mode)" "msil-managed-conv"="boxed,enum;void" }
+attributes #2 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="SetPair" "msil-managed-sig"="void(valuetype Contoso.Mode, valuetype Contoso.Mode)" "msil-managed-conv"="enum,boxed;void" }
+
+!msil.managed.calls = !{!0, !1, !2}
+!0 = !{!"__msil_mc.pair_ok", !"Contoso.Widget", !"Pair", !"int32(valuetype Contoso.Point, valuetype Contoso.Point)", !"", !"boxed,boxed;val", !""}
+!1 = !{!"__msil_mc.mode_mix", !"Contoso.Widget", !"SetPair", !"void(valuetype Contoso.Mode, valuetype Contoso.Mode)", !"", !"boxed,enum;void", !""}
+!2 = !{!"__msil_mc.mode_mix_rev", !"Contoso.Widget", !"SetPair", !"void(valuetype Contoso.Mode, valuetype Contoso.Mode)", !"", !"enum,boxed;void", !""}
+#--- vt-static.ll
+;; int vt_guarded(int); the class Contoso.Widget spelled 'valuetype' as the
+;; TYPE of a static method
+declare i32 @__msil_mc.vt_guarded(i32) #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.vt_guarded(i32 1)
+  ret i32 %r0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.vt_guarded", !"valuetype Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"val;val", !""}
+#--- vt-field.ll
+;; int vt_count(void); the same TYPE for a static field
+declare i32 @__msil_mc.vt_count() #0
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.vt_count()
+  ret i32 %r0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Widget" "msil-managed-member"="Count" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.vt_count", !"valuetype Contoso.Widget", !"Count", !"field int32", !"", !";val", !""}
+#--- vt-table.ll
+;; void vt_barrier(void); the class System.Threading.Interlocked, whose
+;; MemoryBarrier() is a row of the built-in table, spelled 'valuetype'
+declare void @__msil_mc.vt_barrier() #0
+
+define i32 @main() {
+  call void @__msil_mc.vt_barrier()
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype System.Threading.Interlocked" "msil-managed-member"="MemoryBarrier" "msil-managed-sig"="void()" "msil-managed-conv"=";void" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.vt_barrier", !"valuetype System.Threading.Interlocked", !"MemoryBarrier", !"void()", !"", !";void", !""}
+#--- gch-static.ll
+;; dn_handle gch_alloc(dn_handle); the static GCHandle::Alloc(object) on a
+;; 'valuetype' TYPE: GCHandle needs no references
+declare ptr @__msil_mc.gch_alloc(ptr) #0
+
+define i32 @main() {
+  %r0 = call ptr @__msil_mc.gch_alloc(ptr null)
+  ret i32 0
+}
+
+attributes #0 = { "msil-managed-type"="valuetype System.Runtime.InteropServices.GCHandle" "msil-managed-member"="Alloc" "msil-managed-sig"="valuetype System.Runtime.InteropServices.GCHandle(object)" "msil-managed-conv"="obj;gch" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.gch_alloc", !"valuetype System.Runtime.InteropServices.GCHandle", !"Alloc", !"valuetype System.Runtime.InteropServices.GCHandle(object)", !"", !"obj;gch", !""}
+#--- pt-static.ll
+;; int pt_twice(int), int pt_total(void); the static method Twice(int32) and
+;; the static field Total of the struct Contoso.Point, spelled 'valuetype'
+declare i32 @__msil_mc.pt_twice(i32) #0
+declare i32 @__msil_mc.pt_total() #1
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.pt_twice(i32 1)
+  %r1 = call i32 @__msil_mc.pt_total()
+  %r = add i32 %r0, %r1
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #1 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="Total" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0, !1}
+!0 = !{!"__msil_mc.pt_twice", !"valuetype Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+!1 = !{!"__msil_mc.pt_total", !"valuetype Contoso.Point", !"Total", !"field int32", !"", !";val", !""}
+#--- pt-plain.ll
+;; pt-static.ll's members with the TYPE spelled without 'valuetype':
+;; int plain_twice(int), int plain_total(void)
+declare i32 @__msil_mc.plain_twice(i32) #0
+declare i32 @__msil_mc.plain_total() #1
+
+define i32 @main() {
+  %r0 = call i32 @__msil_mc.plain_twice(i32 1)
+  %r1 = call i32 @__msil_mc.plain_total()
+  %r = add i32 %r0, %r1
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Twice" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="val;val" }
+attributes #1 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Total" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0, !1}
+!0 = !{!"__msil_mc.plain_twice", !"Contoso.Point", !"Twice", !"int32(int32)", !"", !"val;val", !""}
+!1 = !{!"__msil_mc.plain_total", !"Contoso.Point", !"Total", !"field int32", !"", !";val", !""}
+#--- t23a.ll
+;; int widget_count(void) __attribute__((msil_method("Contoso.Widget",
+;; "Count", "field int32"))); int other(void);
+;; int main(void) { return widget_count() * 100 + other(); }
+declare i32 @__msil_mc.widget_count() #0
+declare i32 @other()
+
+define i32 @main() {
+  %c = call i32 @__msil_mc.widget_count()
+  %m = mul i32 %c, 100
+  %o = call i32 @other()
+  %r = add i32 %m, %o
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Count" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_count", !"Contoso.Widget", !"Count", !"field int32", !"", !";val", !""}
+#--- t23b.ll
+;; int fake_count(void) __asm__("__msil_mc.widget_count");
+;; int fake_count(void) { return 5; } int other(void) { return fake_count(); }
+define i32 @__msil_mc.widget_count() {
+  ret i32 5
+}
+
+define i32 @other() {
+  %r = call i32 @__msil_mc.widget_count()
+  ret i32 %r
+}
+#--- t23b2.ll
+;; int fake_count(void) __asm__("__msil_mc.widget_count"); int ext1(void);
+;; int ext2(void); int fake_count(void) { return ext1() + ext2(); }
+;; int other(void) { return fake_count(); }
+declare i32 @ext1()
+declare i32 @ext2()
+
+define i32 @__msil_mc.widget_count() noinline {
+  %a = call i32 @ext1()
+  %b = call i32 @ext2()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+define i32 @other() {
+  %r = call i32 @__msil_mc.widget_count()
+  ret i32 %r
+}
+#--- t23c2.ll
+;; int ext1(void) { return 1; } int ext2(void) { return 2; }
+define i32 @ext1() {
+  ret i32 1
+}
+
+define i32 @ext2() {
+  ret i32 2
+}
+#--- t23ok.ll
+;; A hand-written internal stub, as slot P0 makes one of the declaration of
+;; int widget_count(void) with msil_method("Contoso.Widget", "Count",
+;; "field int32")
+define internal i32 @__msil_mc.widget_count() #0 {
+  unreachable
+}
+
+define i32 @main() {
+  %r = call i32 @__msil_mc.widget_count()
+  ret i32 %r
+}
+
+attributes #0 = { noinline "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Count" "msil-managed-sig"="field int32" "msil-managed-conv"=";val" "msil-managed-stub" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_count", !"Contoso.Widget", !"Count", !"field int32", !"", !";val", !""}
+#--- patch-access.py
+"""Copy the object argv[1] to argv[2], changing the 'constrained.' token of
+its one managed-call stub, a 'this-val' method access, to the token of the
+GCHandle that the stub's conversion boxes and unboxes. The stub's IL is
+  ldarg.0; call GCHandle::FromIntPtr; box GCHandle; unbox GCHandle;
+  call GCHandle::get_Target; unbox V; constrained. V; callvirt V::M; ...
+(5.20.3 MS5 and 5.20.5 ML2 (2) as amended in section 12, 2026-11-04), so the
+access becomes 'constrained. GCHandle' then 'callvirt V::M'. Offsets do not
+change."""
+import re
+import sys
+
+with open(sys.argv[1], "rb") as f:
+    data = bytearray(f.read())
+# box G; unbox G; call get_Target; unbox V; constrained. V; callvirt V::M
+site = re.compile(rb"\x8c(.{4})\x79(.{4})\x28.{4}\x79.{4}\xfe\x16(.{4})\x6f.{4}", re.S)
+found = list(site.finditer(data))
+if len(found) != 1:
+    sys.exit("patch-access.py: %d 'constrained.' access sites, expected 1" % len(found))
+m = found[0]
+if m.group(1) != m.group(2) or m.group(1) == m.group(3):
+    sys.exit("patch-access.py: unexpected stub body")
+data[m.start(3):m.end(3)] = m.group(1)
+with open(sys.argv[2], "wb") as f:
+    f.write(data)

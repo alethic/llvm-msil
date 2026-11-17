@@ -25,6 +25,7 @@
 
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -66,6 +67,16 @@ private:
   // What add() records for the code generator's hooks (LTO.cpp): the
   // prevailing definitions that no regular object needs.
   std::shared_ptr<DiscardableCopies> discardable;
+  // The T-P2 errors that add() reported (a portable triple's native
+  // imports), which compile() reads.
+  unsigned numPortableImportErrors = 0;
+  // What T-M17 and T-M10 before LTO (checkMixedManagedCalls,
+  // checkBitcodeManagedCalls and checkBitcodeManagedCallUses, which the
+  // constructor runs) found: whether they reported an error, which compile()
+  // reads, and the bitcode inputs whose modules did not read, which add()
+  // skips.
+  bool managedCallErrors = false;
+  llvm::SmallPtrSet<const BitcodeFile *, 1> unreadableBitcode;
 };
 
 // Returns true if \p f has a ThinLTO module, by lto::LTO::addModule's rule (a

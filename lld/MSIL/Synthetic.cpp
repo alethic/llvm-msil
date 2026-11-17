@@ -422,6 +422,44 @@ MethodSig OutputModule::mapSig(ObjFile &f, const MethodSig &sig) {
   });
 }
 
+// The TypeRef of the type whose member a MemberRef with the parent \p parent
+// names: the parent itself when it is a TypeRef, and T when it is a TypeSpec
+// whose blob is ELEMENT_TYPE_VALUETYPE followed by T's TypeRef. Objects give
+// that parent to a static method or static field whose managed-call TYPE is
+// 'valuetype T' (plan 5.20.6 MW1 as amended by the row 'MK3 check
+// everywhere'). 0 for any other parent, every other TypeSpec included: a
+// generic instantiation, an array, a CLASS type, or a value type that a
+// TypeDef names.
+static Expected<uint32_t> getParentTypeRef(const MetadataReader &md,
+                                           uint32_t parent) {
+  switch (static_cast<TableId>(getTokenType(parent))) {
+  case TableId::TypeRef:
+    return parent;
+  case TableId::TypeSpec: {
+    Expected<TypeSpecRow> row = md.getTypeSpec(getTokenRow(parent));
+    if (!row)
+      return row.takeError();
+    Expected<ArrayRef<uint8_t>> blob = md.getBlob(row->Signature);
+    if (!blob)
+      return blob.takeError();
+    // A blob that does not decode is not that form either.
+    Expected<TypeSig> type = decodeTypeSpec(*blob);
+    if (!type) {
+      consumeError(type.takeError());
+      return 0;
+    }
+    if (type->getElementType() != ELEMENT_TYPE_VALUETYPE ||
+        !type->getModifiers().empty() ||
+        getTokenType(type->getTypeRef()) !=
+            static_cast<uint8_t>(TableId::TypeRef))
+      return 0;
+    return type->getTypeRef();
+  }
+  default:
+    return 0;
+  }
+}
+
 uint32_t OutputModule::mapBCLToken(ObjFile &f, uint32_t token) {
   switch (static_cast<TableId>(getTokenType(token))) {
   case TableId::TypeRef:
@@ -435,18 +473,26 @@ uint32_t OutputModule::mapBCLToken(ObjFile &f, uint32_t token) {
       reportUnsupported(f, toString(row.takeError()));
       return 0;
     }
-    if (getTokenType(row->Parent) != static_cast<uint8_t>(TableId::TypeRef)) {
+    // A member of the parent's type T, whether the parent is T's TypeRef or a
+    // TypeSpec 'valuetype T'. The output's MemberRef has T's TypeRef as its
+    // parent either way, the form Roslyn writes.
+    Expected<uint32_t> typeRef = getParentTypeRef(md, row->Parent);
+    if (!typeRef) {
+      reportUnsupported(f, toString(typeRef.takeError()));
+      return 0;
+    }
+    if (!*typeRef) {
       reportUnsupported(f, "member reference '" + row->Name +
                                "' has a parent other than a type reference, "
                                "which is not supported yet");
       return 0;
     }
-    // The parent's TypeRef first, as M20's stand-in made it, so that a link
-    // without references keeps its row order (plan 5.11.7).
-    if (!mapTypeToken(f, row->Parent))
+    // T's TypeRef first, as M20's stand-in made it, so that a link without
+    // references keeps its row order (plan 5.11.7).
+    if (!mapTypeToken(f, *typeRef))
       return 0;
     Expected<std::pair<std::string, std::string>> parent =
-        getTypeRefName(f, row->Parent);
+        getTypeRefName(f, *typeRef);
     if (!parent) {
       reportUnsupported(f, toString(parent.takeError()));
       return 0;

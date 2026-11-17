@@ -49,7 +49,14 @@
 ##   System.BitConverter and GetBytes(int32)); then M27's four rows for
 ##   setjmp and longjmp (5.15.4 and M27.a item 4: System.Exception,
 ##   System.Runtime.InteropServices.ExternalException, its constructor
-##   (string, int32) and Exception::get_HResult()).
+##   (string, int32) and Exception::get_HResult()); then MC-1's fifteen rows
+##   for managed calls (5.20.13: System.Runtime.InteropServices.GCHandle
+##   with Alloc(object), ToIntPtr, FromIntPtr, get_Target() and Free(),
+##   System.Text.Encoding with GetString(uint8*, int32),
+##   System.Text.UTF8Encoding with its constructor (bool, bool),
+##   System.Text.UTF32Encoding with its constructor (bool, bool, bool),
+##   System.Text.DecoderFallbackException, System.String and its
+##   constructor (char*)).
 ## The pack is Inputs/fakepack (gen.py): FakeCore (the core library),
 ## FakeInterop (Marshal) and FakeThreading (Interlocked). p1.o requests every
 ## Phase 1 member (data with a relocation, a variable-length memmove, a fence
@@ -217,6 +224,21 @@
 # TABLE-NEXT: {{^}}type [mscorlib]System.Runtime.InteropServices.ExternalException{{$}}
 # TABLE-NEXT: {{^}}method instance void [mscorlib]System.Runtime.InteropServices.ExternalException::.ctor(string, int32){{$}}
 # TABLE-NEXT: {{^}}method instance int32 [mscorlib]System.Exception::get_HResult(){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Runtime.InteropServices.GCHandle{{$}}
+# TABLE-NEXT: {{^}}method valuetype System.Runtime.InteropServices.GCHandle [mscorlib]System.Runtime.InteropServices.GCHandle::Alloc(object){{$}}
+# TABLE-NEXT: {{^}}method native int [mscorlib]System.Runtime.InteropServices.GCHandle::ToIntPtr(valuetype System.Runtime.InteropServices.GCHandle){{$}}
+# TABLE-NEXT: {{^}}method valuetype System.Runtime.InteropServices.GCHandle [mscorlib]System.Runtime.InteropServices.GCHandle::FromIntPtr(native int){{$}}
+# TABLE-NEXT: {{^}}method instance object [mscorlib]System.Runtime.InteropServices.GCHandle::get_Target(){{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.Runtime.InteropServices.GCHandle::Free(){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Text.Encoding{{$}}
+# TABLE-NEXT: {{^}}method instance string [mscorlib]System.Text.Encoding::GetString(uint8*, int32){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Text.UTF8Encoding{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.Text.UTF8Encoding::.ctor(bool, bool){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Text.UTF32Encoding{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.Text.UTF32Encoding::.ctor(bool, bool, bool){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Text.DecoderFallbackException{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.String{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.String::.ctor(char*){{$}}
 # TABLE-NOT:  {{.}}
 
 #--- notes.txt

@@ -1,0 +1,11 @@
+Stopwatch.Frequency is positive: 1
+Stopwatch.IsHighResolution: 1
+GetTimestamp: positive 1, not backward 1
+BitConverter.IsLittleEndian: 1
+IntPtr.Zero: 0
+String.Empty: handle nonzero 1, units not null 1, first unit 0
+DateTime.MinValue: handle nonzero 1, Ticks 0
+DateTime.MaxValue: handle nonzero 1, Ticks 3155378975999999999
+a second read of MinValue is a new handle: 1
+freed four handles
+[exit 0]

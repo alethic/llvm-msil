@@ -1,0 +1,17 @@
+UTF-8 to UTF-16 is not null: 1
+UTF-16 units: 17
+equal to the expected units: 1
+units: 0068 00e9 006c 006c 006f 002c 0020 0077 00f6 0072 006c 0064 0020 20ac 0020 d834 dd1e
+back to UTF-8: 23 bytes, equal to the input 1
+through a char *: equal 1
+long string: 2017 units
+long string back to UTF-8: equal 1
+empty string: not null 1, first unit 0
+null pointer: null result 1
+valid with msil_catch: equal 1, code untouched 1
+an invalid byte: null result 1, code is EILSEQ 1
+a truncated sequence: null result 1, code is EILSEQ 1
+an overlong form: null result 1, code is EILSEQ 1
+an encoded surrogate: null result 1, code is EILSEQ 1
+an invalid byte after valid text: null result 1, code is EILSEQ 1
+[exit 0]

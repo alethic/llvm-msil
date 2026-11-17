@@ -1,0 +1,292 @@
+# .NET arrays from C: array .ctors (newarr) of uint8[], int32[], float64[], object[], string[] and class element types (System.IO.Stream[], System.Type[]) give handles, Marshal::Copy copies C memory into them and back out, Array::get_Length reads their length through a 'this' handle, a new array is zeroed, Array::SetValue and GetValue store and load object handles (an unset element is the null handle 0), a string[] passes to String::Join's string[] parameter and a System.Type[] to Type::GetMethod's System.Type[] parameter, and every handle is freed exactly once.
+# Plan 5.20.2 MA1 and MA3 (an SZARRAY TYPE '<elem>[]', whose element is a
+# listing primitive, string, object or a class, with MEMBER '.ctor' and
+# SIGNATURE 'instance void(int32)' lowers to newarr; no member is bound),
+# 5.20.10 S5 (T[] values are handles, created with an array .ctor, copied
+# to and from C memory with Marshal::Copy, elements read and written with
+# System.Array members), 5.20.3 MS5 ('obj' for array and object parameters
+# and results, 'this-obj' for the System.Array members, castclass to the
+# CIL type), 5.20.9 MH2 (a null result is 0 and allocates nothing). The
+# program links against the .NET Framework 4.8 implementation assemblies
+# (%{msil_refs_netfx}), because Marshal::Copy, System.Array, Convert and
+# String::Concat are no built-in table entries; the image runs on the
+# Framework, .NET 10 and WSL .NET 10. String::Concat(string, string) makes
+# a string handle from two UTF-8 C strings, and Convert::ToInt32(object)
+# reads a boxed element. A string[] .ctor is newarr string and a
+# 'class System.Type[]' or 'class System.IO.Stream[]' .ctor newarr of the
+# class (MA1's SZARRAY TYPE with a string or class element); their handles
+# pass as 'obj' parameters of those array types, castclass string[] for
+# String::Join(string, string[]) and castclass System.Type[] for
+# Type::GetMethod(string, System.Type[]), whose Type[] picks the overload
+# (Math.Abs(Int64) returns System.Int64, Math.Abs(Int32) System.Int32), and
+# Object::GetType names the array types (System.String[],
+# System.IO.Stream[]; the same on the Framework and .NET 10). The members
+# have no C library equivalent, so the expected file is hand-written for
+# both OSes (plan 5.20.11 MT3, 5.17.4 as amended for MC-1). Plan 5.17.13
+# (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+#include <string.h>
+#include <uchar.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define MARSHAL "System.Runtime.InteropServices.Marshal"
+
+__attribute__((msil_method("uint8[]", ".ctor", "instance void(int32)")))
+mc_handle new_bytes(int length);
+
+__attribute__((msil_method("int32[]", ".ctor", "instance void(int32)")))
+mc_handle new_ints(int length);
+
+__attribute__((msil_method("float64[]", ".ctor", "instance void(int32)")))
+mc_handle new_doubles(int length);
+
+__attribute__((msil_method("object[]", ".ctor", "instance void(int32)")))
+mc_handle new_objects(int length);
+
+__attribute__((msil_method(MARSHAL, "Copy",
+                           "void(native int, uint8[], int32, int32)")))
+void bytes_in(const void *source, mc_handle array, int start, int length);
+
+__attribute__((msil_method(MARSHAL, "Copy",
+                           "void(uint8[], int32, native int, int32)")))
+void bytes_out(mc_handle array, int start, void *destination, int length);
+
+__attribute__((msil_method(MARSHAL, "Copy",
+                           "void(native int, int32[], int32, int32)")))
+void ints_in(const int *source, mc_handle array, int start, int length);
+
+__attribute__((msil_method(MARSHAL, "Copy",
+                           "void(int32[], int32, native int, int32)")))
+void ints_out(mc_handle array, int start, int *destination, int length);
+
+__attribute__((msil_method(MARSHAL, "Copy",
+                           "void(native int, float64[], int32, int32)")))
+void doubles_in(const double *source, mc_handle array, int start, int length);
+
+__attribute__((msil_method(MARSHAL, "Copy",
+                           "void(float64[], int32, native int, int32)")))
+void doubles_out(mc_handle array, int start, double *destination, int length);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni",
+                           "native int(string)")))
+char16_t *string_units(mc_handle s);
+
+__attribute__((msil_method("System.Array", "get_Length", "instance int32()")))
+int array_length(mc_handle array);
+
+__attribute__((msil_method("System.Array", "GetValue",
+                           "instance object(int32)")))
+mc_handle array_get(mc_handle array, int index);
+
+__attribute__((msil_method("System.Array", "SetValue",
+                           "instance void(object, int32)")))
+void array_set(mc_handle array, mc_handle value, int index);
+
+__attribute__((msil_method("System.Convert", "ToInt32", "int32(object)")))
+int to_int32(mc_handle boxed);
+
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+mc_handle concat(const char *a, const char *b);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+/* string[] and arrays of a class. */
+__attribute__((msil_method("string[]", ".ctor", "instance void(int32)")))
+mc_handle new_strings(int length);
+
+__attribute__((msil_method("class System.IO.Stream[]", ".ctor",
+                           "instance void(int32)")))
+mc_handle new_streams(int length);
+
+__attribute__((msil_method("class System.Type[]", ".ctor",
+                           "instance void(int32)")))
+mc_handle new_types(int length);
+
+__attribute__((msil_method("System.String", "Join",
+                           "string(string, string[])")))
+mc_handle string_join(const char *separator, mc_handle parts);
+
+__attribute__((msil_method("System.Type", "GetType",
+                           "class System.Type(string)")))
+mc_handle type_get(const char *name);
+
+__attribute__((msil_method("System.Type", "GetMethod",
+                           "instance class System.Reflection.MethodInfo("
+                           "string, class System.Type[])")))
+mc_handle type_get_method(mc_handle type, const char *name, mc_handle types);
+
+__attribute__((msil_method("System.Reflection.MethodInfo", "get_ReturnType",
+                           "instance class System.Type()")))
+mc_handle method_return_type(mc_handle method);
+
+__attribute__((msil_method("System.Type", "get_FullName",
+                           "instance string()")))
+mc_handle type_full_name(mc_handle type);
+
+__attribute__((msil_method("System.Object", "GetType",
+                           "instance class System.Type()")))
+mc_handle object_type(mc_handle object);
+
+__attribute__((msil_method("System.IO.MemoryStream", ".ctor",
+                           "instance void()")))
+mc_handle new_memory_stream(void);
+
+static int frees;
+static void release(mc_handle h) {
+  handle_free(h);
+  ++frees;
+}
+
+/* Prints a string handle's UTF-16 units as ASCII. */
+static void put_string(const char *what, mc_handle s) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+/* Prints the full name of a type handle, then frees the name. */
+static void put_type_name(const char *what, mc_handle type) {
+  mc_handle name = type_full_name(type);
+  put_string(what, name);
+  release(name);
+}
+
+int main(void) {
+  /* uint8[]: in, length, out. */
+  static const unsigned char src[5] = {1, 2, 0x80, 0xfe, 0xff};
+  unsigned char dst[8];
+  memset(dst, 0xaa, sizeof dst);
+  mc_handle b = new_bytes(5);
+  printf("uint8[5]: handle nonzero %d, Length %d\n", b != 0, array_length(b));
+  bytes_in(src, b, 0, 5);
+  bytes_out(b, 1, dst, 4);
+  printf("out from index 1:");
+  for (int i = 0; i < 8; ++i)
+    printf(" %02x", dst[i]);
+  printf("\n");
+
+  /* int32[]: a new array is zeroed; in at an offset, out whole. */
+  int iv[6] = {9, 9, 9, 9, 9, 9};
+  mc_handle ia = new_ints(6);
+  ints_out(ia, 0, iv, 6);
+  printf("new int32[6]: %d %d %d %d %d %d\n", iv[0], iv[1], iv[2], iv[3],
+         iv[4], iv[5]);
+  static const int four[4] = {10, -20, 30, -2147483647 - 1};
+  ints_in(four, ia, 2, 4);
+  ints_out(ia, 0, iv, 6);
+  printf("int32[6] after Copy at 2: %d %d %d %d %d %d\n", iv[0], iv[1], iv[2],
+         iv[3], iv[4], iv[5]);
+  mc_handle boxed = array_get(ia, 3);
+  printf("GetValue(3) through Convert.ToInt32: %d\n", to_int32(boxed));
+
+  /* float64[]: the bits survive the round trip. */
+  static const double dv[3] = {0.5, -1.25, 1e300};
+  double back[3] = {0, 0, 0};
+  mc_handle da = new_doubles(3);
+  doubles_in(dv, da, 0, 3);
+  doubles_out(da, 0, back, 3);
+  printf("float64[3]: Length %d, equal %d\n", array_length(da),
+         memcmp(dv, back, sizeof dv) == 0);
+
+  /* object[]: handles in and out; an unset element is null. */
+  mc_handle oa = new_objects(3);
+  mc_handle s = concat("arr", "ays");
+  array_set(oa, s, 1);
+  array_set(oa, b, 2);
+  mc_handle unset = array_get(oa, 0);
+  mc_handle got = array_get(oa, 1);
+  mc_handle got_bytes = array_get(oa, 2);
+  printf("object[3]: Length %d, element 0 is null %d\n", array_length(oa),
+         unset == 0);
+  char16_t *u = string_units(got);
+  printf("element 1:");
+  for (; u && *u; ++u)
+    printf(" %c", (char)*u);
+  printf("\n");
+  printf("element 2 is the uint8[5]: Length %d\n", array_length(got_bytes));
+
+  /* string[]: newarr string, filled with SetValue, passed as string[]. */
+  mc_handle parts = new_strings(3);
+  mc_handle p0 = concat("ab", "c"), p1 = concat("de", ""), p2 = concat("", "f");
+  array_set(parts, p0, 0);
+  array_set(parts, p1, 1);
+  array_set(parts, p2, 2);
+  printf("string[3]: Length %d\n", array_length(parts));
+  mc_handle joined = string_join("-", parts);
+  put_string("String.Join(\"-\", string[])", joined);
+  mc_handle parts_type = object_type(parts);
+  put_type_name("its type", parts_type);
+
+  /* System.IO.Stream[]: newarr of a class; a MemoryStream element. */
+  mc_handle streams = new_streams(2);
+  mc_handle ms = new_memory_stream();
+  array_set(streams, ms, 1);
+  mc_handle stream0 = array_get(streams, 0);
+  mc_handle stream1 = array_get(streams, 1);
+  printf("Stream[2]: Length %d, element 0 is null %d, element 1 nonzero %d\n",
+         array_length(streams), stream0 == 0, stream1 != 0);
+  mc_handle streams_type = object_type(streams);
+  put_type_name("its type", streams_type);
+  mc_handle stream1_type = object_type(stream1);
+  put_type_name("element 1's type", stream1_type);
+
+  /* System.Type[]: passed to Type::GetMethod's System.Type[] parameter. */
+  mc_handle math = type_get("System.Math");
+  mc_handle types = new_types(1);
+  mc_handle int64_type = type_get("System.Int64");
+  array_set(types, int64_type, 0);
+  mc_handle abs64 = type_get_method(math, "Abs", types);
+  mc_handle ret64 = method_return_type(abs64);
+  put_type_name("Math.GetMethod(\"Abs\", {Int64}).ReturnType", ret64);
+  mc_handle int32_type = type_get("System.Int32");
+  array_set(types, int32_type, 0);
+  mc_handle abs32 = type_get_method(math, "Abs", types);
+  mc_handle ret32 = method_return_type(abs32);
+  put_type_name("Math.GetMethod(\"Abs\", {Int32}).ReturnType", ret32);
+  mc_handle types_type = object_type(types);
+  put_type_name("the Type[]'s type", types_type);
+
+  release(types_type);
+  release(ret32);
+  release(abs32);
+  release(int32_type);
+  release(ret64);
+  release(abs64);
+  release(int64_type);
+  release(types);
+  release(math);
+  release(stream1_type);
+  release(streams_type);
+  release(stream1);
+  release(ms);
+  release(streams);
+  release(parts_type);
+  release(joined);
+  release(p2);
+  release(p1);
+  release(p0);
+  release(parts);
+
+  release(got_bytes);
+  release(got);
+  release(s);
+  release(oa);
+  release(da);
+  release(boxed);
+  release(ia);
+  release(b);
+  printf("handles freed: %d\n", frees);
+  return 0;
+}

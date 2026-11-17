@@ -1,0 +1,155 @@
+# msil_catch maps .NET exceptions to codes: opening a missing file through FileStream's constructor stores the FileNotFoundException entry's code and returns a null handle, a missing directory stores the DirectoryNotFoundException entry's code, entries are tested in the order written (IOException listed first wins over its subclass), an exception from the argument conversion (invalid UTF-8) is mapped too, a void and an enum-returning member return nothing and 0, a successful call leaves the code alone; an ArgumentException (an empty path), which the list does not name, escapes loudly through the filter.
+# Plan 5.20.8 (MX2: with msil_catch the whole stub body is one .try with a
+# filter that tests isinst for each entry in the order written, stores the
+# first match's code and returns the zero value of the C return type, a
+# null handle, 0 or nothing for void; on success *err is not written; MX1:
+# an exception the declaration does not list escapes as an ordinary
+# unhandled .NET exception; MX4: an exception thrown inside the conversions
+# is mappable like one from the member), 5.20.2 MA5 (msil_catch is
+# repeatable and ordered; CODE is 1 to INT32_MAX), 5.20.7 MK4 (with
+# references each catch type must derive from System.Exception), 5.20.3 MS5
+# ('enum' for valuetype enum parameters and an enum result as integers).
+# FileStream(string, FileMode, FileAccess, FileShare, int32) is P-2's fopen
+# shape (plan 5.20.2's example). The program links against the .NET
+# Framework 4.8 implementation assemblies (%{msil_refs_netfx}), because
+# FileStream and the IO exception types are no built-in table entries; the
+# image runs on the Framework, .NET 10 and WSL .NET 10. Each run starts in a
+# private directory of its own (msil-run.py), so the relative names cannot
+# collide. Measured on Framework 4.8.1, .NET 10 and WSL .NET 10: FileMode
+# Open (3) of a missing file throws FileNotFoundException, of a file in a
+# missing directory DirectoryNotFoundException (both derive from
+# IOException), File.GetAttributes and File.Delete in a missing directory
+# DirectoryNotFoundException, and an empty path ArgumentException.
+# The program ends on the unlisted exception (a loud failure, plan 5.17.4),
+# so the transcript is hand-written for both OSes: the lines before the
+# call, then the status line '[unhandled exception: System.ArgumentException]'.
+# The LOUD line matches the program's own stderr line, written before the
+# call; the runtime's report of the exception is never matched. Plan
+# 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: catch-map: opening the empty path, whose ArgumentException is not listed
+# LOUD-NOT: catch-map: returned from the unlisted exception
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdio.h>
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define FS_CTOR_SIG                                                            \
+  "instance void(string, valuetype System.IO.FileMode, valuetype "            \
+  "System.IO.FileAccess, valuetype System.IO.FileShare, int32)"
+
+enum { FILE_MODE_OPEN = 3 };
+enum { FILE_ACCESS_READ = 1 };
+enum { FILE_SHARE_READ = 1 };
+
+/* Codes of this test (any values from 1 to INT32_MAX). */
+enum {
+  CODE_NOT_FOUND = 11,
+  CODE_NO_DIRECTORY = 12,
+  CODE_ACCESS = 13,
+  CODE_IO = 14,
+  CODE_DECODING = 15
+};
+
+__attribute__((msil_method("System.IO.FileStream", ".ctor", FS_CTOR_SIG),
+               msil_catch("System.IO.FileNotFoundException", CODE_NOT_FOUND),
+               msil_catch("System.IO.DirectoryNotFoundException",
+                          CODE_NO_DIRECTORY),
+               msil_catch("System.UnauthorizedAccessException", CODE_ACCESS),
+               msil_catch("System.Text.DecoderFallbackException",
+                          CODE_DECODING),
+               msil_catch("System.IO.IOException", CODE_IO)))
+mc_handle fs_open(const char *path, int mode, int access, int share,
+                  int buffer_size, int *err);
+
+/* The same member with IOException first: it matches FileNotFoundException
+   and DirectoryNotFoundException too, so it wins. */
+__attribute__((msil_method("System.IO.FileStream", ".ctor", FS_CTOR_SIG),
+               msil_catch("System.IO.IOException", CODE_IO),
+               msil_catch("System.IO.FileNotFoundException", CODE_NOT_FOUND)))
+mc_handle fs_open_io_first(const char *path, int mode, int access, int share,
+                           int buffer_size, int *err);
+
+/* A void member and an enum result. */
+__attribute__((msil_method("System.IO.File", "Delete", "void(string)"),
+               msil_catch("System.IO.DirectoryNotFoundException",
+                          CODE_NO_DIRECTORY)))
+void file_delete(const char *path, int *err);
+
+__attribute__((msil_method("System.IO.File", "GetAttributes",
+                           "valuetype System.IO.FileAttributes(string)"),
+               msil_catch("System.IO.FileNotFoundException", CODE_NOT_FOUND),
+               msil_catch("System.IO.DirectoryNotFoundException",
+                          CODE_NO_DIRECTORY)))
+int file_attributes(const char *path, int *err);
+
+__attribute__((msil_method("System.IO.Stream", "Dispose", "instance void()")))
+void stream_dispose(mc_handle stream);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+static void open_case(const char *what, const char *path) {
+  int err = -1;
+  mc_handle h = fs_open(path, FILE_MODE_OPEN, FILE_ACCESS_READ,
+                        FILE_SHARE_READ, 4096, &err);
+  printf("%s: null handle %d, code %d\n", what, h == 0, err);
+  if (h) {
+    stream_dispose(h);
+    handle_free(h);
+  }
+}
+
+int main(void) {
+  /* A file that exists: a handle, and the code is not written. */
+  FILE *f = fopen("catch-map.txt", "wb");
+  if (!f || fputs("exists", f) < 0 || fclose(f) != 0)
+    return 1;
+  open_case("an existing file", "catch-map.txt");
+
+  /* Listed exceptions. */
+  open_case("a missing file", "catch-map-missing.txt");
+  open_case("a missing directory", "catch-map-no-dir/file.txt");
+  open_case("invalid UTF-8 in the path", "catch-map-\xff.txt");
+
+  /* The order of the entries. */
+  int err = -1;
+  mc_handle h = fs_open_io_first("catch-map-missing.txt", FILE_MODE_OPEN,
+                                 FILE_ACCESS_READ, FILE_SHARE_READ, 4096, &err);
+  printf("IOException listed first: null handle %d, code %d\n", h == 0, err);
+
+  /* Zero values of other return types. */
+  err = -1;
+  file_delete("catch-map-no-dir/file.txt", &err);
+  printf("File.Delete in a missing directory: code %d\n", err);
+  err = -1;
+  int attributes = file_attributes("catch-map-missing.txt", &err);
+  printf("File.GetAttributes of a missing file: result %d, code %d\n",
+         attributes, err);
+  err = -1;
+  attributes = file_attributes("catch-map.txt", &err);
+  printf("File.GetAttributes of the existing file: nonzero %d, code %d\n",
+         attributes != 0, err);
+
+  /* The loud call: an empty path throws ArgumentException, which no entry
+     of fs_open lists, so its filter declines it and it escapes. */
+  fflush(stdout);
+  fputs("catch-map: opening the empty path, whose ArgumentException is not "
+        "listed\n",
+        stderr);
+  fflush(stderr);
+  err = -1;
+  h = fs_open("", FILE_MODE_OPEN, FILE_ACCESS_READ, FILE_SHARE_READ, 4096,
+              &err);
+  printf("returned from the unlisted exception: %d, code %d\n", h != 0, err);
+  fprintf(stderr, "catch-map: returned from the unlisted exception\n");
+  return 0;
+}

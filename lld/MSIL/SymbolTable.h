@@ -15,6 +15,7 @@
 
 #include "InputFiles.h"
 #include "LTO.h"
+#include "ManagedCalls.h"
 #include "Symbols.h"
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/CachedHashString.h"
@@ -105,18 +106,22 @@ public:
   // parsed like any object, with COMDATs ignored (every group kept), and
   // appended to ctx.objectFiles (ObjFile::isLTO, plan 5.9.13). The
   // prevailing bitcode definitions become undefined symbols first, so that
-  // the LTO objects define them again (lld/wasm's undefine).
+  // the LTO objects define them again (lld/wasm's undefine). Before LTO it
+  // records the units that declare each managed call, which
+  // finalizeObjectSymbols() compares with the objects loaded after LTO.
   void compileBitcodeFiles();
 
   // Records which bitcode inputs refer to each symbol, for the diagnostics
-  // after LTO, which takes the inputs' symbol tables, and checks the
-  // libraries built by this toolchain against the link
-  // (checkManagedLibraries). The driver calls it once every input is loaded,
-  // before LTO, in every mode (--interface-only and --lto-emit-asm
+  // after LTO, which takes the inputs' symbol tables, checks the libraries
+  // built by this toolchain against the link (checkManagedLibraries), and
+  // checks the managed calls of the CIL objects (checkObjectManagedCalls:
+  // T-M17 and T-M21, ManagedCalls.h). The driver calls it once every input
+  // is loaded, before LTO, in every mode (--interface-only and --lto-emit-asm
   // included).
   void recordReferences() {
     (void)getReferences(nullptr);
     checkManagedLibraries();
+    checkObjectManagedCalls();
   }
 
   // The plan 5.9.6 rules for the symbols that are still undefined after every
@@ -210,12 +215,15 @@ public:
   // --lto-emit-asm the import-annotation pass does this on the merged module.
   void resolveAlternateNames();
 
-  // After resolution and late binding (plan 5.9.5, 5.9.9): marks the method
-  // or segment of every CIL object definition that lost to another input's
-  // definition as discarded (a WEAK copy overridden by a GLOBAL definition or
-  // a common symbol), unless a symbol that won still lies in it (an alias of
-  // the losing definition: the writer then names the method or field apart
-  // from the winner's), and gives every common symbol that survived a
+  // After resolution and late binding (plan 5.9.5, 5.9.9): checks the managed
+  // calls of the CIL objects that LTO's extractions loaded
+  // (checkLateManagedCalls, T-M17) and the exported managed calls again
+  // (checkExportedManagedCalls), marks the method or segment of every CIL
+  // object definition that lost to another input's definition as discarded
+  // (a WEAK copy overridden by a GLOBAL definition or a common symbol),
+  // unless a symbol that won still lies in it (an alias of the losing
+  // definition: the writer then names the method or field apart from the
+  // winner's), and gives every common symbol that survived a
   // SyntheticSegment at the SYMTAB position of its first declaration, in
   // ctx.syntheticSegments (objects in load order, SYMTAB order).
   void finalizeObjectSymbols();
@@ -407,6 +415,10 @@ private:
   // included. (lld/wasm's static BitcodeFile::doneLTO: a member here, because
   // the driver creates a new SymbolTable for every link.)
   bool doneLTO = false;
+
+  // The units that declared each managed call before LTO, when LTO writes CIL
+  // objects (compileBitcodeFiles; finalizeObjectSymbols).
+  std::optional<ManagedCallUnitRecord> managedCallUnitsBeforeLTO;
 
   // For LTO.
   std::unique_ptr<BitcodeCompiler> lto;

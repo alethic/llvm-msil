@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ASTCommon.h"
+#include "MSILManagedCallDecls.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
@@ -3099,6 +3100,13 @@ static bool isRequiredDecl(const Decl *D, ASTContext &Context,
     return false;
   }
 
+  // MSIL: a PCH or a header module lists a managed call with dllexport,
+  // constructor or destructor, which has no body, so that CodeGen gets it for
+  // its forwarders, as it lists a constructor or destructor definition (a
+  // named module returned above; MSILManagedCallDecls.h).
+  if (msil::isForwardedManagedCallDecl(D))
+    return true;
+
   return Context.DeclMustBeEmitted(D);
 }
 
@@ -3151,6 +3159,18 @@ void ASTWriter::WriteDecl(ASTContext &Context, Decl *D) {
   // them to a record in the AST file later.
   if (isRequiredDecl(D, Context, WritingModule))
     AddDeclRef(D, EagerlyDeserializedDecls);
+
+  // MSIL: a named module lists a managed call with dllexport, constructor or
+  // destructor only for its own object. The AST reader deserializes the
+  // modular-codegen declarations eagerly only when the module file is the
+  // main file (ASTReader.cpp, MODULAR_CODEGEN_DECLS), so compiling the BMI
+  // (-emit-module-interface or --precompile, then -emit-llvm or -c of the
+  // .pcm) defines the forwarders, as the one-phase compile of the source
+  // does. An importer gets them only by naming the managed call, through the
+  // reader's hook (MSILManagedCallDecls.h).
+  if (WritingModule && WritingModule->isNamedModule() &&
+      msil::isForwardedManagedCallDecl(D))
+    AddDeclRef(D, ModularCodegenDecls);
 }
 
 void ASTRecordWriter::AddFunctionDefinition(const FunctionDecl *FD) {

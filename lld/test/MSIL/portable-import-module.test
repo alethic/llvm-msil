@@ -22,6 +22,19 @@
 ##   (architecture, OS, environment; the vendor is ignored) is
 ##   msil64-unknown-dotnet. The same forgery of an object without the
 ##   attribute links, so the error comes from the import module alone.
+## - --lto-emit-asm of the bitcode input with a variable and a function
+##   (section 12 row 'MC-1.d extended (P-1b leftover: T-P2 under
+##   --lto-emit-asm)'): one T-P2 line for each declaration, as in the image
+##   and -shared links, never 5.10.14's data-import error for the variable,
+##   and no text;
+## - a declaration with an import name alone, no import module (section 12
+##   row 'MC-1.c extended (P-1b leftover: import_name alone on the portable
+##   triples)'): before MC-1 msil-ld dropped the import name and bound the
+##   call by its C name, here to name-def.ll's my_fn, silently; it is an
+##   explicit import too, refused with T-P2's text naming the import name
+##   ('my_fn' is declared with import name 'native_fn', ..., pinned whole),
+##   in an executable link, a -shared link and under --lto-emit-asm, with no
+##   output.
 ## Objects only otherwise: the portable triples have no LTO legs before P-3
 ## (brief Q13 (a)); the bitcode cases pin the link-time check only.
 
@@ -31,6 +44,8 @@
 # RUN: llvm-as fn.ll -o fn.bc
 # RUN: llvm-as var.ll -o var.bc
 # RUN: llvm-as named.ll -o named.bc
+# RUN: llvm-as name-only.ll -o name-only.bc
+# RUN: llvm-as name-def.ll -o name-def.bc
 
 # DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
@@ -51,6 +66,27 @@
 # RUN: not ls bc/var.exe
 # RUN: not ls so/var.dll
 # RUN: not ls bc/named.exe
+
+## Bitcode under --lto-emit-asm: a T-P2 line for the variable and the
+## function, not the data-import error, and no text.
+# RUN: not msil-ld --lto-emit-asm var.bc -o bc/var.il 2>&1 | %{fc} --check-prefixes=FN,VAR \
+# RUN:   --implicit-check-not="cannot be imported" --implicit-check-not=">>>"
+# RUN: not msil-ld --lto-emit-asm fn.bc -o bc/fn.il 2>&1 | %{fc} --check-prefix=FN --implicit-check-not=">>>"
+# RUN: not ls bc/var.il
+# RUN: not ls bc/fn.il
+
+## An import name alone: refused, never bound to name-def.ll's my_fn by its
+## C name.
+# RUN: not msil-ld name-only.bc name-def.bc -o bc/name.exe 2>&1 | %{fc} --check-prefix=NAME-ONLY
+# RUN: not msil-ld --target=msil64-unknown-dotnet name-only.bc name-def.bc -o tgt/name.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NAME-ONLY
+# RUN: not msil-ld -shared name-only.bc name-def.bc -o so/name.dll 2>&1 | %{fc} --check-prefix=NAME-ONLY
+# RUN: not msil-ld --lto-emit-asm name-only.bc name-def.bc -o bc/name.il 2>&1 | %{fc} --check-prefix=NAME-ONLY
+# NAME-ONLY: {{^}}msil-ld: error: 'my_fn' is declared with import name 'native_fn', which msil64-unknown-dotnet does not support: the portable target binds no native code{{$}}
+# RUN: not ls bc/name.exe
+# RUN: not ls tgt/name.exe
+# RUN: not ls so/name.dll
+# RUN: not ls bc/name.il
 
 ## A CIL object, forged.
 # DEFINE: %{forge} = %python %S/Inputs/portable/pe.py
@@ -133,4 +169,27 @@ attributes #0 = { "msil-import-module"="mylib" }
 #--- plain.ll
 define i32 @main() {
   ret i32 42
+}
+
+#--- name-only.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; __attribute__((import_name("native_fn"))) int my_fn(int);
+declare i32 @my_fn(i32) #0
+
+define i32 @main() {
+  %r = call i32 @my_fn(i32 1)
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-name"="native_fn" }
+
+#--- name-def.ll
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+
+;; A definition of the C name: a lone import name must not bind to it.
+define i32 @my_fn(i32 %x) {
+  ret i32 %x
 }

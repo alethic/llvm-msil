@@ -1,0 +1,158 @@
+# C strings into .NET strings on msil64-unknown-dotnet: UTF-8 (char *), 32-bit wchar_t (UTF-32), char32_t and char16_t strings, passed to Marshal::StringToHGlobalUni(string), come back as the UTF-16 code units of the same text, compared in C; non-ASCII text, a character outside the BMP, a long string, the empty string and a null pointer; a char16_t string keeps a lone surrogate; the UTF-16 result converted back to UTF-8 in C equals the input.
+# Plan 5.20.10 (S1: utf8, a length loop and GetString on a throwing
+# UTF8Encoding(false, true); S2: utf16, String::.ctor(char*), lossless for
+# lone surrogates; S3: utf32, a length loop of 4-byte units and GetString on
+# UTF32Encoding(false, false, true); a null pointer gives a null string),
+# 5.20.3 MS5 (the string rows: 'const char *' and 'char *' are utf8,
+# 'const char16_t *' is utf16, 'const char32_t *' and a 32-bit
+# 'const wchar_t *' are utf32; a 'native int' result into an object
+# pointer is 'val'), 5.20.11 MT1 (wchar_t is 32-bit signed on the portable
+# triples, so its strings are the UTF-32 form; the user's pick '32-bit
+# signed (Recommended)' in the question box, 2026-11-01).
+# Marshal::StringToHGlobalUni(string) is a table entry (M20): for a null
+# string it returns a null pointer, otherwise a copy of the string's UTF-16
+# code units with a terminating 0 in unmanaged memory, which the program
+# never frees (Marshal::FreeHGlobal is no table entry). The program uses
+# c.dll's strlen, memcmp and memset. The expected units are the Unicode
+# encodings of the text: U+00E9 is C3 A9 in UTF-8, U+20AC is E2 82 AC,
+# U+1D11E is F0 9D 84 9E and the surrogate pair D834 DD1E. Each failed group
+# sets one bit of the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stddef.h>
+#include <string.h>
+#include <uchar.h>
+
+_Static_assert(sizeof(wchar_t) == 4, "wchar_t is 32 bits on msil64");
+
+#define MARSHAL "System.Runtime.InteropServices.Marshal"
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf8(const char *s);
+
+/* Non-const char * is the utf8 form too. */
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf8_mutable(char *s);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_wide(const wchar_t *s);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf32(const char32_t *s);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf16(const char16_t *s);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+/* "héllo € \U0001D11E" in each form. */
+static const char text8[] = "h\xc3\xa9llo \xe2\x82\xac \xf0\x9d\x84\x9e";
+static const wchar_t text_wide[] = {'h', 0xE9, 'l', 'l', 'o', ' ', 0x20AC,
+                                    ' ', 0x1D11E, 0};
+static const char32_t text32[] = {'h', 0xE9, 'l', 'l', 'o', ' ', 0x20AC,
+                                  ' ', 0x1D11E, 0};
+static const char16_t text16[] = {'h', 0xE9, 'l', 'l', 'o', ' ', 0x20AC,
+                                  ' ', 0xD834, 0xDD1E, 0};
+#define TEXT16_UNITS 10
+
+/* The number of code units before the terminating 0. */
+static size_t units(const char16_t *p) {
+  size_t n = 0;
+  while (p[n])
+    ++n;
+  return n;
+}
+
+/* Whether p holds exactly the n units of want and a terminating 0. */
+static int same16(const char16_t *p, const char16_t *want, size_t n) {
+  return p != NULL && units(p) == n &&
+         memcmp(p, want, (n + 1) * sizeof(char16_t)) == 0;
+}
+
+/* UTF-16 to UTF-8 in C (well-formed input); returns the length. */
+static size_t to_utf8(const char16_t *p, char *out) {
+  size_t n = 0;
+  while (*p) {
+    unsigned long c = *p++;
+    if (c >= 0xD800 && c < 0xDC00 && *p >= 0xDC00 && *p < 0xE000)
+      c = 0x10000 + ((c - 0xD800) << 10) + (*p++ - 0xDC00);
+    if (c < 0x80) {
+      out[n++] = (char)c;
+    } else if (c < 0x800) {
+      out[n++] = (char)(0xC0 | (c >> 6));
+      out[n++] = (char)(0x80 | (c & 0x3F));
+    } else if (c < 0x10000) {
+      out[n++] = (char)(0xE0 | (c >> 12));
+      out[n++] = (char)(0x80 | ((c >> 6) & 0x3F));
+      out[n++] = (char)(0x80 | (c & 0x3F));
+    } else {
+      out[n++] = (char)(0xF0 | (c >> 18));
+      out[n++] = (char)(0x80 | ((c >> 12) & 0x3F));
+      out[n++] = (char)(0x80 | ((c >> 6) & 0x3F));
+      out[n++] = (char)(0x80 | (c & 0x3F));
+    }
+  }
+  out[n] = 0;
+  return n;
+}
+
+static char long8[1200];
+static char back[1200];
+
+int main(void) {
+  /* 0: UTF-8, and the round trip back to UTF-8. */
+  char16_t *p = from_utf8(text8);
+  CHECK(0, same16(p, text16, TEXT16_UNITS));
+  CHECK(0, p != NULL && to_utf8(p, back) == strlen(text8) &&
+               strcmp(back, text8) == 0);
+  char mutable8[sizeof text8];
+  memcpy(mutable8, text8, sizeof text8);
+  CHECK(0, same16(from_utf8_mutable(mutable8), text16, TEXT16_UNITS));
+
+  /* 1: 32-bit wchar_t (UTF-32) and char32_t. */
+  CHECK(1, same16(from_wide(text_wide), text16, TEXT16_UNITS));
+  CHECK(1, same16(from_utf32(text32), text16, TEXT16_UNITS));
+  static const wchar_t ascii_wide[] = {'w', 'i', 'd', 'e', 0};
+  static const char16_t ascii16[] = {'w', 'i', 'd', 'e', 0};
+  CHECK(1, same16(from_wide(ascii_wide), ascii16, 4));
+
+  /* 2: char16_t, with a lone surrogate kept as it is. */
+  CHECK(2, same16(from_utf16(text16), text16, TEXT16_UNITS));
+  static const char16_t lone[] = {'a', 0xD800, 'b', 0xDFFF, 0};
+  CHECK(2, same16(from_utf16(lone), lone, 4));
+
+  /* 3: a long string: 1000 ASCII bytes and the text after them. */
+  memset(long8, 'x', 1000);
+  memcpy(long8 + 1000, text8, sizeof text8);
+  p = from_utf8(long8);
+  CHECK(3, p != NULL && units(p) == 1000 + TEXT16_UNITS);
+  CHECK(3, p != NULL && p[0] == 'x' && p[999] == 'x' &&
+               same16(p + 1000, text16, TEXT16_UNITS));
+  CHECK(3, p != NULL && to_utf8(p, back) == strlen(long8) &&
+               strcmp(back, long8) == 0);
+
+  /* 4: the empty string is a string; a null pointer is a null string. */
+  static const wchar_t empty_wide[] = {0};
+  static const char32_t empty32[] = {0};
+  static const char16_t empty16[] = {0};
+  CHECK(4, same16(from_utf8(""), empty16, 0));
+  CHECK(4, same16(from_wide(empty_wide), empty16, 0));
+  CHECK(4, same16(from_utf32(empty32), empty16, 0));
+  CHECK(4, same16(from_utf16(empty16), empty16, 0));
+  CHECK(4, from_utf8(NULL) == NULL);
+  CHECK(4, from_wide(NULL) == NULL);
+  CHECK(4, from_utf32(NULL) == NULL);
+  CHECK(4, from_utf16(NULL) == NULL);
+  return (int)fails;
+}

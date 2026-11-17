@@ -1877,11 +1877,32 @@ TEST(CLILinkInfoTest, TwoCarriers) {
 // C1-C7 (5.8.5)
 //===----------------------------------------------------------------------===//
 
+// The signature of a TypeSpec that is a MemberRef's parent (C6 as amended for
+// 5.20.7 MK3: a managed-call stub's static member of a value type has the
+// parent 'valuetype T', T a BCL TypeRef). The first two pass; every other one
+// is a C6 violation.
+enum class SpecParent {
+  None,
+  ValueType,       // valuetype [msil.bcl]System.DateTime
+  NestedValueType, // valuetype [msil.bcl]System.Outer/Inner
+  Class,           // class [msil.bcl]System.DateTime
+  Array,           // valuetype [msil.bcl]System.DateTime[]
+  Modified,        // valuetype [msil.bcl]System.DateTime modreq(Marshal)
+  InModuleRef,     // valuetype [.module libfoo]T
+  Symbols,         // valuetype [msil.extern]'<msil>Symbols'
+  FnAddr,          // valuetype [msil.extern]'<msil>FnAddr'
+  TypeDef,         // valuetype <Module>
+  NoSuchTypeRef,   // valuetype of a TypeRef row the object does not have
+  Truncated,       // 0x11 (VALUETYPE) alone, which does not decode
+};
+
 // A CIL object for the validation rules, in the shape 5.8.3 and 5.8.10
 // describe: defined data (native int fields of <Module>) and functions,
 // P/Invoke stubs on a named module (EXPLICIT_IMPORT) and on msil.unresolved,
 // MemberRefs on [msil.extern]'<msil>Symbols' and '<msil>FnAddr', a BCL
-// MemberRef and the carrier's constructor. Each knob breaks one rule.
+// MemberRef and the carrier's constructor. Each knob breaks one rule, except
+// TypeSpecParent, which adds a MemberRef 'm' on a TypeSpec and breaks C6 for
+// every SpecParent but the first two.
 struct ObjSpec {
   std::string FName = "f";
   bool GvInt32 = false, GvInOtherType = false;
@@ -1893,6 +1914,7 @@ struct ObjSpec {
        FnAddrToData = false;
   int BadParent =
       0; // 1: TypeRef scoped to a ModuleRef, 2: TypeDef, 3: ModuleRef
+  SpecParent TypeSpecParent = SpecParent::None;
 };
 
 struct Obj {
@@ -1902,7 +1924,7 @@ struct Obj {
   std::unique_ptr<MetadataReader> R;
   Record Rec;
   uint32_t GV = 0, CV = 0, F = 0, G = 0, UndefFn = 0, UndefVar = 0,
-           AllocHGlobal = 0, Ext = 0;
+           AllocHGlobal = 0, Ext = 0, OnTypeSpec = 0;
 };
 
 std::unique_ptr<Obj> buildObj(const ObjSpec &S) {
@@ -1995,6 +2017,60 @@ std::unique_ptr<Obj> buildObj(const ObjSpec &S) {
   } else if (S.BadParent == 3) {
     MB.addMemberRef(LibFoo, "m", VoidFn);
   }
+  EntityHandle OnTypeSpec;
+  if (S.TypeSpecParent != SpecParent::None) {
+    // A type as TypeDefOrRefOrSpecEncoded (II.23.2.8): its row above the tag
+    // (0 TypeDef, 1 TypeRef), one byte for the rows below 32 used here.
+    auto Coded = [](EntityHandle T) {
+      EXPECT_LT(T.getIndex(), 32u);
+      const uint32_t Tag = T.getTable() == TableId::TypeRef ? 1 : 0;
+      return uint8_t(T.getIndex() << 2 | Tag);
+    };
+    const EntityHandle BclRef = MB.addAssemblyRef(Bcl);
+    const EntityHandle DateTime = MB.addTypeRef(BclRef, "System", "DateTime");
+    const uint8_t VT = ELEMENT_TYPE_VALUETYPE;
+    ByteVec Sig;
+    switch (S.TypeSpecParent) {
+    case SpecParent::None:
+      break;
+    case SpecParent::ValueType:
+      Sig = {VT, Coded(DateTime)};
+      break;
+    case SpecParent::NestedValueType:
+      Sig = {VT, Coded(MB.addTypeRef(MB.addTypeRef(BclRef, "System", "Outer"),
+                                     "", "Inner"))};
+      break;
+    case SpecParent::Class:
+      Sig = {ELEMENT_TYPE_CLASS, Coded(DateTime)};
+      break;
+    case SpecParent::Array:
+      Sig = {ELEMENT_TYPE_SZARRAY, VT, Coded(DateTime)};
+      break;
+    case SpecParent::Modified:
+      Sig = {ELEMENT_TYPE_CMOD_REQD, Coded(Marshal), VT, Coded(DateTime)};
+      break;
+    case SpecParent::InModuleRef:
+      Sig = {VT, Coded(MB.addTypeRef(LibFoo, "", "T"))};
+      break;
+    case SpecParent::Symbols:
+      Sig = {VT, Coded(Symbols)};
+      break;
+    case SpecParent::FnAddr:
+      Sig = {VT, Coded(FnAddr)};
+      break;
+    case SpecParent::TypeDef:
+      Sig = {VT, Coded(Mod)};
+      break;
+    case SpecParent::NoSuchTypeRef:
+      Sig = {VT, Coded(rowHandle(TableId::TypeRef,
+                                 MB.getRowCount(TableId::TypeRef) + 1))};
+      break;
+    case SpecParent::Truncated:
+      Sig = {VT};
+      break;
+    }
+    OnTypeSpec = MB.addMemberRef(MB.addTypeSpec(MB.addBlob(Sig)), "m", VoidFn);
+  }
   // The carrier, with a header-only payload (its content is not C1-C7's).
   {
     Record Hdr;
@@ -2021,6 +2097,8 @@ std::unique_ptr<Obj> buildObj(const ObjSpec &S) {
   O->UndefFn = MB.getToken(UndefFn);
   O->UndefVar = MB.getToken(UndefVar);
   O->AllocHGlobal = MB.getToken(Alloc);
+  if (!OnTypeSpec.isNil())
+    O->OnTypeSpec = MB.getToken(OnTypeSpec);
 
   Record &R = O->Rec;
   R.Hdr.Triple = "x86_64-unknown-linux-gnu-msil";
@@ -2240,6 +2318,59 @@ TEST(CLILinkInfoTest, C6OtherMemberRefs) {
     ObjSpec S;
     S.BadParent = Bad;
     std::unique_ptr<Obj> O = buildObj(S);
+    expectRule(*O, O->Rec, {6});
+  }
+}
+
+// The object of \p P, after checking that its MemberRef on a TypeSpec has the
+// object's only TypeSpec as its parent.
+std::unique_ptr<Obj> buildObjWithTypeSpecParent(SpecParent P) {
+  ObjSpec S;
+  S.TypeSpecParent = P;
+  std::unique_ptr<Obj> O = buildObj(S);
+  if (!O->R)
+    return O;
+  EXPECT_EQ(O->R->getRowCount(TableId::TypeSpec), 1u);
+  Expected<MemberRefRow> M = O->R->getMemberRef(getTokenRow(O->OnTypeSpec));
+  EXPECT_THAT_EXPECTED(M, Succeeded());
+  if (M)
+    EXPECT_EQ(M->Parent, makeToken(TableId::TypeSpec, 1));
+  return O;
+}
+
+// C6 as amended for 5.20.7 MK3: the parent 'valuetype T', with T a TypeRef
+// scoped to an AssemblyRef directly or through its enclosing TypeRefs, is a
+// BCL request.
+TEST(CLILinkInfoTest, C6ValueTypeSpecParents) {
+  for (SpecParent P : {SpecParent::ValueType, SpecParent::NestedValueType}) {
+    SCOPED_TRACE(P == SpecParent::ValueType ? "valuetype System.DateTime"
+                                            : "valuetype System.Outer/Inner");
+    std::unique_ptr<Obj> O = buildObjWithTypeSpecParent(P);
+    ASSERT_TRUE(O->R);
+    EXPECT_THAT_ERROR(validateLinkInfo(O->Rec, *O->R), Succeeded());
+  }
+}
+
+// Every other TypeSpec parent is a C6 violation, reported as one: another
+// element type, a modifier, a TypeRef that is not scoped to an AssemblyRef, a
+// placeholder type, a type that is not a TypeRef of the object, and a
+// signature that does not decode (not the decoder's error).
+TEST(CLILinkInfoTest, C6OtherTypeSpecParents) {
+  struct {
+    const char *What;
+    SpecParent P;
+  } Cases[] = {{"class System.DateTime", SpecParent::Class},
+               {"valuetype System.DateTime[]", SpecParent::Array},
+               {"a modreq before valuetype", SpecParent::Modified},
+               {"valuetype [.module libfoo]T", SpecParent::InModuleRef},
+               {"valuetype '<msil>Symbols'", SpecParent::Symbols},
+               {"valuetype '<msil>FnAddr'", SpecParent::FnAddr},
+               {"valuetype <Module>", SpecParent::TypeDef},
+               {"valuetype of no TypeRef row", SpecParent::NoSuchTypeRef},
+               {"a signature that does not decode", SpecParent::Truncated}};
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.What);
+    std::unique_ptr<Obj> O = buildObjWithTypeSpecParent(C.P);
     expectRule(*O, O->Rec, {6});
   }
 }

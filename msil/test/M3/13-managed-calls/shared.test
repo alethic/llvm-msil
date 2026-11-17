@@ -1,0 +1,134 @@
+# Managed calls in a -shared library: the library's exported functions call Buffer::MemoryCopy, Marshal::AllocHGlobal and BitConverter::GetBytes through managed declarations of their own; the program calls them, makes the same managed call under the same C name in its own assembly, and frees a handle that the library returned through its own GCHandle::Free declaration.
+# Plan 5.20.6 MW1 as amended in section 12 (in an object the stub is an
+# internal MethodDef __msil_mc.<symbol> and a LOCAL FUNCTION symbol, never
+# global, exported, imported or bound late, so the library's stub and the
+# program's stub of one C name never meet: each assembly calls its own),
+# 5.20.4 MR2 (the IR declaration is named __msil_mc.<symbol>, so no
+# managed-call name is exported or imported), 5.20.7 MK1 (the library and
+# the program each bind through the built-in table, with no reference),
+# 5.20.9 MH5 (handles are valid in every assembly of the process: the
+# program frees the library's array handle). The library mclib
+# (%{msil_shlibs}, linked with -shared; natively mclib.dll with mclib.lib
+# on Windows, libmclib.so on Linux) exports its functions; every run gets it
+# beside the program. Each managed declaration sits under
+# '#if defined(__MSIL__)' with a C fallback in '#else' (memmove, malloc,
+# a malloc'd stand-in for the array handle and free, both from the one DLL C
+# runtime of the native Windows oracle), and the native oracle builds the
+# fallbacks (plan 5.20.11 MT3). Like the other %{msil_shlibs} tests it does
+# not run with msil_link_output=il (msil-prog.py refuses --shlibs there).
+# Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = mclib=%t/mclib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- mc.h
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#ifdef MCLIB_BUILD
+#define API __declspec(dllexport)
+#else
+#define API __declspec(dllimport)
+#endif
+#else
+#define API __attribute__((visibility("default")))
+#endif
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+/* The managed declarations both assemblies make, each for itself. */
+#if defined(__MSIL__)
+__attribute__((msil_method("System.Buffer", "MemoryCopy",
+                           "void(void*, void*, int64, int64)")))
+void copy_bytes(const void *src, void *dst, long long dst_size,
+                long long count);
+
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle",
+                           "Free", "instance void()")))
+void handle_free(mc_handle handle);
+#else
+struct mc_object {
+  unsigned char bytes[4];
+};
+static inline void copy_bytes(const void *src, void *dst, long long dst_size,
+                              long long count) {
+  (void)dst_size;
+  memmove(dst, src, (size_t)count);
+}
+static inline void handle_free(mc_handle handle) { free(handle); }
+#endif
+
+/* The library's exports. */
+API void lib_copy(const char *src, char *dst, int count);
+API char *lib_alloc_copy(const char *src);
+API mc_handle lib_int_bytes(int value);
+#--- mclib.c
+#define MCLIB_BUILD
+#include "mc.h"
+
+#if defined(__MSIL__)
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "AllocHGlobal", "native int(native int)")))
+void *alloc_hglobal(size_t size);
+
+__attribute__((msil_method("System.BitConverter", "GetBytes",
+                           "uint8[](int32)")))
+mc_handle int_bytes(int value);
+#else
+static void *alloc_hglobal(size_t size) { return malloc(size); }
+static mc_handle int_bytes(int value) {
+  mc_handle h = malloc(sizeof *h);
+  memcpy(h->bytes, &value, sizeof value);
+  return h;
+}
+#endif
+
+API void lib_copy(const char *src, char *dst, int count) {
+  copy_bytes(src, dst, count, count);
+}
+
+/* A copy of src in an AllocHGlobal block (never freed: Marshal::FreeHGlobal
+   is no table entry). */
+API char *lib_alloc_copy(const char *src) {
+  size_t n = strlen(src) + 1;
+  char *p = alloc_hglobal(n);
+  if (p)
+    copy_bytes(src, p, (long long)n, (long long)n);
+  return p;
+}
+
+API mc_handle lib_int_bytes(int value) { return int_bytes(value); }
+#--- main.c
+#include <stdio.h>
+
+#include "mc.h"
+
+int main(void) {
+  char buf[16];
+
+  /* The library's stub. */
+  memcpy(buf, "abcdefghij", 11);
+  lib_copy(buf, buf + 3, 5);
+  printf("lib_copy over an overlap: %s\n", buf);
+
+  /* The program's own stub of the same C name. */
+  memcpy(buf, "abcdefghij", 11);
+  copy_bytes(buf + 4, buf, 10, 6);
+  printf("the program's copy_bytes: %s\n", buf);
+
+  char *p = lib_alloc_copy("from the library's AllocHGlobal");
+  printf("lib_alloc_copy: %s\n", p ? p : "(null)");
+
+  /* A handle made in the library, freed in the program. */
+  mc_handle h = lib_int_bytes(42);
+  mc_handle h2 = lib_int_bytes(43);
+  printf("library handles: nonzero %d, distinct %d\n", h != 0 && h2 != 0,
+         h != h2);
+  handle_free(h);
+  handle_free(h2);
+  puts("freed the library's handles in the program");
+  return 0;
+}

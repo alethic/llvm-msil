@@ -239,7 +239,8 @@ class BoolArgument<string name, bit opt = 0, bit fake = 0> : Argument<name, opt,
                                                                       fake>;
 class IdentifierArgument<string name, bit opt = 0> : Argument<name, opt>;
 class IntArgument<string name, bit opt = 0> : Argument<name, opt>;
-class StringArgument<string name, bit opt = 0> : Argument<name, opt>;
+class StringArgument<string name, bit opt = 0, bit fake = 0>
+    : Argument<name, opt, fake>;
 class ExprArgument<string name, bit opt = 0> : Argument<name, opt>;
 class DeclArgument<DeclNode kind, string name, bit opt = 0, bit fake = 0>
     : Argument<name, opt, fake> {
@@ -497,6 +498,11 @@ def TargetWebAssembly : TargetArch<["wasm32", "wasm64"]>;
 // format; they share WebAssembly's import attributes.
 def TargetWebAssemblyOrMSIL : TargetSpec {
   let CustomCode = [{ T.isWasm() || T.isOSBinFormatMSIL() }];
+}
+// Every target whose object format is MSIL: the host MSIL triples and the
+// portable msil32/msil64-unknown-dotnet triples.
+def TargetMSIL : TargetSpec {
+  let CustomCode = [{ T.isOSBinFormatMSIL() }];
 }
 def TargetNVPTX : TargetArch<["nvptx", "nvptx64"]>;
 def TargetWindows : TargetSpec {
@@ -2642,6 +2648,42 @@ def WebAssemblyImportName : InheritableAttr,
   let Args = [StringArgument<"ImportName">];
   let Documentation = [WebAssemblyImportNameDocs];
   let Subjects = SubjectList<[Function, GlobalVar], ErrorDiag>;
+}
+
+// A call of a function declaration with msil_method calls the public .NET
+// member it names; msil_catch maps listed exceptions to codes.
+def MSILMethod : InheritableAttr, TargetSpecificAttr<TargetMSIL> {
+  let Spellings = [Clang<"msil_method">];
+  let Args = [StringArgument<"Type">, StringArgument<"Member">,
+              StringArgument<"Signature">,
+              // The optional ASSEMBLY: variadic, so that the pretty printer
+              // prints it only when it is written; Sema refuses a second
+              // string.
+              VariadicStringArgument<"Assembly">,
+              // Not spelled in source and not printed: the conversion list in
+              // the "msil-managed-conv" encoding, written by Sema when it
+              // classifies the declaration and copied by CodeGen (MR1).
+              StringArgument<"Conversions", /*opt=*/1, /*fake=*/1>];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [MSILMethodDocs];
+  // Each declaration names its own member.
+  let PragmaAttributeSupport = 0;
+  let AdditionalMembers = [{
+    /// The ASSEMBLY argument, or "" when it is not written.
+    StringRef getAssembly() const {
+      return assembly_size() ? *assembly_begin() : StringRef();
+    }
+  }];
+}
+
+def MSILCatch : InheritableAttr, TargetSpecificAttr<TargetMSIL> {
+  let Spellings = [Clang<"msil_catch">];
+  let Args = [StringArgument<"ExceptionType">, IntArgument<"Code">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [MSILCatchDocs];
+  // Repeatable and ordered: a redeclaration inherits the whole list.
+  let InheritEvenIfAlreadyPresent = 1;
+  let PragmaAttributeSupport = 0;
 }
 
 def NoSplitStack : InheritableAttr {

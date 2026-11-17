@@ -30,6 +30,7 @@ add_llvm_target(MSILCodeGen
   MSILLowerSjLj.cpp
   MSILMCInstLower.cpp
   MSILMachineFunctionInfo.cpp
+  MSILManagedCalls.cpp
   MSILNullifyDebugValueLists.cpp
   MSILOptimizeLiveIntervals.cpp
   MSILOptimizeReturned.cpp

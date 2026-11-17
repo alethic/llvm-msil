@@ -1,0 +1,128 @@
+# Wide C strings into .NET strings: char16_t strings (UTF-16, lone surrogates kept) and char32_t strings (UTF-32) on both OSes, and wchar_t strings, UTF-16 on Windows and UTF-32 on Linux, all reach Marshal::StringToHGlobalUni(string) as the same text; invalid UTF-32 (a surrogate code point, a value above U+10FFFF) is mapped by msil_catch; null pointers are null strings.
+# Plan 5.20.10 S2 (utf16: newobj String::.ctor(char*), lossless: .NET
+# strings may hold lone surrogates) and S3 (utf32: a length loop of 4-byte
+# units and GetString on a throwing UTF32Encoding(false, false, true);
+# invalid scalars throw System.Text.DecoderFallbackException), 5.20.3 MS5
+# ('const char16_t *' is utf16, 'const char32_t *' utf32, 'const wchar_t *'
+# utf16 where wchar_t is 16 bits and utf32 where it is 32 bits), 5.20.11 MT1
+# (wchar_t is 16 bits on the Windows host triples and 32 bits on the Linux
+# host triples), 5.20.8 MX2 and MX4. Marshal::StringToHGlobalUni(string) is
+# a built-in table entry (M20): the UTF-16 code units and a terminating 0
+# in unmanaged memory, never freed here (Marshal::FreeHGlobal is no table
+# entry), or a null pointer for a null string. The wchar_t literals are
+# written with universal character names, so the compiler encodes them in
+# the triple's wchar_t form (a surrogate pair on Windows, one unit on
+# Linux); the program compares the results with the same expected UTF-16
+# units on both OSes and prints only what both show alike. The invalid
+# UTF-32 values throw on the .NET Framework 4.8.1, .NET 10 and WSL .NET 10
+# (measured with UTF32Encoding(false, false, true)).
+# The member has no C library equivalent, so the expected file is
+# hand-written for both OSes (plan 5.20.11 MT3, 5.17.4 as amended for
+# MC-1). Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <errno.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#include <uchar.h>
+#include <wchar.h>
+
+#define MARSHAL "System.Runtime.InteropServices.Marshal"
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf16(const char16_t *s);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_utf32(const char32_t *s);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)")))
+char16_t *from_wide(const wchar_t *s);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)"),
+               msil_catch("System.Text.DecoderFallbackException", EILSEQ)))
+char16_t *from_utf32_checked(const char32_t *s, int *err);
+
+__attribute__((msil_method(MARSHAL, "StringToHGlobalUni", "native int(string)"),
+               msil_catch("System.Text.DecoderFallbackException", EILSEQ)))
+char16_t *from_wide_checked(const wchar_t *s, int *err);
+
+/* "grüß € \U0001F600" as UTF-16. */
+static const char16_t want[] = {'g', 'r', 0xFC, 0xDF, ' ', 0x20AC,
+                                ' ', 0xD83D, 0xDE00, 0};
+#define WANT_UNITS 9
+
+static size_t units(const char16_t *p) {
+  size_t n = 0;
+  while (p[n])
+    ++n;
+  return n;
+}
+
+static void show(const char *what, const char16_t *p, const char16_t *expect,
+                 size_t n) {
+  if (!p) {
+    printf("%s: null\n", what);
+    return;
+  }
+  printf("%s: %u units, equal %d, units:", what, (unsigned)units(p),
+         units(p) == n && memcmp(p, expect, (n + 1) * sizeof *p) == 0);
+  for (; *p; ++p)
+    printf(" %04x", (unsigned)*p);
+  printf("\n");
+}
+
+int main(void) {
+  /* char16_t: the literal and a string with lone surrogates. */
+  show("char16_t literal", from_utf16(u"grüß € \U0001F600"),
+       want, WANT_UNITS);
+  static const char16_t lone[] = {'a', 0xDC00, 'b', 0xD800, 0};
+  show("char16_t lone surrogates", from_utf16(lone), lone, 4);
+
+  /* char32_t: the literal (one unit per scalar). */
+  static const char32_t text32[] = U"grüß € \U0001F600";
+  printf("char32_t literal: %u code points\n",
+         (unsigned)(sizeof text32 / sizeof text32[0] - 1));
+  show("char32_t literal", from_utf32(text32), want, WANT_UNITS);
+
+  /* wchar_t: UTF-16 on Windows, UTF-32 on Linux; the same text. */
+  show("wchar_t literal", from_wide(L"grüß € \U0001F600"),
+       want, WANT_UNITS);
+  static const char16_t wide_ascii[] = {'w', 'c', 'h', 'a', 'r', 0};
+  show("wchar_t ASCII", from_wide(L"wchar"), wide_ascii, 5);
+
+  /* Empty strings and null pointers. */
+  static const char16_t empty[] = {0};
+  show("char16_t empty", from_utf16(u""), empty, 0);
+  show("char32_t empty", from_utf32(U""), empty, 0);
+  show("wchar_t empty", from_wide(L""), empty, 0);
+  printf("null pointers: %d %d %d\n", from_utf16(NULL) == NULL,
+         from_utf32(NULL) == NULL, from_wide(NULL) == NULL);
+
+  /* Invalid UTF-32 through msil_catch, and a valid call that stores
+     nothing. */
+  int err = -1;
+  char16_t *p = from_utf32_checked(text32, &err);
+  printf("char32_t valid with msil_catch: equal %d, code untouched %d\n",
+         p != NULL && units(p) == WANT_UNITS &&
+             memcmp(p, want, sizeof want) == 0,
+         err == -1);
+  static const char32_t surrogate[] = {'x', 0xD800, 0};
+  static const char32_t too_big[] = {0x110000, 0};
+  err = -1;
+  p = from_utf32_checked(surrogate, &err);
+  printf("char32_t surrogate code point: null result %d, code is EILSEQ %d\n",
+         p == NULL, err == EILSEQ);
+  err = -1;
+  p = from_utf32_checked(too_big, &err);
+  printf("char32_t above U+10FFFF: null result %d, code is EILSEQ %d\n",
+         p == NULL, err == EILSEQ);
+  err = -1;
+  p = from_wide_checked(L"ok", &err);
+  printf("wchar_t valid with msil_catch: not null %d, code untouched %d\n",
+         p != NULL, err == -1);
+  return 0;
+}

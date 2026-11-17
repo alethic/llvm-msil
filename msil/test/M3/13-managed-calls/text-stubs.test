@@ -1,0 +1,207 @@
+# clang -S text of 'this-gch' and 'this-val' stubs, assembled by ilasm and run: an EntryPointNotFoundException handle's HResult, IsAllocated and GCHandle::Free through 'this-gch' (members GCHandle declares), DateTime::get_Ticks through 'this-val' (a member DateTime declares), and GetHashCode, Equals, GetType and TimeSpan's ToString through 'this-val' in System.Object's form; the image verifies and prints the same on every runtime.
+# Plan 5.20.5 ML2 (2) and 5.20.6 MW2 as amended for MC-1 (section 12 row
+# '5.20.5 ML2 (2) and 5.20.6 MW2 amended; refines (d) ...'): standalone
+# text (clang -S, llc text) of a 'this-val' or 'this-gch' instance method
+# without "msil-managed-decl" never carries the placeholder 'constrained. V'
+# + 'callvirt V::M' that msil-ld rewrites in objects, because no msil-ld
+# rewrites text. The backend writes a final form: one of System.Object's
+# public instance methods (bool Equals(object), int32 GetHashCode(), string
+# ToString(), class System.Type GetType()) is 'constrained. V' then
+# 'callvirt instance <sig> [mscorlib]System.Object::M', valid whether or not
+# V overrides M (ECMA-335 III.2.1); every other member is 'call V::M',
+# which every GCHandle row of the built-in table (get_IsAllocated, Free) and
+# every member V declares (DateTime::get_Ticks) takes. MW2 promises that
+# the text runs where the assemblies resolve; the placeholder form crashed
+# GCHandle::Free (0xC0000005 on Framework 4.8, an internal CLR error on
+# .NET 10) and returned garbage from get_Ticks. Also 5.20.9 MH2 (every
+# handle, the string results among them, freed exactly once through
+# GCHandle::Free) and 5.20.3 MS5 ('this-obj' for Exception::get_HResult and
+# Type::get_FullName, 'boxed' for the value-type .ctors, 'obj' for Equals'
+# object parameter and the string and Type results, 'bool' into _Bool).
+# The program prints only with puts and putchar, the C library functions
+# that -S text binds without a linker (plan D14), and needs no reference:
+# the text names [mscorlib], which the .NET Framework and .NET 10 (through
+# its facade) resolve. At -O0 and -O2: clang -S for the test's triple, the
+# TEXT lines (the final forms), ilasm -exe, msil-verify (ILVerify and, on
+# Windows, PEVerify), jitall, the run on the configured runtime and, by
+# %{msil_also_run_check}, on each runtime of the leg's msil_also_run, and
+# with msil_run_netfx the run on the .NET Framework 4.8; every transcript
+# matches the CHECK lines. No composite builds this test, so no equivalence
+# oracle compares the text with an object link (their stubs differ by design
+# at these sites, MW2 as amended). The values are .NET's, the same on every
+# runtime (measured on Framework 4.8.1 and .NET 10 through an object link):
+# COR_E_ENTRYPOINTNOTFOUND is 0x80131523, DateTime's and TimeSpan's hash of
+# 1234567 ticks is 1234567, and TimeSpan's ToString is culture-invariant.
+# Plan 5.17.13 (MC-1, M3/13-managed-calls).
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/O0 %t/O2
+# DEFINE: %{ts_level} = O0
+# REDEFINE: %{msil_also_run_image} = %t/%{ts_level}/prog.exe
+# DEFINE: %{ts_build} = \
+# DEFINE:   %clang_msil %{msil_cflags} -%{ts_level} -S %t/main.c -o %t/%{ts_level}/prog.il \
+# DEFINE:   && FileCheck %s --check-prefix=TEXT --input-file=%t/%{ts_level}/prog.il \
+# DEFINE:      --implicit-check-not="callvirt instance void [mscorlib]System.Runtime.InteropServices.GCHandle::Free()" \
+# DEFINE:      --implicit-check-not="callvirt instance bool [mscorlib]System.Runtime.InteropServices.GCHandle::get_IsAllocated()" \
+# DEFINE:      --implicit-check-not="callvirt instance int64 [mscorlib]System.DateTime::get_Ticks()" \
+# DEFINE:   && %ilasm -exe -output=%t/%{ts_level}/prog.exe %t/%{ts_level}/prog.il \
+# DEFINE:   && %msil_verify %t/%{ts_level}/prog.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %t/%{ts_level}/prog.exe %}
+# DEFINE: %{ts_run} = \
+# DEFINE:   %msil_exec --out %t/%{ts_level}/prog.out %t/%{ts_level}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{ts_level}/prog.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{ts_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --out %t/%{ts_level}/prog.netfx.out %t/%{ts_level}/prog.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{ts_level}/prog.netfx.out --match-full-lines %s
+# RUN: %{ts_build}
+# RUN: %{ts_run}
+# RUN: %if msil-run-netfx %{ %{ts_netfx} %}
+# REDEFINE: %{ts_level} = O2
+# RUN: %{ts_build}
+# RUN: %{ts_run}
+# RUN: %if msil-run-netfx %{ %{ts_netfx} %}
+# The final forms in the text: 'call V::M' for members GCHandle and
+# DateTime declare, System.Object's form for its four methods.
+# TEXT-DAG: call instance bool [mscorlib]System.Runtime.InteropServices.GCHandle::get_IsAllocated()
+# TEXT-DAG: call instance void [mscorlib]System.Runtime.InteropServices.GCHandle::Free()
+# TEXT-DAG: call instance int64 [mscorlib]System.DateTime::get_Ticks()
+# TEXT-DAG: callvirt instance int32 [mscorlib]System.Object::GetHashCode()
+# TEXT-DAG: callvirt instance bool [mscorlib]System.Object::Equals(object)
+# TEXT-DAG: callvirt instance class [mscorlib]System.Type [mscorlib]System.Object::GetType()
+# TEXT-DAG: callvirt instance string [mscorlib]System.Object::ToString()
+# Every run's transcript.
+# CHECK:      exception handle nonzero: 1
+# CHECK-NEXT: HResult: 0x80131523
+# CHECK-NEXT: IsAllocated: 1
+# CHECK-NEXT: freed the exception handle
+# CHECK-NEXT: DateTime(1234567) Ticks: 1234567
+# CHECK-NEXT: GetHashCode: 1234567
+# CHECK-NEXT: Equals itself: 1
+# CHECK-NEXT: GetType FullName: "System.DateTime"
+# CHECK-NEXT: TimeSpan(1234567) ToString: "00:00:00.1234567"
+# CHECK-NEXT: handles freed: 6
+# CHECK-NEXT: [exit 0]
+#--- main.c
+/* Only puts and putchar print: clang -S text binds no other C library
+   function (plan D14's standalone import table). */
+int puts(const char *s);
+int putchar(int c);
+
+typedef struct mc_object *mc_handle; /* an opaque handle (plan 5.20.9) */
+
+#define GCH "valuetype System.Runtime.InteropServices.GCHandle"
+#define DT "valuetype System.DateTime"
+#define TS "valuetype System.TimeSpan"
+
+/* The handle lifecycle: built-in table rows, a 'this-gch' Free. */
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+mc_handle new_entry_point_not_found(const char *message);
+
+__attribute__((msil_method("System.Exception", "get_HResult",
+                           "instance int32()")))
+int exception_hresult(mc_handle exception);
+
+__attribute__((msil_method(GCH, "get_IsAllocated", "instance bool()")))
+_Bool handle_is_allocated(mc_handle handle);
+
+__attribute__((msil_method(GCH, "Free", "instance void()")))
+void handle_free(mc_handle handle);
+
+/* 'this-val': a member DateTime declares, then System.Object's four. */
+__attribute__((msil_method(DT, ".ctor", "instance void(int64)")))
+mc_handle new_date(long long ticks);
+
+__attribute__((msil_method(DT, "get_Ticks", "instance int64()")))
+long long date_ticks(mc_handle date);
+
+__attribute__((msil_method(DT, "GetHashCode", "instance int32()")))
+int date_hash(mc_handle date);
+
+__attribute__((msil_method(DT, "Equals", "instance bool(object)")))
+_Bool date_equals(mc_handle date, mc_handle other);
+
+__attribute__((msil_method(DT, "GetType", "instance class System.Type()")))
+mc_handle date_type(mc_handle date);
+
+__attribute__((msil_method(TS, ".ctor", "instance void(int64)")))
+mc_handle new_span(long long ticks);
+
+__attribute__((msil_method(TS, "ToString", "instance string()")))
+mc_handle span_string(mc_handle span);
+
+__attribute__((msil_method("System.Type", "get_FullName",
+                           "instance string()")))
+mc_handle type_full_name(mc_handle type);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+unsigned short *string_units(mc_handle s);
+
+static void put_text(const char *s) {
+  while (*s)
+    putchar(*s++);
+}
+
+static void put_dec(long long v) {
+  char digits[24];
+  int n = 0;
+  unsigned long long u = v < 0 ? 0 - (unsigned long long)v : (unsigned long long)v;
+  if (v < 0)
+    putchar('-');
+  do {
+    digits[n++] = (char)('0' + u % 10);
+    u /= 10;
+  } while (u);
+  while (n)
+    putchar(digits[--n]);
+}
+
+static void put_hex(unsigned v) {
+  put_text("0x");
+  for (int shift = 28; shift >= 0; shift -= 4)
+    putchar("0123456789abcdef"[(v >> shift) & 15]);
+}
+
+/* A string handle's UTF-16 units as ASCII, then the handle is freed. */
+static void put_string(mc_handle s) {
+  putchar('"');
+  for (unsigned short *p = string_units(s); p && *p; ++p)
+    putchar(*p < 0x80 ? *p : '?');
+  putchar('"');
+  handle_free(s);
+}
+
+static void line(const char *what, long long v) {
+  put_text(what);
+  put_dec(v);
+  putchar('\n');
+}
+
+int main(void) {
+  mc_handle e = new_entry_point_not_found("text: a managed exception");
+  line("exception handle nonzero: ", e != 0);
+  put_text("HResult: ");
+  put_hex((unsigned)exception_hresult(e));
+  putchar('\n');
+  line("IsAllocated: ", handle_is_allocated(e));
+  handle_free(e);
+  puts("freed the exception handle");
+
+  mc_handle d = new_date(1234567);
+  line("DateTime(1234567) Ticks: ", date_ticks(d));
+  line("GetHashCode: ", date_hash(d));
+  line("Equals itself: ", date_equals(d, d));
+  mc_handle t = date_type(d);
+  put_text("GetType FullName: ");
+  put_string(type_full_name(t));
+  putchar('\n');
+  mc_handle span = new_span(1234567);
+  put_text("TimeSpan(1234567) ToString: ");
+  put_string(span_string(span));
+  putchar('\n');
+  handle_free(span);
+  handle_free(t);
+  handle_free(d);
+  puts("handles freed: 6");
+  return 0;
+}

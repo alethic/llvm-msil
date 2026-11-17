@@ -1,0 +1,51 @@
+# A constructor managed call that takes argc on the Linux triple: '__attribute__((constructor)) void print_argc(int argc)' bound to System.Console::WriteLine(int32) prints the argc that the startup code passes to constructors (1: the program runs without arguments), before main prints its own.
+# Plan 5.20.4 as amended for MC-1 (MC-1 leftover audit, defect D6, and the
+# user's pick 'Build them now' in the chat, 2026-11-05): the forwarder
+# '__msil_mc_ctor.<symbol>' that clang's CodeGen registers in
+# llvm.global_ctors has the managed call's parameters and passes them to the
+# stub. Sema accepts them as the MSIL backend accepts a native
+# constructor's: none on the Windows triples and msil64-unknown-dotnet, and
+# on the Linux triple (ELF rules) a prefix of (int32, native int, native
+# int) by the IL types the C parameters lower to, glibc's (argc, argv,
+# envp), which msil-ld passes to such a constructor (section 12, 2026-10-26,
+# 'M22.b extended (Rust-found defects 2 and 4)' item 4;
+# M2/08-semantics/initarray-args.test). Here the prefix is argc alone;
+# elsewhere, or with any other parameter, Sema refuses the declaration
+# (T-M19). Before the fix the attribute had no effect, and the program
+# printed only main's line. Console.WriteLine writes straight to the
+# process's standard output, before main's C output.
+# The test REQUIRES msil-triple-linux: it runs in wsl-p3 (WSL .NET 10 and
+# TC=0) under obj and in the MC-1 gate's step 18b under lto. Console is no
+# built-in table type, so the program links against the .NET Framework 4.8
+# implementation assemblies (%{msil_refs_netfx}), which bind for WSL .NET 10
+# too. The managed declaration sits under '#if defined(__MSIL__)' with a C
+# fallback in '#else' (a C constructor that takes argc and prints it), and
+# the native E7h oracle builds it, glibc passing argc as it passes it to
+# every '.init_array' entry, so the expected file is update-expected.py's
+# (--os linux; plan 5.20.11 MT3, 5.17.4). Plan 5.17.13 (MC-1,
+# M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx, msil-triple-linux
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <stdio.h>
+
+#if defined(__MSIL__)
+__attribute__((constructor))
+__attribute__((msil_method("System.Console", "WriteLine", "void(int32)")))
+void print_argc(int argc);
+#else
+__attribute__((constructor)) void print_argc(int argc) {
+  printf("%d\n", argc);
+  fflush(stdout);
+}
+#endif
+
+int main(int argc, char **argv) {
+  printf("main: argc %d, argv[argc] is null %d; the line above is the "
+         "constructor managed call's Console.WriteLine(argc)\n",
+         argc, argv[argc] == 0);
+  return 0;
+}

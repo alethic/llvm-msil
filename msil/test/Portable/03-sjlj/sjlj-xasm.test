@@ -1,0 +1,80 @@
+# setjmp and longjmp across assemblies on msil64-unknown-dotnet: a -shared library's longjmp returns to the program's site, a program function that the library calls through a pointer jumps back to the library's site, and a jump from the library passes through a site of the library that does not own the buffer.
+# Plan 5.15.4 ('Across assemblies, native frames, msil-ld': assembly B's
+# __msil_longjmp arms assembly A's status block through the buffer, and A's
+# filter matches B's throw with no shared exception type; on
+# *-unknown-dotnet every function pointer is managed, so a longjmp through
+# another assembly's pointer crosses only managed frames, as within one
+# assembly; P-1r row R1). sjlib is a -shared assembly (%{msil_shlibs},
+# linked with the directory's --sysroot against c.dll); the program links
+# it, and every run has c.dll and sjlib.dll beside it. Each failed group
+# sets one bit of the exit status.
+# A link that writes --lto-emit-asm text cannot import c.dll or sjlib.dll
+# (msil_link_output=il), so the test needs linked images.
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = sjlib=%t/sjlib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- sjlib.c
+#include <setjmp.h>
+#define API __attribute__((visibility("default")))
+
+/* 0: a longjmp in the library to the program's buffer. */
+API void lib_jump(jmp_buf b, int v) { longjmp(b, v); }
+
+/* 1: a site in the library; the program's callback jumps back to it. */
+API int lib_site(void (*cb)(jmp_buf, int), int v) {
+  jmp_buf lb;
+  int r = setjmp(lb);
+  if (r == 0)
+    cb(lb, v);
+  return r + 100;
+}
+
+/* 2: the library's own site around a call that jumps to the program's
+   buffer: the library's wrapper filter must decline the program's jump. */
+API int lib_pass_through(jmp_buf b, int v) {
+  jmp_buf lb;
+  int r = setjmp(lb);
+  if (r == 0)
+    lib_jump(b, v);
+  return -r; /* never reached */
+}
+#--- main.c
+#include <setjmp.h>
+
+void lib_jump(jmp_buf b, int v);
+int lib_site(void (*cb)(jmp_buf, int), int v);
+int lib_pass_through(jmp_buf b, int v);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static jmp_buf jb;
+
+/* Called by the library through a managed pointer. */
+static void prog_jump(jmp_buf b, int v) { longjmp(b, v); }
+
+int main(void) {
+  /* 0: the library jumps to the program's site. */
+  int r = setjmp(jb);
+  if (r == 0)
+    lib_jump(jb, 21);
+  CHECK(0, r == 21);
+
+  /* 1: the program jumps to the library's site. */
+  CHECK(1, lib_site(prog_jump, 22) == 122);
+  CHECK(1, lib_site(prog_jump, 0) == 101);
+
+  /* 2: through a library site that does not own the buffer. */
+  r = setjmp(jb);
+  if (r == 0)
+    lib_pass_through(jb, 23);
+  CHECK(2, r == 23);
+  return (int)fails;
+}

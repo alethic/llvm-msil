@@ -101,6 +101,8 @@ skip O4 msil/test/M2/08-semantics/p2c-weak-def.test -shared libraries and links 
 skip O4 msil/test/M3/05-variadics/shared-variadic.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M3/07-sjlj/sjlj-xasm.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M3/07-sjlj/sjlj-xasm-callback.test -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M3/13-managed-calls/shared.test -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M3/13-managed-calls/exported.test -shared libraries and links against them have no --lto-emit-asm text
 #
 # Helper-archive programs (plan 5.14.3 A9, M25): a program that calls a K1
 # helper (a function of the helper archive clang_rt.builtins, plan 5.14.1)
@@ -141,3 +143,36 @@ skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/powi.test programs
 # variants and keep O4. ucrt-rounding includes <stdio.h>, whose inline
 # definitions need no member, and keeps O4 on both triples.
 skip O4@x86_64-pc-windows-msvc-msil msil/test/M3/05-variadics/ucrt-noinc.test prebuilt CIL objects: the printf and scanf families, declared without <stdio.h>, come from the helper archive's CIL members of msil_ucrt_stdio.c, so the composite's --also-il link stops with '--lto-emit-asm cannot link CIL objects' and there is no text to compare (plan 5.14.3 A9)
+#
+# Managed calls checked at run time in whole-program text (plan 5.20.6 MW2
+# as amended for MC-1): clang -S, llc and msil-ld's --lto-emit-asm text bind
+# no managed call, so each stub there checks its declaration when it runs,
+# where msil-ld checks it at link time (5.20.7 MK2, MK3): the castclass of a
+# 'this-obj' stub, the unbox of a 'this-val' stub and a constructor's
+# castclass (a class) or box (a value type) name TYPE as a TypeSpec of its
+# declared kind (except System.String and System.Object, and the primitive
+# value types), and a stub with an 'enum' parameter or result first tests
+# that E is an enum of the C integer's width, through typeof(E).IsEnum and
+# sizeof E, with its own code and a user string. Objects, object-form text
+# and images carry neither, so the LTO image of a program with such a stub
+# differs from the image of its --lto-emit-asm text in those stubs, and O4
+# is skipped for the %{msil_prog} tests of msil/test/M3/13-managed-calls
+# that have one, one line per test. The directory's other %{msil_prog} tests
+# keep O4: their managed calls are static members and GCHandle's 'this-gch'
+# members, with no constructor and no 'enum' conversion (shared and exported
+# have their library lines above; handles and catch-map are loud failures,
+# which build no equivalence output, and the tests with RUN lines of their
+# own build none either). No line skips O3 or O6: they run only for
+# %{msil_c} and %{msil_ll}, which no managed-call test uses, and PEVerify
+# /md reports the same for a right declaration's checked text as for its
+# unchecked text.
+skip O4 msil/test/M3/13-managed-calls/arrays.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/console.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/conversions.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/enum-args.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/field-read.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/inherited.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/interfaces.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/null-handles.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/static-value-members.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)
+skip O4 msil/test/M3/13-managed-calls/value-types.test whole-program text checks managed-call declarations when it runs and an image does not: the --lto-emit-asm text's stubs name TYPE as a TypeSpec of its declared kind in their 'this-obj' castclass, 'this-val' unbox and a constructor's castclass or box, and test each 'enum' conversion's E with typeof(E).IsEnum, sizeof E and a throw, where the LTO image's stubs have TypeRefs and no test, because msil-ld checks the declarations at link time (plan 5.20.6 MW2)

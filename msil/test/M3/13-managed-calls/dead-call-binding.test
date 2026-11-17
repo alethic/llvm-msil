@@ -1,0 +1,169 @@
+# Two translation units that bind one external managed call differently, one of them only in a call that its own optimizer deletes: s1.c binds 'int f(int)' to System.Math::Abs and calls it in g, s2.c binds the same f to Math::Sign but calls it only in a branch that is dead once its static h is inlined into k, and sm.c's main returns 100 + g(-3) * 10 + k(-4); at -O2 the program links and exits with 130 as CIL objects, as a mixed link (s2.c as bitcode), through full LTO, through ThinLTO and with two LTO partitions, and at -O0, where s2.c's call survives, each of those links fails with one T-M17 line.
+# Plan 5.20.4 MR4 and 5.20.3's T-M17 as amended for MC-1 (section 12: a
+# unit counts for T-M17 when its compiled code still declares the managed
+# call, the same way in every link mode): a CIL object counts through its
+# stub of the call and a bitcode input through a declaration that its
+# symbol table still lists, so an entry of !msil.managed.calls whose
+# declaration the unit's own optimizer deleted counts in no link mode.
+# msil-ld decides T-M17 before LTO in every LTO mode, from the bitcode
+# inputs that still declare the call, and removes the list from the modules
+# that LTO compiles, so slot P0 never compares it again (it used to, once
+# per LTO partition and per ThinLTO module); object and mixed links compare
+# every external managed call that two or more units still declare, not
+# only the calls that a unit forwards. At -O2 clang deletes s2.c's dead
+# call of f and then its declaration of f, but keeps its entry (Sign): the
+# -O2 object of s2.c has no stub of f and its bitcode lists no declaration
+# of it, so in every mode s1.c alone declares f, the link succeeds, g calls
+# Abs, k never calls f, and the exit status is 130 (129 would mean that k
+# called Sign through s2.c's binding, 134 that it called Abs). Before this
+# rule the LTO links refused the program with T-M17, printed twice with
+# --lto-partitions=2, while its objects linked. At -O0 s2.c's call and
+# declaration survive, so two units declare f with different arguments, and
+# every mode refuses the link with exactly one line of T-M17, 'managed call
+# 'f' is declared with different 'msil_method' or 'msil_catch' arguments in
+# different translation units'; the object and mixed links used to accept
+# it, each unit keeping its own binding. As for native undefined symbols,
+# the verdict on a call that is dead depends on the -O level.
+# Each managed declaration sits under '#if defined(__MSIL__)' with a C
+# fallback in '#else' (a static f that returns abs(x) in s1.c and one that
+# returns (x > 0) - (x < 0) in s2.c), and the native oracle builds the
+# fallbacks, so the expected file is update-expected.py's (plan 5.20.11
+# MT3, 5.17.4). %{msil_prog_O2} builds the program the leg's way (CIL
+# objects under msil_pipeline=obj; full LTO under lto, where msil_equiv=1
+# also writes the link's --lto-emit-asm text, which O4 compares with the
+# image), verifies and force-JITs it and runs it on every runtime of the
+# leg; it runs at -O2 alone, because at -O0 the link fails by design. The
+# other modes have their own RUN lines, as mixed-link.test has: every unit
+# is compiled at the level with clang -c, -flto -c and -flto=thin -c (each
+# bitcode file named .o, as msil-prog.py names them: the clang driver
+# passes a .o file to msil-ld as it is, while it would compile a .bc file
+# to an object first), and the driver links them with msil-ld and
+# %{msil_ldflags}: s2.c's bitcode with the other units' objects (first at
+# -O2, last at -O0), the ThinLTO modules, full LTO with
+# -Wl,--lto-partitions=2, and whichever of objects and full LTO the
+# composite does not build (full LTO under msil-prog-pipeline=obj, objects
+# under msil-prog-pipeline=lto; at -O0 both). At -O2 each link prints
+# nothing; then %msil_verify, %msil_jitall where the feature msil-jitall is
+# present, the run on the configured runtime and, by
+# %{msil_also_run_check}, on each runtime of the leg's msil_also_run, and
+# with msil_run_netfx the run on the .NET Framework 4.8; every transcript
+# matches the CHECK lines. At -O0 each link prints the T-M17 line, then
+# clang's line, and no other error or warning. So every leg that runs this
+# directory runs every mode: p3-full (.NET 10, TC=0 and the Framework) and
+# wsl-p3 (WSL .NET 10 and TC=0, on x86_64-unknown-linux-gnu-msil) under
+# obj, the MC-1 gate's steps 18 and 18b under lto, and the post-commit
+# legs. System.Math is no built-in table type, so every link takes the
+# .NET Framework 4.8 implementation assemblies (%{msil_refs_netfx}). Plan
+# 5.17.13 (MC-1, M3/13-managed-calls).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/s1.c %t/s2.c %t/sm.c
+# RUN: %{msil_prog_O2}
+# DEFINE: %{dcb_level} = O2
+# DEFINE: %{dcb_dir} = %t/O2
+# DEFINE: %{dcb_cc} = %clang_msil %{msil_cflags} -%{dcb_level}
+# DEFINE: %{dcb_compile} = \
+# DEFINE:   mkdir -p %{dcb_dir}/obj %{dcb_dir}/lto %{dcb_dir}/thin \
+# DEFINE:   && %{dcb_cc} -c %t/s1.c -o %{dcb_dir}/obj/s1.o \
+# DEFINE:   && %{dcb_cc} -c %t/s2.c -o %{dcb_dir}/obj/s2.o \
+# DEFINE:   && %{dcb_cc} -c %t/sm.c -o %{dcb_dir}/obj/sm.o \
+# DEFINE:   && %{dcb_cc} -flto -c %t/s1.c -o %{dcb_dir}/lto/s1.o \
+# DEFINE:   && %{dcb_cc} -flto -c %t/s2.c -o %{dcb_dir}/lto/s2.o \
+# DEFINE:   && %{dcb_cc} -flto -c %t/sm.c -o %{dcb_dir}/lto/sm.o \
+# DEFINE:   && %{dcb_cc} -flto=thin -c %t/s1.c -o %{dcb_dir}/thin/s1.o \
+# DEFINE:   && %{dcb_cc} -flto=thin -c %t/s2.c -o %{dcb_dir}/thin/s2.o \
+# DEFINE:   && %{dcb_cc} -flto=thin -c %t/sm.c -o %{dcb_dir}/thin/sm.o
+# DEFINE: %{dcb_mode} = mixed
+# DEFINE: %{dcb_inputs} = %{dcb_dir}/lto/s2.o %{dcb_dir}/obj/s1.o %{dcb_dir}/obj/sm.o
+# DEFINE: %{dcb_link} = \
+# DEFINE:   %clang_msil -%{dcb_level} %{msil_ldflags} %{dcb_inputs} -o %{dcb_dir}/%{dcb_mode}.exe
+# REDEFINE: %{msil_also_run_image} = %{dcb_dir}/%{dcb_mode}.exe
+# DEFINE: %{dcb_run} = \
+# DEFINE:   %{dcb_link} 2>&1 | count 0 \
+# DEFINE:   && %msil_verify %{dcb_dir}/%{dcb_mode}.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %{dcb_dir}/%{dcb_mode}.exe %} \
+# DEFINE:   && %msil_exec --out %{dcb_dir}/%{dcb_mode}.out %{dcb_dir}/%{dcb_mode}.exe \
+# DEFINE:   && FileCheck --input-file=%{dcb_dir}/%{dcb_mode}.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{dcb_netfx} = \
+# DEFINE:   %msil_exec --netfx %{msil_netfx_skip} --out %{dcb_dir}/%{dcb_mode}.netfx.out %{dcb_dir}/%{dcb_mode}.exe \
+# DEFINE:   && FileCheck --input-file=%{dcb_dir}/%{dcb_mode}.netfx.out --match-full-lines %s
+# DEFINE: %{dcb_fail} = \
+# DEFINE:   not %{dcb_link} 2>&1 \
+# DEFINE:   | FileCheck %s --check-prefix=TM17 --implicit-check-not=error: --implicit-check-not=warning: \
+# DEFINE:     --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# At -O2 every mode links and runs: the mixed link, ThinLTO, two LTO
+# partitions, then full LTO or objects, whichever the composite left out.
+# RUN: %{dcb_compile}
+# RUN: %{dcb_run}
+# RUN: %if msil-run-netfx %{ %{dcb_netfx} %}
+# REDEFINE: %{dcb_mode} = thin
+# REDEFINE: %{dcb_inputs} = %{dcb_dir}/thin/s1.o %{dcb_dir}/thin/s2.o %{dcb_dir}/thin/sm.o
+# RUN: %{dcb_run}
+# RUN: %if msil-run-netfx %{ %{dcb_netfx} %}
+# REDEFINE: %{dcb_mode} = part2
+# REDEFINE: %{dcb_inputs} = -Wl,--lto-partitions=2 %{dcb_dir}/lto/s1.o %{dcb_dir}/lto/s2.o %{dcb_dir}/lto/sm.o
+# RUN: %{dcb_run}
+# RUN: %if msil-run-netfx %{ %{dcb_netfx} %}
+# REDEFINE: %{dcb_mode} = lto
+# REDEFINE: %{dcb_inputs} = %{dcb_dir}/lto/s1.o %{dcb_dir}/lto/s2.o %{dcb_dir}/lto/sm.o
+# RUN: %if msil-prog-pipeline=obj %{ %{dcb_run} %}
+# RUN: %if msil-prog-pipeline=obj && msil-run-netfx %{ %{dcb_netfx} %}
+# REDEFINE: %{dcb_mode} = obj
+# REDEFINE: %{dcb_inputs} = %{dcb_dir}/obj/s1.o %{dcb_dir}/obj/s2.o %{dcb_dir}/obj/sm.o
+# RUN: %if msil-prog-pipeline=lto %{ %{dcb_run} %}
+# RUN: %if msil-prog-pipeline=lto && msil-run-netfx %{ %{dcb_netfx} %}
+# At -O0 every mode refuses the link: objects, the mixed link, full LTO,
+# ThinLTO and two LTO partitions.
+# REDEFINE: %{dcb_level} = O0
+# REDEFINE: %{dcb_dir} = %t/O0
+# RUN: %{dcb_compile}
+# RUN: %{dcb_fail}
+# REDEFINE: %{dcb_mode} = mixed
+# REDEFINE: %{dcb_inputs} = %{dcb_dir}/obj/s1.o %{dcb_dir}/obj/sm.o %{dcb_dir}/lto/s2.o
+# RUN: %{dcb_fail}
+# REDEFINE: %{dcb_mode} = lto
+# REDEFINE: %{dcb_inputs} = %{dcb_dir}/lto/s1.o %{dcb_dir}/lto/s2.o %{dcb_dir}/lto/sm.o
+# RUN: %{dcb_fail}
+# REDEFINE: %{dcb_mode} = thin
+# REDEFINE: %{dcb_inputs} = %{dcb_dir}/thin/s1.o %{dcb_dir}/thin/s2.o %{dcb_dir}/thin/sm.o
+# RUN: %{dcb_fail}
+# REDEFINE: %{dcb_mode} = part2
+# REDEFINE: %{dcb_inputs} = -Wl,--lto-partitions=2 %{dcb_dir}/lto/s1.o %{dcb_dir}/lto/s2.o %{dcb_dir}/lto/sm.o
+# RUN: %{dcb_fail}
+# Every run's transcript, the exit status alone.
+# CHECK-NOT: {{.}}
+# CHECK:     [exit 130]
+# Every -O0 link.
+# TM17:      {{^}}msil-ld: error: managed call 'f' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units{{$}}
+# TM17-NEXT: {{^}}clang: error: msil-ld command failed with exit code 1 (use -v to see invocation){{$}}
+#--- s1.c
+/* s1.c: f is System.Math::Abs, and g calls it. */
+#if defined(__MSIL__)
+int f(int) __attribute__((msil_method("System.Math", "Abs", "int32(int32)")));
+#else
+#include <stdlib.h>
+
+static int f(int x) { return abs(x); }
+#endif
+
+int g(int x) { return f(x); }
+#--- s2.c
+/* s2.c: f is System.Math::Sign, and only h calls it, in a branch that is
+   dead once h is inlined into k, which passes y = 0. */
+#if defined(__MSIL__)
+int f(int) __attribute__((msil_method("System.Math", "Sign", "int32(int32)")));
+#else
+static int f(int x) { return (x > 0) - (x < 0); }
+#endif
+
+static int h(int x, int y) { return y ? f(x) : 0; }
+
+int k(int x) { return h(x, 0); }
+#--- sm.c
+/* sm.c: 130 when k never calls f, 129 when it calls Sign, 134 when it
+   calls Abs. */
+int g(int), k(int);
+
+int main(void) { return 100 + g(-3) * 10 + k(-4); }
