@@ -436,7 +436,7 @@ and `-BuildDir <dir>` reads another tree's `compile_commands.json` (the private 
 before M1.0 only TUs without generated headers can be checked.
 
 ```powershell
-pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -FlagsFrom llvm/lib/Target/WebAssembly/WebAssemblyInstrInfo.cpp -ExtraInclude llvm/lib/Target/MSIL,build/lib/Target/MSIL,C:/scratch/tblgen llvm/lib/Target/MSIL/MSILInstrInfo.cpp
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -FlagsFrom llvm/lib/Target/WebAssembly/WebAssemblyInstrInfo.cpp -ExtraInclude llvm/lib/Target/MSIL,build/lib/Target/MSIL,../llvm-msil-scratch/tblgen llvm/lib/Target/MSIL/MSILInstrInfo.cpp
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 lld/MSIL/SymbolTable.cpp
 ```
 
@@ -453,7 +453,7 @@ Runs `<build>/bin/llvm-tblgen.exe` on `llvm/lib/Target/MSIL/MSIL.td` with the bu
 directory, deletes a failed backend's old outputs, and exits 1 on any TableGen error.
 
 ```powershell
-pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-tblgen.ps1 -Out C:/scratch/tblgen -Gen instr-info,dag-isel
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-tblgen.ps1 -Out ../llvm-msil-scratch/tblgen -Gen instr-info,dag-isel
 ```
 
 ### msil-gtest.ps1 (shared)

@@ -691,7 +691,7 @@ clang --target=x86_64-pc-windows-msvc-msil -O2 main.o -Wl,--print-imports -o pro
 # Linux triple, on Windows or Linux: a sysroot with the C library (section 7).
 clang --target=x86_64-unknown-linux-gnu-msil -O2 -ffreestanding -c main.c
 clang --target=x86_64-unknown-linux-gnu-msil -O2 main.o \
-  --sysroot=C:/llvm-msil-scratch/linux-sysroot -Wl,--print-imports -o prog.exe
+  --sysroot=<sysroot> -Wl,--print-imports -o prog.exe
 ```
 
 For a `main.c` that calls `puts`, `strlen`, `strdup` and `sqrt`, the two links print:
@@ -2497,16 +2497,16 @@ oracle runs without it loses the native oracle, with a note, or under
 lit also notes, never as a feature, whether the MSIL triple's helper archive exists. The feature
 `msil-hosted` holds when the triple's headers exist (the glibc sysroot of
 `--param msil_glibc_sysroot`, default `$MSIL_GLIBC_SYSROOT`, else
-`C:\llvm-msil-scratch\glibc-sysroot`, for the Linux triple), and `msil-linux-hosted-oracle` when
-that sysroot also has E7h's files and `ld.lld` is found. Without `msil-hosted` a hosted directory
-is UNSUPPORTED. Under the WSL runner, whose native oracle for the Linux triple is E7, a hosted
-directory without `msil-linux-hosted-oracle` only loses the native oracle, with a note, unless
-`msil_native_oracle=required` makes it UNSUPPORTED too. `--param msil_require_hosted=1`, which
-every lit leg passes, makes each UNSUPPORTED case a configuration error that names what is
-missing. `update-expected.py` finds hosted directories by the same line (`gate-select.py
-harness` counts every `lit.local.cfg` under `msil/test` as a harness file, so adding the line
-selects step G3c). The Linux CI job runs hosted tests natively against the runner's own glibc
-(`msil_glibc_sysroot=/`).
+`<repo>\..\llvm-msil-scratch\glibc-sysroot` on Windows, for the Linux triple), and
+`msil-linux-hosted-oracle` when that sysroot also has E7h's files and `ld.lld` is found. Without
+`msil-hosted` a hosted directory is UNSUPPORTED. Under the WSL runner, whose native oracle for the
+Linux triple is E7, a hosted directory without `msil-linux-hosted-oracle` only loses the native
+oracle, with a note, unless `msil_native_oracle=required` makes it UNSUPPORTED too. `--param
+msil_require_hosted=1`, which every lit leg passes, makes each UNSUPPORTED case a configuration
+error that names what is missing. `update-expected.py` finds hosted directories by the same line
+(`gate-select.py harness` counts every `lit.local.cfg` under `msil/test` as a harness file, so
+adding the line selects step G3c). The Linux CI job runs hosted tests natively against the runner's
+own glibc (`msil_glibc_sysroot=/`).
 
 **Limits, probes and steps (M24).** Every tool command of the harness takes its limits from the
 placeholder `%{msil_limits}`, `--timeout <msil_timeout> --mem-limit-mb <msil_mem_limit_mb>`
@@ -2657,8 +2657,8 @@ runs every test of a matrix line that names a Phase 3 milestone and every `#! p3
 both triples with `10+tc0`, the native oracle required and, for the Windows triple,
 `msil_run_netfx=1` (`p3-full` and `wsl-p3`'s run 1 do).
 
-`<sysroot>` is `$MSIL_LINUX_SYSROOT`, else `C:\llvm-msil-scratch\linux-sysroot`, and `<glibc
-sysroot>` is `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot`. The reference
+`<sysroot>` is `$MSIL_LINUX_SYSROOT`, else `<repo>\..\llvm-msil-scratch\linux-sysroot`, and `<glibc
+sysroot>` is `$MSIL_GLIBC_SYSROOT`, else `<repo>\..\llvm-msil-scratch\glibc-sysroot`. The reference
 legs take their packs from lit, which finds them without downloading anything: `net48` is
 `$MSIL_REF_NET48`, else the .NET Framework 4.8 reference directory (`%ProgramFiles(x86)%\Reference
 Assemblies\Microsoft\Framework\.NETFramework\v4.8`), else `build/.NETFramework/v4.8` of the
@@ -2839,7 +2839,7 @@ after a build that changed clang; the first run downloads the two runtimes):
 
 ```powershell
 wsl -d Ubuntu --cd <repository> --exec bash msil/utils/msil-wsl-dotnet.sh   # the private runtimes
-python msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot --builtins
+python msil/utils/make-linux-sysroot.py --out ../llvm-msil-scratch/linux-sysroot --builtins
 ```
 
 `make-linux-sysroot.py` copies `libc.so.6`, `libm.so.6`, `libgcc_s.so.1` and the dynamic loader
@@ -2869,16 +2869,16 @@ command makes, also without root (`apt-get download` of `libc6-dev`, `linux-libc
 stamp `msil-glibc-sysroot.stamp` lists the same packages):
 
 ```powershell
-wsl -d Ubuntu --cd <repository> --exec bash msil/utils/make-glibc-sysroot.sh /mnt/c/llvm-msil-scratch/glibc-sysroot
+wsl -d Ubuntu --cd <repository> --exec bash msil/utils/make-glibc-sysroot.sh ../llvm-msil-scratch/glibc-sysroot
 ```
 
 The result holds glibc's own `usr/include`, `libc.so.6`, `libm.so.6`, `libc_nonshared.a` and
 its real linker scripts `libc.so` and `libm.so`, with every symbolic link copied as a file (a
 Windows drive keeps none). It replaces the directory only when it is empty or holds the stamp.
 Every milestone gate from M15 runs it in its step G0, and `run-m1-gate.ps1`'s `host-setup` runs
-it into `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot` (the `<glibc sysroot>`
-of the `hosted` leg and of *E7h*), so those legs need no sysroot made beforehand. It already
-holds the start files and `libc_nonshared.a` that E7h links (checked when M24 was planned).
+it into `$MSIL_GLIBC_SYSROOT`, else `<repo>\..\llvm-msil-scratch\glibc-sysroot` (the `<glibc
+sysroot>` of the `hosted` leg and of *E7h*), so those legs need no sysroot made beforehand. It
+already holds the start files and `libc_nonshared.a` that E7h links (checked when M24 was planned).
 
 ### The exit corpus
 
@@ -2899,10 +2899,10 @@ python msil/utils/corpus/fetch.py --self-test             # offline self-test in
 ```
 
 - **The cache** is `--cache <dir>`, else `$MSIL_CORPUS_CACHE` when it is not empty, else
-  `C:\llvm-msil-scratch\corpus-cache` on Windows and `~/.cache/msil-corpus` elsewhere; a cache
-  inside the repository is refused (exit status 2). Each entry is a tree `<cache>/<name>-<ref>/`
-  (`zlib-1.3.2`, `tinf-57ffa1f1d5e3`, `c-testsuite-5c7275656d75`, ...). All twelve take about 21 MB
-  (about 19 MB before M27's two).
+  `<repo>\..\llvm-msil-scratch\corpus-cache` on Windows and `~/.cache/msil-corpus` elsewhere; a
+  cache inside the repository is refused (exit status 2). Each entry is a tree
+  `<cache>/<name>-<ref>/` (`zlib-1.3.2`, `tinf-57ffa1f1d5e3`, `c-testsuite-5c7275656d75`, ...). All
+  twelve take about 21 MB (about 19 MB before M27's two).
 - **What it trusts.** It fetches only over `https` (a redirect elsewhere is refused), checks an
   archive's SHA-256 before it extracts anything, refuses absolute, `..`, Windows-reserved and
   case-colliding member names, special files and links that leave the tree, turns a link inside
@@ -2975,8 +2975,8 @@ python msil/utils/corpus/fetch.py --self-test             # offline self-test in
 
 ```powershell
 pwsh -NoProfile -File msil/utils/run-m1-gate.ps1                                # everything but the -Exit legs
-pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache -FetchCorpus
-pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -CorpusCache C:/llvm-msil-scratch/corpus-cache
+pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache ../llvm-msil-scratch/corpus-cache -FetchCorpus
+pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -CorpusCache ../llvm-msil-scratch/corpus-cache
 pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Leg programs,roundtrip
 pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Portable    # with the portable legs (P-1a)
 pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List                          # the leg names
@@ -2999,14 +2999,14 @@ except the `-Quick`, `-Full` and `-Exit` ones), the `determinism` step, with `-E
 checks that each of them has a row) and `ci-sh`. The two M23 steps and M24's `matrix-legs`:
 
 - **`corpus`.** `-CorpusCache <dir>` names the cache (default `$MSIL_CORPUS_CACHE`, else
-  `C:\llvm-msil-scratch\corpus-cache`), which the legs get as `MSIL_CORPUS_CACHE`; the row
+  `<repo>\..\llvm-msil-scratch\corpus-cache`), which the legs get as `MSIL_CORPUS_CACHE`; the row
   `corpus/check` runs `fetch.py --cache <dir> --check` over all twelve entries, never with `--skip`,
   and `-FetchCorpus` adds the row `corpus/fetch` before it, which downloads what the cache lacks.
   A failed `corpus` row does not stop the legs, whose corpus legs then fail with lit's
   configuration error.
 - **`determinism`.** `msil/utils/ci/det-manifest.py build` twice, from the work directories
-  `C:\llvm-msil-scratch\gates\det\a` and `...\b`: every C file of `msil/test/M1` compiled with
-  `clang -c` for `x86_64-pc-windows-msvc-msil` and `x86_64-unknown-linux-gnu-msil` at `-O0` and
+  `<repo>\..\llvm-msil-scratch\gates\det\a` and `...\b`: every C file of `msil/test/M1` compiled
+  with `clang -c` for `x86_64-pc-windows-msvc-msil` and `x86_64-unknown-linux-gnu-msil` at `-O0` and
   `-O2` (relative paths, `-fdebug-compilation-dir=.`, and `-fms-compatibility-version=19.33` on
   the windows-msvc compiles, so the triple the objects carry does not depend on the host's
   MSVC), one `llvm-ar rcs` archive per triple and level, since M25 the helper archives of both
@@ -3112,7 +3112,7 @@ in every leg; a test of a large program raises its limits with `REDEFINE: %{msil
 instead, with a comment that gives the slowest command's quiet time.
 
 **The standard milestone gate (M24, plan 5.17.7).** From M24 each Phase 3 milestone's gate runs
-these steps, with logs under `C:\llvm-msil-scratch\milestones\M<n>\gate-<k>\`, besides the
+these steps, with logs under `<repo>\..\llvm-msil-scratch\milestones\M<n>\gate-<k>\`, besides the
 milestone's own steps:
 
 | Step | What | Quiet minutes |
@@ -3235,7 +3235,7 @@ It compiles each changed or untracked `.cpp` under `llvm/`, `clang/`, `lld/` and
 `x86_64-unknown-linux-gnu`, with the flags of the build's `compile_commands.json` translated to
 the Linux job's, using Ubuntu 24.04's clang 18 and libstdc++ 14, which it fetches once from the
 Ubuntu archive (SHA-256-checked, extracted without root) into `$MSIL_LINUX_CLANG18`, else
-`C:/llvm-msil-scratch/linux-clang18` on Windows and `~/llvm-msil-scratch/linux-clang18`
+`<repo>/../llvm-msil-scratch/linux-clang18` on Windows and `~/llvm-msil-scratch/linux-clang18`
 elsewhere; on Windows the compiles run inside WSL. It prints `ok:`, `FAIL:` (with clang's
 output) or `skip:` (no compile command) per file and a summary line, and exits 1 on a failure
 and 2 on a setup error. The CI workflow has no such step, because its Linux job builds every
@@ -3254,11 +3254,11 @@ root, writing outside the repository:
 
 ```powershell
 # Before a change, with the build of HEAD:
-python msil/utils/il-snapshot.py --build build --jobs 6 --out C:/llvm-msil-scratch/il-before `
+python msil/utils/il-snapshot.py --build build --jobs 6 --out ../llvm-msil-scratch/il-before `
   --exclude llvm/test/CodeGen/MSIL/imports-linked.ll msil/test/M1 llvm/test/CodeGen/MSIL
 # After it, with the new build: exit 1 and the differences when anything changed.
-python msil/utils/il-snapshot.py --build build --jobs 6 --out C:/llvm-msil-scratch/il-after `
-  --compare C:/llvm-msil-scratch/il-before `
+python msil/utils/il-snapshot.py --build build --jobs 6 --out ../llvm-msil-scratch/il-after `
+  --compare ../llvm-msil-scratch/il-before `
   --exclude llvm/test/CodeGen/MSIL/imports-linked.ll msil/test/M1 llvm/test/CodeGen/MSIL
 ```
 
@@ -3373,7 +3373,7 @@ python msil/utils/mdtools/build-mdtools.py
 dotnet exec --runtimeconfig build/tools/msil/mdtools/mdcanon.runtimeconfig.json `
   build/tools/msil/mdtools/mdcanon.dll fib.dll
 dotnet build/tools/msil/mdtools/mdcanon.dll --params=drop `
-  --out-dir C:/llvm-msil-scratch/canon a.dll b.dll
+  --out-dir ../llvm-msil-scratch/canon a.dll b.dll
 # CILOpcodes.def against System.Reflection.Emit.OpCodes: 218 of its 219 opcodes equal
 # (OpCodes has no no.).
 python msil/utils/mdtools/check-cil-defs.py
@@ -3383,7 +3383,7 @@ python msil/utils/mdtools/cli-corpus-check.py --mode ilasm --levels O0,O2 msil/t
 # M17: both dumpers on every program and its copy, the copies verified, force-JIT-compiled
 # and run, and both dumpers on four framework assemblies (M17's gate step; about 10 minutes).
 python msil/utils/mdtools/cli-corpus-check.py --mode dumpers,copy,stats --levels O0,O2 `
-  --work C:/llvm-msil-scratch/cli-corpus msil/test/M1
+  --work ../llvm-msil-scratch/cli-corpus msil/test/M1
 ```
 
 `build-mdtools.py` compiles each tool with the newest installed SDK's C# compiler against the newest
@@ -3393,7 +3393,7 @@ them; `--out DIR` and `--build-dir DIR` choose where. `check-cil-defs.py` compar
 operand kind, stack pops and pushes and flow, and needs the tools built first. `cli-corpus-check.py`
 takes test directories or `.c` files, compiles with the tree's clang (`--clang`, default
 `<build>/bin/clang`) for `x86_64-pc-windows-msvc-msil` (`--triple`) with the flags of
-`%{msil_cflags}`, works in `--work` (default `C:\llvm-msil-scratch\cli-corpus` on Windows,
+`%{msil_cflags}`, works in `--work` (default `<repo>\..\llvm-msil-scratch\cli-corpus` on Windows,
 `$HOME/llvm-msil-scratch/cli-corpus` elsewhere, never inside the repository), dumps each set with
 one `mdcanon --out-dir` run and prints the first differing lines of a program whose listings differ;
 `--ilasm-framework` and `--ilasm-nuget` name the assemblers (the NuGet one at `MsilILAsmVersion` of
@@ -3744,8 +3744,8 @@ keeps the fork's number under a `__dotnet__` branch of that header (`datamodel-h
 pins every number).
 
 **The private hooks tree.** The compile leg works in `-HooksBuildDir`, else
-`$env:MSIL_HOOKS_BUILD_DIR`, else `C:\llvm-msil-hooks-build`: projects clang and lldb, the ARM
-target only, no tests and no optional lldb dependency. When the tree has no `build.ninja` the
+`$env:MSIL_HOOKS_BUILD_DIR`, else `<repo>\..\llvm-msil-hooks-build`: projects clang and lldb, the
+ARM target only, no tests and no optional lldb dependency. When the tree has no `build.ninja` the
 leg configures it (about 4 min); it then builds the ARM object (about 8 min the first time,
 5-13 min after an upstream merge) and checks both files (about 47 s on every run). A new tree
 takes about 140 MB (the development host's tree is about 460 MB, because the recon also built

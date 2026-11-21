@@ -98,7 +98,8 @@
 #        every object-format switch has an MSIL case), pins (action pins as upstream's), lit
 #        (the upstream lit tests of the hooked files), gtest (all of TargetParserTests and
 #        MCTests), compile (ARMAsmParser.cpp and lldb's GDBRemoteCommunicationClient.cpp in the
-#        private hooks build tree on C:). CI runs it with -NoCompile -NoManifest -MinPass 250.
+#        private hooks build tree beside the checkout). CI runs it with -NoCompile -NoManifest
+#        -MinPass 250.
 #  10. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
 #                                    on every msil/utils/ci/*.sh, 'lit-legs.sh --list' must print
 #                                    the legs its header documents ('--full:', '--exit:' and

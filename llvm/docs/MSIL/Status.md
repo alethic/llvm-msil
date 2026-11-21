@@ -175,8 +175,8 @@ in GettingStarted.md section 7.
 The sources are never part of the repository. `msil/utils/corpus/manifest.json` pins each
 entry by its full commit (a GitHub archive at that commit) or by the SHA-256 of its release
 files, and by the SHA-256 of its extracted tree; `python msil/utils/corpus/fetch.py` downloads
-them into a cache outside the repository (`C:\llvm-msil-scratch\corpus-cache` on the
-development host), and lit reads the cache (TestCorpus.md, "Phase 2 exit corpus", has the
+them into a cache outside the repository (`<repo>\..\llvm-msil-scratch\corpus-cache` on
+Windows), and lit reads the cache (TestCorpus.md, "Phase 2 exit corpus", has the
 versions and licences). Every program links its library as a static archive and a support
 archive, `msil/test/Programs/support/` (an arena allocator and `memcmp`, `memset`, `memcpy`
 and `strlen`, defined only for the MSIL build, which links no C library statically, and output
