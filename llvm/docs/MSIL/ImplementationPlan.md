@@ -10165,6 +10165,717 @@ about 5,200 planned lines over the nine WPs. Rebuild: the `Attr.td` records are 
   are not C programs until `__llvm_libc_set_c_main()` (Q28 (b)), and its binding of `System.*` through the Framework
   4.8 implementation assemblies from P-2 (Q30 (a)).
 
+### 5.21 Real .NET references in C, first slice (R-a)
+
+R-a gives C real .NET object references: values that live only in IL locals, arguments, results and the evaluation
+stack, where the runtime tracks them, with no GCHandle. It is the goal the user set ("What matters is when we start
+actually using real referenes, without GC handle. ... We dont care about anything except getting to that.", user,
+2026-11-19 01:26). It follows MC-1, whose stubs it extends, and precedes the cleanup round's milestones, EH-0 with
+FX-1 to FX-3, and P-2 (section 12). C++ follows as R-a2 (5.21.16), directly before P-2, after the cleanup round's
+milestones and EH-0 with FX-1 to FX-3 (the user's pick "(b) Before P-2", 2026-11-20 11:50).
+
+It adds one IR type, `target("msil.ref")` (two entries in LLVM's core); one clang type class, written `T ^`; pass slot
+P15; a sixth backend value kind, `object`; two managed-call conversion codes and cast stubs. It adds no record minor,
+trailer definition, `BCLMembers.def` row, runtime assembly, IR intrinsic or diagnostic group. The user's decisions
+behind it are section 12's rows of 2026-11-21. Sources: the recon copy `recon/p3/references.md`, added by R-a's plan
+commit without session ids or machine paths: the checks with their verifiers' corrections; the questions of the user's
+references walk of 2026-11-18/19 with the answers, cited as "references Q<n>"; the value-type questions, cited as
+"references VT-<n>"; and the file-and-line evidence behind this section's citations, which name files and functions
+(5.13's rule). With it, `recon/p3/references-files/zinit.il`.
+
+#### 5.21.1 Model and scope
+
+- **RA1** A *reference* is a C value of type `T ^`, `T` a struct with `cli_type` naming a .NET reference type (user,
+  "Caret", 2026-11-19 12:31). It is held only in IL locals, arguments, results and the stack, never in C memory. In IL
+  it is `object` (RI3); the class lives in clang's type and in stubs.
+- **RA2** `*` keeps C's meaning (user). A pointer to a `cli_type` struct, that struct by value, and a pointer to a
+  reference are errors (RS10-RS12).
+- **RA3 Tickets:** C memory keeps an object only as a raw GCHandle number in an `intptr_t`, through .NET's `GCHandle`
+  members and MC-1's `gch` rows (user, 2026-11-19 01:26: "That's just a raw GCHandle integer."; `intptr_t` and the
+  calls are Claude's reading). R-a adds nothing for them.
+- **RA4** C only (user). Every rule tests for the reference type, which exists only on MSIL object-format triples, or
+  sits behind `Triple::isOSBinFormatMSIL()`.
+- **RA5 A type of its own** (Claude's reading of "Caret": fails closed, class mix-ups are hard errors), never Apple's
+  block pointer, which C converts to `void *` silently and CodeGen and mangling treat as a block
+  (`Sema::CheckAssignmentConstraints`' block-pointer-to-`void *` rule, `CodeGenTypes::ConvertType`'s `BlockPointer`
+  case, `CXXNameMangler::mangleType(const BlockPointerType *)`). Only the parser's `^` is reused.
+- **RA6** One type per .NET class, keyed by the folded name (Claude's reading of the user's "The specifc names of the C
+  structs or C prototypes and such don't matter, since the attributes specify them.", 2026-11-18 20:35).
+- **RA7 The first slice** (the path plan's, shown with references Q1, answered "Okay.", 2026-11-19 02:33): references
+  in automatic variables; in parameters and results of `static`, prototyped, non-variadic functions whose address is
+  never taken; in managed calls. They support `==`, `!=`, `NULL`, `!r`, `if (r)`, `&&`, `||`, `?:`. Under the user's pick
+  "(a) Only to Object" (2026-11-20 10:45), they convert to `System.Object` by themselves and to another class only by a
+  C cast checked at run time. All else is a loud error.
+
+Example (`ToString` binds only with `--reference`; the GCHandle members are in the built-in table):
+
+```c
+#include <cli/cli.h>                                         /* only CLI_TYPE (RT1) */
+#include <stddef.h>
+#include <stdint.h>
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+__attribute__((msil_method("System.Object", "ToString", "instance string()")))
+String ^to_string(Object ^o);                                /* this-ref;ref: callvirt */
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle", "Alloc",
+                           "valuetype System.Runtime.InteropServices.GCHandle(object)")))
+intptr_t gc_alloc(Object ^o);                                /* ref;gch: a ticket */
+static intptr_t kept;                                        /* C memory keeps tickets */
+static String ^name_of(Object ^o) {
+  if (!o) return NULL;                                       /* RS6, RS4 */
+  kept = gc_alloc(o);
+  return to_string(o);                                       /* the object's override runs */
+}
+static String ^as_string(Object ^o) { return (String ^)o; }  /* RS8: throws if not a string */
+```
+
+#### 5.21.2 The `cli_type` attribute
+
+- **RT1** `Clang<"cli_type">` (GNU and `[[clang::cli_type]]`), `InheritableAttr`, `TargetSpecificAttr<TargetMSIL>`
+  (`TargetMSIL` in Attr.td), subjects `Struct` with `ErrorDiag` (no unions), no pragma support; arguments
+  `StringArgument<"Name">` and a fake `StringArgument<"Key", 1, 1>` that Sema fills (the form of MC-1's `MSILMethod`
+  record). Elsewhere clang's unknown-attribute warning applies; `__has_attribute(cli_type)` is true only on MSIL
+  triples. `CLI_TYPE(N)` is `__attribute__((cli_type(N)))`, defined in `<cli/cli.h>` (`clang/lib/Headers/cli/cli.h`, a
+  fork file among clang's own resource headers), which holds only that macro and stops with `#error` off MSIL triples
+  (the user's pick "(a) <cli/cli.h> header", 2026-11-20 11:47). Its hook in `clang/lib/Headers/CMakeLists.txt` (one
+  block, three places; the form is Claude's) gives it a list of its own, named in the loop that copies the headers into
+  the build and installed by its own `install(FILES ... DESTINATION ${header_install_dir}/cli ...)` rule, as the
+  headers under `openmp_wrappers/` and `llvm_libc_wrappers/` are: `install(FILES)` keeps only the file name, so a list
+  inside `files`, where WebAssembly's `wasm_simd128.h` is, would install the header as `include/cli.h` of the resource
+  directory, where `#include <cli/cli.h>` does not find it.
+- **RT2 Grammar:** MC-1's TYPE grammar (5.20.2 MA1, `cli::parseManagedTypeName` in ManagedSignature.h) minus
+  `valuetype`: `"Ns.Name"`, `"Ns.Outer/Inner"`, or `"<elem>[]"` with a listing primitive, `string`, `object` or `class
+  Ns.T` element. Refused with T-R1: `valuetype` (`value types are not supported for MSIL yet`); a listing primitive
+  (`'<text>' is a signature type; name the type by its full name, for example 'System.String'`); `class ` outside an
+  array; a pointer; all MC-1's refusals. Refusing short forms is Claude's decision; adding them later breaks nothing.
+- **RT3 Key:** fold at every level (`class System.String` → `string`, `class System.Object` → `object`). The fold is
+  new: MC-1 folds only `class System.Object`, and only in `cli::checkManagedCallShape`'s delegate-constructor check.
+  The key is the canonical listing text (`string`, `string[]`, `class System.IO.Stream`), so two spellings of one class
+  or array are one key. New `llvm::cli::parseCLITypeName(StringRef) -> Expected<CLITypeName>` (folded type, key,
+  display name) in `ManagedSignature.h`.
+- **RT4** On the struct's first declaration only (as 5.20.3 MS2); a later one repeats the key or inherits it; else
+  T-R2. One `mergeDeclAttribute` case in `SemaDecl.cpp`.
+- **RT5 Never a body** (Claude's decision): a class has no layout in C memory, so a definition with a body
+  (`Sema::ActOnTagFinishDefinition`) is T-R3, permanent. Value-type structs will be marked `valuetype`, never
+  recognised by a body.
+- **RT6 Kinds:** classes, interfaces, `System.String`, `System.Object`, arrays. A misspelled class is found when a
+  managed call or cast stub binds it, or never if used only in locals (no IL changes).
+- **RT7** File or block scope; C++ accepts the attribute (C headers compile), RC6 refuses `^` there.
+- **RT8 Files:** `Attr.td`, `AttrDocs.td`, one `ProcessDeclAttribute` case, the `SemaDecl.cpp` calls; logic in the new
+  fork file `clang/lib/Sema/SemaMSILReference.{h,cpp}` (MC-1's pattern; `Sema.h` unchanged); RT1's header, the new fork
+  file `clang/lib/Headers/cli/cli.h`, with its hook in `clang/lib/Headers/CMakeLists.txt`.
+
+#### 5.21.3 The caret and the type
+
+- **RC1 No parser change:** `^` already yields a `DeclaratorChunk::BlockPointer` with its qualifiers
+  (`isPtrOperatorToken` and `Parser::ParseDeclaratorInternal` in ParseDecl.cpp), so `String ^s`, `String ^const s`,
+  `String ^f(String ^a)`, `(String ^)o`, `typedef String ^R;` parse.
+- **RC2 Forming** (`GetFullTypeForDeclarator`'s `DeclaratorChunk::BlockPointer` case in SemaType.cpp, before the
+  `-fblocks` check): a function pointee stays a block pointer (Claude's reading of "Caret"); an unqualified `cli_type`
+  struct gives `ASTContext::getCLIReferenceType` plus the chunk's qualifiers; anything else is T-R4, replacing the block
+  error and its `-fblocks` advice; `const String ^` is T-R19. `BuildBlockPointerType` is unchanged (templates are
+  R-a2's).
+- **RC3 The node** (Claude's design; the clang packages may build it otherwise with these properties, or stop and
+  report): `CLIReferenceType` in `TypeNodes.td`. The canonical node is profiled by the key, interned as an
+  `IdentifierInfo`; its class slot holds one implicit, never-completed struct per key, built by the getter (named by
+  the display name, outside name lookup) and never serialized as a declaration, so no walker meets a placeholder and
+  R-a2 can deduce a template's `T` without a second type-header edit and rebuild. Sugared nodes carry the struct as
+  written, answer `isSugared()` and desugar to the canonical node, so aka text works (`'String ^' (aka 'System.String
+  ^')`). Equal keys are one type; different keys differ. `CLIReferenceTypeLoc` holds the caret and the class's TypeLoc.
+  Sizeless, not scalar (the K2 check, adopted): clang's `Type::isSizelessType()` and the sizeless test of
+  `Sema::RequireCompleteTypeImpl` learn it; `isSizelessBuiltinType()` does not, so braced initializers stay refused.
+- **RC4 Display name:** the class in MC-1's TYPE grammar (`System.String`, `Ns.Outer/Inner`, `string[]`, `class Ns.T[]`).
+- **RC5** `DeclaratorLocFiller` (SemaType.cpp) gains `VisitCLIReferenceTypeLoc` (else its `VisitTypeLoc` reaches
+  `llvm_unreachable`). The other 18 `BlockPointer` chunk sites of SemaType.cpp treat a chunk that built a reference as
+  no pointer: `maybeMovePastReturnType` (two), `distributeObjCPointerTypeAttr`,
+  `distributeObjCPointerTypeAttrFromDeclarator`, `distributeFunctionTypeAttr`, `inferARCWriteback` (two),
+  `diagnoseRedundantReturnTypeQualifiers`, `warnAboutRedundantParens`, `classifyPointerDeclarator`,
+  `hasOuterPointerLikeChunk`, three more in `GetFullTypeForDeclarator` (the deduced-type check, the nullability
+  pointer count and the C23 prototype rule), `transferARCOwnership`, `fillAtomicQualLoc` and
+  `distributeNullabilityTypeAttr` (two). RC2's own case, with its block-pointer nullability inference, is not one of
+  them.
+- **RC6 Languages:** the caret over a `cli_type` class is T-R5, "yet" in C++ (R-a2), permanent in Objective-C, OpenCL and
+  CUDA; HLSL cannot reach it (`CompilerInvocation::ParseLangArgs` refuses HLSL on other targets).
+- **RC7** `-fblocks` stays off by default on MSIL triples (the driver's `-fblocks` default in `Clang::ConstructJob`);
+  with it, function pointees are blocks and `cli_type` classes references (Claude's reading: `^` means two things in
+  Objective-C code).
+- **RC8 Plumbing:** a case in every exhaustive switch over type classes (5.21.13): uniquing, type info, merging (equal
+  canonical types only), common sugar (the canonical node, never a merge of two structs), encodings (unreachable),
+  linkage, `__builtin_classify_type`, variably-modified walks, import, structural equivalence, serialization
+  (`TYPE_CLI_REFERENCE` appended), visitors, dumper, manglers (RG10), ClangIR (RH4).
+
+#### 5.21.4 Sema rules
+
+*Allowed* (anything else stays an error: the type is neither scalar nor sized):
+
+- **RS1** Automatic variables, `register` included, at every level.
+- **RS2 NULL at start:** default initialization adds a zero-initialization step (`TryDefaultInitialization` in
+  SemaInit.cpp, ARC's precedent), so CodeGen stores NULL at the declaration at every level. The backend cannot: after
+  SROA an unset reference is `undef`, and `phi(a, undef)` folds to `a` at -O1 (the path verifier). The
+  const-without-initializer warnings skip references. (The path plan's rule; Sema is Claude's choice.)
+- **RS3** Parameters and results of static, prototyped, non-variadic functions whose address is never taken, and of
+  managed calls.
+- **RS4 Implicit conversions**, at `Sema::CheckSingleAssignmentConstraints` beside OpenCL `queue_t`'s null rule (C
+  initialization reaches it from `InitializationSequence::Perform`) and at `Sema::CheckAssignmentConstraints`, both in
+  SemaExpr.cpp: the same canonical type; any null pointer constant (`NULL`, `0`, `(void *)0`, `'\0'`, C23 `nullptr`)
+  to a null reference (`CK_NullToPointer`); any reference to the Object reference (`CK_BitCast`). Every other pair is
+  `err_typecheck_convert_incompatible`, a hard error. That classes convert implicitly only to Object is the user's pick
+  "(a) Only to Object" (2026-11-20 10:45).
+- **RS5 `==`, `!=`** (`queue_t`'s precedent in `Sema::CheckCompareOperands`): the same class, Object against a class
+  (under the user's pick "(a) Only to Object"), a null pointer constant against a reference; identity (`ceq`). Other
+  pairs and `<` `>` `<=` `>=`: clang's `invalid operands`.
+- **RS6 Truth tests** (conditions, `!`, `&&`, `||`, a `?:` condition: `Sema::CheckBooleanCondition`,
+  `Sema::CreateBuiltinUnaryOp`, `Sema::CheckLogicalOperands` and `checkCondition` in SemaExpr.cpp) are rewritten into
+  `r != NULL`, as AMDGPU's predicate is (Claude's decision). In GNU `r ?: s` only the condition is rewritten.
+  `_Bool b = r;` stays an error.
+- **RS7 `?:` operands** (in `Sema::CheckConditionalOperands`, before its null-pointer-constant diagnostic): the same
+  class; a reference and a null constant; a class and Object (Object, under the user's pick "(a) Only to Object"). Two
+  classes: `incompatible operand types`.
+- **RS8 Casts** (`CastOperation::CheckCStyleCast`, before its scalar-type test): reference to reference (free when equal
+  or to Object, else a cast stub that checks the class at run time, RG5; the user's pick "Keep checked casts",
+  2026-11-20 10:19); a null constant to a reference; a reference to `void`. Other casts to a reference: T-R22; from a
+  reference to a scalar: clang's `err_typecheck_expect_scalar_operand`.
+- **RS9** `typedef`, `typeof`, `typeof_unqual`, `_Generic`, `__builtin_types_compatible_p`, `__auto_type`, C23 `auto`,
+  comma, statement expressions, `const` after the caret.
+
+*Refused* (texts in 5.21.12):
+
+- **RS10** `String *` (`Sema::BuildPointerType`, beside WebAssembly's reference-type refusal there): T-R6, permanent.
+- **RS11** The class struct by value: a variable (`extern` included), parameter or result: T-R7, permanent; in
+  `Sema::CheckVariableDeclarationType` and beside MC-1's hook in `Sema::ActOnFunctionDeclarator` (SemaDecl.cpp).
+  Otherwise `extern String g; &g` forms a `String *` that MC-1's handle rule takes (`isHandleType` in
+  SemaMSILManagedCall.cpp).
+- **RS12** `String ^*`: T-R8, permanent (Design.md section 4: C memory never holds a GC reference). **RS13** `&r`,
+  `__builtin_addressof(r)` (in `Sema::CheckAddressOfOperand`, beside WebAssembly's reference refusal): T-R9, permanent.
+- **RS14 Storage**, by the sizeless rules with clang's texts: fields, unions, bit-fields, arrays, VLAs, globals, static
+  locals, `thread_local`, block-scope `extern`, `sizeof`, `_Alignof`, `_Atomic`, `aligned`, `_Alignas`, compound
+  literals, braced initializers, `__builtin_bit_cast`.
+- **RS15 External linkage** with a reference parameter or result: T-R10, except managed calls (their stubs are
+  internal). R-b lifts it.
+- **RS16 Function addresses:** T-R11, in `checkAddressOfFunctionIsAvailable` (SemaOverload.cpp), reached by every decay
+  outside a direct call, `&f`, `(&f)(r)`, `(*f)(r)` and `__builtin_function_start`. Host triples keep it (Design.md
+  4.5); R-b may lift it on portable triples.
+- **RS17 Function pointer and block types** with a reference: T-R12; in `BuildPointerType`, RC2, block literals, and on
+  each parameter's adjusted type (`Sema::CheckParameter`, where the parameter's type decays), so `void h(String
+  ^cb(String ^))` and `typedef String ^F(String ^); void h(F cb);` are refused.
+- **RS18** No prototype: T-R13. **RS19** Variadic arguments: `Sema::isValidVarArgType` returns `VarArgKind::Invalid`
+  for the type, as it does for WebAssembly references, so clang's hard error `err_cannot_pass_to_vararg` applies
+  (without that case the type, neither POD nor incomplete, would fall to `VarArgKind::Undefined`: a default-error
+  warning that `-Wno-error` turns into a run-time trap); RV6 pins the text. Unprototyped arguments and `va_arg`:
+  T-R14. **RS20** Variadic functions with a reference: T-R15 (Claude's decision).
+- **RS21 Attributes** on a function whose type has a reference: `constructor`, `destructor`, `alias`, `ifunc`, `weak`,
+  `dllexport`, `annotate`: T-R16 (each makes another party call it or records its address; on a managed call, MC-1's
+  forwarders would export it). `used` is accepted (RB11 rule 4). An alias of such a function takes no AST address; P1
+  refuses it (T-RB2), pinned by RV6.
+- **RS22 setjmp callers** with a reference: T-R17 with a note; one body walk in `Sema::ActOnFinishFunctionBody`, only in
+  units that formed a reference. EH-2 decides when it lifts.
+- **RS23** `volatile`, `__unaligned`, address spaces on a reference: T-R18; `restrict`, `_Atomic`, nullability: clang's
+  texts. **RS24** `const String ^`: T-R19.
+- **RS25** `cleanup`, `uninitialized` (could only be ignored silently), `__block`: T-R20, permanent.
+- **RS26** Captures in blocks, captured statements, OpenMP regions (`isVariableCapturable` in SemaExpr.cpp): T-R21,
+  permanent.
+- **RS27** Other conversions into a reference: T-R22 or `err_typecheck_convert_incompatible`.
+- **RS28 Jumps past a declaration** (`goto`, `switch`, computed `goto`, `asm goto`): clang's jump error with the note
+  T-R23. Claude's decision (the K2 check's verifier), shown with references Q5, which the user answered "OK all six"
+  (2026-11-19 12:37; the six silent states). Hooks: `GetDiagForGotoScopeDecl` (JumpDiagnostics.cpp) and the
+  protected-scope marking in `Sema::CheckVariableDeclarationType` (SemaDecl.cpp). Jumps out and backward stay allowed:
+  the declaration stores NULL again.
+- **RS29** Inline asm operands: T-R24 from `emitMSILAsmStmt` (CGStmt.cpp); "yet" for the inline-IL goal.
+- **RS30** Other languages: RC6.
+
+Refused by clang as is (pinned): arithmetic, bitwise and relational operators, unary `-` `+` `~`, `++`, `--`, `*r`,
+`r[i]`, `r->x`, `switch (r)`. Falling off the end of a function that returns a reference gets `-Wreturn-type` when it
+is compiled and stops the program where it happens (RG12, Claude's decision). Without RG12 the result would be
+undefined and would differ by level: NULL at -O0, possibly another reference at -O1 and above.
+
+#### 5.21.5 clang CodeGen
+
+- **RG1** `target("msil.ref")` (`CodeGenTypes::ConvertType`, beside the WebAssembly reference types' case),
+  `TEK_Scalar` (`CodeGenFunction::getEvaluationKind`); -O0 locals are allocas that P15 removes. No IR type names a
+  class.
+- **RG2** NULL is `zeroinitializer`; `CK_NullToPointer` gets a branch (`ScalarExprEmitter::VisitCastExpr`; OpenCL's
+  `CK_ZeroToOCLOpaqueType` case is the precedent).
+- **RG3** RS2's store at the declaration (`CodeGenFunction::EmitAutoVarInit`); `CodeGenFunction::getAutoVarInitKind`
+  answers `Uninitialized` for references, required because a computed `goto` marks every local bypassed (the bypass
+  rule of `CodeGenFunction::EmitAutoVarAlloca`).
+- **RG4** `==` calls RI6's helper (LLVM refuses `icmp` on target types); `!=` negates; the result is an `int`.
+- **RG5 Casts** (`ScalarExprEmitter::VisitCastExpr`'s `CK_BitCast` case): no-op when the canonical classes are equal or
+  the target is Object; else a call of RM8's cast declaration (the user's pick "Keep checked casts"), made through
+  MC-1's helpers in `CGMSILManagedCalls.cpp`, with no memory attributes, so an unused cast still runs and throws.
+- **RG6** Direct on every MSIL triple with no ABI hook (the K2 verifier: `X86_64ABIInfo::classifyArgumentType` sends
+  the MEMORY class of a non-aggregate to `X86_64ABIInfo::getIndirectResult`, which returns Direct;
+  `WinX86_64ABIInfo::classify`, `AArch64ABIInfo::classifyArgumentType` and `MSILPortableABIInfo::classifyArgumentType`
+  are Direct too); RV2 pins it; `CGCall.cpp` unchanged.
+- **RG7 Debug info:** a forward-declared structure named by the display name (`CGDebugInfo::CreateTypeNode`; the
+  WebAssembly reference types' precedent in `CGDebugInfo::CreateType(const BuiltinType *)`), so `-g` works.
+- **RG8** Never variably modified. **RG9** MC-1's `.__uniq.<n>` hashes canonical C types as text
+  (`getMSILManagedCallTypeText` in CGMSILManagedCalls.cpp), so two spellings give one postfix.
+- **RG10 Mangling:** none in R-a; a C `overloadable` function with a reference reports `cannot mangle this .NET reference
+  type yet` through `err_ms_mangle_unsupported` (DiagnosticASTKinds.td) in both manglers (Claude's decision).
+- **RG11** Upstream files hold one-line hooks; the logic is in the new `clang/lib/CodeGen/CGMSILReferences.{h,cpp}`.
+- **RG12 Falling off the end** (Claude's decision): in `CodeGenFunction::GenerateCode`, a C function on an MSIL triple
+  whose result is a reference takes the missing-return path that C++ functions take, with the trap at every
+  optimization level where C++ has it only at -O0: `llvm.trap` and `unreachable` where control can reach the closing
+  brace, so the program stops loudly there at every level. C makes falling off the end undefined only when the caller
+  uses the value; a program that ignores the value stops too, which is the price of an outcome that is the same at
+  every level (5.17.13). The hook is in `CodeGenFunction.cpp`, already R-a's file (RG1).
+
+#### 5.21.6 IR representation
+
+- **RI1** `target("msil.ref")`, no parameters, registered in LLVM's `getTargetTypeInfo` (llvm/lib/IR/Type.cpp, beside
+  the WebAssembly reference types) with a `ptr` layout, HasZeroInit and CanBeLocal only (not CanBeGlobal). IR already
+  refuses `bitcast`, `ptrtoint`, `inttoptr` and `icmp` on it (LangRef, "Target Extension Type"). The verifier's refusal
+  of globals (`Verifier::visitGlobalVariable`) is an extra net in assertion builds, llc and opt only: clang without
+  assertions passes `-disable-llvm-verifier` (`Clang::ConstructJob`), so P1's rules always run. A target type, not an
+  address space: data layouts stay native.
+- **RI2** (Claude's decision, inside the two core files) `MVT::getVT` maps it to the existing `MVT::externref`, beside
+  `wasm.externref`; `ValueTypes.td` unchanged. Its null node, `llvm.wasm.ref.null.extern`
+  (`SelectionDAGBuilder::getValueImpl`), is selected as `ldnull` and never appears in MSIL IR;
+  `EVT::getTypeForEVT(externref)` serves only size and alignment, which agree.
+- **RI3 `object` in IL** (Claude's decision; the user was not asked): classes appear only in stubs (RM7, RM8). One IR
+  type keeps IR simple (a class in the type name would need prefix matches and per-class TypeRefs, R-b's); `object`
+  names no TypeRef, so the text streamer's refusal of class locals (`MSILTargetAsmStreamer::emitLocals`), msil-ld and
+  the writer need nothing new; each `castclass` keeps types true and calls verifiable.
+- **RI4 Accepted by the back end** (all else is refused by an RB11 rule, rule 12 included): internal functions whose
+  address is never taken and direct calls of them; `ret`, `phi`, `select`, `freeze`; single-element static entry-block
+  allocas of exactly the type with plain loads, stores, lifetime markers and debug records (P15 removes them);
+  managed-call and cast declarations; RI6's helper; `llvm.fake.use` (clang emits it for every local at -Og, the
+  driver's `-fextend-variable-liveness=all` default).
+- **RI5** NULL is `zeroinitializer`; `undef`/`poison` references become `ldnull` (a safety net only).
+- **RI6 The helper** (Claude's decision): `declare i1 @"__msil_ref.eq"(target("msil.ref"), target("msil.ref"))` with
+  `memory(none) nounwind willreturn speculatable`. Selection makes each call `ceq`, `beq`, `bne.un`, `brtrue` or
+  `brfalse`, so no object names it. Not an intrinsic (more core files); LangRef allows target values from
+  target-specific functions ("Target Extension Type"). An N3 name (`cli::isToolchainName` in TrailerDefs.h), never
+  bound natively. Constants `cli::ReferenceTypeName`, `cli::ReferenceEqName` in `ManagedSignature.h`.
+
+#### 5.21.7 The back end
+
+- **RB1** `MSIL::ValType::Object` (MSILMCTypeUtilities.h), spelled `object`; `MSIL::toValType(externref)` is Object;
+  `toTypeSig(Object)` is `ELEMENT_TYPE_OBJECT` (`MSIL::toTypeSig` in MSILAsmPrinter.cpp and the object writer's
+  `toTypeSig` in MSILObjectWriter.cpp).
+- **RB2** Register class `OBJ` (MIR `obj`, `MSILRegClass<[externref], 0, (add OBJ_0)>`), registered for `externref` in
+  the `MSILTargetLowering` constructor. SELECT Legal (`SELECT_OBJ`, with a case in
+  `MSILTargetLowering::EmitInstrWithCustomInserter`); SELECT_CC, BR_CC Expand; LOAD and STORE Custom, reporting T-RB6
+  with a well-formed DAG (a backstop behind P15).
+- **RB3** New area file `MSILInstrRef.td`: the `ARGUMENT` and `LOCAL` multiclasses for OBJ, `CONST_NULL` (`ldnull`),
+  `CEQ_OBJ`, `BEQ_OBJ`, `BNE_UN_OBJ`, `BR_IF_OBJ` (`brtrue`), `BR_UNLESS_OBJ` (`brfalse`), `SELECT_OBJ`; no memory
+  form. Tables: `isArgument`, `isCopy`, `isTee` (MSILMCTargetDesc.h; `CONST_NULL` stays out of `isScalarConst`),
+  `MSIL::getCopyOpcodeForRegClass` (MSILUtilities.cpp), `getInvertedBranch` (MSILInstrInfo.cpp),
+  `MSILMCInstLower::lowerImpl` (MSILMCInstLower.cpp).
+- **RB4** Nodes `REF_EQ`, `REF_IS_NULL` (i32, known bits 0 or 1); patterns to `CEQ_OBJ`, `BEQ_OBJ`, `BNE_UN_OBJ`,
+  `BR_IF_OBJ`, `BR_UNLESS_OBJ`; RI2's null node to `CONST_NULL`. Missed shapes compile correctly as `ceq; brtrue`.
+- **RB5** `MSILTargetLowering::LowerCall` turns a direct call of `__msil_ref.eq` with RI6's type into `REF_IS_NULL`, 1
+  or `REF_EQ`, with no `CALL`, so no SYMTAB lists it (the symbol loop of `MSILAsmPrinter::emitObjectEnd`).
+- **RB6** Signatures are generic over MVTs; MIR's `parseMVT` (MSILMachineFunctionInfo.cpp) accepts `externref`.
+- **RB7** ExplicitLocals' tables (`getDropOpcode`, `getLocalGetOpcode`, `getLocalSetOpcode`, `getLocalTeeOpcode`) and
+  `typeForRegClass` gain OBJ; an OBJ `IMPLICIT_DEF` becomes `CONST_NULL` in `explicitLocals`, never erased;
+  RegStackify's tee and zero tables (`convertImplicitDefToConstZero`) gain OBJ. A partial net only (an undef use can
+  still read a local: `isSafeToMove` in MSILRegStackify.cpp skips undef operands); C's guarantee is RS2 with RS28.
+- **RB8** RegColoring merges one class only (`regColoring` in MSILRegColoring.cpp); a merged local may keep a dead
+  object alive until overwritten or return: GC timing, never a value. Claude's reading: not a silent state; Status.md
+  says so.
+- **RB9** StackCheck unchanged.
+- **RB10 Pass P15 `MSILPromoteReferences`** (new file; `createMSILPromoteReferencesLegacyPass()`, `MSIL Promote
+  References`, `msil-promote-references`; a ModulePass in 5.13.3's form). Added by `MSILPassConfig::addISelPrepare`
+  after AtomicExpand and before `TargetPassConfig::addISelPrepare()`, so after CodeGenPrepare and
+  `addPassesToHandleExceptions` (`TargetPassConfig::addISelPasses`), where EH-1's preparation will run; not after P1,
+  as first proposed, since EH preparation can demote reference PHIs into new slots. Every level, LTO and `optnone`. It
+  promotes with `PromoteMemToReg` each static alloca of exactly the type that `isAllocaPromotable` accepts and no other
+  (LLVM issue 81575). Any alloca left containing the type, or a load or store of it, is T-RB4; the body becomes
+  `unreachable` and the compilation fails. A slot used by an EH pad is never promoted: T-RB8 (no pad survives P3/P4
+  today: `MSILPassConfig::addIRPasses`). Functions without reference slots are untouched.
+- **RB11 P1 backstops** (hot file, hooks only): `isScalableOrTargetExtType` (MSILPrepareIR.cpp) stops counting the
+  type; `diagnoseDefinition` and the declaration and global loops of `MSILPrepareIRLegacy::runOnModule` call the new
+  `MSILReferences.{h,cpp}`. Errors erase the body, as P1's others do. Rules 3-6 concern non-intrinsic calls; RI4's
+  intrinsics are allowed, and rule 12 refuses every other use.
+  1. An array, structure or vector type containing it: T-RB1. 2. A global containing it: T-RB9.
+  3. A non-local function with it in its signature: T-RB2 'that is not static'; a hidden one (ThinLTO's promotion and
+     the partition split make locals external and hidden: `FunctionImportGlobalProcessing::processGlobalForThinLTO`,
+     `GlobalValue::externalize`, `splitCodeGen` in LTOBackend.cpp): T-RB2 'that ThinLTO or --lto-partitions made
+     external'. Exempt: P0's stubs, the helper.
+  4. Its address taken (any use but a direct call with its own type; `llvm.used` and `llvm.compiler.used` listings do
+     not count, as `refuseNonCallUses` treats them for T-M10; aliasees and `llvm.global.annotations` do): T-RB2.
+  5. A call with it in the type that is not a direct, exact-type call of an internal definition, a stub or the helper:
+     T-RB2; direct calls of non-static declarations are rule 3's.
+  6. A variadic function with it in its signature: T-RB2 ('that is variadic'); a variadic call that passes it as a
+     variadic argument, or a `va_arg` of it: T-RB12. 7. `byval`, `sret`, `inalloca`, `preallocated`, `byref`,
+     `elementtype` of it: T-RB1.
+  8. A `returns_twice` caller with any argument, result, alloca or instruction operand or result of it: T-RB3.
+  9. An alloca of it that is not single-element, static, entry-block: T-RB1; a volatile or atomic access: T-RB10.
+  10. An asm operand of it: T-RB9, checked before `runOnModule` calls `lowerEmptyInlineAsm`, which would drop it
+     silently.
+  11. A definition of a `__msil_ref.` name, or a declaration other than RI6's exact one: T-RB7.
+  12. Any other instruction with an operand or result of it, or a call of an intrinsic that RI4 does not list: T-RB11.
+- **RB12** MSILFixFunctionBitcasts (P5): a mismatched call involving the type is T-RB5, never a wrapper or silent trap,
+  on the `_bitcast_invalid` path (`createWrapper`'s type-mismatch trap in MSILFixFunctionBitcasts.cpp) in both modes
+  and in the "msil-lto" table's `convertValue` and `createTrapWrapper`.
+- **RB13 Unchanged:** FrameLowering, LowerSjLj, EHClauses, LowerDynamicAlloca, AddMissingPrototypes,
+  OptimizeReturned, `MSILTargetStreamer.*`.
+
+#### 5.21.8 Output forms
+
+- **RO1** Signatures and `.locals` of compiled C hold `ELEMENT_TYPE_OBJECT`; no new token kind outside stubs.
+- **RO2** Text output (the user kept the text way for now on 2026-11-17; its removal waits for the end of the project):
+  `object` in headers and `.locals`; stubs print `castclass` with whole-program kind checks (5.20.6 MW2 as amended);
+  both ilasms assemble it.
+- **RO3** Never `object` in `calli` signatures, P/Invokes, `ldftn` targets, address fields, exports or constructors.
+
+#### 5.21.9 Managed calls (amends 5.20)
+
+- **RM1** Codes `ref` and `this-ref`, appended to `cli::ManagedConv`; `this-ref` only first, neither `this` form as a
+  result.
+- **RM2 Selection** (`classifyManagedParam` in SemaMSILManagedCall.cpp): a reference C type takes `ref` for a CIL
+  `string`, `object`, `class T` or `T[]` parameter, result, `.ctor` type or field when its key equals the CIL type's
+  folded key; `this` of a class, interface, String or Object TYPE takes `this-ref` when the keys are equal (arrays have
+  only `.ctor`); other pairs are T-M3. Exact matching is the user's pick ("I think A is correct.", 2026-11-20 11:44).
+  Handle types keep MC-1's rows.
+- **RM3 Strings:** a CIL `string` parameter takes `String ^`. S1-S3 stay in R-a as a recorded temporary workaround until
+  R-a2 retires them, directly before P-2 (RN10; the user decided that they go, "Confirm" (2026-11-19 12:34), and when:
+  "(a) Before P-2" (2026-11-20 12:04)). Silent meanwhile, and OK'd by the user with that pick until R-a2, as the user's
+  pick on the review page (2026-11-04, item prov-10) asks ("silent states only with my OK"); Status.md lists them:
+  S1-S3 read up to the first 0 (S1 and S3 count up to it; S2's `String::.ctor(char*)` stops at it), so an unterminated
+  C string is read past its end and a zero inside the text cuts it short; text in another encoding that is valid UTF-8
+  turns into different text; S2 never throws. Invalid UTF-8 or UTF-32 throws.
+- **RM4** MS1-MS4, MS6 and T-M1 to T-M25 apply (5.20.3 with section 12). T-M3 and T-M4 say "the 'this' reference"
+  where `this` is a reference (`this-ref`) and keep "the 'this' handle" for handles, so MC-1's tests stay as they are
+  (RV19; Claude's reading).
+- **RM5** External linkage allowed (RS15), but no `dllexport`, `constructor`, `destructor` (RS21) or address (RS16).
+- **RM6 Fit** (`ManagedCallIR.h`): `isManagedReferenceType`; `fitsManagedConversion(Ref, CIL, IRTy)` is
+  `CIL.isReferenceType() && isManagedReferenceType(IRTy)`; `this-ref` fits a class, interface, String or Object TYPE.
+- **RM7 Stubs:** a `ref` argument is `ldarg` plus `castclass` to the member's parameter type unless `object`; no null
+  test, GCHandle or box. `this-ref` is `ldarg.0`, `castclass` to TYPE unless Object, then `callvirt`: the virtual test
+  of `StubWriter::emitAccess` takes `ThisRef` too, so an override runs; `ldfld` for a field. A `ref` result is returned
+  as is. With `msil_catch` the result local is `object` and the handler's zero is `ldnull` (`StubWriter::emitZero`).
+- **RM8 Cast stubs** (checked casts are the user's pick "Keep checked casts", 2026-11-20 10:19; the stubs' form is
+  Claude's decision: they reuse MC-1's token kinds, text scopes, kind checks and MK3). A C cast to another class calls a
+  CodeGen-made declaration named `__msil_mc.<castclass>.__uniq.<n>` (`<n>` from
+  `cli::getManagedCallUniqPostfix` over its MR4 operands and function type: equal casts merge under LTO, each class has
+  its own stub, msil-ld sees a stub, `isManagedCallStub` in lld/MSIL/ManagedCalls.cpp), with MR1 attributes
+  `msil-managed-type` = RC4's name (a class, String or an array), `msil-managed-member` = `.castclass`,
+  `msil-managed-sig` = `object(object)`, `msil-managed-conv` = `ref;ref`, an MR4 entry and no memory attributes. A
+  shared `cli::isManagedCastShape` is tested by `MSIL::parseManagedCall` (MSILManagedCalls.cpp) and
+  `isValidManagedCall` (lld/MSIL/ManagedCalls.cpp) before `cli::checkManagedMemberName`, which still refuses
+  `.castclass` in source; T-M22 also refuses asm labels starting with `<castclass>`. Body: `ldarg.0; castclass <TYPE>;
+  ret` (`declaredType`, or the SZARRAY token for arrays). MM1, MK2: "at most one member access; a cast stub makes
+  none".
+- **RM9 Tickets unchanged:** `Alloc` as `intptr_t f(Object ^)` is `ref;gch`; `get_Target` as `Object ^f(intptr_t)` is
+  `this-gch;ref`; all in the built-in table.
+- **RM10** Handle rows unchanged; RS10-RS11 keep pointers to `cli_type` structs away from them. MC-1's star-spelled
+  handles (`void *` and the struct-pointer typedefs) stay in R-a as a recorded temporary workaround until R-a2, directly
+  before P-2, makes them `intptr_t` or `uintptr_t` (RN10; the user's pick "(b) Retire before P-2", 2026-11-20 14:24);
+  boxed parameters and results keep the star until value-type form B (`DateTime ^r`, 5.21.16), or until the step named
+  by the answer to references VT-9. By the pick's count (14 declarations in 7 test files, from the no-star check), those
+  are the boxed parameters and the boxed results of members other than `.ctor`, where an integer type means an enum
+  (item 3 of section 12's row '5.20.3 MS5 as built', 2026-11-06), so new code also writes them with the star; a value
+  type's `.ctor` result already takes `intptr_t` and moves with the rest (Claude's reading).
+- **RM11** No `BCLMembers.def` row (Claude's decision); `GetByteCount`, `GetBytes`, `Marshal::Copy` need `--reference`.
+- **RM12** With RM2's exact matching, a stub's `castclass` fails only if two assemblies define one type name, and
+  then throws. MX2's zero for a reference result is `ldnull`.
+- **RM13** When S1-S3 go: `utf8`, `utf16`, `utf32` and their fits, the length loops and string cases of the stub writer
+  (`layoutLocals`, `StubWriter::emitLengthLoop` and the string cases of `StubWriter::emitArgument` in
+  MSILManagedCalls.cpp) and MC-1's string rows go; 94 declarations are rewritten. The BCL rows stay, for C to call.
+
+#### 5.21.10 msil-ld
+
+- **RL1** `isValidManagedCall` (lld/MSIL/ManagedCalls.cpp) takes `this-ref`, `ref` (RM6) and RM8's shape.
+- **RL2** MK3 (`checkDeclaration`) checks `ref` class parameters, `this-ref` TYPEs and cast TYPEs as reference types
+  (T-M16).
+- **RL3** The object stub walk needs no change (`scanStubSites` collects `castclass` tokens; `checkStub` refuses only
+  more than one access); RV27 pins it.
+- **RL4** `annotateImports` (lld/MSIL/LTO.cpp) skips `__msil_ref.eq` as it skips managed calls, or its `reportUnbound`
+  call misreports it; the lld package probes (MK5's method) for other reporting sites first. A definition of a
+  `__msil_ref.` name is T-RL1 (`lld::msil::checkReservedManagedCallNames` in lld/MSIL/ManagedCalls.cpp).
+- **RL5** `object` in signatures names no type: remapping (`OutputModule::mapStandAloneSig` in lld/MSIL/Synthetic.cpp)
+  and comparison (`signatureNamesType` in lld/MSIL/SymbolTable.cpp) pass it through.
+- **RL6** T-M17 needs nothing new; the helper has no MR4 entry and RB11 rule 11 checks it.
+- **RL7** ThinLTO and `--lto-partitions` above 1 (`readConfigs` in lld/MSIL/Driver.cpp) externalize R-a's statics; P1
+  refuses them with T-RB2's LTO reason (Claude's decision: the text names cause and remedy; R-b lifts it).
+
+#### 5.21.11 Verification (D21)
+
+5.17.16 gains no part (Claude's reading): object locals, arguments, results, `ldnull`, `ceq`, the branches, select
+triangles and stub `castclass` are verifiable. Measured 2026-11-19 (`zinit.il`): plain object locals without
+`localsinit`, read before written, read as null on Framework 4.8 and .NET 8, 10 and 11, tiered on and off; ILVerify and
+PEVerify report only InitLocals, allowed (the InitLocals entry of `msil/utils/ilverify-allowed.txt`, D13). Not
+measured: object locals beside the `localloc` frame, filter clauses, `ceq` and select on objects, `castclass` on entry;
+`frames-mixed`, `catch-ref`, the stub tests, both `msil-verify.py` passes, jitall, PEVerify and
+`msil/test/harness/verify-object-locals.test` decide them. Stubs and ISel never read an object local before writing
+it. Design.md 4.2 ("Frames are not zeroed: `.locals` is never `init`") and D13 stand; a `localsinit` fallback stays
+open until those tests pass. Any other verifier message is a defect or a D21 question for the user.
+
+#### 5.21.12 Shared texts
+
+Sema texts: `err_msil_ref_*`/`note_msil_ref_*`, one block right after MC-1's in `DiagnosticSemaKinds.td` (after
+`err_msil_method_forwarder_clash`), no `InGroup`; T-R24 beside `err_msil_asm_unsupported` in
+`DiagnosticCommonKinds.td`. Back-end texts use `DiagnosticInfoUnsupported`. "Yet" marks what a planned step may lift
+(5.15.1 rule 2); C-memory texts are permanent (Claude's decision; Design.md section 4: "C memory never holds a GC
+reference."). Tests pin each whole.
+
+| Id | Rule | Text |
+|---|---|---|
+| T-R1 | RT2 | `'cli_type' type '<text>' is not valid: <reason>` |
+| T-R2 | RT4 | `'cli_type' must appear on the first declaration of '<S>'`; `'cli_type' on this declaration of '<S>' differs from its first declaration`; note `first declared here` |
+| T-R3 | RT5 | `'cli_type' struct '<S>' names the .NET class '<T>', which has no layout in C memory; a class struct has no body` |
+| T-R4 | RC2 | `'^' needs a struct with the 'cli_type' attribute of a .NET class; '<T>' is not one` |
+| T-R5 | RC6 | `.NET references in C++ are not supported for MSIL yet`; `.NET references in <Objective-C\|OpenCL\|CUDA> are not supported for MSIL` |
+| T-R6 | RS10 | `'<T> *' points into C memory, which cannot hold the .NET class '<T>'; a reference to it is written '<T> ^'` |
+| T-R7 | RS11 | `the .NET class '<T>' has no value in C; a reference to it is written '<T> ^'` |
+| T-R8 | RS12 | `a pointer to the .NET reference type '<T>' is not supported for MSIL: C memory never holds a .NET reference` |
+| T-R9 | RS13 | `taking the address of the .NET reference '<v>' is not supported for MSIL: C memory never holds a .NET reference` |
+| T-R10 | RS15 | `'<f>' has external linkage; a .NET reference as <parameter <i>\|its result> is not supported for MSIL yet (declare '<f>' 'static')` |
+| T-R11 | RS16 | `taking the address of '<f>', whose type has a .NET reference, is not supported for MSIL yet` |
+| T-R12 | RS17 | `a <function pointer\|block pointer\|block> type with a .NET reference is not supported for MSIL yet` |
+| T-R13 | RS18 | `a function without a prototype that takes or returns a .NET reference is not supported for MSIL` |
+| T-R14 | RS19 | `passing the .NET reference type '<T>' to a function without a prototype is not supported for MSIL`; `'va_arg' of the .NET reference type '<T>' is not supported for MSIL` |
+| T-R15 | RS20 | `a variadic function that takes or returns a .NET reference is not supported for MSIL yet` |
+| T-R16 | RS21 | `'<attr>' on '<f>', whose type has a .NET reference, is not supported for MSIL yet` |
+| T-R17 | RS22 | `a .NET reference in a function that calls '<g>' is not supported for MSIL yet`; note `a .NET reference is used here` |
+| T-R18 | RS23 | `'<qualifier>' on the .NET reference type '<T>' is not supported for MSIL` |
+| T-R19 | RS24 | `'<qualifier>' on the .NET class '<T>' is not supported for MSIL; a reference's own qualifiers follow '^', as in '<T> ^const'` |
+| T-R20 | RS25 | `'<attr>' on the .NET reference '<v>' is not supported for MSIL` |
+| T-R21 | RS26 | `capturing the .NET reference '<v>' in a <block\|captured statement\|OpenMP region> is not supported for MSIL` |
+| T-R22 | RS8, RS27 | `converting '<S>' to the .NET reference type '<T>' is not supported for MSIL; only a .NET reference or a null pointer constant converts to it` |
+| T-R23 | RS28 (note) | `jump bypasses the initialization of the .NET reference '<v>'` |
+| T-R24 | RS29 | `a .NET reference as an inline assembly operand is not supported for MSIL yet` |
+| T-RB1 | P1 1, 7, 9 | `a .NET reference cannot be held in C memory: <what>` (`the aggregate type '<T>'`, `a '<attribute>' parameter`, `a stack slot of more than one element`, `a stack slot outside the entry block`) |
+| T-RB2 | P1 3-6 | `a function with a .NET reference in its signature <reason> is not supported for MSIL yet` (`that is not 'static'`; `that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1)`; `whose address is taken`; `called through a pointer or with another function type`; `that is variadic`) |
+| T-RB3 | P1 8 | `a .NET reference in a function that calls setjmp is not supported for MSIL yet` |
+| T-RB4 | P15 | `a .NET reference that cannot become an IL local is not supported for MSIL: <reason>` (`the slot's address escapes`, `the slot is copied as memory`, `a load through a pointer`, `a store through a pointer`) |
+| T-RB5 | P5 | `call of '<g>' passes '<A>' where it takes '<P>': a .NET reference cannot be converted` |
+| T-RB6 | ISel | `a .NET reference is loaded from or stored to memory` |
+| T-RB7 | P1 11 | `'<name>' is reserved for the MSIL toolchain` |
+| T-RB8 | P15 | `a .NET reference live across an exception handler is not supported for MSIL yet` |
+| T-RB9 | P1 2, 10 | `a .NET reference in <a global variable\|an inline asm operand> is not supported for MSIL yet` |
+| T-RB10 | P1 9 | `a <volatile\|atomic> access of a .NET reference is not supported for MSIL` |
+| T-RB11 | P1 12 | `a .NET reference as an operand or result of '<instruction or intrinsic>' is not supported for MSIL` |
+| T-RB12 | P1 6 | `a .NET reference as a variadic argument or as the type of 'va_arg' is not supported for MSIL` |
+| T-RL1 | RL4 | `<file>: defines '<name>', which is reserved for the MSIL toolchain (a reference helper)` |
+
+#### 5.21.13 Upstream files
+
+- **RH1** 9 hooked files gain hunks; 43 unhooked files get new blocks: 19 AST and serialization, 10 Sema, 8 CodeGen, 2
+  ClangIR, libclang's `CIndex.cpp` (RH4), LLVM core's `Type.cpp` and `ValueTypes.cpp`, and the header list and install
+  rule in `clang/lib/Headers/CMakeLists.txt` for RT1's `<cli/cli.h>`; 52 upstream files in all. The per-file list with
+  lit and fork lines is the table at the end of this section.
+- **RH2 Bound:** the user approved, with "(a) Yes" (2026-11-19 12:39), the option text (Claude's) "about 40-45 more
+  upstream files for C ... plus two files in LLVM's core". Claude's stricter reading: at most 45 new blocks, the core
+  files counted; a 46th comes back to the user first (gate step 25).
+- **RH3** Each hook is minimal; its block names upstream lit tests that show other targets unchanged, and fork tests.
+- **RH4 ClangIR** is built (`CLANG_ENABLE_CIR=ON`; `clang` links it) and reachable on MSIL triples with `-fclangir`,
+  though MSIL does not use it. Its four exhaustive switches over type classes get the new class (Claude's decision; two
+  more upstream files, inside the bound): `CIRGenFunction::getEvaluationKind` (with the scalars) and
+  `CIRGenFunction::emitVariablyModifiedType` (never variably modified) in CIRGenFunction.cpp, `vTableClassNameForType`
+  and `CIRGenItaniumRTTIBuilder::buildTypeInfo` (as ItaniumCXXABI.cpp's cases) in CIRGenItaniumCXXABI.cpp. A reference
+  that reaches ClangIR then gets its not-yet-implemented error from `CIRGenTypes::convertType`'s default case instead
+  of an `llvm_unreachable`. **libclang** is not in the build-target list, but `ninja check-clang` builds it (`c-index-test`
+  is in clang's test dependencies), and lit-legs.sh's `--full` 'upstream' leg runs that target. `CursorVisitor`
+  (CursorVisitor.h) declares a `Visit<Class>TypeLoc` method for every TypeLoc class through TypeLocNodes.def, and
+  `CIndex.cpp` defines each by hand, so without a definition for the new class libclang does not link. `CIndex.cpp`
+  gains `CursorVisitor::VisitCLIReferenceTypeLoc`, which visits the class's TypeLoc as `VisitBlockPointerTypeLoc` visits
+  its pointee's, so the cursor walk still reaches the struct's name (`DEFAULT_TYPELOC_IMPL` would hand it to
+  `VisitTypeLoc`, which visits nothing): Claude's decision, one more upstream file, inside the bound. Gate step 25
+  checks that the hook is there and step 29 syntax-checks the file (libclang is configured, so `CIndex.cpp` has a
+  compile command); only the `--full` leg links and tests libclang.
+- **RH5** A missed type-class case is a `-Wswitch` warning and an `llvm_unreachable` only assertions builds report.
+  R-a's gate (step 30) syntax-checks R-a's 22 switch files with `-Werror=switch` (the AST, serialization, Sema,
+  CodeGen and ClangIR files of 5.21.15 with such a switch or visitor; `captureVariablyModifiedType` in SemaExpr.cpp
+  among them). From R-a on, `check-upstream-hooks.py --check`, the manifest leg of `upstream-hooks.ps1` (R-a's step
+  24, `run-m1-gate.ps1`'s upstream-hooks step and the upstream-merge gate, which runs every leg; the Windows CI job
+  runs without it), also fails a switch in a C or C++ file under `clang/include`, `clang/lib` or `clang/tools` whose
+  condition calls `getTypeClass()` or `getTypeLocClass()`, or is a local variable initialized from one of them (as
+  `switch (TC)` after `Type::TypeClass TC = T->getTypeClass();`), when the switch has no `CLIReference` case, no
+  `default:` of its own and no generated case for every class (`TypeNodes.inc` or `TypeLocNodes.def` included with
+  `TYPE`, `TYPELOC` or `UNQUAL_TYPELOC` defined as a case label), so a new upstream switch in any such file fails the
+  merge too. R-a.i adds the scan, modelled on the leg's XCOFF scan, with a self-test case of each form, which gate
+  step 24 runs (Claude's decision: the scan lands with the class, so it never runs before the class exists).
+- **RH6** Not changed: the parser, `Sema.h`, `CGCall.cpp`, `Targets/*.cpp`, the driver, `SemaStmtAsm.cpp`,
+  `DiagnosticASTKinds.td`, `CodeGenModule.cpp`, `Intrinsics.td`, `ValueTypes.td`, `SelectionDAGBuilder.cpp`. Not built
+  and not changed: lldb's `TypeSystemClang.cpp` (lldb is not built); a manifest comment names it.
+
+**The per-file table** (R-a.i writes the matching blocks of `msil/utils/upstream-hooks.txt`). At `a15f3c958572`: 82 `hook` blocks, 43 `fork-only` lines. R-a: 9 hooked files gain hunks and 43 unhooked files get new blocks (52 upstream files), the two LLVM core files, the two ClangIR files, libclang's `CIndex.cpp` and `clang/lib/Headers/CMakeLists.txt` included; bound 45. Lit paths are under `clang/test/` unless they start with `llvm/`; fork tests under `clang/test/Sema/` (`msil-*`), `clang/test/CodeGen/MSIL/` (`ref-*`) or `llvm/test/CodeGen/MSIL/`. The owner of each file is its R-a work package (5.21.15).
+
+| File | Hooked | Change | lit (upstream) | fork |
+|---|---|---|---|---|
+| `clang/include/clang/Basic/Attr.td` | yes | RT1 | existing block | `msil-cli-type.c` |
+| `clang/include/clang/Basic/AttrDocs.td` | yes | RT1 docs | none (docs) | `msil-cli-type.c` |
+| `clang/include/clang/Basic/DiagnosticSemaKinds.td` | yes | T-R1-T-R23, T-M3/T-M4 | none (no group) | Sema tests |
+| `clang/include/clang/Basic/DiagnosticCommonKinds.td` | yes | T-R24 | none | `ref-asm.c` |
+| `clang/lib/Sema/SemaDeclAttr.cpp` | yes | RT8, RS21, RS25 | `Sema/attr-cleanup.c`, `Sema/attr-uninitialized.c` | `msil-cli-type.c`, `msil-ref-storage.c` |
+| `clang/lib/Sema/SemaDecl.cpp` | yes | RT4, RT5, RS2, RS11, RS15, RS17, RS18, RS20-RS22, RS28 | `Sema/function-redecl.c`, `Sema/builtin-setjmp.c`, `Sema/scope-check.c` | `msil-ref-functions.c`, `msil-ref-jumps.c` |
+| `clang/lib/Sema/CMakeLists.txt` | yes | new fork file | none (CMake) | `msil-cli-type.c` |
+| `clang/lib/CodeGen/CGStmt.cpp` | yes | RS29 | existing block | `ref-asm.c` |
+| `clang/lib/CodeGen/CMakeLists.txt` | yes | new fork file | none (CMake) | `ref-ir.c` |
+| `clang/include/clang/Basic/TypeNodes.td` | no | type class | `PCH/blocks.c`, `PCH/types.c`, `AST/ast-dump-types-json.cpp` | `ref-pch.c` |
+| `clang/include/clang/AST/TypeBase.h` | no | class, sugar | `Sema/sizeless-1.c`, `PCH/aarch64-sve-types.c` | `msil-ref-type.c` |
+| `clang/include/clang/AST/TypeLoc.h` | no | TypeLoc | `Sema/block-misc.c` | `msil-ref-type.c` |
+| `clang/include/clang/AST/TypeProperties.td` | no | properties | `PCH/types.c` | `ref-pch.c` |
+| `clang/include/clang/AST/RecursiveASTVisitor.h` | no | traversal | `AST/ast-dump-types-json.cpp` | `msil-ref-type.c` |
+| `clang/include/clang/AST/ASTNodeTraverser.h` | no | dumper | `AST/ast-dump-aarch64-sve-types.c` | `msil-ref-type.c` |
+| `clang/include/clang/AST/ASTContext.h` | no | getter, implicit structs | `Sema/sizeless-1.c` | `msil-cli-type.c` |
+| `clang/include/clang/Serialization/TypeBitCodes.def` | no | bit code | `PCH/types.c` | `ref-pch.c` |
+| `clang/lib/AST/ASTContext.cpp` | no | RC3, RC8 | `Sema/merge-decls.c`, `Misc/diag-aka-types.cpp` | `msil-ref-ops.c` |
+| `clang/lib/AST/ASTImporter.cpp` | no | import | `ASTMerge/struct/test.c` | `ref-ast-merge.c` |
+| `clang/lib/AST/ASTStructuralEquivalence.cpp` | no | equal keys | `ASTMerge/struct/test.c` | `ref-ast-merge.c` |
+| `clang/lib/AST/ExprConstant.cpp` | no | classify | `Sema/builtin-classify-type.c` | `msil-ref-ops.c` |
+| `clang/lib/AST/Type.cpp` | no | sizeless, linkage | `Sema/sizeless-1.c`, `Sema/wasm-refs-and-tables.c` | `msil-ref-storage.c` |
+| `clang/lib/AST/TypeLoc.cpp` | no | end location | `Sema/block-misc.c` | `msil-ref-type.c` |
+| `clang/lib/AST/TypePrinter.cpp` | no | printing | `Misc/diag-aka-types.cpp` | `msil-ref-type.c` |
+| `clang/lib/AST/ItaniumMangle.cpp` | no | RG10 (R-a2 mangles) | `CodeGenCXX/mangle.cpp`, `CodeGen/overloadable.c` | `ref-mangling.c` |
+| `clang/lib/AST/MicrosoftMangle.cpp` | no | RG10 (R-a2) | `CodeGenCXX/mangle-ms.cpp` | `ref-mangling.c` |
+| `clang/lib/Serialization/ASTReader.cpp` | no | TypeLoc reader | `PCH/blocks.c` | `ref-pch.c` |
+| `clang/lib/Serialization/ASTWriter.cpp` | no | TypeLoc writer | `PCH/blocks.c` | `ref-pch.c` |
+| `clang/lib/Sema/SemaType.cpp` | no | RC2, RC5, RS10, RS12, RS17, RS23, RS24 | `Sema/block-misc.c`, `Sema/nullability.c`, `Sema/wasm-refs-and-tables.c` | `msil-ref-type.c` |
+| `clang/lib/Sema/SemaExpr.cpp` | no | RS4-RS7, RS13, RS17, RS19, RS26; `captureVariablyModifiedType`'s case | `Sema/compare.c`, `Sema/conditional-expr.c`, `Sema/varargs.c`, `SemaOpenCL/null_queue.cl` | `msil-ref-ops.c` |
+| `clang/lib/Sema/SemaCast.cpp` | no | RS8, RS27 | `Sema/cast.c` | `msil-ref-ops.c` |
+| `clang/lib/Sema/SemaInit.cpp` | no | RS2 | `Sema/init.c`, `CodeGenObjC/arc.m` | `ref-ir.c` |
+| `clang/lib/Sema/JumpDiagnostics.cpp` | no | RS28 | `Sema/scope-check.c`, `SemaObjC/arc-jump-block.m` | `msil-ref-jumps.c` |
+| `clang/lib/Sema/SemaOverload.cpp` | no | RS16 (R-a2 adds) | `Sema/pass-object-size.c`, `Sema/enable_if.c` | `msil-ref-functions.c` |
+| `clang/lib/Sema/SemaLookup.cpp` | no | ADL case | `SemaCXX/sizeless-1.cpp` | `SemaCXX/msil-ref-cxx.cpp` |
+| `clang/lib/Sema/SemaTemplate.cpp` | no | visitor (needed to link) | `SemaCXX/sizeless-1.cpp` | `SemaCXX/msil-ref-cxx.cpp` |
+| `clang/lib/Sema/SemaTemplateDeduction.cpp` | no | cases (R-a2 adds) | `SemaCXX/sizeless-1.cpp` | `SemaCXX/msil-ref-cxx.cpp` |
+| `clang/lib/Sema/TreeTransform.h` | no | transform | `Sema/vla.c` | `ref-ir.c` |
+| `clang/lib/CodeGen/CodeGenTypes.cpp` | no | RG1 | `CodeGen/WebAssembly/wasm-externref.c`, `CodeGen/blocks.c` | `ref-abi.c` |
+| `clang/lib/CodeGen/CodeGenFunction.cpp` | no | RG1, RG8, RG12 | `CodeGen/WebAssembly/wasm-externref.c`, `CodeGen/blocks.c`, `CodeGenCXX/return.cpp` | `ref-ir.c` |
+| `clang/lib/CodeGen/CGExprScalar.cpp` | no | RG2, RG4, RG5 | `CodeGenOpenCL/null_queue.cl`, `CodeGen/nullptr.c` | `ref-ir.c` |
+| `clang/lib/CodeGen/CGDecl.cpp` | no | RG3 | `CodeGenCXX/auto-var-init.cpp`, `CodeGen/trivial-auto-var-init-bypass.c` | `ref-auto-var-init.c` |
+| `clang/lib/CodeGen/CGDebugInfo.cpp` | no | RG7 | `DebugInfo/Generic/block.c` | `ref-debug-info.c` |
+| `clang/lib/CodeGen/CGDebugInfo.h` | no | RG7 | `DebugInfo/Generic/block.c` | `ref-debug-info.c` |
+| `clang/lib/CodeGen/ItaniumCXXABI.cpp` | no | RTTI cases (R-a2 adds) | `CodeGenCXX/rtti-layout.cpp` | `SemaCXX/msil-ref-cxx.cpp` |
+| `clang/lib/CodeGen/QualTypeMapper.cpp` | no | unsupported | `CodeGen/AArch64/abi-classify-arg-types.c` | `ref-abi.c` |
+| `clang/lib/CIR/CodeGen/CIRGenFunction.cpp` | no | RH4: `getEvaluationKind` (scalar), `emitVariablyModifiedType` (never variably modified) | `CIR/CodeGen/basic.c`, `CIR/CodeGen/vla.c` | `ref-clangir.c` |
+| `clang/lib/CIR/CodeGen/CIRGenItaniumCXXABI.cpp` | no | RH4: `vTableClassNameForType`, `CIRGenItaniumRTTIBuilder::buildTypeInfo` (as ItaniumCXXABI.cpp) | `CIR/CodeGen/rtti-qualfn.cpp`, `CIR/CodeGen/vtable-emission.cpp` | `ref-clangir.c` |
+| `clang/tools/libclang/CIndex.cpp` | no | RH4: `CursorVisitor::VisitCLIReferenceTypeLoc`, visiting the class's TypeLoc (as `VisitBlockPointerTypeLoc` visits its pointee's) | none (the shared build has no c-index-test; the --full upstream leg builds and tests libclang) | none (needs c-index-test) |
+| `llvm/lib/IR/Type.cpp` | no | RI1 | `llvm/test/Assembler/target-type-param-errors.ll`, `llvm/test/Assembler/target-type-properties.ll`, `llvm/test/Verifier/target-ext-vector*.ll`, `llvm/test/Transforms/SROA/sroa-target.ll` | `reference-ir.ll` |
+| `llvm/lib/CodeGen/ValueTypes.cpp` | no | RI2 | `llvm/test/CodeGen/WebAssembly/externref-*.ll`, `llvm/test/CodeGen/WebAssembly/select-reftype.ll` | `reference-values.ll` |
+| `clang/lib/Headers/CMakeLists.txt` | no | RT1: a list of its own for `cli/cli.h`, named in the copy loop and installed by its own `install(FILES ... DESTINATION ${header_install_dir}/cli ...)`, as `openmp_wrapper_files` and `llvm_libc_wrapper_files` are (one hook block, three places; inside `files`, as `webassembly_files` is, it would install as `include/cli.h`) | none (CMake) | `Driver/msil-cli-header.c` |
+| `clang/include/clang/Sema/Overload.h` | no | R-a2: conversion kinds | R-a2 | R-a2 |
+| `clang/lib/Sema/SemaExprCXX.cpp` | no | R-a2: conversions, refusals | R-a2 | R-a2 |
+| `clang/lib/Sema/Sema.cpp` | yes | R-a2: `bool` conversion | existing block | R-a2 |
+
+`ref-clangir.c` carries `REQUIRES: cir-support`, as the `CIR/CodeGen` tests do.
+
+The `Type.cpp` block names two of the five `llvm/test/Assembler/target-type*.ll` tests: `target-types.ll`, `target-type-mangled.ll` and `target-type-params.ll` pipe `llvm-as` into `llvm-dis`, which `msil/utils/ci/build-targets.txt` does not build, so they would fail on the shared build, before R-a and after it. The block's comment names them and the reason.
+
+`fork-only` lines: `SemaMSILReference.{h,cpp}`, `CGMSILReferences.{h,cpp}`, `clang/lib/Headers/cli/cli.h`, the seven `clang/test/Sema/msil-*.c` files, `clang/test/SemaCXX/msil-ref-cxx.cpp`, `clang/test/Driver/msil-cli-header.c`, `clang/test/Driver/msil-ref-driver.c`. Fork files that need no new line: `SemaMSILManagedCall.cpp` and `CGMSILManagedCalls.{h,cpp}` (each already has its `fork-only` line), `llvm/include/llvm/CLI/*`, `llvm/lib/Target/MSIL/**`, `lld/MSIL/**`, the fork test directories.
+
+Not changed: `CGCall.cpp`, `CodeGenModule.cpp`, `SemaStmtAsm.cpp`, `DiagnosticASTKinds.td`, the parser, `Sema.h`, `Intrinsics.td`, `ValueTypes.td`, `SelectionDAGBuilder.cpp`, `CIRGenTypes.cpp` (its `convertType` has a default case that reports ClangIR's not-yet-implemented error). Not built and not changed: lldb's `TypeSystemClang.cpp` (lldb is not built); a manifest comment names it.
+
+#### 5.21.14 Tests
+
+New clang tests outside `clang/test/CodeGen/MSIL/` get `fork-only` lines and join check-msil. RUN lines cover the eight
+host triples of `triples.c` and `msil64-unknown-dotnet`. Every text of 5.21.12, and every clang text R-a relies on, is
+pinned whole.
+
+- **RV1** `clang/test/Sema/msil-cli-type.c` (RT): spellings, `__has_attribute`, keys, T-R1-T-R3.
+- **RV2** `clang/test/CodeGen/MSIL/ref-abi.c` (RG6): the IR signature on all ten MSIL triples; never `ptr`, an integer,
+  `byval` or `sret`.
+- **RV3** `msil-ref-type.c` (RC, RS10-RS12, RS23, RS24): T-R4, Blocks with and without `-fblocks`, T-R6, T-R7 for
+  `extern String g;`, `String f(void);`, `void f(String a);`, T-R8, T-R18, T-R19, aka, `-ast-dump`, `-ast-print`.
+- **RV4** `msil-ref-ops.c` (RS1-RS9, RS14, RS27): every allowed form, each null form in `=` and `==` (`nullptr` under
+  `-std=c23`), GNU `r ?: s`, RS9's uses, no const warning, every refusal. **RV5** `msil-ref-storage.c` (RS13, RS14,
+  RS25, RS26). **RV6** `msil-ref-functions.c` (RS15-RS22; both adjusted-parameter forms; `annotate`; `used`; RS19's
+  `err_cannot_pass_to_vararg` whole; a `-c` line where `alias("f")` gets T-RB2). **RV7** `msil-ref-jumps.c` (RS28).
+  **RV8** `msil-ref-managed-calls.c` (RM; T-M3 cases, a `msil_catch` reference result, tickets, T-M22). **RV9**
+  `SemaCXX/msil-ref-cxx.cpp` (RC6).
+- **RV10** `ref-ir.c` at -O0, -O2, -Og: NULL stores, `pick`'s phi with `zeroinitializer`, the helper, casts called when
+  unused, `llvm.fake.use`, a VLA bound with `c ? a : b` over two spellings (TreeTransform on a canonical node), and
+  RG12's `llvm.trap` and `unreachable` where a reference function can fall off its end, at every level.
+- **RV11-RV16** `ref-managed-calls.c`, `ref-auto-var-init.c` (`=zero`, `=pattern`, a computed `goto`),
+  `ref-debug-info.c`, `ref-asm.c`, `ref-mangling.c`, `ref-pch.c`, `ref-ast-merge.c` and `ref-clangir.c` (RH4: ClangIR's
+  not-yet-implemented error under `-fclangir`; `REQUIRES: cir-support`).
+- **RV17** Driver: `msil-cli-header.c` (RT1's `<cli/cli.h>`); no default `-fblocks`; `msil-ref-driver.c` per triple.
+- **RV18** `ManagedSignatureTest.cpp`: exactly 6 new cases (25 → 31): `parseCLITypeName` forms and keys; its refusals;
+  code names; positions; `isManagedCastShape`; `.castclass` refused in source. CLITests 488 → 494.
+- **RV19** Unchanged: MC-1's `msil-method*` and attribute tests, the blocks' upstream lit lines.
+- **RV20-RV22** `llvm/test/CodeGen/MSIL/reference-ir.ll` (RI1), `reference-values.ll` and `reference-mir.mir` (RB1-RB9,
+  RO; -O0 to -O3; objects through `llvm-cil-dump`; the ilasm oracle), `reference-compare.ll` (the helper in no SYMTAB,
+  MemberRef or text), on Windows, Linux and msil64 triples (llc also aarch64).
+- **RV23** `reference-promote.ll` (RB10): locals beside the `localloc` frame; T-RB4; T-RB8 via `llc -start-after` on IR
+  with a pad; `pipeline.ll` gains P15.
+- **RV24** `reference-errors.ll`: every P1, P5 and ISel text in both modes (globals under `-disable-verify`), T-RB11 and
+  T-RB12 among them; `llvm.fake.use` accepted; an MC-1 forwarder with a reference refused.
+- **RV25** `managed-call-ref.ll`, `managed-call-cast.ll` (RM; `callvirt` for `this-ref`; `ldnull` under `msil_catch`).
+- **RV26** MSILTests: Object in `MSILTypeUtilitiesTest`; OBJ in `MSILStackEffectTest` (four classes become five).
+- **RV27** `lld/test/MSIL/references.test` (RL): binding with and without `--reference`, T-M16, the helper never bound,
+  T-RL1, ThinLTO and `--lto-partitions=2` (T-RB2), T-RB5 through the LTO table pass.
+- **RV28** `msil/test/M3/14-references/` (at least 12; expected files hand-written under MC-1's reason): `string-table`,
+  `identity-null`, `string-builder`, `instance-members` (an override through `this-ref`), `constructors`, `casts`,
+  `cast-loud`, `tickets`, `gc-stress`, `catch-ref`, `lto-units`, `frames-mixed`; `%{msil_refs_netfx}` where needed.
+  `msil/test/Portable/08-references/`: 3 tests, table members only, post-commit `Portable` legs only (Claude's reading
+  of brief Q11 (a); P-3 owns 06 and 07). `msil/test/harness/verify-object-locals.test`: ILVerify and PEVerify on the
+  shapes 5.21.11 lists as not measured.
+- **RV29** Hook blocks for every file; il-snapshot of M1, M2 and `llvm/test/CodeGen/MSIL` unchanged.
+
+#### 5.21.15 Files and roles (for the R-a milestone text; 5.13.4 style)
+
+The roles and package letters are the milestone text's (R-a.a-R-a.n; R-a.0 is the build agent's step and owns no
+file). Each role's files are its package's `Owned files` line, in full.
+
+| Role | Files | What |
+|---|---|---|
+| R-a.a `R-a/lists` (root) | `clang/include/clang/Basic/TypeNodes.td`, `clang/include/clang/AST/TypeBase.h`, `clang/include/clang/AST/TypeLoc.h`, `clang/include/clang/AST/TypeProperties.td`, `clang/include/clang/AST/RecursiveASTVisitor.h`, `clang/include/clang/AST/ASTNodeTraverser.h`, `clang/include/clang/AST/ASTContext.h`, `clang/include/clang/Serialization/TypeBitCodes.def`, `clang/include/clang/Basic/Attr.td`, `clang/include/clang/Basic/AttrDocs.td`, `clang/include/clang/Basic/DiagnosticSemaKinds.td`, `clang/include/clang/Basic/DiagnosticCommonKinds.td`, `clang/lib/Sema/TreeTransform.h`, `clang/lib/Sema/SemaMSILReference.h` (new), `clang/lib/CodeGen/CGDebugInfo.h`, `clang/lib/CodeGen/CGMSILReferences.h` (new), `clang/lib/CodeGen/CGMSILManagedCalls.h`, `clang/lib/Headers/cli/cli.h` (new), `clang/lib/Headers/CMakeLists.txt`, `llvm/include/llvm/CLI/ManagedSignature.h`, `llvm/include/llvm/CLI/ManagedCallIR.h`, `llvm/lib/IR/Type.cpp`, `llvm/lib/CodeGen/ValueTypes.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTypeUtilities.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTargetDesc.h`, `llvm/lib/Target/MSIL/MSILRegisterInfo.td`, `llvm/lib/Target/MSIL/MSILInstrInfo.td`, `llvm/lib/Target/MSIL/MSILInstrRef.td` (new), `llvm/lib/Target/MSIL/MSILISelLowering.h`, `llvm/lib/Target/MSIL/MSILManagedCalls.h`, `llvm/lib/Target/MSIL/MSILReferences.h` (new), `llvm/lib/Target/MSIL/MSIL.h` | every header and `.td` file R-a edits, and the two core files: RC3's declarations, RT1, the texts of 5.21.12, RI1, RI2, RT3, RM1, RM6, RM8's predicate, RI6's constants, RB1's value kind, RB2-RB4's records, the pass's declaration |
+| R-a.b `R-a/clang-ast` | `clang/lib/AST/ASTContext.cpp`, `clang/lib/AST/ASTImporter.cpp`, `clang/lib/AST/ASTStructuralEquivalence.cpp`, `clang/lib/AST/ExprConstant.cpp`, `clang/lib/AST/Type.cpp`, `clang/lib/AST/TypeLoc.cpp`, `clang/lib/AST/TypePrinter.cpp`, `clang/lib/AST/ItaniumMangle.cpp`, `clang/lib/AST/MicrosoftMangle.cpp`, `clang/lib/Serialization/ASTReader.cpp`, `clang/lib/Serialization/ASTWriter.cpp`, `clang/lib/Sema/SemaLookup.cpp`, `clang/lib/Sema/SemaTemplate.cpp`, `clang/lib/Sema/SemaTemplateDeduction.cpp`, `clang/lib/CodeGen/ItaniumCXXABI.cpp`, `clang/lib/CodeGen/QualTypeMapper.cpp`, `clang/lib/CIR/CodeGen/CIRGenFunction.cpp`, `clang/lib/CIR/CodeGen/CIRGenItaniumCXXABI.cpp`, `clang/tools/libclang/CIndex.cpp` | RC3's getter, RC8, RG10, RH4 (ClangIR's cases, libclang's visitor) |
+| R-a.c `R-a/clang-sema` | `clang/lib/Sema/SemaType.cpp`, `clang/lib/Sema/SemaExpr.cpp`, `clang/lib/Sema/SemaCast.cpp`, `clang/lib/Sema/SemaInit.cpp`, `clang/lib/Sema/JumpDiagnostics.cpp`, `clang/lib/Sema/SemaOverload.cpp`, `clang/lib/Sema/SemaDecl.cpp`, `clang/lib/Sema/SemaDeclAttr.cpp`, `clang/lib/Sema/CMakeLists.txt`, `clang/lib/Sema/SemaMSILReference.cpp` (new), `clang/lib/Sema/SemaMSILManagedCall.cpp` | RT4-RT7, RC2, RC5, RC6, RS1-RS28, RS30, RM2, RM4, RM5, T-M22 |
+| R-a.d `R-a/clang-codegen` | `clang/lib/CodeGen/CodeGenTypes.cpp`, `clang/lib/CodeGen/CodeGenFunction.cpp`, `clang/lib/CodeGen/CGExprScalar.cpp`, `clang/lib/CodeGen/CGDecl.cpp`, `clang/lib/CodeGen/CGDebugInfo.cpp`, `clang/lib/CodeGen/CGStmt.cpp`, `clang/lib/CodeGen/CMakeLists.txt`, `clang/lib/CodeGen/CGMSILReferences.cpp` (new), `clang/lib/CodeGen/CGMSILManagedCalls.cpp` | RG1-RG12, RS29, RM8's declarations |
+| R-a.e `R-a/isel` | `llvm/lib/Target/MSIL/MSILISelLowering.cpp`, `llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp`, `llvm/lib/Target/MSIL/MSILInstrInfo.cpp`, `llvm/lib/Target/MSIL/MSILUtilities.cpp`, `llvm/lib/Target/MSIL/MSILMCInstLower.cpp`, `llvm/lib/Target/MSIL/MSILExplicitLocals.cpp`, `llvm/lib/Target/MSIL/MSILRegStackify.cpp`, `llvm/lib/Target/MSIL/MSILMachineFunctionInfo.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTypeUtilities.cpp` | RB1-RB7's C++ parts |
+| R-a.f `R-a/ir` | `llvm/lib/Target/MSIL/MSILPrepareIR.cpp` (hot), `llvm/lib/Target/MSIL/MSILReferences.cpp` (new), `llvm/lib/Target/MSIL/MSILPromoteReferences.cpp` (new), `llvm/lib/Target/MSIL/MSILTargetMachine.cpp`, `llvm/lib/Target/MSIL/MSILFixFunctionBitcasts.cpp`, `llvm/lib/Target/MSIL/CMakeLists.txt` | RB10-RB12, P1's hooks |
+| R-a.g `R-a/emit` | `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp` (hot; one case), `llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp`, `llvm/lib/Target/MSIL/MSILManagedCalls.cpp` | RB1's `toTypeSig` cases, RO1-RO3, RM7, RM8's bodies, RM12 |
+| R-a.h `R-a/lld` | `lld/MSIL/ManagedCalls.h`, `lld/MSIL/ManagedCalls.cpp`, `lld/MSIL/LTO.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`. `SymbolTable.*` change only if RL4's probe needs them; the hand-over says which changed. | RL1-RL7 |
+| R-a.i `R-a/harness` | `msil/utils/upstream-hooks.txt`, `msil/test/CMakeLists.txt`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/ci/check-upstream-hooks.py`, `msil/utils/ci/upstream-hooks.ps1` and `msil/utils/run-m1-gate.ps1` (header comments only) | every hook block and `fork-only` line (L6), `min-pass`, the new clang tests' check-msil paths, RH5's type-class switch scan and every description of the manifest leg's checks in those files |
+| R-a.j `R-a/clang-tests` | `clang/test/Sema/msil-cli-type.c`, `clang/test/Sema/msil-ref-type.c`, `clang/test/Sema/msil-ref-ops.c`, `clang/test/Sema/msil-ref-storage.c`, `clang/test/Sema/msil-ref-functions.c`, `clang/test/Sema/msil-ref-jumps.c`, `clang/test/Sema/msil-ref-managed-calls.c`, `clang/test/SemaCXX/msil-ref-cxx.cpp`, `clang/test/Driver/msil-cli-header.c`, `clang/test/Driver/msil-ref-driver.c`, `clang/test/CodeGen/MSIL/` | RV1-RV17, RV19 |
+| R-a.k `R-a/llc-tests` | `llvm/test/CodeGen/MSIL/`, `llvm/unittests/CLI/ManagedSignatureTest.cpp`, `llvm/unittests/Target/MSIL/MSILTypeUtilitiesTest.cpp`, `llvm/unittests/Target/MSIL/MSILStackEffectTest.cpp` | RV18, RV20-RV26 |
+| R-a.l `R-a/lld-tests` | the whole `lld/test/MSIL/` (L7) | RV27 |
+| R-a.m `R-a/exec-tests` | `msil/test/M3/14-references/`, `msil/test/Portable/08-references/`, `msil/test/harness/verify-object-locals.test` | RV28 |
+| R-a.n `R-a/docs` | `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/test/README.md` | Status.md's rules, limits and silent states, GettingStarted's example and its type-class switch rule (RH5), the README, the re-pin hand-over |
+
+#### 5.21.16 Not in R-a; R-a2's part
+
+Not in R-a (R-b and later): references in external, exported or cross-file functions (`object` or exact classes in IL
+signatures; msil-ld checks between objects, never an adapter between `object` and a number); function pointers with
+references (never on host triples; later on portable ones through managed `calli`); callbacks from .NET into C (after
+P-3's delegates); perhaps globals as .NET static fields; references across handlers and setjmp (EH-1, EH-2); value types
+(`DateTime d`; `DateTime ^r`, a boxed value held as a reference, called value-type form B; IL values; references VT-1 to
+VT-9); generics; `ldstr` (a CIL object has no user strings: `MSILObjectWriter::recordRelocation`).
+
+R-a2 (outline; the user's "(a) Yes, R-a2" (2026-11-19 12:50): C++ locals and internal functions' parameters and results,
+templates by value, overloads, mangling; `String&`, lambda captures, class members refused for now):
+- **RN1** T-R5 lifts for C++ only.
+- **RN2** A dependent `T ^` becomes the reference type once `T` is known, never a block pointer (block deduction matches
+  only blocks: `DeduceTemplateArgumentsByTypeMatch`'s `BlockPointer` case). Open for R-a2's text: deducing `T` as RC3's
+  implicit struct, by explicit arguments only, or as the whole reference type; any narrowing of "templates by value"
+  goes back to the user.
+- **RN3** Conversion kinds for null constants, `nullptr`, the Object upcast (RS4's rule, from the user's pick
+  "(a) Only to Object") and contextual `bool` (`Overload.h`; `IsStandardConversion`'s boolean and `queue_t` rules in
+  SemaOverload.cpp; `Sema::ScalarTypeToBooleanCastKind`); `static_cast` and C-style casts as RS8; `reinterpret_cast`,
+  `const_cast` refused; `dynamic_cast` as `isinst` later.
+- **RN4** Refused for now, as approved: `String&`, lambda captures and class members; Claude's additions: `String&&`,
+  `String ^&`, `String ^&&` (WebAssembly's rule in `Sema::BuildReferenceType`; P15's T-RB4 backs them), class bases,
+  `new`, `throw`, `catch`, exception specifications naming the type, class templates storing `T`, virtual and
+  address-taken members.
+- **RN5** References only in functions already internal (static or an anonymous namespace); inline functions and
+  instantiations are never forced internal (their static locals would split per unit, silently). The back end and
+  msil-ld need nothing new.
+- **RN6** Mangling: an Itanium vendor type keeping `.`, `/` and arrays apart (plain nesting gives `Ns.Outer/Inner` and
+  `Ns.Outer.Inner` one name); Microsoft, an artificial struct in `__clang` (as `MicrosoftCXXNameMangler` mangles
+  `OverflowBehaviorType`).
+- **RN7** Tests in `clang/test/SemaCXX/`, CodeGen and `M3/14-references` (`-std=c++17 -fno-exceptions -fno-rtti`);
+  hosted C++ execution on host triples is a new capability R-a2 must prove (today's one C++ execution test is portable
+  and freestanding).
+- **RN8** About 2-4 more upstream files (`Overload.h`, `SemaExprCXX.cpp`, others its text finds) and the hooked
+  `Sema.cpp`; days to 2 weeks at four CPUs for C++, and about 1-2 weeks more for RN10 (Claude's estimates); as in R-a,
+  the CPU count changes only the machine's share, its builds and gate rounds (R-a2's gate is G0-G9 as R-a's plus C++
+  tests and MC-1's rewritten tests, section 12's row 'R-a2's gate'; a round of R-a's gate takes about 1-1.5 hours
+  besides its build, R-a's Rebuild cost). **RN9** P-2 keeps beyond a call only tickets (llvm-libc's `File` uses function
+  pointers, libc/src/__support/File/file.h).
+- **RN10 MC-1's transition**, in R-a2 by the user's picks "(a) Before P-2" (2026-11-20 12:04) for S1-S3 and
+  "(b) Retire before P-2" (2026-11-20 14:24) for the star handles: S1-S3 retire as RM13 and section 12's retirement row
+  say (94 declarations rewritten on references), and Status.md drops their silent cases (RM3); MC-1's star-spelled
+  handles (`void *` and the struct-pointer typedefs; 268 of the 273 compiling declarations that use a handle (as
+  `this`, a parameter or the result), 303 with the error tests, by the no-star check's counts; the typedef names on 551
+  lines in 35 files) become `intptr_t` or `uintptr_t` (RM10), except boxed parameters and results (14 declarations in 7
+  test files, as RM10 reads them), which keep the star until value-type form B, or until the step named by the answer
+  to references VT-9. R-a2's gate runs MC-1's rewritten tests.
+
 ## 6. Milestones
 
 ### M0. Infrastructure: tracked build scripts, plan checks, execution harness, jitall, CI skeleton
@@ -14810,6 +15521,217 @@ Host tests have native-oracle transcripts where the member has a C equivalent (e
 
 **MC-1's re-pin rows** (applied with MC-1's commit, from MC-1.i's hand-over; 5.20.13's list): the CLITests `'*'` floors of M28-M35 rise by MC-1's actual new cases (at least 6, on top of P-1r R13: 481, 488, 489, 496, 497, 503, 509, 509 with exactly 6); 5.13.6's P0 list names `MSIL::createManagedCallStubs` between M24's and M33's hooks; the hook contexts that M28-M34 cite in `MSILAsmPrinter.*`, `MSILPrepareIR.cpp`, `MCTargetDesc/MSILMCExpr.*`, `MCTargetDesc/MSILObjectWriter.*`, `MSILStackCheck.cpp`, `MSILLowerSjLj.cpp`, the target's and the CLI unit tests' `CMakeLists.txt`, `lld/MSIL/Writer.cpp`, `lld/MSIL/CMakeLists.txt`, `lld/MSIL/BCLBinder.*`, `lld/MSIL/LTO.cpp` and (only if MC-1.d's hand-over says they changed) `lld/MSIL/SymbolTable.*`/`InputFiles.*` are re-verified against MC-1's hooks; B7's later blocks follow MC-1's block, and their `--print-bcl-table` lines and counts are re-pinned; 5.15.10 and M32.a: `CLI_BCL_TYPE(String, "System", "String", true)` exists from MC-1's block, so M32.a appends only `String_Concat`, on MC-1's `String` type; `msil/test/M2/05-refs/mscorlib-safe.test`'s count continues from MC-1's 43 (P-1r R21); the quiet-minute estimates of M28-M35's G3b and G4 each rise by about 1-1.5 minutes for `13-managed-calls`, measured in MC-1's round 1.
 
+### R-a. Real .NET references in C, first slice
+
+**Goal.** Contract 5.21 (recon copy `recon/p3/references.md`). C holds .NET objects as real references `T ^` in locals
+and static functions' parameters and results, with no GCHandle; managed calls pass them through with one `castclass`;
+casts between classes are checked at run time. Not in R-a: 5.21.16.
+
+**Depends on:** MC-1; the tools commit (`plan-check.py` milestone ids `R-<letter>[<digits>]`, with a self-test case of a milestone in R-a's form, its `.0` build step included; `upstream-hooks.ps1 -Jobs <n>`, passed to its lit leg's `msil-lit.ps1` and to its compile leg's ninja; `calibration.json` re-baselined, with its row); R-a's plan commit (this text). R-a's commit body carries MC-1's post-commit line `phase gate: 45 row(s), 0 not PASS, 343 min` (5.17.11). Every WP reads 5.21, this text and the section 12 rows for R-a, among them the 5.13.5 exemption, the 5.13.6 slot P15 and MC-1's contract amendments.
+
+**Header changes** (all in R-a.a and built once, by R-a.0 after the implement packages; a later package that needs another header edit stops and reports, section 1.2, and gets it only through a section 12 grant; R-a.0's hand-over and the gate report record each rebuild's minutes):
+- clang's type-system headers `TypeNodes.td`, `TypeBase.h`, `TypeLoc.h`, `TypeProperties.td`, `RecursiveASTVisitor.h`, `ASTNodeTraverser.h`, `ASTContext.h` and `TypeBitCodes.def`, with `TreeTransform.h` and `CGDebugInfo.h`: most of clang
+- `Attr.td`, `AttrDocs.td`, `DiagnosticSemaKinds.td`, `DiagnosticCommonKinds.td`: inside that set (a new clang diagnostic alone is M26.g's measured class, 1,081 objects)
+- the fork headers `SemaMSILReference.h`, `CGMSILReferences.h`, `CGMSILManagedCalls.h` and `cli/cli.h`: their includers only
+- `ManagedSignature.h`, `ManagedCallIR.h` (header-only): their includers in clang, the MSIL target and lld
+- LLVM core's `Type.cpp` and `ValueTypes.cpp`: one object each, then relinks
+- the MSIL target's `MSILMCTypeUtilities.h`, `MSILMCTargetDesc.h`, `MSILISelLowering.h`, `MSILManagedCalls.h`, `MSILReferences.h`, `MSIL.h` and `.td` files: most of the target
+
+Roles (5.21.15): R-a.a `R-a/lists` (root), R-a.b `R-a/clang-ast`, R-a.c `R-a/clang-sema`, R-a.d `R-a/clang-codegen`, R-a.e `R-a/isel`, R-a.f `R-a/ir`, R-a.g `R-a/emit`, R-a.h `R-a/lld`, R-a.i `R-a/harness`, R-a.j `R-a/clang-tests`, R-a.k `R-a/llc-tests` (with the unit tests), R-a.l `R-a/lld-tests` (all of `lld/test/MSIL/`, L7), R-a.m `R-a/exec-tests`, R-a.n `R-a/docs`; R-a.0 is the build agent's step. Hot files: `MSILPrepareIR.cpp` to `R-a/ir`, `MSILAsmPrinter.cpp` to `R-a/emit`; `BCLMembers.def` untouched.
+
+Shared texts: 5.21.12, written verbatim from there and pinned whole by R-a's tests.
+
+**Work packages** (sizes are estimates; in all about 10,000-18,000 lines, mostly tests; 2.5 to 5 weeks at four CPUs, Claude's estimate, of which the CPU count changes only the machine's share: mainly R-a.0's one rebuild, about 45-90 minutes, and about 1-1.5 hours a gate round besides its build (both from Rebuild cost), about 20-30 hours for 20 rounds, as many as section 12's row 'MC-1's gate time as measured' counts for MC-1)
+
+#### R-a.a Declarations: the type, the attribute, the texts, the IR type and the target's records (implement, ~700-1,000 lines)
+
+- Owned files: `clang/include/clang/Basic/TypeNodes.td`, `clang/include/clang/AST/TypeBase.h`, `clang/include/clang/AST/TypeLoc.h`, `clang/include/clang/AST/TypeProperties.td`, `clang/include/clang/AST/RecursiveASTVisitor.h`, `clang/include/clang/AST/ASTNodeTraverser.h`, `clang/include/clang/AST/ASTContext.h`, `clang/include/clang/Serialization/TypeBitCodes.def`, `clang/include/clang/Basic/Attr.td`, `clang/include/clang/Basic/AttrDocs.td`, `clang/include/clang/Basic/DiagnosticSemaKinds.td`, `clang/include/clang/Basic/DiagnosticCommonKinds.td`, `clang/lib/Sema/TreeTransform.h`, `clang/lib/Sema/SemaMSILReference.h`, `clang/lib/CodeGen/CGDebugInfo.h`, `clang/lib/CodeGen/CGMSILReferences.h`, `clang/lib/CodeGen/CGMSILManagedCalls.h`, `clang/lib/Headers/cli/cli.h`, `clang/lib/Headers/CMakeLists.txt`, `llvm/include/llvm/CLI/ManagedSignature.h`, `llvm/include/llvm/CLI/ManagedCallIR.h`, `llvm/lib/IR/Type.cpp`, `llvm/lib/CodeGen/ValueTypes.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTypeUtilities.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTargetDesc.h`, `llvm/lib/Target/MSIL/MSILRegisterInfo.td`, `llvm/lib/Target/MSIL/MSILInstrInfo.td`, `llvm/lib/Target/MSIL/MSILInstrRef.td`, `llvm/lib/Target/MSIL/MSILISelLowering.h`, `llvm/lib/Target/MSIL/MSILManagedCalls.h`, `llvm/lib/Target/MSIL/MSILReferences.h`, `llvm/lib/Target/MSIL/MSIL.h`
+- Reads: this plan sections 5.13.1-5.13.6, 5.14.2, 5.15.1, 5.20.2-5.20.4 and 5.21.1-5.21.13, this milestone's texts and the section 12 rows for R-a; llvm/docs/MSIL/recon/p3/references.md (the caret, K2 and path checks with their verifiers' corrections); clang/include/clang/Basic/TypeNodes.td (BlockPointerType, HLSLInlineSpirvType); clang/include/clang/AST/TypeBase.h (BlockPointerType, Type::isSizelessType); clang/include/clang/AST/ASTContext.h (getBlockPointerType); clang/include/clang/Basic/Attr.td (TargetMSIL, MSILMethod); clang/include/clang/Basic/DiagnosticSemaKinds.td (MC-1's block, err_msil_method_forwarder_clash); clang/lib/Headers/CMakeLists.txt (openmp_wrapper_files, llvm_libc_wrapper_files, the copy loop over copy_header_to_output_dir and their install rules); llvm/include/llvm/CLI/ManagedSignature.h (parseManagedTypeName, ManagedConv, checkManagedCallShape, checkManagedMemberName, getManagedCallUniqPostfix); llvm/include/llvm/CLI/ManagedCallIR.h (isManagedHandleType, fitsManagedConversion); llvm/lib/IR/Type.cpp (getTargetTypeInfo); llvm/lib/CodeGen/ValueTypes.cpp (MVT::getVT, EVT::getTypeForEVT); llvm/lib/Target/MSIL/MSILInstrInfo.td (the ARGUMENT and LOCAL multiclasses); llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTargetDesc.h (isArgument, isCopy, isTee, isScalarConst); llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTypeUtilities.h (MSIL::ValType)
+- Provides: clang: the type class `CLIReference` (`TypeNodes.td`; `CLIReferenceType` in `TypeBase.h` with its key as an `IdentifierInfo *`, the class's implicit struct, `isSugared()` and `desugar()`; `Type::isCLIReferenceType()`; `CLIReferenceTypeLoc`; `TYPE_CLI_REFERENCE` appended to `TypeBitCodes.def`; its `TypeProperties.td` record; the `RecursiveASTVisitor` and `ASTNodeTraverser` entries; `TreeTransform::TransformCLIReferenceType`; `ASTContext::getCLIReferenceType` declared; `CGDebugInfo::CreateType` for the class), the attribute `CLIType` (`Clang<"cli_type">`, RT1) with its `AttrDocs.td` entry, T-R1-T-R23 as `err_msil_ref_*`/`note_msil_ref_*` after MC-1's block and T-R24 in `DiagnosticCommonKinds.td`, the entry points of `SemaMSILReference.h` and `CGMSILReferences.h` that R-a.c and R-a.d define, the declaration in `CGMSILManagedCalls.h` of the helper that makes RM8's cast declaration, and `<cli/cli.h>` (only `CLI_TYPE(N)`; `#error` off MSIL triples) with its `CMakeLists.txt` entries (RT1: its own list, the copy loop and its install rule, in the `clang-resource-headers` component that R-a.0's step 4 installs); llvm: `cli::parseCLITypeName(StringRef) -> Expected<CLITypeName>` (folded type, key, display name), `cli::ReferenceTypeName`, `cli::ReferenceEqName`, `ManagedConv::Ref` and `ManagedConv::ThisRef` (appended), `cli::isManagedCastShape`, `isManagedReferenceType` and RM6's `fitsManagedConversion` cases; `target("msil.ref")` in `getTargetTypeInfo` (`ptr` layout, HasZeroInit, CanBeLocal) and `MVT::getVT`'s mapping to `MVT::externref`; `MSIL::ValType::Object`; the `OBJ` register class; `MSILInstrRef.td` (`ARGUMENT` and `LOCAL` for OBJ, `CONST_NULL`, `CEQ_OBJ`, `BEQ_OBJ`, `BNE_UN_OBJ`, `BR_IF_OBJ`, `BR_UNLESS_OBJ`, `SELECT_OBJ`, the nodes `REF_EQ` and `REF_IS_NULL` with their `MSILISD` values and patterns); the OBJ cases of `isArgument`, `isCopy` and `isTee`; the `MSIL::ManagedCall` fields for `this-ref` and casts; `MSILReferences.h`'s P1 checks; `createMSILPromoteReferencesLegacyPass()` and `initializeMSILPromoteReferencesLegacyPassPass` in `MSIL.h`
+
+Declarations, records and rows only: the `.cpp` logic is the other packages'. The two LLVM core files are here although they are `.cpp` files, because every llc check and R-a.e-R-a.g need the type's properties. Checks: the build's `clang-tblgen` (HEAD's) on `TypeNodes.td`, `TypeProperties.td`, `Attr.td` and the two diagnostic files into its scratch folder; `msil-tblgen.ps1` on `MSIL.td`; `msil-syntax.ps1` on one includer of each header, with `-ExtraInclude` of that scratch output. `cli/cli.h` has no includer in the build, and `msil-syntax.ps1` would compile it with the host's flags, where its `#error` fires; instead the build's `clang` (HEAD's) runs `-fsyntax-only -isystem D:/llvm-msil/clang/lib/Headers` on a scratch includer that stops with an `#error` of its own if `CLI_TYPE` is not defined: for `msil64-unknown-dotnet` it compiles, for `x86_64-pc-windows-msvc` it stops at the header's `#error`. The header's `#error` tests `__MSIL__`, which clang predefines on every MSIL triple (clang/lib/Basic/Targets/MSIL.h), so HEAD's clang can check it. R-a.0 builds and measures the rest; its step 4 checks RT1's install rule.
+
+#### R-a.b clang plumbing: the getter and every switch over type classes (implement, ~600-1,000 lines)
+
+- Owned files: `clang/lib/AST/ASTContext.cpp`, `clang/lib/AST/ASTImporter.cpp`, `clang/lib/AST/ASTStructuralEquivalence.cpp`, `clang/lib/AST/ExprConstant.cpp`, `clang/lib/AST/Type.cpp`, `clang/lib/AST/TypeLoc.cpp`, `clang/lib/AST/TypePrinter.cpp`, `clang/lib/AST/ItaniumMangle.cpp`, `clang/lib/AST/MicrosoftMangle.cpp`, `clang/lib/Serialization/ASTReader.cpp`, `clang/lib/Serialization/ASTWriter.cpp`, `clang/lib/Sema/SemaLookup.cpp`, `clang/lib/Sema/SemaTemplate.cpp`, `clang/lib/Sema/SemaTemplateDeduction.cpp`, `clang/lib/CodeGen/ItaniumCXXABI.cpp`, `clang/lib/CodeGen/QualTypeMapper.cpp`, `clang/lib/CIR/CodeGen/CIRGenFunction.cpp`, `clang/lib/CIR/CodeGen/CIRGenItaniumCXXABI.cpp`, `clang/tools/libclang/CIndex.cpp`
+- Depends on: R-a.a
+- Reads: this plan sections 5.13.5, 5.21.3, 5.21.5 (RG10) and 5.21.13, this milestone's texts, R-a.a's Provides line and the section 12 rows for R-a; llvm/docs/MSIL/recon/p3/references.md (the K2 check's list of switches over type classes, with its verifier's corrections); clang/lib/AST/ASTContext.cpp (getBlockPointerType, getTypeInfoImpl, mergeTypes); clang/lib/AST/Type.cpp (computeCachedProperties, LinkageComputer::computeTypeLinkageInfo); clang/lib/AST/ItaniumMangle.cpp (CXXNameMangler::mangleType); clang/lib/AST/MicrosoftMangle.cpp (MicrosoftCXXNameMangler::mangleType); clang/lib/Serialization/ASTReader.cpp (TypeLocReader); clang/lib/Serialization/ASTWriter.cpp (TypeLocWriter); clang/lib/CIR/CodeGen/CIRGenFunction.cpp (CIRGenFunction::getEvaluationKind, CIRGenFunction::emitVariablyModifiedType); clang/lib/CIR/CodeGen/CIRGenTypes.cpp (CIRGenTypes::convertType); clang/tools/libclang/CursorVisitor.h (the Visit...TypeLoc declarations from TypeLocNodes.def); clang/tools/libclang/CIndex.cpp (CursorVisitor::VisitBlockPointerTypeLoc, DEFAULT_TYPELOC_IMPL)
+- Provides: `ASTContext::getCLIReferenceType` (RC3: one canonical node per key, profiled by the key; one implicit, never-completed struct per key, outside name lookup and never serialized as a declaration; sugared nodes keep the struct as written and desugar to the canonical node); RC8's case in every exhaustive switch over type classes and every type visitor of its files (type info, merging of equal canonical types only, common sugar, encodings unreachable, linkage, `__builtin_classify_type`, variably-modified walks, import, structural equivalence, the TypeLoc reader and writer, printing as RC4's display name with aka text); RG10's `cannot mangle this .NET reference type yet` in both manglers; the cases SemaLookup, SemaTemplate and SemaTemplateDeduction need to compile (R-a2 adds the C++ rules); ItaniumCXXABI's and QualTypeMapper's cases; RH4's four ClangIR cases and libclang's `CursorVisitor::VisitCLIReferenceTypeLoc` in `CIndex.cpp` (visiting the class's TypeLoc, as `VisitBlockPointerTypeLoc` visits its pointee's)
+
+Upstream files take one-line or case-label hooks only. Checks: `msil-syntax.ps1 -ExtraFlags /clang:-Werror=switch` on each of its files with R-a.a's TableGen output, which also shows a `-Wswitch` warning a file already has at HEAD: such a file is named in the hand-over, so that a section 12 row can take it off gate step 30, and is not changed beyond its hook. `CIndex.cpp` has a compile command (libclang is configured, though no build target builds it), so the same check covers it; a missing definition there shows only when libclang links, in the `--full` upstream leg, which is why gate step 25 checks that it is there.
+
+#### R-a.c clang Sema (implement, ~900-1,600 lines)
+
+- Owned files: `clang/lib/Sema/SemaType.cpp`, `clang/lib/Sema/SemaExpr.cpp`, `clang/lib/Sema/SemaCast.cpp`, `clang/lib/Sema/SemaInit.cpp`, `clang/lib/Sema/JumpDiagnostics.cpp`, `clang/lib/Sema/SemaOverload.cpp`, `clang/lib/Sema/SemaDecl.cpp`, `clang/lib/Sema/SemaDeclAttr.cpp`, `clang/lib/Sema/CMakeLists.txt`, `clang/lib/Sema/SemaMSILReference.cpp`, `clang/lib/Sema/SemaMSILManagedCall.cpp`
+- Depends on: R-a.a, R-a.b
+- Reads: this plan sections 5.20.3, 5.21.1-5.21.4, 5.21.9 and 5.21.12, this milestone's texts, R-a.a's and R-a.b's Provides lines and the section 12 rows for R-a; llvm/docs/MSIL/recon/p3/references.md (the caret and K2 checks and the path plan's Sema rules, with their verifiers' corrections); clang/lib/Sema/SemaType.cpp (GetFullTypeForDeclarator, Sema::BuildPointerType, DeclaratorLocFiller); clang/lib/Sema/SemaExpr.cpp (Sema::CheckSingleAssignmentConstraints, Sema::CheckAssignmentConstraints, Sema::CheckCompareOperands, Sema::CheckBooleanCondition, Sema::CheckConditionalOperands, Sema::isValidVarArgType, captureVariablyModifiedType); clang/lib/Sema/SemaInit.cpp (TryDefaultInitialization); clang/lib/Sema/JumpDiagnostics.cpp (GetDiagForGotoScopeDecl); clang/lib/Sema/SemaDecl.cpp (Sema::CheckVariableDeclarationType, Sema::CheckParameter, Sema::ActOnFinishFunctionBody, mergeDeclAttribute); clang/lib/Sema/SemaMSILManagedCall.cpp (classifyManagedParam, isHandleType)
+- Provides: RT4-RT7 (`mergeDeclAttribute`'s `cli_type` case, T-R3 at `Sema::ActOnTagFinishDefinition`); RC2 (the caret over a `cli_type` struct in `GetFullTypeForDeclarator`); RC5 (`DeclaratorLocFiller::VisitCLIReferenceTypeLoc` and the 18 chunk sites); RC6; RS1-RS28 and RS30 with their texts, RS19's `VarArgKind::Invalid` among them, and the case `captureVariablyModifiedType` needs; RM2's `ref` and `this-ref` selection, RM4's T-M3 and T-M4 wording, RM5 and T-M22's `<castclass>` labels in `SemaMSILManagedCall.cpp`; the logic in `SemaMSILReference.cpp`, called through one-line hooks
+
+Checks: `msil-syntax.ps1` on its files with R-a.a's TableGen output, with `-ExtraFlags /clang:-Werror=switch` on `SemaExpr.cpp`.
+
+#### R-a.d clang CodeGen (implement, ~250-500 lines)
+
+- Owned files: `clang/lib/CodeGen/CodeGenTypes.cpp`, `clang/lib/CodeGen/CodeGenFunction.cpp`, `clang/lib/CodeGen/CGExprScalar.cpp`, `clang/lib/CodeGen/CGDecl.cpp`, `clang/lib/CodeGen/CGDebugInfo.cpp`, `clang/lib/CodeGen/CGStmt.cpp`, `clang/lib/CodeGen/CMakeLists.txt`, `clang/lib/CodeGen/CGMSILReferences.cpp`, `clang/lib/CodeGen/CGMSILManagedCalls.cpp`
+- Depends on: R-a.a, R-a.b, R-a.c
+- Reads: this plan sections 5.20.4, 5.21.4-5.21.6 and 5.21.9 (RM8), this milestone's texts, the Provides lines of R-a.a, R-a.b and R-a.c and the section 12 rows for R-a; clang/lib/CodeGen/CodeGenTypes.cpp (CodeGenTypes::ConvertType); clang/lib/CodeGen/CodeGenFunction.cpp (CodeGenFunction::getEvaluationKind, CodeGenFunction::GenerateCode, CodeGenFunction::EmitVariablyModifiedType); clang/lib/CodeGen/CGExprScalar.cpp (ScalarExprEmitter::VisitCastExpr); clang/lib/CodeGen/CGDecl.cpp (CodeGenFunction::EmitAutoVarInit, CodeGenFunction::getAutoVarInitKind, CodeGenFunction::EmitAutoVarAlloca); clang/lib/CodeGen/CGDebugInfo.cpp (CGDebugInfo::CreateTypeNode); clang/lib/CodeGen/CGStmt.cpp (emitMSILAsmStmt); clang/lib/CodeGen/CGMSILManagedCalls.cpp (getMSILManagedCallTypeText, declareMSILManagedCallWithForwarders, emitMSILManagedCallsMetadata)
+- Provides: RG1-RG12 (`target("msil.ref")` in `CodeGenTypes::ConvertType`, `TEK_Scalar`, NULL as `zeroinitializer`, RS2's store, `Uninitialized` from `getAutoVarInitKind`, `==` through `__msil_ref.eq`, casts through RM8's declarations, debug info, never variably modified, RG12's trap at every level); RS29's T-R24 in `emitMSILAsmStmt`; RM8's cast declarations (`__msil_mc.<castclass>.__uniq.<n>` with MR1's attributes and an MR4 entry) through the helper that `CGMSILManagedCalls.h` declares; the logic in `CGMSILReferences.cpp`
+
+Checks: `msil-syntax.ps1` on its files with R-a.a's TableGen output, with `-ExtraFlags /clang:-Werror=switch` on `CodeGenTypes.cpp`, `CodeGenFunction.cpp` and `CGDebugInfo.cpp`.
+
+#### R-a.e Instruction selection and the machine passes (implement, ~500-900 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILISelLowering.cpp`, `llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp`, `llvm/lib/Target/MSIL/MSILInstrInfo.cpp`, `llvm/lib/Target/MSIL/MSILUtilities.cpp`, `llvm/lib/Target/MSIL/MSILMCInstLower.cpp`, `llvm/lib/Target/MSIL/MSILExplicitLocals.cpp`, `llvm/lib/Target/MSIL/MSILRegStackify.cpp`, `llvm/lib/Target/MSIL/MSILMachineFunctionInfo.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTypeUtilities.cpp`
+- Depends on: R-a.a
+- Reads: this plan sections 5.4, 5.21.6 and 5.21.7 (RB1-RB9), this milestone's texts, R-a.a's Provides line and the section 12 rows for R-a; llvm/lib/Target/MSIL/MSILISelLowering.cpp (MSILTargetLowering::MSILTargetLowering, MSILTargetLowering::EmitInstrWithCustomInserter); llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp (MSILTargetLowering::LowerCall); llvm/lib/Target/MSIL/MSILExplicitLocals.cpp (explicitLocals, typeForRegClass); llvm/lib/Target/MSIL/MSILRegStackify.cpp (convertImplicitDefToConstZero, isSafeToMove); llvm/lib/Target/MSIL/MSILMCInstLower.cpp (MSILMCInstLower::lowerImpl); llvm/lib/Target/MSIL/MSILInstrInfo.cpp (getInvertedBranch); llvm/lib/Target/MSIL/MSILUtilities.cpp (MSIL::getCopyOpcodeForRegClass); llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTypeUtilities.cpp (MSIL::toValType)
+- Provides: RB1's `toValType(externref)`; RB2 (the OBJ class registered for `externref`, `SELECT_OBJ`'s custom-inserter case, LOAD and STORE Custom with T-RB6); RB3's cases in `getCopyOpcodeForRegClass`, `getInvertedBranch` and `lowerImpl`; RB4's lowering to `REF_EQ` and `REF_IS_NULL`; RB5 (`LowerCall`'s `__msil_ref.eq`); RB6 (`parseMVT`'s `externref`); RB7 (ExplicitLocals' and RegStackify's OBJ tables; an OBJ `IMPLICIT_DEF` as `CONST_NULL`)
+
+R-a.e, R-a.f and R-a.g cannot compile reference IR without each other, so each checks with `msil-syntax.ps1` against `msil-tblgen.ps1` output in its scratch folder; R-a.0's build and sample run, then R-a.k's first llc runs, are their joint check.
+
+#### R-a.f IR passes: P15 and the P1 and P5 backstops (implement, ~700-1,200 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILPrepareIR.cpp`, `llvm/lib/Target/MSIL/MSILReferences.cpp`, `llvm/lib/Target/MSIL/MSILPromoteReferences.cpp`, `llvm/lib/Target/MSIL/MSILTargetMachine.cpp`, `llvm/lib/Target/MSIL/MSILFixFunctionBitcasts.cpp`, `llvm/lib/Target/MSIL/CMakeLists.txt`
+- Depends on: R-a.a
+- Reads: this plan sections 5.13.2, 5.13.3, 5.13.6, 5.21.6 and 5.21.7 (RB10-RB12), this milestone's texts, R-a.a's Provides line and the section 12 rows for R-a; llvm/docs/MSIL/recon/p3/references.md (the path plan's P15 and backstops, with its verifier's corrections); llvm/lib/Target/MSIL/MSILPrepareIR.cpp (isScalableOrTargetExtType, diagnoseDefinition, MSILPrepareIRLegacy::runOnModule, lowerEmptyInlineAsm); llvm/lib/Target/MSIL/MSILTargetMachine.cpp (MSILPassConfig::addISelPrepare, MSILPassConfig::addIRPasses); llvm/lib/Target/MSIL/MSILFixFunctionBitcasts.cpp (createWrapper, createTrapWrapper, convertValue); llvm/lib/Target/MSIL/MSILManagedCalls.cpp (refuseNonCallUses); llvm/lib/Transforms/Utils/PromoteMemoryToRegister.cpp (PromoteMemToReg, isAllocaPromotable)
+- Provides: P15 `MSILPromoteReferences` (`msil-promote-references`, `MSIL Promote References`), added in `MSILPassConfig::addISelPrepare` after AtomicExpand and before `TargetPassConfig::addISelPrepare()` (RB10, T-RB4, T-RB8) and registered with the target; RB11's twelve P1 rules in `MSILReferences.cpp`, called through hooks in `MSILPrepareIR.cpp` (T-RB1-T-RB3, T-RB7, T-RB9-T-RB12); RB12's T-RB5 in both modes and in the "msil-lto" table; the target's `CMakeLists.txt` lines for the two new files
+
+In the hot file only hooks (L2). Checks: `msil-syntax.ps1` on its files against `msil-tblgen.ps1` output.
+
+#### R-a.g Emission and stubs (implement, ~200-400 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp`, `llvm/lib/Target/MSIL/MSILManagedCalls.cpp`
+- Depends on: R-a.a
+- Reads: this plan sections 5.20.5, 5.20.6, 5.21.8 and 5.21.9 (RM7, RM8, RM12, RM13), this milestone's texts, R-a.a's Provides line and the section 12 rows for R-a; llvm/lib/Target/MSIL/MSILManagedCalls.cpp (MSIL::parseManagedCall, StubWriter::emitAccess, StubWriter::emitArgument, StubWriter::emitZero); llvm/lib/Target/MSIL/MSILAsmPrinter.cpp (MSIL::toTypeSig); llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp (toTypeSig)
+- Provides: RB1's `toTypeSig(Object)` in the AsmPrinter (one case in the hot file) and in the object writer; RO1-RO3; RM7 (`ref` and `this-ref` arguments, `callvirt` for `this-ref`, `object` result locals and `ldnull` under `msil_catch`); RM8's cast-stub bodies (`ldarg.0; castclass <TYPE>; ret`) and `parseManagedCall`'s cast shape; RM12's `ldnull` zero
+
+Checks: `msil-syntax.ps1` on its files against `msil-tblgen.ps1` output.
+
+#### R-a.h msil-ld (implement, ~100-250 lines)
+
+- Owned files: `lld/MSIL/ManagedCalls.h`, `lld/MSIL/ManagedCalls.cpp`, `lld/MSIL/LTO.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`
+- Depends on: R-a.a, R-a.e, R-a.f, R-a.g
+- Reads: this plan sections 5.9.13, 5.20.7 and 5.21.10, this milestone's texts, the Provides lines of R-a.a and R-a.e-R-a.g and the section 12 rows for R-a; lld/MSIL/ManagedCalls.cpp (isValidManagedCall, checkDeclaration, scanStubSites, checkStub, lld::msil::checkReservedManagedCallNames); lld/MSIL/LTO.cpp (annotateImports); lld/MSIL/Synthetic.cpp (OutputModule::mapStandAloneSig); lld/MSIL/SymbolTable.cpp (signatureNamesType); lld/MSIL/Driver.cpp (readConfigs)
+- Provides: RL1-RL7: `isValidManagedCall` and MK3 for `ref`, `this-ref` and casts; `annotateImports` skipping `__msil_ref.eq`; T-RL1 in `checkReservedManagedCallNames`; the hand-over says whether RL4's probe changed `SymbolTable.*`
+
+RL4's probe comes first. Checks: `msil-syntax.ps1` on its files.
+
+#### R-a.0 Build after the implement packages (build agent) (infra, no source changes)
+
+- Owned files: (none; build agent, writes only the build tree and scratch folders)
+- Depends on: R-a.a, R-a.b, R-a.c, R-a.d, R-a.e, R-a.f, R-a.g, R-a.h
+- Reads: this plan sections 4, 5.13.5, 5.14.3 (A10), 5.21.2 (RT1) and 11 ('Baselines before the build'), this milestone's Header changes, Rebuild cost and gate steps 1, 8 and 21, and 5.21.13's table; msil/utils/build/msil-build.ps1; msil/utils/ci/build-targets.txt; msil/utils/il-snapshot.py; msil/utils/build/build-builtins.py; msil/utils/ci/check-upstream-hooks.py (--list-lit); msil/utils/build/msil-lit.ps1
+- Provides: the IL baseline in `D:/llvm-msil-scratch/milestones/R-a/gate/il-baseline`, written with HEAD's build before R-a's build (gate steps 1 and 21 read it); the new upstream lit inputs that pass with HEAD's build, one per line in `D:/llvm-msil-scratch/milestones/R-a/gate/new-lit-inputs-pass.txt`, whose path and count the summary names, for R-a.i's `min-pass` (a repeated R-a.0 keeps the baseline and the list); the shared build with every implement package's change and the helper archive rebuilt with it, for the test packages' checks by hand; R-a's rebuild class (objects and minutes at four jobs) in the hand-over, for 5.13.5 and the Rebuild cost paragraph; the result of step 4's check of RT1's install rule, in the hand-over
+
+Executed by the build agent, not an implementer; it edits no tracked file. First, as the gate agent does, it checks for a running post-commit run (a `run-m1-gate.ps1` process) and waits for it to end, checking every 5 minutes for at most 6 hours, then reports an environment problem: a build would replace the binaries under that run's legs, and step 0 would share the four CPUs with it. Step 0, before the build, with HEAD's build (the shared build as R-a's launch found it: R-a's implement packages never run ninja), as section 11's 'Baselines before the build' asks: (a) the IL baseline that gate steps 1 and 21 read, `pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $b = "D:/llvm-msil-scratch/milestones/R-a/gate/il-baseline"; if (Test-Path -LiteralPath "$b/il-snapshot.json") { $h = (Get-Content -Raw -LiteralPath "$b/il-snapshot.json" | ConvertFrom-Json).head; if ($h -ne (git rev-parse HEAD)) { "baseline of another commit, not replaced: $b ($h)"; exit 1 }; "baseline present: $b" } else { python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 4 --skip-changed --out $b msil/test/M1 msil/test/M2 llvm/test/CodeGen/MSIL; exit $LASTEXITCODE }'`, whose failure stops R-a.0 before the build; (b) the upstream lit tests of 5.21.13's table that are not lit inputs at HEAD (`check-upstream-hooks.py --list-lit` prints those that are), run with the same build through `msil-lit.ps1 -Jobs 4`: when the run ends, those that pass go one per line into `D:/llvm-msil-scratch/milestones/R-a/gate/new-lit-inputs-pass.txt` (written even when none passes), and the summary names that file and the count, for R-a.i's `min-pass`. A repeated R-a.0 (a resume, or a relaunch after its build has started, when the shared build may already hold R-a's changes) keeps what step 0 wrote: (a) takes no new baseline while `il-snapshot.json` is there, and stops, never replacing it, when its `head` is not the current HEAD; (b) runs no tests while the list file is there. Step 1: `pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard -Jobs 4`, timed, with the number of compiled objects from the build log. Step 2, after a good build: gate step 8's `python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 4` (5.14.3 A10: the build agent runs it after `msil-build.ps1 -Standard`), so the test packages' programs link with a helper archive built by R-a's compiler. Step 3: `llvm-as`, `opt -passes=verify` and `llc -mtriple=x86_64-pc-windows-msvc-msil` on a sample it writes in its scratch folder from RI1, RI4 and RI6 (a static function with a reference parameter, an alloca, a load and a store of the type, and a call of `__msil_ref.eq`): the first joint run of R-a.a and R-a.e-R-a.g. A compile error or a failed sample is reported with its file for the implementation triage; this step fixes nothing. Step 4: RT1's install rule, which no build or CI job of the fork runs: into an empty folder `<dir>` in its scratch folder, `cmake --install D:/llvm-msil/build --component clang-resource-headers --prefix <dir>`, with the CMake that configured the build (`CMAKE_COMMAND` in `D:/llvm-msil/build/CMakeCache.txt`) and never without `--prefix` (the build's own prefix is a system folder); it passes when `<dir>/lib/clang/<major>/include/cli/cli.h` exists and `<dir>/lib/clang/<major>/include/cli.h` does not. A failure is reported for the implementation triage, as step 3's are, and step 4 runs again after any later change to `clang/lib/Headers/CMakeLists.txt`.
+
+#### R-a.i Harness: hook blocks, fork-only lines, check-msil paths and the type-class switch scan (infra, ~250-450 lines)
+
+- Owned files: `msil/utils/upstream-hooks.txt`, `msil/test/CMakeLists.txt`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/ci/check-upstream-hooks.py`, `msil/utils/ci/upstream-hooks.ps1`, `msil/utils/run-m1-gate.ps1`
+- Depends on: R-a.0, R-a.j, R-a.k, R-a.l, R-a.m
+- Reads: this plan sections 5.6.1, 5.13.5, 5.17.2, 5.17.6, 5.21.13 (its per-file table) and 5.21.14, this milestone's texts and the section 12 rows for R-a; R-a.0's list of the new upstream lit inputs that pass with HEAD's build (`D:/llvm-msil-scratch/milestones/R-a/gate/new-lit-inputs-pass.txt`, which its summary names); msil/utils/upstream-hooks.txt (its header's allow entry, MC-1's blocks, the min-pass comment); msil/utils/ci/check-upstream-hooks.py (strip_code, _switch_bodies, switch_problems, self_test: the XCOFF scan); msil/test/CMakeLists.txt; msil/utils/ci/lit-legs.ps1 ($checkMsil); msil/utils/ci/lit-legs.sh (check_msil); msil/utils/ci/upstream-hooks.ps1 (its header's manifest leg); msil/utils/run-m1-gate.ps1 (its header's upstream-hooks step)
+- Provides: a `hook` block for each upstream file R-a changes (5.21.13's table: its lit lines, and fork lines naming R-a's tests); `fork-only` lines for `clang/lib/Sema/SemaMSILReference.h`, `clang/lib/Sema/SemaMSILReference.cpp`, `clang/lib/CodeGen/CGMSILReferences.h`, `clang/lib/CodeGen/CGMSILReferences.cpp`, `clang/lib/Headers/cli/cli.h`, the seven `clang/test/Sema/msil-*.c` files, `clang/test/SemaCXX/msil-ref-cxx.cpp`, `clang/test/Driver/msil-cli-header.c` and `clang/test/Driver/msil-ref-driver.c`; those ten clang tests in check-msil (`$checkMsil`, `check_msil`, `msil/test/CMakeLists.txt`); the manifest comment that names lldb's `TypeSystemClang.cpp` as not built and not changed; `min-pass` raised by the new inputs that pass with the build before R-a's changes (R-a.0's list), with the sum in the manifest comment, as MC-1's; a table test that is not a lit input at HEAD and is missing from R-a.0's list (it did not pass with HEAD's build) is dropped from its lit line with a manifest comment that says why, or gets an `allow` line only for an environment failure (a tool or runtime the build cannot provide), as the manifest's header says; RH5's type-class switch scan in `check-upstream-hooks.py --check`, with a `--self-test` case of each form (a switch on the getter's call, a switch on a local variable initialized from it); the scan's rule beside the XCOFF rule in `upstream-hooks.txt`'s header and in `check-upstream-hooks.py`'s docstring, and named where the manifest leg's checks are listed in the headers of `upstream-hooks.ps1` and `run-m1-gate.ps1` (comments only; neither script's code changes)
+
+`clang/test/CodeGen/MSIL/`, `llvm/test/CodeGen/MSIL/`, `lld/test/MSIL/` and `msil/test` are already taken whole. Checks: `check-upstream-hooks.py --check` and `--self-test`; `lit-legs.ps1 -Describe`.
+
+#### R-a.j clang tests (test, ~2,500-4,500 lines)
+
+- Owned files: `clang/test/Sema/msil-cli-type.c`, `clang/test/Sema/msil-ref-type.c`, `clang/test/Sema/msil-ref-ops.c`, `clang/test/Sema/msil-ref-storage.c`, `clang/test/Sema/msil-ref-functions.c`, `clang/test/Sema/msil-ref-jumps.c`, `clang/test/Sema/msil-ref-managed-calls.c`, `clang/test/SemaCXX/msil-ref-cxx.cpp`, `clang/test/Driver/msil-cli-header.c`, `clang/test/Driver/msil-ref-driver.c`, `clang/test/CodeGen/MSIL/`
+- Depends on: R-a.a, R-a.b, R-a.c, R-a.d, R-a.0
+- Reads: this plan sections 5.5, 5.17.18 and 5.21, this milestone's texts, the Provides lines of R-a.a-R-a.d and the section 12 rows for R-a; llvm/docs/MSIL/recon/p3/references.md; clang/test/Sema/attr-msil-method.c (MC-1's forms); clang/test/CodeGen/MSIL/msil-method.c (MC-1's forms)
+- Provides: RV1-RV17 and RV19: `msil-cli-type.c`, `msil-ref-type.c`, `msil-ref-ops.c`, `msil-ref-storage.c`, `msil-ref-functions.c`, `msil-ref-jumps.c`, `msil-ref-managed-calls.c`, `msil-ref-cxx.cpp`, `msil-cli-header.c`, `msil-ref-driver.c`, and in `clang/test/CodeGen/MSIL/` `ref-abi.c`, `ref-ir.c`, `ref-managed-calls.c`, `ref-auto-var-init.c`, `ref-debug-info.c`, `ref-asm.c`, `ref-mangling.c`, `ref-pch.c`, `ref-ast-merge.c` and `ref-clangir.c`; RUN lines on the eight host triples and msil64; every clang text of 5.21.12, and every clang text R-a relies on, pinned whole
+
+From the specification only. Checks: each test run by hand with R-a.0's `clang`, `FileCheck` and `not`, outputs in its scratch folder.
+
+#### R-a.k llc and unit tests (test, ~1,300-2,500 lines)
+
+- Owned files: `llvm/test/CodeGen/MSIL/`, `llvm/unittests/CLI/ManagedSignatureTest.cpp`, `llvm/unittests/Target/MSIL/MSILTypeUtilitiesTest.cpp`, `llvm/unittests/Target/MSIL/MSILStackEffectTest.cpp`
+- Depends on: R-a.a, R-a.e, R-a.f, R-a.g, R-a.0
+- Reads: this plan sections 5.4, 5.5, 5.13.6 (P-4), 5.17.16 and 5.21, this milestone's texts, the Provides lines of R-a.a and R-a.e-R-a.g and the section 12 rows for R-a; llvm/docs/MSIL/recon/p3/references.md; llvm/docs/MSIL/recon/p3/references-files/zinit.il; llvm/test/CodeGen/MSIL/pipeline.ll; llvm/unittests/CLI/ManagedSignatureTest.cpp; llvm/unittests/Target/MSIL/MSILStackEffectTest.cpp
+- Provides: RV18 (exactly 6 new `CLIManagedSignatureTest` cases, 25 → 31); RV20-RV26 (`reference-ir.ll`, `reference-values.ll`, `reference-mir.mir`, `reference-compare.ll`, `reference-promote.ll`, P15's `pipeline.ll` line, `reference-errors.ll`, `managed-call-ref.ll`, `managed-call-cast.ll`; Object in `MSILTypeUtilitiesTest`, five classes in `MSILStackEffectTest`) on the Windows, Linux and msil64 triples (llc also aarch64)
+
+From the specification only. Checks: each llc test by hand with R-a.0's `llc`, `FileCheck`, `llvm-cil-dump` and ilasm, outputs in its scratch folder; the unit tests with `msil-syntax.ps1` (the gate builds and runs them).
+
+#### R-a.l msil-ld tests (test, ~300-700 lines)
+
+- Owned files: `lld/test/MSIL/`
+- Depends on: R-a.a, R-a.h, R-a.0
+- Reads: this plan sections 5.11.1, 5.17.18, 5.20.7 and 5.21.10, this milestone's texts, the Provides lines of R-a.a and R-a.h and the section 12 rows for R-a; lld/test/MSIL/managed-calls.test (MC-1's forms)
+- Provides: RV27: `references.test` (binding with and without `--reference`, T-M16, the helper never bound, T-RL1, ThinLTO and `--lto-partitions=2` with T-RB2, T-RB5 through the LTO table pass)
+
+L7: the whole directory. Checks: the test run by hand with R-a.0's `msil-ld`, outputs in its scratch folder.
+
+#### R-a.m Execution tests: msil/test/M3/14-references and the portable directory (test, ~1,200-2,400 lines)
+
+- Owned files: `msil/test/M3/14-references/`, `msil/test/Portable/08-references/`, `msil/test/harness/verify-object-locals.test`
+- Depends on: R-a.a, R-a.b, R-a.c, R-a.d, R-a.e, R-a.f, R-a.g, R-a.h, R-a.0
+- Reads: this plan sections 5.5, 5.17.4, 5.17.13, 5.17.16 and 5.21, this milestone's texts, the Provides lines of R-a.a-R-a.h and the section 12 rows for R-a; llvm/docs/MSIL/recon/p3/references.md; llvm/docs/MSIL/recon/p3/references-files/zinit.il; msil/test/M3/13-managed-calls/ (MC-1's hand-written expected files); msil/test/Portable/02-managed-calls/
+- Provides: RV28: at least 12 tests in `14-references` (`string-table`, `identity-null`, `string-builder`, `instance-members`, `constructors`, `casts`, `cast-loud`, `tickets`, `gc-stress`, `catch-ref`, `lto-units`, `frames-mixed`), expected files hand-written under MC-1's reason, `%{msil_refs_netfx}` where needed; 3 table-only tests in `Portable/08-references` (post-commit `Portable` legs only); `verify-object-locals.test` (5.21.11's unmeasured shapes under ILVerify and PEVerify)
+
+From the specification only. Checks: each program built and run by hand with R-a.0's tools on .NET 10 and the Framework, outputs in its scratch folder.
+
+#### R-a.n Documentation (docs, ~300-500 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/test/README.md`
+- Depends on: R-a.a, R-a.b, R-a.c, R-a.d, R-a.e, R-a.f, R-a.g, R-a.h, R-a.0, R-a.i, R-a.j, R-a.k, R-a.l, R-a.m
+- Reads: this plan section 5.21, this milestone's text and the section 12 rows for R-a; the hand-overs of R-a.0-R-a.m
+- Provides: Status.md's references section (the rules and limits; items (1)-(5) of the silent-states row with the user's OK, item (6)'s time bound, and beside item (2) the case the row adds with the user's OK: a nonzero number passed where a ticket is expected that was never a live ticket (never made by `GCHandle.Alloc` and `ToIntPtr`) is undefined, as a wild pointer is in C (0 stays null, MH1); S1-S3's silent cases (RM3), with the user's OK until R-a2; RB8's note; RG12; the backstop texts); GettingStarted's example on references, and in its upstream-hooks section the type-class switch rule of 5.21.13 RH5 (in the `manifest` leg's row and in the upstream-merge steps, beside the object-format switch rule); the README's new directories and hand-written files; the hand-over of R-a's re-pin rows
+
+**Build targets:** `llc` `opt` `clang` `clang-tblgen` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `llvm-tblgen` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (in order; on four CPUs, the user's rule of 2026-11-16/17 with the user's change of 2026-11-20 20:42 ("The only change is you can use 4 CPUs."), which Claude's reading applies as four lit workers, a `-Jobs 4` or `--jobs 4` of its own on every step that runs work in parallel (step 24's comes with the tools commit) and one process at a time on the other steps; no portable step, as MC-1's under brief Q11 (a), also by Claude's reading):
+
+```text
+ 1. pwsh -NoProfile -Command '$b = "D:/llvm-msil-scratch/milestones/R-a/gate/il-baseline"; if (Test-Path -LiteralPath "$b/il-snapshot.json") { "baseline present: $b" } else { "no baseline (R-a.0 writes it with the build of HEAD before building): $b"; exit 1 }'  (R-a.0's IL baseline, taken with HEAD's build; this step never writes one)
+ 2. pwsh -NoProfile -Command '"D: has {0:N1} GB free (report only)" -f ((Get-PSDrive D).Free / 1GB)'
+ 3. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0)
+ 4. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out D:/llvm-msil-scratch/linux-sysroot  (G0)
+ 5. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out D:/llvm-msil-scratch/linux-sysroot --builtins --clang D:/llvm-msil/build/bin/clang.exe --jobs 4  (G0)
+ 6. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/make-glibc-sysroot.sh /mnt/d/llvm-msil-scratch/glibc-sysroot  (G0)
+ 7. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard -Jobs 4  (G1)
+ 8. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 4
+ 9. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe  (G2)
+10. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 494  (488 + RV18's 6)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLIManagedSignatureTest.*' -NoSkip -MinTests 31
+12. python D:/llvm-msil/msil/utils/ci/calibrate.py --label start  (G2c)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net-core -Jobs 4  (G3)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg p3-full -Jobs 4  (G3b)
+15. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $s = @(python msil/utils/ci/gate-select.py harness); $s; if ($s[0] -eq "harness: run") { pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Leg harness -Jobs 4; exit $LASTEXITCODE }'  (G3c)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-p3 -Jobs 4  (G4)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 4 -LitArgs "-sv --param msil_pipeline=lto --param msil_equiv=1 --param msil_dotnet_runtime=10 --param msil_run_netfx=1 --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1" msil/test/M3/14-references  (LTO, O4)
+18. pwsh -NoProfile -Command "& D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 4 -LitArgs '-sv --param msil_pipeline=lto --param msil_runner=wsl --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_wsl_dotnet=private --param msil_dotnet_runtime=10 --param msil_native_oracle=required --param msil_linux_sysroot=D:/llvm-msil-scratch/linux-sysroot --param msil_glibc_sysroot=D:/llvm-msil-scratch/glibc-sysroot --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1' msil/test/M3/14-references"  (LTO, Linux triple)
+19. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 4 -LitArgs "-sv --param msil_pipeline=obj --param msil_opt_levels=O0,O1,O2,O3 --param msil_equiv=1 --param msil_dotnet_runtime=10 --param msil_run_netfx=1 --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1" msil/test/M3/14-references  (every level, Windows triple)
+20. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 4 -LitArgs "-sv --param msil_pipeline=obj --param msil_dotnet_runtime=8 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1" msil/test/M3/14-references msil/test/M3/13-managed-calls  (.NET 8)
+21. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $o = "D:/llvm-msil-scratch/milestones/R-a/gate/il-after"; Remove-Item -Recurse -Force -LiteralPath $o -ErrorAction SilentlyContinue; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 4 --out $o --compare D:/llvm-msil-scratch/milestones/R-a/gate/il-baseline --skip-changed msil/test/M1 msil/test/M2 llvm/test/CodeGen/MSIL; exit $LASTEXITCODE'  (no IL change without references)
+22. python D:/llvm-msil/msil/utils/ci/calibrate.py --label end  (G4c)
+23. python D:/llvm-msil/msil/utils/ci/calibrate.py --combine D:/llvm-msil/build/lit-results/calibration-start.json D:/llvm-msil/build/lit-results/calibration-end.json
+24. pwsh -NoProfile -Command 'python D:/llvm-msil/msil/utils/ci/check-upstream-hooks.py --self-test; if ($LASTEXITCODE) { exit 1 }; pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Jobs 4; exit $LASTEXITCODE'  (check-upstream-hooks.py's self-test, RH5's scan cases among them, then G5 in full; -Jobs from the tools commit)
+25. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $req = [ordered]@{ "clang/include/clang/Basic/Attr.td" = "cli_type"; "clang/include/clang/Basic/TypeNodes.td" = "CLIReference"; "clang/lib/Sema/JumpDiagnostics.cpp" = "CLIReference"; "clang/lib/CodeGen/CGDecl.cpp" = "CLIReference"; "clang/tools/libclang/CIndex.cpp" = "CLIReference"; "llvm/lib/IR/Type.cpp" = "msil.ref"; "llvm/lib/CodeGen/ValueTypes.cpp" = "msil.ref"; "llvm/include/llvm/CLI/ManagedSignature.h" = "this-ref"; "llvm/lib/Target/MSIL/MSILPromoteReferences.cpp" = "PromoteMemToReg"; "llvm/test/CodeGen/MSIL/pipeline.ll" = "MSIL Promote References"; "llvm/test/CodeGen/MSIL/reference-values.ll" = "RUN:"; "clang/test/Sema/msil-cli-type.c" = "RUN:"; "clang/test/CodeGen/MSIL/ref-ir.c" = "RUN:"; "lld/test/MSIL/references.test" = "RUN:"; "msil/test/harness/verify-object-locals.test" = "RUN:"; "llvm/docs/MSIL/Status.md" = "CLI_TYPE" }; foreach ($k in $req.Keys) { if (-not (Select-String -LiteralPath ($r + $k) -SimpleMatch $req[$k] -Quiet -ErrorAction SilentlyContinue)) { $bad += "$k lacks $($req[$k])" } }; foreach ($d in @{ "msil/test/M3/14-references" = 12; "msil/test/Portable/08-references" = 3 }.GetEnumerator()) { $n = @(Get-ChildItem -LiteralPath ($r + $d.Key) -Filter *.test -Recurse -ErrorAction SilentlyContinue).Count; if ($n -lt $d.Value) { $bad += "$($d.Key): $n tests, needs $($d.Value)" } }; $h = @(Select-String -LiteralPath ($r + "msil/utils/upstream-hooks.txt") -Pattern "^hook ").Count; if ($h -gt 127) { $bad += "$h hook blocks, more than 82 + 45" }; if ($bad.Count) { $bad; exit 1 }; "R-a presence check: ok ($h hook blocks)"'  (G6)
+26. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; New-Item -ItemType Directory -Force D:/llvm-msil-scratch/milestones/R-a/gate | Out-Null; $j = "D:/llvm-msil-scratch/milestones/R-a/gate/legs.json"; pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Describe | Set-Content -Encoding utf8 $j; if ($LASTEXITCODE) { exit 1 }; python msil/test/M2/08-semantics/Inputs/check-matrix.py --legs $j .; exit $LASTEXITCODE'  (G6)
+27. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; . msil/utils/build/msil-env.ps1; $d = @(python msil/utils/ci/gate-select.py expected-dirs); if ($LASTEXITCODE) { exit 1 }; if ($d.Count) { python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --jobs 4 --levels O0,O2 @d; if ($LASTEXITCODE) { exit 1 }; python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --jobs 4 --levels O0,O2 --os linux @d; exit $LASTEXITCODE }'  (G7)
+28. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests clang/lib clang/include clang/tools/libclang lld/MSIL msil/lib"  (G8: no diff)
+29. python D:/llvm-msil/msil/utils/ci/linux-syntax-check.py --changed-from HEAD --jobs 4
+30. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -ExtraFlags /clang:-Werror=switch clang/lib/AST/ASTContext.cpp clang/lib/AST/ASTImporter.cpp clang/lib/AST/ASTStructuralEquivalence.cpp clang/lib/AST/ExprConstant.cpp clang/lib/AST/Type.cpp clang/lib/AST/TypeLoc.cpp clang/lib/AST/TypePrinter.cpp clang/lib/AST/ItaniumMangle.cpp clang/lib/AST/MicrosoftMangle.cpp clang/lib/Serialization/ASTReader.cpp clang/lib/Serialization/ASTWriter.cpp clang/lib/Sema/SemaExpr.cpp clang/lib/Sema/SemaLookup.cpp clang/lib/Sema/SemaTemplate.cpp clang/lib/Sema/SemaTemplateDeduction.cpp clang/lib/CodeGen/CodeGenTypes.cpp clang/lib/CodeGen/CodeGenFunction.cpp clang/lib/CodeGen/CGDebugInfo.cpp clang/lib/CodeGen/ItaniumCXXABI.cpp clang/lib/CodeGen/QualTypeMapper.cpp clang/lib/CIR/CodeGen/CIRGenFunction.cpp clang/lib/CIR/CodeGen/CIRGenItaniumCXXABI.cpp  (RH5)
+31. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope R-a"  (G9)
+```
+
+Steps MC-1 gained only by later rows are here from the start (Claude's decisions): 17's `msil_equiv=1` and 18 (section 12's MC-1 rows 'MC-1 gate step 18 amended' and 'amended again', 2026-11-04 and 2026-11-06); also 19 (-O1, -O3), 20 (.NET 8), 21 with the llc tests, 25's hook bound and 30.
+
+**Exit criteria:** every allowed form runs through objects on .NET 10, TC=0 and Framework 4.8 at -O0 to -O3 on the Windows triple (steps 14, 19), on .NET 8 (step 20), under WSL .NET 10 and TC=0 at -O0 and -O2 on the Linux triple (step 16), and through LTO on both host x86_64 triples (steps 17, 18), with msil64 cases in the clang, llc and lld tests; stubs pass references with at most one `castclass` and no GCHandle member; every text of 5.21.12 pinned whole and every backstop tested, RG12's trap and RH4's ClangIR error among them; `gc-stress`, `frames-mixed` and `catch-ref` verified on every runtime with the existing allow-list; il-snapshot of M1, M2 and `llvm/test/CodeGen/MSIL` unchanged; 5.13.6 gains exactly P15; floors 494 and 31; `mscorlib-safe.test` still 43; every changed upstream file has a block, at most 45 are new, the 22 switch files pass `-Werror=switch`, and `check-upstream-hooks.py --self-test` passes with RH5's scan cases (step 24).
+
+**Review focus:** no reference ever reaches C memory, a SYMTAB symbol, an export or a function pointer; NULL at every declaration at every level, and a loud stop where a reference function falls off its end; cast-stub names and LTO merging; `callvirt` for `this-ref`; hooks only in hot files and upstream files.
+
+**Rebuild cost** (Claude's estimates): R-a's new Sema texts alone recompile M26.g's measured class of a new clang diagnostic, 1,081 objects in about 173 job-minutes (section 12's M26 row of 2026-11-02, which measured 44 minutes at 4 jobs on the earlier host), about 45 minutes at four jobs; the type-system headers reach most of the rest of clang (the whole tree measured 3.0-3.2 CPU-hours of compile before Phase 2, section 11's 'Rebuilds', and has grown since). So about 3-5 CPU-hours for most of clang and of the MSIL target, about 45-90 minutes at four jobs (a quarter of that, with room for the links and the slowest objects, which run alone), at R-a.0, which measures it; the gate's own build then recompiles only what the fix runs change. The gate takes about 1-1.5 hours at four workers besides the build (MC-1's quiet gate round 19 took about 14.6 raw minutes with 16 lit workers, section 12's row 'MC-1's gate time as measured' of 2026-11-16, and a quarter of the workers makes the steps that run in parallel up to four times as long; R-a adds lit steps 19 and 20; round 1 measures it), above 5.17.7's 30 minutes: only G3c (when R-a's harness change only adds files) and G4's run 2 may move to the post-commit run; the overrun is recorded in a section 12 row.
+
+**R-a's re-pin rows** (with R-a's commit, from R-a.n's hand-over; MC-1's re-pin row of 2026-11-16 is the form): M28-M35's CLITests `'*'` floors rise by R-a's actual new cases (6 planned: M28 508, M29 515, M30 516, M31 523, M32 524, M33 530, M34 536, M35 536); M28.g's floor sentence reads '(5.17.7 rebased by P-1r R13, MC-1 and R-a: 461 after P-1a, 488 after MC-1, 494 after R-a, 508 after M28)', M28's exit criteria quote '(508; 19, 13, 30, 10)' (was '(502; 19, 13, 30, 10)'), and M35's case count is 536 (its step 13 note gains R-a's 6); the other suites' floors do not change, since R-a adds cases only to `CLIManagedSignatureTest` (25 → 31); M28.f and M31.f keep P15's `pipeline.ll` line; M28.f gains one llc case: P1 refuses an address-taken reference function before P11 (T-RB2); R-a.n re-verifies by `git grep` every function M28-M35 cite in a file R-a changes (at least `MSILPrepareIR.cpp`, `MSILAsmPrinter.cpp`, `MSILObjectWriter.cpp`, `MSILTargetMachine.cpp`, `MSIL.h`, `MSILFixFunctionBitcasts.cpp`, `MSILISelLowering.{h,cpp}`, `MSILISelLoweringCall.cpp`, `MSILInstrInfo.{td,cpp}`, `MSILRegisterInfo.td`, `MSILMCInstLower.cpp`, `MSILUtilities.cpp`, `MSILMachineFunctionInfo.cpp`, `MSILExplicitLocals.cpp`, `MSILRegStackify.cpp`, `MSILManagedCalls.{h,cpp}`, the target's `CMakeLists.txt`, `lld/MSIL/LTO.cpp`, `lld/MSIL/ManagedCalls.*`, `DiagnosticSemaKinds.td`, `upstream-hooks.txt`, the lit-leg scripts); G3b's and G4's quiet minutes rise by `14-references`' measured time; no BCL re-pin.
+
+**R-a2. Real .NET references in C++** (an outline, 5.21.16; the user's "(a) Yes, R-a2" (2026-11-19 12:50); its text is drafted after R-a's
+commit). C++ locals and internal functions' parameters and results, templates by value, overloads, mangling; refused for
+now, as approved: `String&`, lambda captures and class members; Claude's additions: `String&&`, `String ^&`, `String ^&&`,
+class bases and the rest of 5.21.16 RN4's list. It goes directly before P-2, after the cleanup round's milestones and
+EH-0 with FX-1 to FX-3 (the user's pick "(b) Before P-2", 2026-11-20 11:50), and it also carries MC-1's transition
+(5.21.16 RN10): S1-S3 retire (RM3; the user's pick "(a) Before P-2", 12:04), and MC-1's star-spelled handles become
+`intptr_t` or `uintptr_t`, boxed ones excepted (RM10; the user's pick "(b) Retire before P-2", 14:24), so P-2 is
+written on all of it. Its gate repeats R-a's with C++ tests and MC-1's rewritten tests.
+
 **P-2. The single-threaded OS layer over the BCL** (an outline; contract 5.19.2's stage 2, 5.19.9, 5.19.10 and 5.19.11 at major 0; its milestone text is drafted after MC-1's commit; decisions cited as brief Q<n> are the decision brief answers (user, 2026-11-01)). After MC-1, llvm-libc's `OSUtil/dotnet` becomes C/C++ that calls `System.*` through `msil_method` declarations, bound by `--reference` to the build host's Framework 4.8 implementation assemblies `mscorlib.dll` and `System.dll` (brief Q30 (a): `build-libc.py` stops with a message naming a missing file and never falls back to the built-in table or another reference set). It brings: the generic `File` class with a `DotnetFile` over a `System.IO.Stream` handle (`libc/src/__support/File/dotnet/`, the standard-stream accessors in `libc/src/stdio/dotnet/`, `stdout` and friends as lvalue macros over exported accessors), `fopen`/`fclose`/`printf`/`fprintf`/`scanf`/`sscanf`/`asprintf` and the wide streams, with exceptions mapped to errno by `msil_catch` (a derived type before its base) and file names decoded by throwing UTF-8 (`EILSEQ`); the heap (brief Q29 (a), revising the user's mapping of 2026-10-31: a two-pointer header `{base, size}` over `Marshal.AllocHGlobal`/`ReAllocHGlobal`/`FreeHGlobal` on every runtime, `malloc` 16-aligned, `NativeMemory` not used), which also unblocks `strdup`, the tree search functions, `vsscanf`, `atexit` and `hcreate`/`hsearch` (with `HashTable/randomness.h` moved to `LIBC_THREAD_LOCAL`); `internal::exit` over `Environment.Exit` after flushing; `abort` writing `abort() called` to stderr before `Environment.FailFast` (FailFast alone is silent on the Framework console); clocks (`DateTime.UtcNow`, `Stopwatch`), `TimeZoneInfo` for the localtime family, `mktime` and `strftime` (absent until here, brief Q18 (a)); the environment over `System.Environment`; `remove`/`rename`/`tmpfile`/`tmpnam`; `getopt` with its variables per copy (brief Q35 (a)). The dotnet `'<msil>Main'` becomes `exit(main(argc, argv))` when the link resolves `exit`, and calls `c.dll`'s exported `__llvm_libc_set_c_main()` before `main` when the link resolves that name (brief Q28 (b)): until that call `c.dll`'s standard streams are unbuffered, so a host that is not a C program (a C# program calling `c.dll`, which never calls `exit` and gets no `ProcessExit` handler before P-3's delegates) loses no output; after it C's buffering rules apply. `__llvm_libc_set_c_main`, `__cxa_atexit`, `__cxa_finalize` and the stdio accessors are appended to the export list. `LowerGlobalDtorsPass` runs at the reserved dotnet slot `P0b` and global destructors register through `c.dll`'s `__cxa_atexit`, with `.fini_array` staying T-P8 (brief Q31 (a)); msil-ld defines `__dso_handle` (P-1r R5: M29 reuses both). Exit handlers and the final flush run only through `exit()`. errno stays P-1b's exported cell (brief Q16 (a)); the per-thread C block is P-3's. The process root and the discovery names exist at a provisional layout major 0 with one copy (brief Q32 (a)). `TargetLibraryInfo` on dotnet is re-audited for folds into functions `c.dll` lacks (the `printf` to `puts` fold among them). Mode 2 only; tests in `msil/test/Portable/05-os`, run by P-2's own gate with `msil-lit.ps1` (brief Q11 (a)) and by the post-commit legs. Oracle: the host-native transcript of the same program built with llvm-libc's overlay mode under WSL (stdout exists from here, so 5.17.4's portable allowance ends for new tests). **P-2's re-pin rows** (like MC-1's): M29.a, M29.b and M29.d cite P-2's `EntryPoint` exit field and `__dso_handle` (P-1r R5); M31.b's `TrailerExit.cpp` edits name the file that P-2 creates or extends; the CLITrailerTest floors of M28-M35 rise by P-2's cases; 5.13.6 marks slot `P0b` implemented, and M28's and M31's llc-test roles keep any dotnet RUN line P-2 adds to `pipeline.ll`.
 
 ### M28. Native-callable function pointers and threads
@@ -19010,6 +19932,28 @@ the change text ``fix-loop ownership: `<path>` -> <agent>``, for example
 | 2026-11-16 | M28 | Known limitation until M28 (Claude's record; it decides nothing for the user): on the host triples, C code that calls a native function through a function pointer, such as a `GetProcAddress` or `dlsym` result, compiles to a managed `calli`, Phase 2's form of every indirect call (Status.md section 2, 'Calls'), which enters the native code with no transition from managed code (no GC transition); it runs today, silently and unsupported, and nothing diagnoses it, since before M28's lookup no tool can tell a native entry point from a C function's managed address at an indirect call. The right answer is M28's native-call dispatch (5.15.3 A2, brief R3): an exact per-assembly lookup at each indirect call, a managed `calli` on a hit and `calli unmanaged cdecl` on a miss, which M28 tests in `msil/test/M3/06-callbacks` with `dlsym`/`GetProcAddress` pointers called from C. MC-1's refusal of `Marshal::GetDelegateForFunctionPointer` (the MC-1 row of this date) also removed the narrow way to make such a call with a transition through a managed call (the M28 hand-over row of this date). `msil64-unknown-dotnet` has no native code, so the state exists on the host triples only. Whether it may stay until M28 is not decided: the user's pick "Fail loudly by default; recorded temporary workarounds allowed; silent states only with my OK; exit/atexit/atomics keep 'throw until M28-M30'" (review page, item prov-10, 2026-11-04) leaves a silent state to the user's OK, and the user has not been asked | found by question 5's check of MC-1's commit preparation (2026-11-16); Claude's probe with the tools of MC-1's gate round 20: `GetProcAddress(GetModuleHandleA("kernel32.dll"), "FlushProcessWriteBuffers")` called through a C function pointer compiles to `calli void()` and exits 42 on the .NET Framework 4.8, .NET 8 and .NET 10; 5.15.11 and Status.md section 3 record the reverse direction (a C function's address passed to native code that the callback list does not name, a known gap until M28) but not this one |
 | 2026-11-16 | - | Managed-calls input (addresses of managed-call functions, 5.20.14 'Function addresses'; Claude's record): when the fuller managed calls lift T-M10, two translation units' `static` managed calls with the same arguments and function type, which share one IR name (the `.__uniq.<n>` suffix of 5.20.4 as amended hashes only the `!msil.managed.calls` operands and the function type), need distinct identities, since C gives two `static` functions distinct addresses, while LTO merges such declarations into one stub | question 5's check of MC-1's commit preparation (2026-11-16): before the row '5.20.3 T-M10, 5.20.5 ML2 (1) and MC-1's 'Shared texts' amended (T-M10 before LTO's optimizer)' of this date, two units that compared the addresses of their own `static` managed call `f` linked under LTO and returned 1 where C requires 2; with the tools of MC-1's gate round 20 both units' IR declare `__msil_mc.f.__uniq.<n>` with the same `<n>` |
 | 2026-11-21 | - | `msil/utils/ci/calibration.json` re-baselined for the current development host in R-a's tools commit, measured as 5.17.8 describes: `quiet_seconds` 7.94 against 11.73 before, `test_cpu_seconds` 5.33 against 5.74 before. The new values are the medians of three `calibrate.py --label start` runs, one after another, on 2026-11-20 with the harness and build of a15f3c958572, each a lit `-j1` run of `msil/test/M1/03-control/loops.c` inside a Windows job object (test CPU: lit's CPU minus that of a configuration-only run with the same parameters): xunit 14.84, 7.94 and 7.44 s, test CPU 6.09, 5.33 and 5.14 s, on a Windows 11 x64 host with 16 logical CPUs shared with other work, the runs pinned to four logical CPUs at a load of 29-34%. The file's `source` records the figures and the old values' origin (M24's harness-cost WP, 2026-10-30, on the earlier development host); `version`, `test` and `params` are unchanged. | The old values came from the earlier development host: on this host the second and third runs took 7.94 and 7.44 s (factors 0.68 and 0.63 against 11.73 s), so a gate's load factor (5.17.8: F = max(1.0, (factor_start + factor_end) / 2)) stayed at its floor of 1.00 unless load stretched the composite by about half. R-a's tools commit (R-a's Depends-on line). Claude's measurement and Claude's choice of the medians; the four-CPU limit is the user's (2026-11-20 20:42, "The only change is you can use 4 CPUs."). |
+| 2026-11-04 | - | Project end goal, in the user's words (chat, 2026-11-04 07:00): "our criteria in here is to do as much as humanly possible." Then (07:06): "we are ultimately trying to implement as many features as possible, as good as possible, using the most appropriate answer. It might be true that we have to defer some stuff and write some workarounds in order to do stuff later. But ultimately, the end goal of this project is to do everything right." Claude's reading (not the user's words): a deferral or workaround is recorded as temporary and names the right answer and the step that replaces it; a refusal is permanent only when CIL or the runtime makes the feature impossible, or when the user rules the feature out (for example "What we won't do is share state between things linked to a native library versus things that are pure MSIL.", chat, 2026-10-31 23:01, recorded in the row 'C library linking modes (user, 2026-10-31)'); a deferral such as no NuGet packaging until the very late .NET SDK goal (row 'Very late goal (user, 2026-10-31)') is temporary, not a refusal; an interim state fails loudly by default, and a silent one needs the user's explicit OK and a Status.md entry, as 5.15.1 rule 1, amended by the next row, says. | The user (chat, 2026-11-04 07:00 and 07:06) for the end-goal quotes, and the user (chat, 2026-10-31 23:01) for the example's quote. The reading is Claude's, kept as such by the user's pick on the review page (2026-11-04, item prov-16): "Keep the quotes; label the rules as Claude's reading, with the two corrections" (Claude's corrections: a refusal is also permanent when the user rules the feature out, and a silent state needs the user's OK). The row is inserted in this corrected form by the user's pick on that page (item row-0): "Insert the corrected row with the rule 1 amendment". |
+| 2026-11-04 | - | 5.15.1 rule 1 amended (workarounds and silent states), as the user's pick on the review page (2026-11-04, item prov-10) asks: "Fail loudly by default; recorded temporary workarounds allowed; silent states only with my OK; exit/atexit/atomics keep 'throw until M28-M30'". Rule 1's title becomes 'Fail loudly by default', and its text reads: before the milestone that implements a feature, every use of it is a compile or link error where the toolchain can see it, and a throw or `Environment.FailFast` at run time where it cannot; a temporary workaround is allowed, not required, when it lets work go ahead: a section 12 row records it with the right answer and the step that replaces it (a milestone or named later work), and Status.md lists it; a silent state, interim or lasting (a workaround that changes behaviour silently included), needs the user's explicit OK and a Status.md entry; exit, atexit and atomics keep the states that 5.15.11 lists for them, with no workaround, until their milestones (the pick's 'throw until M28-M30'; reading it as those states is Claude's reading); 5.15.11 lists the state of each feature per milestone, and 5.17.4 says how loud failures are tested. Rule 1's label 'the user's principle, 2026-10-28' reads 'Claude's generalization of the user's direction of 2026-10-28 on exit, atexit and atomics, as amended by the user's pick on the review page (2026-11-04, item prov-10)', and so do the labels of 5.17.4's paragraph 'Loud failures' ('the user's principle of 2026-10-28') and M35's Goal ('the user's principle'); M28's paragraph 'Fail loudly, no interim workaround' takes the same label in place of 'the user's principle', with a semicolon before its pointer ('; 5.15.1 rule 1'). Texts that record the past take the label without the amendment, 'Claude's generalization of the user's direction of 2026-10-28 on exit, atexit and atomics', in place of 'the user's principle' and the words after it in the label: M24's Goal ('the user's principle of 2026-10-28'), section 10's bullet 'No interim workaround (the user's principle for sequencing)' and 5.15.11's table row 'Native callbacks off the Phase 2 list (M28)', whose clause reads 'R1 accepted this gap before Claude's generalization of the user's direction of 2026-10-28 on exit, atexit and atomics was stated'. The reason of the row of 2026-10-28 'Plan 5.10.14's native-callback list gains `FlsAlloc`' reads 'decision brief 3.2; the user's 2026-10-28 direction on exit, atexit and atomics (no hack before proper support)'. Where M24's Goal and Review focus, M26's Review focus, M28's paragraph and Review focus, and section 10's bullet say 'no interim workaround', 'no workaround' or 'no hack before it', they read with amended rule 1 (Claude's reading): no workaround is required, and one that is built, never for exit, atexit or atomics, needs its row, its Status.md entry and, if it is silent, the user's OK; M35's Goal, 'Everything Phase 3 leaves unsupported fails loudly', and M35's Exit criteria bullet 'Loud failures', 'everything Phase 3 leaves unsupported fails with a named error, throw or FailFast message, as Status.md lists', likewise allow the silent states that have the user's OK, which Status.md lists. | The user's pick on the review page (2026-11-04, item prov-10), "Fail loudly by default; recorded temporary workarounds allowed; silent states only with my OK; exit/atexit/atomics keep 'throw until M28-M30'", and the user's direction on exit, atexit and atomics (chat, 2026-10-28 21:17): "We don't need to fix this until we have the proper support to fix this. There's no reason to make a hack now." and "if you need to make this work right now, you just throw. And then when we get to the rest of the stuff, we fix it properly." The generalization to every feature, the compile and link errors, the Status.md entries and the wording are Claude's (Claude's view on the review page, whose recommended option the user picked). Four readings of the pick go past that view and are Claude's: a workaround that changes behaviour silently is a silent state, allowed with the user's OK (the view said that a workaround 'never changes behaviour silently'); a lasting silent state needs the user's OK as an interim one does, since the pick says 'silent states' without a limit (the view said 'a silent interim state'); a workaround's row names the step that replaces it, a milestone or named later work, as the previous row's reading says (the view said 'the replacing milestone'); and exit, atexit and atomics keep the states that 5.15.11 lists for them until their milestones (the view said 'no hack, throw until M28-M30'). |
+| 2026-11-21 | - | .NET objects and strings in C: a .NET string is an object reference and never becomes C text by itself; a C string stays C memory; `CLI_TYPE("Ns.T")` structs stand for .NET types, and the annotation, not the C name, gives the identity. | The user (2026-11-18 20:31-20:35, directions): "Changing it to a REAL C string would require an explicit operation." "Basically we solve for .NET object references, and strings are just those." "Yeah that's CLI_TYPE("Ns.T")" "The specifc names of the C structs or C prototypes and such don't matter, since the attributes specify them." |
+| 2026-11-21 | - | Program order amended (real .NET references): after MC-1 comes R-a (5.21), before the cleanup round's milestones, EH-0 with FX-1 to FX-3, and P-2; R-a2 (C++) goes directly before P-2, after the cleanup round's milestones and EH-0 with FX-1 to FX-3. Until the pending exception-model and cleanup-round rows apply, the order after M27 of the row 'Program order (user, 2026-11-01, 'Option A, after M26')' reads MC-1, R-a, R-a2, P-2, M28, M29, M30, P-3, M31-M35, P-4; 5.18's paragraph is read with this row. Pending texts that put EH-0 right after MC-1 are reworded to "after R-a" before the user sees them again. R-a and R-a2 follow the Phase 3 protocol outside its numbering and exit gate, as MC-1 does; their tests live under `msil/test/M3`. If R-a has not committed 4 weeks after launch, the orchestrator stops and asks the user whether EH-0 and FX-1 to FX-3 go first (the user's tripwire). | The user (2026-11-19 01:26, a direction): "What matters is when we start actually using real referenes, without GC handle. Thats the end goal, right? We dont care about anything except getting to that." "Okay." to references Q1 (02:33; Claude's reading: option (A), R-a next), made explicit by "OK all six" (12:37), item 6. "(a) Yes, R-a2" (12:50). The tripwire is the user's pick "(a) Stop and ask me" (15:48); the wording is Claude's. R-a2's place is the user's pick "(b) Before P-2" (2026-11-20 11:50). |
+| 2026-11-21 | - | `*` is a real pointer into C memory: new code never spells an object, reference or ticket with `*`, except a boxed parameter or result (Claude's reading, 5.21 RM10); R-a refuses a pointer to a `CLI_TYPE` class struct and that struct by value. MC-1's star-spelled handles are a recorded temporary state until R-a2, directly before P-2, makes them `intptr_t` or `uintptr_t`; boxed parameters and results (5.21 RM10), MC-1's and new ones, keep the star until value-type form B (`DateTime ^r`), or until the step named by the answer to references VT-9. Tickets are raw GCHandle numbers, with no typed ticket (Claude's reading: in `intptr_t`, through .NET's `GCHandle` members and MC-1's `gch` rows). The goal is real references with no GCHandle; nothing GCHandle-only is built (Claude's reading). | The user (2026-11-19 01:18-01:26): "* means its a pointer. String* is in fact not a pointer to a string strut." "it's storing data, which is lied about by the type." "That's just a raw GCHandle integer." "No reason to color it as anything else." The step that retires the star handles is the user's pick "(b) Retire before P-2" (2026-11-20 14:24). |
+| 2026-11-21 | R-a | A reference is `T ^r`, `T` a `CLI_TYPE` struct; a class is an incomplete struct that never gets a body. A value type without references will allow `DateTime d` and `DateTime ^r` (not in R-a or R-a2). The reference is a clang type of its own (5.21 RA5, RC3). | The user's pick "Caret" (2026-11-19 12:31; Claude had recommended K2), superseding "Let's go with C, the carrot." and "Your simpler shape I like better." (10:27-10:29); the user (10:40): "I guess that's the benefit of the ^ syntax. YOu can represent both." Claude's readings recorded with it: a type of its own, keyed by the folded name; Blocks keep `^` for function pointees. |
+| 2026-11-21 | R-a | Conversions and casts between .NET classes: a reference converts to the `System.Object` reference by itself; from one class to another only by a C cast, checked when the program runs: one call of a cast stub (`ldarg.0; castclass T; ret`), and a failed cast throws `InvalidCastException`; a cast to the same class or to Object emits nothing; `==` and `!=` need the same class, or Object on one side; a `?:` between a class and Object gives Object; every other mix of two classes is a compile error (5.21 RA7, RS4, RS5, RS7, RS8, RG5, RM8). Narrowing managed-call declarations are not added in place of casts (they could come later). | The user's picks "Keep checked casts" (2026-11-20 10:19) and "(a) Only to Object" (10:45). The rules' wording and the cast stub's form (names, attributes, MC-1's token kinds) are Claude's. |
+| 2026-11-21 | R-a | Managed calls with references: a declaration names exactly the member's classes: a class `T` parameter, result or `this` takes only `T ^`, and `object` takes `Object ^`; passing a `FileStream` where a `Stream` is wanted needs a C cast (RS8); clang checks the prototype against the signature text and msil-ld checks the text against the .NET member, so a stub's `castclass` fails only when two assemblies define one type name (5.21 RM2, RM12). Loosening later, to `Object ^` for any class parameter or to any class, breaks nothing. | The user (2026-11-20 11:44), choosing exact classes over `Object ^` for any class parameter (checked by the stub) and over any class (checked by msil-ld or at run time): "I think A is correct." The wording is Claude's. |
+| 2026-11-21 | - | Strings: no automatic conversion either way; a `string` parameter takes a `System.String` reference or ticket; S1-S3 go in R-a2, directly before P-2, and until then their silent cases have the user's OK (5.21 RM3: an unterminated C string is read past its end, a zero inside the text cuts it short, text in another encoding that is valid UTF-8 turns into different text, and the UTF-16 form never throws), which Status.md lists; C converts with .NET's members (in: `new UTF8Encoding(false, true)`, `Encoding::GetString(uint8*, int32)`, both in the table; out: `GetByteCount`, `GetBytes`, `Marshal::Copy`, which need `--reference`); an optional header of C conveniences over those calls is allowed, as library code, not compiler code; without a signature, `const char *` means bytes. | "Confirm" (2026-11-19 12:34), confirming the user's lean (00:23-00:25): "There's no guarantee that a C string is null terminated, is there?" "There's also no guarantee about character formats." Costs accepted: 94 of 947 declarations rewritten, longer call sites, `--reference` for string-to-bytes. When S1-S3 go is the user's pick "(a) Before P-2" (2026-11-20 12:04), which, as presented, is also the user's OK of S1-S3's silent cases until R-a2 under the user's pick on the review page (2026-11-04, item prov-10), "silent states only with my OK". A known cost of that timing (Claude's note with the pick): if the cleanup round respells the managed-call declarations before R-a2, the 94 declarations are edited twice. |
+| 2026-11-21 | - | Silent states with the user's OK, as the user's pick on the review page (2026-11-04, item prov-10) asks: (1) ticket leaks (MH6); (2) ticket use after release is undefined (MH4), a recycled same-type slot unnoticed; (3) `==` on tickets compares numbers; (4) tickets and pointers mix; (5) a pinned string view used after unpinning or written through; (6) EH-0's four silent wrong-code states last R-a's length longer, bounded by the order row's tripwire. Status.md lists items (1)-(5) and states item (6)'s time bound. A loud rule comes with the six: jumps past a reference's declaration are refused. Also with the user's OK: a nonzero number passed where a ticket is expected that was never a live ticket (never made by `GCHandle.Alloc` and `ToIntPtr`) is undefined, as a wild pointer is in C: for example, the process may crash, or the stub may get a null object (MH4) or another live object (of another class, its `castclass` throws; of that class, nothing shows); 0 stays null (MH1); Status.md documents it beside item (2); the compiler does not change (MC-1 already takes `intptr_t` tickets this way). S1-S3's silent cases have the user's OK until R-a2 (the strings row). | "OK all six" (2026-11-19 12:37). The jump rule is Claude's decision (the K2 check's verifier), shown with the question. Item 6 named "R-a's 2 to 4 weeks"; R-a is now estimated at 2.5 to 5, and the user's pick "(a) Stop and ask me" (15:48) bounds item 6 at 4 weeks after R-a's launch. The never-live ticket number is the user's pick "(a) OK as undefined" (2026-11-20 17:04), chosen over a table of live tickets that every stub would consult. |
+| 2026-11-21 | R-a, R-a2 | Upstream footprint: about 40 to 45 more upstream files for C, each hook minimal and listed with its tests in `upstream-hooks.txt`; R-a's list has 43 new hook blocks (52 upstream files with the 9 already hooked), the two LLVM core files, two ClangIR files, libclang's `CIndex.cpp` and the header list and install rule in `clang/lib/Headers/CMakeLists.txt` for `<cli/cli.h>` among them; Design.md risk 5 gains its clause. Bound (Claude's stricter reading): at most 45 new hook blocks for R-a with the two LLVM core files counted, 51 with R-a2; more comes back to the user. | "(a) Yes" (2026-11-19 12:39), approving the option text (Claude's): "about 40-45 more upstream files for C (46-51 with C++; 82 are hooked today) ... plus two files in LLVM's core". The two ClangIR files and `CIndex.cpp` are Claude's decisions of 5.21.13 RH4, inside that bound. The header list and install rule come with the user's pick "(a) <cli/cli.h> header" (2026-11-20 11:47): `CLI_TYPE` from a header among clang's own, holding only that macro, on MSIL triples only; the hook's form is Claude's (5.21 RT1). |
+| 2026-11-21 | R-a | Upstream merges (the row of 2026-10-20) and every run of `upstream-hooks.ps1` with its manifest leg: from R-a's commit on, that leg (`check-upstream-hooks.py --check`) also fails a switch over clang's type classes (on the getter's call or on a local variable initialized from it) that has no `CLIReference` case, no `default:` and no generated case for every class (5.21.13 RH5); the merge gate runs every leg, so it fails a merge that brings such a switch. R-a.i adds the scan with its self-test, which R-a's gate runs. | Claude's: a fixed list of files misses a new upstream switch; the leg's XCOFF scan is the form. |
+| 2026-11-21 | R-a | Design.md section 1's first non-goal and section 4's memory-model paragraph take the approved texts; section 10's risk 5 gains its clause at the end of the sentence. | "Approve" (2026-11-19 12:49; Claude's drafts) for sections 1 and 4; "(a) Yes" (12:39, approval 1) for risk 5's clause; the clause's place is Claude's reading, shown with this text. |
+| 2026-11-21 | R-a, R-a2 | R-a is C only. R-a2 adds C++ locals and internal functions' parameters and results (templates by value, overloads, mangling) before P-2, refusing for now, as approved: `String&`, lambda captures and class members; Claude's additions: `String&&`, `String ^&`, `String ^&&`, class bases and the rest of 5.21.16 RN4's list. What P-2 keeps beyond a call stays a ticket. | "(a) Yes, R-a2" (2026-11-19 12:50). |
+| 2026-11-21 | R-a, R-a2 | 5.13.5: (1) a table row per upstream file of R-a and R-a2, with its manifest block and `fork-only` lines; (2) the closing sentence "No Phase 3 milestone edits `Attr.td`, an IR intrinsic, `RuntimeLibcalls.td`, `CallingConv.h` or a clang diagnostic group", read with the 2026-11-02 exemptions, also excepts R-a (`Attr.td`, clang's type-system headers, `Type.cpp`, `ValueTypes.cpp`) and R-a2 (`Overload.h`); neither edits an intrinsic, `RuntimeLibcalls.td`, `CallingConv.h` or a group; (3) section 7's sentence "Phase 3 needs none" gains "except the edits that the 2026-11-02 and 2026-11-21 exemption rows of section 12 list". | Approval 1; the 2026-11-02 row's form. |
+| 2026-11-21 | R-a | Contract rows: 5.13.2, `MSILPrepareIR.cpp` gains `runOnModule`'s declaration and global loops as hook points; 5.13.3, the new files of 5.21.15; 5.13.4 and L7, R-a's rows; 5.13.6, slot P15 (`createMSILPromoteReferencesLegacyPass()`, `MSIL Promote References`, in `MSILPassConfig::addISelPrepare` after AtomicExpand and before `TargetPassConfig::addISelPrepare()`, every level and LTO), rule P-1 gains P15, rule P-2 reads "`addISelPrepare` keeps `AtomicExpand` and adds P15 after it, before `TargetPassConfig::addISelPrepare()`", rule P-4 gains R-a, and P15 changes no IL without references; 5.14.1, K5 gains cast stubs; 5.14.2, N3 gains `__msil_ref.eq`; 5.15.11 and 5.15.12, a row "References (R-a)"; 5.18.2, a reference is Direct on the portable triples (RV2); 5.18.9, references stay loud there as on the host triples; 5.17.4, 5.17.13 and the capability table, `M3/14-references` and `Portable/08-references` (post-commit legs only), with hand-written expected files under MC-1's reason. | Claude's, in 5.20.12's form. |
+| 2026-11-21 | R-a | MC-1's contract: MS5, MR1, ML1, ML2 gain `ref`, `this-ref` and casts (5.21.9); MR2 gains the cast declarations; MM1 and MK2 read "at most one member access; a cast stub makes none"; MK3 covers the new codes and casts; MX2's zero for a reference is `ldnull`; T-M3 and T-M4 say "the 'this' reference" where `this` is a reference and keep "the 'this' handle" for handles; T-M22 refuses asm labels starting with `<castclass>`; the handle type drops pointers to `CLI_TYPE` structs; MH2 holds for handle results only; S4: a `string` result is a reference or a ticket; 5.20.14 gains "Object references without GCHandles: R-a and R-a2; exports, calls between files, callbacks, function pointers, C++ byrefs and globals stay with R-b". | The user's ticket direction and "Confirm"; Claude's wording. |
+| 2026-11-21 | R-a2 | In R-a2, directly before P-2 (5.21.16 RN10): S1-S3 retire (`utf8`, `utf16`, `utf32` leave MS5; T-M3 refuses C strings for `string` with a hint to call `Encoding::GetString`; 94 declarations rewritten on references; the BCL rows stay); MC-1's star handles (268 of the 273 compiling declarations that use a handle (as `this`, a parameter or the result), 303 with the error tests; the typedef names appear on 551 lines in 35 files) narrow to `intptr_t`/`uintptr_t`, except boxed parameters and results (14 declarations in 7 test files, as 5.21 RM10 reads them: a value type's `.ctor` result moves with the rest) until value-type form B (`DateTime ^r`) or the step named by the answer to references VT-9. | "Confirm"; the `*` direction; the user's picks "(a) Before P-2" (2026-11-20 12:04) for S1-S3 and "(b) Retire before P-2" (14:24) for the star handles; counts from the no-star check; Claude's wording. |
+| 2026-11-21 | - | EH input: EH-1 keeps a reference live into a handler loud (T-RB8, with tests; the usual `__try`/`__except` shape is then refused) or re-homes such slots as IL locals, refuses references in outlined filters and `__finally` blocks, and brings the choice to the user. EH-2 lifts or keeps R-a's setjmp fence and says which. M28 input: R-a refuses addresses of reference functions, so P11 never sees one; M28.f adds one llc case (a re-pin row). P-3: delegates and callbacks carrying references are R-b's. Inline IL: references as operands are a later design point. | The path plan and its verifier; Claude's. |
+| 2026-11-21 | - | P-2 input: P-2 holds objects as references in locals and internal helpers and as `intptr_t` tickets in C memory; no star handle, except boxed values (5.21 RM10), which keep the star (until value-type form B, `DateTime ^r`, or the step named by the answer to references VT-9); after S1-S3 it decodes file names itself (`new UTF8Encoding(false, true)`, `Encoding::GetString`, `msil_catch(... DecoderFallbackException, EILSEQ)`). In 5.19.9, "`DotnetFile : File` holds a GCHandle" reads "holds a ticket", and the **File names** item's "converted from UTF-8 by MC-1's throwing decoder (5.20.10 S1 ...)" reads "converted from UTF-8 by explicit decoding calls"; 5.19.10's **Clocks and time** item's boxed handle is such a boxed value and keeps the star; 5.19.17's **From 5.20 (MC-1)** item gains references and loses the automatic decoders, which this row resolves. | Approval 3, "Confirm", the ticket direction, the user's pick "(b) Retire before P-2" (2026-11-20 14:24); Claude's. |
+| 2026-11-21 | R-a2 | R-a2's gate: G0-G9 as R-a's on four CPUs; C++ Sema and CodeGen tests (manglings, overloads, templates, the refusals) on both host x86_64 triples, aarch64 and msil64; C++ execution tests in `M3/14-references` through objects and LTO on Windows and WSL at -O0 to -O3, with portable copies; il-snapshot unchanged; at most 51 new hook blocks; MC-1's rewritten tests (5.21.16 RN10: S1-S3's 94 declarations on references; the star handles as `intptr_t` or `uintptr_t`). | "(a) Yes, R-a2"; the user's picks "(a) Before P-2" (2026-11-20 12:04) and "(b) Retire before P-2" (14:24) put MC-1's transition into R-a2; four CPUs, the user's rule of 2026-11-16/17 with the user's change "The only change is you can use 4 CPUs." (2026-11-20 20:42); steps Claude's. |
+| 2026-11-21 | R-a | Governance: a tools commit first (`plan-check.py` ids `R-<letter>[<digits>]` with a self-test of a milestone in R-a's form; `upstream-hooks.ps1 -Jobs`; `calibration.json`); R-a's plan commit carries 5.21, `### R-a.`, R-a2's outline, these rows, the Design.md texts, the two 2026-11-04 rows that waited for MC-1's post-commit run, the recon copy (no session ids or machine paths; with the references walk's questions and answers, references VT-1 to VT-9, and the file-and-line evidence of 5.21's citations), and an orchestrator edit of FeatureIdeas.md (L8: item 4's quote of Design.md section 4 updated; the .NET host helpers idea of 2026-11-16 recorded). FeatureIdeas item 4 is not R-a (Claude's reading). A failure of R-a's post-commit run before a cleanup milestone becomes a small fix step. References VT-1 to VT-9 come to the user after the plan commit; references VT-3 is settled by "Caret", VT-6 is re-cut. Claude's decisions inside R-a are labelled in 5.21. | Claude's; the helpers idea and the CPU rule are the user's (the rule of 2026-11-16/17, four CPUs since the user's change "The only change is you can use 4 CPUs.", 2026-11-20 20:42). |
 
 ## Appendix A. Review dispositions (plan v1 -> v2)
 

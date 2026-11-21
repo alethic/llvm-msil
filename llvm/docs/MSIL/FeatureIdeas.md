@@ -34,6 +34,8 @@ A switch set, for example clang `-mmsil-*` or `-fmsil-*` options carried as modu
 
 **Scheduled (user, 2026-10-26):** with the managed-calls goal (C calling .NET methods), after Phase 3, not at the end of the project; both need clang to carry C prototypes to the backend.
 
+**Not in MC-1:** MC-1, the first stage of the managed calls (plan contract 5.20), was committed on 2026-11-16 without these overloads; they stay with the fuller managed-calls goal (5.20.14 and 5.20.12 item 9).
+
 **Today:** every pointer in a signature is `native int`; C# sees `nint` for data pointers and function pointers alike, so nothing stops a wrong argument and call sites need casts.
 
 **Wanted (refined by the user):** keep the raw signatures, which stay the ABI that C uses, and add secondary overloads on a library's export class (M22) for C# callers:
@@ -55,7 +57,7 @@ A switch set, for example clang `-mmsil-*` or `-fmsil-*` options carried as modu
 
 ## 4. Managed memory and refs instead of unmanaged memory
 
-**Today:** all C-visible memory is unmanaged and never moves. Design.md says "The C program never touches the GC heap": malloc goes to the native heap, and globals live in one AllocHGlobal segment.
+**Today:** malloc goes to the native heap, and globals live in one AllocHGlobal segment. Design.md section 4 says "C memory never holds a GC reference. All C-visible memory is unmanaged and never moves, so pointers are plain `native int`, and the compiler never pins anything. A .NET reference lives only where the runtime tracks it: in IL locals, parameters, results and the evaluation stack. A program that pins an object through .NET's own calls gets a pointer that is valid only while the object stays pinned (user, 2026-11-19)." Plan contract 5.21 (milestone R-a) keeps C's real .NET references in those places and puts no C data on the GC heap, so R-a is not this idea, which stays for the very end (Claude's reading).
 
 **Wanted (exploratory):** allocate on the GC heap where possible and pass `ref`s or `Span<T>` instead of pointers. Where that is not possible, for example memory handed to native code, fall back to raw pointers ("try this, else fall back").
 
@@ -145,6 +147,27 @@ Added 2026-10-14.
 - Facade or explicit per-variant classes?
 - How are exported data and callbacks (function pointers into managed code) routed to the right variant?
 - Does the linker need to deduplicate code that is identical across triples (for example pure computation)?
+
+## 8. Helpers for .NET programs that use C compiled to MSIL
+
+Added 2026-11-16. Not designed and not scheduled: the user asked only that it be recorded.
+
+**Wanted (user, 2026-11-16), word for word:** "I got an idea. It needs to be added to a to-do somewhere. Let's not think about it completely now. But I want some sort of helper methods for a normal .NET program to be able to do things with C code that's been compiled to MSIL. For example, think about dynamic loading and stuff. So there should be some utility which can, you know, essentially invoke DL open in the magic way that it has to. And get a delegate from it, etc."
+
+**What it is:** helper methods that an ordinary .NET program calls to work with C code that this toolchain compiled to MSIL. The user's example is dynamic loading: a utility that loads a library assembly built by this toolchain at run time, as `dlopen` loads a native shared library, and gets a delegate from it.
+
+**Why it would help (Claude's reading):** today a .NET program uses such a library by referencing it when the program is compiled and calling the public static methods of its export class (Design.md's goal 5 and section 5.4); the toolchain has nothing for a program that finds the library only at run time, the case that `dlopen` and `dlsym` serve for native code. A library assembly already has what such helpers could build on (Design.md 5.4):
+- one public export class (`-Wl,--export-class=Contoso.Zlib.Native`; by default the assembly name, as a class without a namespace);
+- an address accessor `'<msil>addr_f'()` for every exported function, and an accessor `'<msil>addr_x'()` and a property `x` for exported data;
+- a custom attribute that carries the symbol table (name, kind, signature), the triple, the C runtime identity, the data model and an ABI version, with which a later link resolves symbols exactly and refuses an assembly built for a different triple or C runtime;
+- two-phase initialization: first the class `'<msil>Data'`, whose `.cctor` allocates and fills the data segment, then `<Module>::.cctor`, which applies the cross-assembly relocations and runs the constructors.
+
+**Neighbours:**
+- The very late goal of a .NET SDK for the toolchain, with NuGet packages of the prebuilt C library implementations (Design.md's scope paragraph; user, 2026-10-31).
+- Delegates over C functions, which come with plan step P-3 (Design.md 4.5).
+- Item 3 (typed and delegate-accepting secondary signatures for exports), the compile-time counterpart: it serves programs that reference a library when they are compiled, where these helpers would serve programs that load one at run time.
+
+**Claude's note (the open question of its form):** Design.md allows no runtime support assembly (section 6); the assemblies that come with the toolchain are C and C++ libraries that the user links, such as the portable C library's `c.dll`, "a C library that the user links, like a host libc, not a toolchain runtime" (section 6), and, later, the C++ standard library as a shared assembly (section 1). Goal 5 also calls the export class "the whole managed-facing API". A helper library that .NET programs reference would be a new kind of assembly, so its form is open: a library that ships with the late .NET SDK, or code that `msil-ld` emits into each library assembly, as it already emits the private attribute class that carries the symbol table (Design.md 5.4). Which form, if any, is the user's choice when the idea is planned.
 
 ## How to evaluate
 

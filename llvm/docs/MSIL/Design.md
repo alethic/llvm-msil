@@ -24,7 +24,7 @@ Scope: C (via clang) to fully managed, IL-only .NET assemblies. Flat exported C 
 
 **Non-goals (for now)**
 
-- A managed object model, GC references in C code, or C++/CLI-style mixed assemblies. Two narrower features are later goals (user, 2026-10-22): C source calling managed (.NET) methods directly, and inline IL. A first stage of the managed calls (an attribute that names one public .NET member, object handles, and listed exceptions mapped to error codes) ships during phase 3, because the portable C library's OS layer is written on it (user, 2026-11-01, program order option A); the fuller managed calls and inline IL come after phase 3 at the earliest.
+- A managed object model, GC references stored in C memory, or C++/CLI-style mixed assemblies. C code holds .NET objects as real references (`T ^r`, `T` a `CLI_TYPE` struct) only in local variables, parameters and results, where .NET tracks them, and as GCHandle tickets (plain integers) when C memory must keep them (user, 2026-11-19). Two narrower features are later goals (user, 2026-10-22): C source calling managed (.NET) methods directly, and inline IL. A first stage of the managed calls (an attribute that names one public .NET member, object handles, and listed exceptions mapped to error codes) ships during phase 3, because the portable C library's OS layer is written on it (user, 2026-11-01, program order option A); the fuller managed calls and inline IL come after phase 3 at the earliest.
 - C++ beyond whatever already works as plain C with mangled names. Mangled names are legal CIL identifiers, so it costs nothing to leave the door open. C++ support aimed at building Qt (QtCore first) is a later goal (user, 2026-10-31), after phase 3 at the earliest. Its C++ standard library is libc++ and libc++abi compiled to CIL (a native one cannot unwind through managed frames), as a shared assembly or a static per-triple archive, the user's choice for each link.
 - Being callable *from native C* (exporting symbols from the assembly to native callers). Callbacks into managed code via function pointers handed to native code are in scope; that is a different thing (see 4.5).
 - Verifiable/safe IL. The output is unverifiable, full-trust IL, the same as `/clr:pure` or `unsafe` C#.
@@ -122,7 +122,7 @@ SIMD is supported. .NET exposes hardware intrinsics that map almost one to one o
 
 ## 4. Memory model
 
-The C program never touches the GC heap. All C-visible memory is unmanaged and never moves, so pointers are plain `native int` and pinning is never needed.
+C memory never holds a GC reference. All C-visible memory is unmanaged and never moves, so pointers are plain `native int`, and the compiler never pins anything. A .NET reference lives only where the runtime tracks it: in IL locals, parameters, results and the evaluation stack. A program that pins an object through .NET's own calls gets a pointer that is valid only while the object stays pinned (user, 2026-11-19).
 
 ### 4.1 Globals
 
@@ -313,7 +313,7 @@ Mono and Unity are out of scope for the plan, but nothing in the default output 
 2. **Host-libc ABI fidelity.** Arch-specific triples, variadic shims, `long double`, and libc structs read through P/Invoke. Each host libc needs its own conformance run.
 3. **Native variadic calls** beyond the v-variant table and the fixed-arity list are unsupported.
 4. **Function-pointer cost** where native-to-managed calls go through delegates: always on .NET Framework, and on modern .NET unless the `UnmanagedCallersOnly` switch is on (4.5).
-5. **Fork maintenance.** Keep the diff to new directories plus registration hooks, as WebAssembly and llvm-mos do.
+5. **Fork maintenance.** Keep the diff to new directories plus registration hooks, as WebAssembly and llvm-mos do, and the .NET reference type's hooks in clang's type system.
 6. **ECMA-335 library effort** in phase 2: the reader and writer (about 9k lines with tests) are the dominant cost; the container choice moves only a few thousand lines.
 7. **Debugging** needs Portable PDB generation (Windows PDB for Framework) from LLVM debug locations.
 8. **Semantics gaps:** C11 atomics rest on the JIT honoring `volatile.` for relaxed and acquire loads and on `Interlocked` being a full barrier, which litmus and hoisting tests check on every runtime the gates run; `fenv.h` rounding modes; and signals.
