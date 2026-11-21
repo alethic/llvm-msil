@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
 #   pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1                       # every leg
+#   pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -Jobs 4               # at most 4 workers
 #   pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -NoCompile -NoManifest -MinPass 250
 #   pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins
 #   pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -SelfTest
@@ -35,6 +36,7 @@
 #             (check-upstream-hooks.py --list-lit): the first input is the path argument, the
 #             others go to <build>/lit-results/upstream-hooks.rsp, one per line, passed as
 #             '@<file>' inside -LitArgs, so the list never meets the Windows command-line limit.
+#             With -Jobs <n>, '-j<n>' goes inside -LitArgs too, ahead of the response file.
 #             lit writes upstream-hooks.json (-o) and .xml there, and the log is
 #             upstream-hooks.log; check-upstream-hooks.py --lit-verdict judges the JSON report:
 #             every FAIL allow-listed, no stale allow entry, no UNRESOLVED, TIMEOUT or XPASS,
@@ -55,8 +57,11 @@
 #             private build tree (-HooksBuildDir, else $env:MSIL_HOOKS_BUILD_DIR, else
 #             <repo>\..\llvm-msil-hooks-build; projects clang and lldb, target ARM): cmake when the tree
 #             has no build.ninja, then ninja the ARMAsmParser.cpp object (which also generates the
-#             ARM .inc files), then msil-syntax.ps1 /Zs of both files with -Werror=switch on every
-#             run. The leg holds the tree's exclusive build lock and runs cmake and ninja itself
+#             ARM .inc files; ninja -j 2 below 6 GB of free physical memory, -j 4 below 16 GB,
+#             else no -j, ninja's own default; -Jobs <n> makes it the smaller of n and that limit,
+#             or n where free memory sets none), then msil-syntax.ps1 /Zs of both files with
+#             -Werror=switch on every run. The leg holds the tree's exclusive build lock and runs
+#             cmake and ninja itself
 #             (msil-configure.ps1 and msil-build.ps1 take the same lock and would wait for their
 #             own parent). It never builds the lldb object (its order-only dependencies are about
 #             1,000 unrelated TUs, 19 min), never deletes or cleans the tree (a broken cache takes
@@ -71,7 +76,12 @@
 # print a SKIP line for their leg and record no row (the CI job: its shallow checkout has no
 # merge commit, and the hooks tree is a development-host cost). -MinPass overrides the
 # manifest's min-pass (the CI build lacks WebAssembly, so the list's WebAssembly tests are
-# UNSUPPORTED there). -SelfTest runs only the self-tests (rows of step 'upstream-hooks-self-test'):
+# UNSUPPORTED there). -Jobs <n> (n > 0, for a run on a shared host) runs the lit leg's lit with
+# n workers ('-j<n>' inside msil-lit.ps1's -LitArgs, ahead of the response file: msil-lit.ps1's
+# own -Jobs would append it after the response file's paths, and lit would then refuse the path
+# argument that follows) and the compile leg's ninja with at most n jobs (the smaller of n and
+# the free-RAM limit); 0, the default, keeps lit's own worker count and the free-RAM limit.
+# -SelfTest runs only the self-tests (rows of step 'upstream-hooks-self-test'):
 # check-upstream-hooks.py --self-test (planted manifest, fork-only, fork-prefix, per-switch
 # coverage and exemption, utc-list, gtest-list, compile-line, allow-list, MERGE_HEAD and
 # lit-verdict defects, the lld suite's test names among them),
@@ -92,6 +102,7 @@ param(
   [switch]$NoManifest,
   [switch]$NoCompile,
   [int]$MinPass = -1,             # -1: the manifest's min-pass
+  [int]$Jobs = 0,                 # 0: lit's own worker count, ninja's free-RAM limit
   [switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
@@ -201,8 +212,10 @@ function Invoke-LitLeg {
   # '-' and contains ':' (a drive path) for '-<name>:<value>' (as in lit-legs.ps1). The
   # response file comes last: msil-lit.ps1 appends the path argument, and lit's argparse takes
   # its test paths only as one run of positional arguments, so no option may come between the
-  # paths of the response file and that one.
-  $litArgs = "-LitArgs:-sv -o $($json.Replace('\', '/')) --xunit-xml-output=$($xml.Replace('\', '/')) " +
+  # paths of the response file and that one. So -Jobs goes in here as '-j<n>', ahead of the
+  # response file, and not to msil-lit.ps1's -Jobs, which appends '-j<n>' after -LitArgs.
+  $jobsArg = if ($Jobs -gt 0) { "-j$Jobs " } else { '' }
+  $litArgs = "-LitArgs:-sv $jobsArg-o $($json.Replace('\', '/')) --xunit-xml-output=$($xml.Replace('\', '/')) " +
              "@$($rsp.Replace('\', '/'))"
   Write-Host "[msil-ci] upstream-hooks lit: msil-lit.ps1 `"$litArgs`" $($paths[0]) (and $($paths.Count - 1) inputs in $rsp)"
   $r = Invoke-Tool -Exe 'pwsh' -Log $log `
@@ -303,10 +316,13 @@ function Invoke-CompileLeg {
       }
       $parts += "configure $([int]$sw.Elapsed.TotalSeconds) s"
     }
-    # As msil-build.ps1: other agents' experiments may hold most of the RAM.
+    # As msil-build.ps1: other agents' experiments may hold most of the RAM. -Jobs lowers that
+    # limit, or sets one where free RAM sets none (0: ninja's own default); it never raises it.
     $ninjaArgs = @('-C', $HooksBuildDir)
     $freeGB = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB
-    if ($freeGB -lt 6) { $ninjaArgs += @('-j', '2') } elseif ($freeGB -lt 16) { $ninjaArgs += @('-j', '4') }
+    $ninjaJobs = if ($freeGB -lt 6) { 2 } elseif ($freeGB -lt 16) { 4 } else { 0 }
+    if ($Jobs -gt 0 -and ($ninjaJobs -eq 0 -or $Jobs -lt $ninjaJobs)) { $ninjaJobs = $Jobs }
+    if ($ninjaJobs -gt 0) { $ninjaArgs += @('-j', "$ninjaJobs") }
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $r = Invoke-Tool -Exe 'ninja' -Arguments ($ninjaArgs + $armObject) -Log $ninjaLog
     if ($r.Rc -ne 0) {
@@ -412,8 +428,9 @@ function Invoke-SelfTest {
 
 # ---- main ---------------------------------------------------------------------------------
 
+if ($Jobs -lt 0) { throw "-Jobs must be 0 (lit's own worker count, ninja's free-RAM limit) or more, not $Jobs" }
 if ($SelfTest) {
-  if ($Leg.Count -gt 0 -or $NoManifest -or $NoCompile -or $MinPass -ge 0) {
+  if ($Leg.Count -gt 0 -or $NoManifest -or $NoCompile -or $MinPass -ge 0 -or $Jobs -ne 0) {
     throw '-SelfTest takes only -BuildDir and -HooksBuildDir'
   }
   Invoke-SelfTest

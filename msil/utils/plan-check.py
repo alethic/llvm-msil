@@ -15,7 +15,8 @@
                                                belongs to <id> (run 'git add -A' first)
   python msil/utils/plan-check.py --self-test  parser and checks on an embedded sample plan
 
-A milestone <id> is M<n> (M24), P-<n> with an optional letter (P-1a, P-2) or MC-<n> (MC-1).
+A milestone <id> is M<n> (M24), P-<n> with an optional letter (P-1a, P-2), MC-<n> (MC-1) or
+R-<letter> with optional digits (R-a, R-a2, R-b).
 
 Options: --plan <file> checks another copy of the plan (for example a deliberately
 conflicting one); --repo <dir> is the root that relative paths and git use (default: the
@@ -23,10 +24,11 @@ repository that contains this script).
 
 What is parsed (plan section 1 and section 12):
   - '### <id>. <title>' milestone headings and '#### <id>.<x> <title>' work-package
-    headings below them (fenced code blocks are skipped); a '### M<digit>', '### P-<digit>'
-    or '### MC-<digit>' heading of another form, or a '#### M' or '#### P-' heading inside a
-    milestone that is not a WP heading, is an error, so a WP never silently drops out of the
-    checks; other '### ' headings, such as section 7's '### P2-A.', are not milestones;
+    headings below them (fenced code blocks are skipped); a '### M<digit>', '### P-<digit>',
+    '### MC-<digit>' or '### R-<letter>' heading of another form, or a '#### M', '#### P-' or
+    '#### R-' heading inside a milestone that is not a WP heading, is an error, so a WP never
+    silently drops out of the checks; other '### ' headings, such as section 7's '### P2-A.',
+    are not milestones;
   - each WP's '- Owned files:' line, exactly one per WP and on one line (a missing line, a
     line ending in ',' or a list wrapped onto the next line is an error): the backquoted
     paths; a trailing '/' owns the whole directory; '(none; ...)' owns nothing;
@@ -72,15 +74,16 @@ ALLOW_LIST = ("llvm/docs/MSIL/ImplementationPlan.md", "llvm/docs/MSIL/recon/")
 PATH_PREFIXES = ("llvm/", "clang/", "lld/", "msil/", ".github/")
 DRIVE_RE = re.compile(r"^[A-Za-z]:/")
 
-# Milestone ids: M<n> (Phases 1-3), P-<n>[a-z] (the portable steps) and MC-<n> (managed calls).
-MILESTONE_ID = r"(?:M\d+|P-\d+[a-z]?|MC-\d+)"
+# Milestone ids: M<n> (Phases 1-3), P-<n>[a-z] (the portable steps), MC-<n> (managed calls)
+# and R-<letter>[<digits>] (real .NET references: R-a, R-a2).
+MILESTONE_ID = r"(?:M\d+|P-\d+[a-z]?|MC-\d+|R-[a-z]\d*)"
 MILESTONE_ID_RE = re.compile(MILESTONE_ID)
 MILESTONE_RE = re.compile(r"^### (" + MILESTONE_ID + r")\. +(.*)$")
 WP_RE = re.compile(r"^#### (" + MILESTONE_ID + r")\.([0-9A-Za-z]+) +(.*)$")
 # A '### ' or '#### ' heading that starts like a milestone or WP id but fails the patterns
 # above is malformed; section 7's '### P2-A.' and '### P3-A.' do not start like one.
-MALFORMED_MILESTONE_RE = re.compile(r"^### (M\d|P-\d|MC-\d)")
-MALFORMED_WP_RE = re.compile(r"^#### (M|P-|MC-)")
+MALFORMED_MILESTONE_RE = re.compile(r"^### (M\d|P-\d|MC-\d|R-[a-z])")
+MALFORMED_WP_RE = re.compile(r"^#### (M|P-|MC-|R-)")
 OWNED_RE = re.compile(r"^- Owned files:(.*)$")
 READS_RE = re.compile(r"^- Reads:(.*)$")
 BACKQUOTED_RE = re.compile(r"`([^`]+)`")
@@ -195,7 +198,8 @@ def parse_plan(text: str) -> Plan:
                 if MALFORMED_MILESTONE_RE.match(line):
                     plan.errors.append(
                         f"line {lineno}: malformed milestone heading (expected "
-                        f"'### <id>. <title>', <id> M<n>, P-<n>[a-z] or MC-<n>): {line}"
+                        f"'### <id>. <title>', <id> M<n>, P-<n>[a-z], MC-<n> or "
+                        f"R-<letter>[<digits>]): {line}"
                     )
                 ms = None
             continue
@@ -203,9 +207,9 @@ def parse_plan(text: str) -> Plan:
             wp = None
             m = WP_RE.match(line)
             if not m:
-                # Inside a milestone every '#### M...' or '#### P-...' heading is a work package;
-                # a malformed one must not make the WP (and its owned files) vanish from the
-                # checks.
+                # Inside a milestone every '#### M...', '#### P-...' or '#### R-...' heading is a
+                # work package; a malformed one must not make the WP (and its owned files) vanish
+                # from the checks.
                 if ms is not None and MALFORMED_WP_RE.match(line):
                     plan.errors.append(
                         f"line {lineno}: malformed work package heading in {ms.ms_id} (expected "
@@ -571,6 +575,59 @@ PORTABLE_PLAN = """\
 | 2026-11-02 | P-1a | fix-loop ownership: `p/c.cpp` -> P-1a.b | a grant |
 """
 
+# A milestone in R-a's form (R-<letter>[<digits>]) beside MC-1: implement packages, a '.0' build
+# step that owns nothing, a test package and a grant row; R-a2's outline is a bold paragraph.
+REFERENCES_PLAN = """\
+## 6. Milestones
+
+### MC-1. A managed-calls sample milestone
+
+#### MC-1.a Lists (implement, ~10 lines)
+
+- Owned files: `m/a.h`
+
+### R-a. A references sample milestone
+
+#### R-a.a Declarations (implement, ~10 lines)
+
+- Owned files: `r/a.h`, `r/a.td`
+- Reads: this plan section 5.21; msil/keep; llvm/x/r.txt (a description; with a semicolon)
+
+#### R-a.b Logic (implement, ~10 lines)
+
+- Owned files: `r/b.cpp`, `r/sub/`
+- Depends on: R-a.a
+- Reads: R-a.a's Provides line; llvm/docs/plan.md
+
+#### R-a.0 Build after the implement packages (build agent) (infra, no source changes)
+
+- Owned files: (none; build agent, writes only the build tree and scratch folders)
+- Depends on: R-a.a, R-a.b
+- Reads: msil/keep; llvm/x/dir/
+
+#### R-a.c Tests (test, ~10 lines)
+
+- Owned files: `r/test/`
+- Depends on: R-a.a, R-a.b, R-a.0
+- Reads: llvm/x/r.txt; llvm/x/recon-added-later.md (the plan commit adds it)
+
+**R-a2. An outline without a heading** is not a milestone.
+
+## 7. Future milestones
+
+### P2-A. Not a milestone of this plan
+
+## 12. Amendment log
+
+| Date | Milestone | Change | Reason |
+|---|---|---|---|
+| 2026-11-20 | - | Milestone ids R-<letter>[<digits>], mentions fix-loop ownership in passing | text |
+| 2026-11-20 | R-a | A row of R-a that is not a grant | text |
+| 2026-11-20 | R-a, R-a2 | A row of two milestones | text |
+| 2026-11-20 | R-a | fix-loop ownership: `r/c.cpp` -> R-a.c | a grant |
+| 2026-11-20 | MC-1 | fix-loop ownership: `m/b.cpp` -> fix-1 | a finding |
+"""
+
 
 def self_test() -> int:
     failures: List[str] = []
@@ -914,6 +971,154 @@ def self_test() -> int:
             f"main() accepts 'scope P-1a' and 'reads MC-1' and refuses 'scope P2-A' {results}",
         )
 
+        # A milestone in R-a's form, checked by ownership, reads and scope.
+        ref = parse_plan(REFERENCES_PLAN)
+        expect(ref.errors == [], f"R-a sample parses without errors {ref.errors}")
+        expect(
+            list(ref.milestones) == ["MC-1", "R-a"],
+            f"milestones MC-1, R-a (P2-A and the R-a2 paragraph skipped) "
+            f"{list(ref.milestones)}",
+        )
+        r_wps = ref.milestones["R-a"].wps
+        expect(
+            [w.wp_id for w in r_wps] == ["R-a.a", "R-a.b", "R-a.0", "R-a.c"],
+            "R-a WPs, the .0 build step among them",
+        )
+        expect(
+            r_wps[2].has_owned_line and r_wps[2].owned == [],
+            "R-a.0's '(none; ...)' owns nothing",
+        )
+        expect(
+            [(a.milestone, a.path, a.agent) for a in ref.amendments]
+            == [("R-a", "r/c.cpp", "R-a.c"), ("MC-1", "m/b.cpp", "fix-1")],
+            "R-a's grant row and MC-1's fix-loop row (R-a's other rows are not grants)",
+        )
+        expect(ownership_conflicts(ref) == [], "ownership: no conflict in the R-a sample")
+        conflicting = REFERENCES_PLAN.replace(
+            "- Owned files: `r/test/`", "- Owned files: `r/test/`, `r/sub/x.cpp`"
+        )
+        expect(
+            ownership_conflicts(parse_plan(conflicting))
+            == ["R-a: `r/sub/x.cpp` (R-a.c) is inside directory `r/sub/` (R-a.b)"],
+            "ownership: a file of R-a.c inside R-a.b's directory is a conflict",
+        )
+        checked, missing = missing_reads(ref, "R-a", repo)
+        expect(
+            checked == 7
+            and [m.split("(Reads")[0].strip() for m in missing]
+            == ["R-a.c: llvm/x/recon-added-later.md"],
+            f"reads R-a checks 7 paths, R-a.0's among them, and reports the one missing path "
+            f"({checked}, {missing})",
+        )
+        off = scope_offenders(
+            ref,
+            "R-a",
+            [
+                "r/a.h",
+                "r/sub/deep/x.cpp",
+                "r/test/t.c",
+                "r/c.cpp",
+                "llvm/docs/MSIL/recon/p3/new.md",
+                "m/a.h",
+                "m/b.cpp",
+                "r/d.cpp",
+            ],
+        )
+        expect(
+            off == ["m/a.h (owned by MC-1.a in other milestones)", "m/b.cpp", "r/d.cpp"],
+            f"scope R-a: its WPs, its grant row and the allow-list only {off}",
+        )
+        expect(
+            scope_offenders(ref, "MC-1", ["m/a.h", "m/b.cpp", "r/c.cpp"]) == ["r/c.cpp"],
+            "scope MC-1: R-a's grant row counts only for R-a",
+        )
+        expect(
+            all(MILESTONE_ID_RE.fullmatch(i) for i in ("R-a", "R-a2", "R-b", "R-z10"))
+            and not any(
+                MILESTONE_ID_RE.fullmatch(i)
+                for i in ("R-A", "R-1", "R-ab", "r-a", "R-", "R-a2b", "R-a.0", "Ra")
+            ),
+            "milestone ids R-<letter>[<digits>]",
+        )
+        badref = parse_plan(
+            "### R-a Missing dot\n#### R-a.a Lost\n- Owned files: `a`\n"
+            "### R-b: Colon\n### R-a. X\n#### R-b.a Wrong parent\n- Owned files: `a`\n"
+            "#### R-a.b: Colon\n- Owned files: `b`\n#### R-a0 No dot\n- Owned files: `c`\n"
+        )
+        expect(
+            sum("malformed milestone heading" in e for e in badref.errors) == 2
+            and any("work package heading outside a milestone" in e for e in badref.errors)
+            and any("R-b.a is under milestone R-a" in e for e in badref.errors)
+            and sum("malformed work package heading in R-a" in e for e in badref.errors) == 2
+            and len(badref.errors) == 6,
+            f"malformed R- headings are errors {badref.errors}",
+        )
+        badrefrow = parse_plan(
+            REFERENCES_PLAN
+            + "| 2026-11-20 | R-A | fix-loop ownership: `r/e.cpp` -> fix-2 | bad id |\n"
+        )
+        expect(
+            len(badrefrow.errors) == 1 and "malformed fix-loop row" in badrefrow.errors[0],
+            "a fix-loop row with an R- id of another form is an error",
+        )
+        # ownership, 'reads R-a' and 'scope R-a' through main(), with the staged paths faked.
+        ref_file = os.path.join(tmp, "references-plan.md")
+        conflict_file = os.path.join(tmp, "references-conflict-plan.md")
+        for path, body in ((ref_file, REFERENCES_PLAN), (conflict_file, conflicting)):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(body)
+        results, outputs = {}, {}
+        try:
+            for name, plan_path, staged, argv in (
+                ("ownership", ref_file, [], ["ownership"]),
+                ("ownership conflict", conflict_file, [], ["ownership"]),
+                ("reads R-a", ref_file, [], ["reads", "R-a"]),
+                ("scope R-a ok", ref_file, ["r/a.h", "r/test/t.c", "r/c.cpp"], ["scope", "R-a"]),
+                ("scope R-a offender", ref_file, ["r/a.h", "m/a.h"], ["scope", "R-a"]),
+                ("scope R-a2", ref_file, [], ["scope", "R-a2"]),
+                ("scope R-A", ref_file, [], ["scope", "R-A"]),
+            ):
+                globals()["staged_paths"] = lambda _repo, s=staged: list(s)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(
+                    io.StringIO()
+                ):
+                    try:
+                        results[name] = main(argv + ["--plan", plan_path, "--repo", repo])
+                    except SystemExit as e:
+                        results[name] = f"usage {e.code}"
+                outputs[name] = out.getvalue()
+        finally:
+            globals()["staged_paths"] = real_staged
+        expect(
+            results
+            == {
+                "ownership": 0,
+                "ownership conflict": 1,
+                "reads R-a": 1,
+                "scope R-a ok": 0,
+                "scope R-a offender": 1,
+                "scope R-a2": 2,
+                "scope R-A": "usage 2",
+            },
+            f"main() runs ownership, 'reads R-a' and 'scope R-a', finds no R-a2 and refuses "
+            f"'scope R-A' {results}",
+        )
+        reports = (
+            "ownership: 2 milestones, 5 work packages, 2 fix-loop rows: OK"
+            in outputs["ownership"]
+            and "MISSING R-a.c: llvm/x/recon-added-later.md" in outputs["reads R-a"]
+            and "reads R-a: 7 path(s) checked: 1 missing" in outputs["reads R-a"]
+            and "OUT OF SCOPE m/a.h (owned by MC-1.a in other milestones)"
+            in outputs["scope R-a offender"]
+            and "R-a2 is not a milestone of the plan" in outputs["scope R-a2"]
+        )
+        expect(
+            reports,
+            "main() reports R-a's counts, its missing Reads path and its offender's owner"
+            + ("" if reports else f" {outputs}"),
+        )
+
     print(
         f"plan-check self-test: {'PASS' if not failures else 'FAIL'} "
         f"({len(failures)} failure(s))"
@@ -937,7 +1142,9 @@ def main(argv: Sequence[str]) -> int:
     )
     ap.add_argument("command", nargs="?", choices=["ownership", "reads", "scope"])
     ap.add_argument(
-        "milestone", nargs="?", help="M<n>, P-<n>[a-z] or MC-<n> for 'reads' and 'scope'"
+        "milestone",
+        nargs="?",
+        help="M<n>, P-<n>[a-z], MC-<n> or R-<letter>[<digits>] for 'reads' and 'scope'",
     )
     ap.add_argument(
         "--self-test", action="store_true", help="run the embedded self-test"
@@ -960,7 +1167,7 @@ def main(argv: Sequence[str]) -> int:
         ap.error("'ownership' takes no milestone (it checks every milestone)")
     if args.command in ("reads", "scope"):
         if not args.milestone or not MILESTONE_ID_RE.fullmatch(args.milestone):
-            ap.error(f"'{args.command}' needs a milestone such as M0, P-1a or MC-1")
+            ap.error(f"'{args.command}' needs a milestone such as M0, P-1a, MC-1 or R-a")
 
     repo = os.path.abspath(args.repo)
     plan_path = args.plan or os.path.join(repo, PLAN_RELPATH)

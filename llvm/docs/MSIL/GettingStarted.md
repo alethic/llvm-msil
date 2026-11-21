@@ -3611,6 +3611,7 @@ and proves that the list is complete:
 
 ```powershell
 pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1                         # every leg
+pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -Jobs 4                 # at most 4 workers
 pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins
 pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -NoCompile -NoManifest -MinPass 250   # CI
 pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -SelfTest
@@ -3633,7 +3634,9 @@ Each leg writes a row of step `upstream-hooks`, every selected leg runs even aft
 and the exit status is 1 if a row failed. The logs, the response file and lit's reports are
 `build/lit-results/upstream-hooks*.{log,rsp,json,xml}`. `-Leg` runs only the named legs;
 `-NoManifest` and `-NoCompile` print a SKIP line for their leg and write no row; `-MinPass N`
-overrides the manifest's `min-pass`. `-SelfTest` runs only the self-tests, as the four rows
+overrides the manifest's `min-pass`; `-Jobs N` runs the `lit` leg's lit with N workers and
+the `compile` leg's ninja with at most N jobs (0, the default, keeps lit's own worker count and
+ninja's free-memory limit). `-SelfTest` runs only the self-tests, as the four rows
 `checker`, `pins-checker`, `gtest-filter` and `compile-mutation` of step
 `upstream-hooks-self-test`:
 
