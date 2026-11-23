@@ -1,0 +1,19 @@
+ToString of a string is the string itself: 1
+ToString of a StringBuilder: "built text"
+ToString of a Version: "1.2"
+ToString of an Object: "System.Object"
+ToString of an InvalidOperationException: "System.InvalidOperationException: bad state"
+Equals: equal strings 1, other text 0, equal versions 1, two Objects 0, an Object and itself 1, a string and a builder 0
+the equal strings and versions are two objects: 1 1
+GetHashCode agrees for equal values: strings 1, versions 1
+ReferenceEquals: equal strings 0, ToString's result 1
+GetType of a string: "System.String"
+GetType of a StringBuilder: "System.Text.StringBuilder"
+GetType of a Version: "System.Version"
+GetType of an Object: "System.Object"
+GetType of an InvalidOperationException: "System.InvalidOperationException"
+CompareTo: "apple" with "banana" -1, with "apple" 0
+CompareTo: 1.2 with 1.3 -1, with 1.2 0, with 1.0 1
+get_Message: "bad state"
+get_Source returns the string set_Source got: 1
+[exit 0]

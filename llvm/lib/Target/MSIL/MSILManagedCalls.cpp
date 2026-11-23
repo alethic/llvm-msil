@@ -20,23 +20,32 @@
 ///     length loops of the UTF-8 and UTF-32 arguments (empty stack)
 ///     'this' and the arguments, each converted (MS5)
 ///     call | [constrained. V] callvirt | newobj | newarr | ldsfld | ldfld
+///       | castclass             (a cast stub, which accesses no member)
 ///     the result, converted
 ///     ret                       (with msil_catch: stloc R; leave DONE)
 ///   [} filter { isinst T_k ... endfilter }
-///    { pop; *err = C; R = 0; leave DONE }
+///    { pop; *err = C; R = 0 or null; leave DONE }
 ///   DONE: ldloc R; ret]
 ///
 /// Object handles are Normal GCHandles as native int (5.20.9): an argument is
 /// dereferenced through FromIntPtr, box, unbox and get_Target, a result
 /// becomes a new handle through Alloc and ToIntPtr, and 0 is null.
 ///
+/// .NET references are 'object' values (5.21.9 RM7): a 'ref' argument and a
+/// 'this-ref' 'this' pass as they are, with a castclass to the member's
+/// parameter type or to TYPE unless that is System.Object, and a 'ref' result
+/// is returned as it is, with no null test, GCHandle or box. A cast stub
+/// (RM8), which a C cast from one class to another calls, makes no member
+/// access: its body is 'ldarg.0; castclass <TYPE>; ret'.
+///
 /// Whole-program text, which ilasm assembles without msil-ld's checks of an
 /// object (5.20.7), checks those at run time (5.20.6 MW2 as amended): the
-/// castclass or unbox of a 'this' handle and a constructor's castclass or box
-/// name TYPE as a TypeSpec of its declared kind, which the runtime's type
-/// loader checks when it compiles the stub (T-M16), and the enum checks test
-/// that the value type of each 'enum' parameter and result is an enum of the
-/// C integer's width (typeof(E).IsEnum and sizeof E), else throw (T-M7).
+/// castclass or unbox of a 'this' handle, the castclass of a 'this' reference
+/// and of a cast stub, and a constructor's castclass or box name TYPE as a
+/// TypeSpec of its declared kind, which the runtime's type loader checks when
+/// it compiles the stub (T-M16), and the enum checks test that the value type
+/// of each 'enum' parameter and result is an enum of the C integer's width
+/// (typeof(E).IsEnum and sizeof E), else throw (T-M7).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -121,18 +130,28 @@ Expected<MSIL::ManagedCall> MSIL::parseManagedCall(const Function &F) {
     return callError("type: " + toString(DeclType.takeError()));
   Call.Type = std::move(*DeclType);
   Call.Member = Attr(cli::ManagedMemberAttr).str();
-  if (Error E = cli::checkManagedMemberName(Call.Member))
-    return callError("member: " + toString(std::move(E)));
+  // A cast stub (plan 5.21.9 RM8), which clang's CodeGen declares for a C
+  // cast from one class to another: its MEMBER '.castclass' is one that
+  // checkManagedMemberName refuses, so that no msil_method names it, and it
+  // accesses no member, so checkManagedCallShape's rules for members do not
+  // apply to it.
+  Call.IsCast = cli::isManagedCastShape(Attr(cli::ManagedTypeAttr), Call.Member,
+                                        Attr(cli::ManagedSigAttr),
+                                        Attr(cli::ManagedConvAttr));
+  if (!Call.isCast())
+    if (Error E = cli::checkManagedMemberName(Call.Member))
+      return callError("member: " + toString(std::move(E)));
   Expected<cli::ManagedSignature> Sig =
       cli::parseManagedSignature(Attr(cli::ManagedSigAttr));
   if (!Sig)
     return callError("signature: " + toString(Sig.takeError()));
   Call.Sig = std::move(*Sig);
-  if (std::optional<cli::ManagedShapeProblem> P =
-          cli::checkManagedCallShape(Call.Type, Call.Member, Call.Sig))
-    return callError(cli::getManagedCallArgName(P->Arg) + ": " + P->Reason);
-  // A member of an array type is its '.ctor' (newarr); every other member
-  // belongs to a class or a value type, which its token names.
+  if (!Call.isCast())
+    if (std::optional<cli::ManagedShapeProblem> P =
+            cli::checkManagedCallShape(Call.Type, Call.Member, Call.Sig))
+      return callError(cli::getManagedCallArgName(P->Arg) + ": " + P->Reason);
+  // TYPE is a class or a value type, which its token names, or an array type,
+  // whose only member is its '.ctor' (newarr) and to which a cast stub casts.
   assert((Call.isArrayConstructor() || Call.Type.isNamed()) &&
          "parseManagedTypeName gives a class, a value type or an array");
   Call.Scope = F.hasFnAttribute(cli::ManagedAsmAttr)
@@ -159,8 +178,8 @@ Expected<MSIL::ManagedCall> MSIL::parseManagedCall(const Function &F) {
     }
   }
 
-  // The C parameters: the 'this' handle, the member's parameters, the error
-  // code pointer; one conversion code each.
+  // The C parameters: the 'this' handle or reference, the member's
+  // parameters, the error code pointer; one conversion code each.
   const FunctionType *FTy = F.getFunctionType();
   const DataLayout &DL = F.getDataLayout();
   if (FTy->isVarArg())
@@ -174,14 +193,20 @@ Expected<MSIL::ManagedCall> MSIL::parseManagedCall(const Function &F) {
                      Twine(NumParams));
   unsigned I = 0;
   if (Call.hasThisHandle()) {
+    // The 'this' handle, or the 'this' reference of a class, an interface,
+    // System.String or System.Object (plan 5.21.9 RM6).
     ManagedConv C = Call.Conv.Params[0];
-    bool Fits = (C == ManagedConv::ThisObj && Call.Type.Kind == TK::Class) ||
-                (C == ManagedConv::ThisVal && Call.Type.Kind == TK::ValueType &&
-                 !Call.Type.isGCHandle()) ||
-                (C == ManagedConv::ThisGCH && Call.Type.isGCHandle());
-    if (!Fits || !cli::isManagedHandleType(FTy->getParamType(0), DL))
-      return callError("parameter 1: " +
-                       describePair(C, Call.Type, FTy->getParamType(0)));
+    Type *ThisTy = FTy->getParamType(0);
+    bool Fits =
+        C == ManagedConv::ThisRef
+            ? cli::fitsManagedConversion(C, Call.Type, ThisTy, DL)
+            : ((C == ManagedConv::ThisObj && Call.Type.Kind == TK::Class) ||
+               (C == ManagedConv::ThisVal && Call.Type.Kind == TK::ValueType &&
+                !Call.Type.isGCHandle()) ||
+               (C == ManagedConv::ThisGCH && Call.Type.isGCHandle())) &&
+                  cli::isManagedHandleType(ThisTy, DL);
+    if (!Fits)
+      return callError("parameter 1: " + describePair(C, Call.Type, ThisTy));
     ++I;
   }
   // ML1, MS5 as amended: the declaring type of a static method or of a
@@ -190,7 +215,8 @@ Expected<MSIL::ManagedCall> MSIL::parseManagedCall(const Function &F) {
   // when the stub is made.
   if (F.hasFnAttribute(cli::ManagedDeclAttr)) {
     StringRef Decl = Attr(cli::ManagedDeclAttr);
-    bool Static = Call.isStaticMethod();
+    // A cast stub accesses no member, which a type could declare.
+    bool Static = Call.isStaticMethod() && !Call.isCast();
     if (!Static && !Call.hasValueThisMethod())
       return callError("\"" + cli::ManagedDeclAttr +
                        "\" belongs only to a static method or to an instance "
@@ -216,7 +242,10 @@ Expected<MSIL::ManagedCall> MSIL::parseManagedCall(const Function &F) {
   }
   for (const cli::ManagedType &P : Call.Sig.Params) {
     ManagedConv C = Call.Conv.Params[I];
-    if (!cli::fitsManagedConversion(C, P, FTy->getParamType(I), DL))
+    // 'this-ref' converts only the 'this' reference (plan 5.21.9 RM1), never
+    // the member's first parameter, though its types may fit.
+    if (C == ManagedConv::ThisRef ||
+        !cli::fitsManagedConversion(C, P, FTy->getParamType(I), DL))
       return callError("parameter " + Twine(I + 1) + ": " +
                        describePair(C, P, FTy->getParamType(I)));
     ++I;
@@ -562,16 +591,25 @@ static StubLocals layoutLocals(const MSIL::ManagedCall &Call,
 }
 
 /// Whether whole-program text checks the kind of \p T at run time (5.20.6
-/// MW2 as amended), the TYPE of a 'this-obj' member or of a class's
-/// constructor (a class), or of a 'this-val' member or of a value type's
-/// constructor (a value type): every kind but a fixed and right one,
-/// System.String or System.Object as a class and a one-byte value type
-/// (MSIL::isOneByteValueType) as a value type, whose TypeSpec would be the
-/// long form that PEVerify /md refuses.
+/// MW2 as amended), the TYPE of a 'this-obj' or 'this-ref' member, of a
+/// cast stub to a class or of a class's constructor (a class), or of a
+/// 'this-val' member or of a value type's constructor (a value type): every
+/// kind but a fixed and right one, System.String or System.Object as a
+/// class and a one-byte value type (MSIL::isOneByteValueType) as a value
+/// type, whose TypeSpec would be the long form that PEVerify /md refuses.
 static bool checksKindAtRunTime(const cli::ManagedType &T) {
   if (T.Kind == TK::Class)
     return T.TypeName != "System.String" && T.TypeName != "System.Object";
   return !MSIL::isOneByteValueType(T.TypeName);
+}
+
+/// Whether \p T is System.Object, written 'object' or 'class System.Object',
+/// to which every .NET reference passes without a castclass (plan 5.21.9
+/// RM7): the 'ref' parameter type or the 'this-ref' TYPE whose key is
+/// "object" (cli::getCLITypeKey).
+static bool isSystemObject(const cli::ManagedType &T) {
+  return T.Kind == TK::Object ||
+         (T.Kind == TK::Class && T.TypeName == "System.Object");
 }
 
 /// Whether the value type \p E of an 'enum' conversion is never an enum: a
@@ -733,14 +771,15 @@ class StubWriter {
           Delta);
   }
   /// An instruction that keeps the stack depth and whose token is TYPE as
-  /// the declaration states its kind: the castclass of a 'this-obj' handle,
-  /// the unbox of a 'this-val' handle, and a constructor's castclass or box
-  /// (checkConstructedKind). In whole-program text it is a TypeSpec of that
-  /// kind ('class [<s>]T', 'valuetype [<s>]V'), which the runtime checks
-  /// against the type's definition when it compiles the stub (T-M16 at run
-  /// time), unless that kind is fixed and right (checksKindAtRunTime);
-  /// otherwise TYPE's TypeRef, as objects name it, whose kind msil-ld checks
-  /// (MK3).
+  /// the declaration states its kind: the castclass of a 'this-obj' handle
+  /// and of a 'this-ref' reference (plan 5.21.9 RM7), the unbox of a
+  /// 'this-val' handle, a cast stub's castclass of a class (RM8), and a
+  /// constructor's castclass or box (checkConstructedKind). In whole-program
+  /// text it is a TypeSpec of that kind ('class [<s>]T', 'valuetype [<s>]V'),
+  /// which the runtime checks against the type's definition when it compiles
+  /// the stub (T-M16 at run time), unless that kind is fixed and right
+  /// (checksKindAtRunTime); otherwise TYPE's TypeRef, as objects name it,
+  /// whose kind msil-ld checks (MK3).
   void declaredType(cli::Opcode Op) {
     if (!TextChecks || !checksKindAtRunTime(Call.Type)) {
       type(Op, Call.Type, 0);
@@ -993,11 +1032,20 @@ void StubWriter::emitLengthLoop(unsigned Arg, bool UTF32) {
 /// pointer to a boxed value type, or one to the GCHandle itself. A 'this'
 /// handle of 0 is null, so the access or 'unbox' throws
 /// NullReferenceException (5.20.8 MX4); a GCHandle value of 0 throws
-/// InvalidOperationException in FromIntPtr, as in C#.
+/// InvalidOperationException in FromIntPtr, as in C#. A 'this' reference
+/// (plan 5.21.9 RM7) passes as it is, so a null one makes the access throw
+/// NullReferenceException too.
 void StubWriter::emitThis() {
   switch (Call.Conv.Params[0]) {
   case ManagedConv::ThisObj:
     loadHandleTarget(0, &Call.Type, /*ThisObj=*/true);
+    return;
+  case ManagedConv::ThisRef:
+    // The reference, cast to TYPE as the declaration states its kind, unless
+    // TYPE is System.Object: no null test, GCHandle or box.
+    ldarg(0);
+    if (!isSystemObject(Call.Type))
+      declaredType(cli::Opcode::Castclass);
     return;
   case ManagedConv::ThisVal:
     loadHandleTarget(0);
@@ -1104,9 +1152,18 @@ void StubWriter::emitArgument(unsigned Arg, const cli::ManagedType &CIL,
     ldarg(Arg);
     bcl(cli::Opcode::Call, cli::BCLMemberId::GCHandle_FromIntPtr, 0);
     return;
+  case ManagedConv::Ref:
+    // Plan 5.21.9 RM7: the reference, cast to the parameter's type unless
+    // that is System.Object; no null test, GCHandle or box, so null passes
+    // as null.
+    ldarg(Arg);
+    if (!isSystemObject(CIL))
+      type(cli::Opcode::Castclass, CIL, 0);
+    return;
   case ManagedConv::ThisObj:
   case ManagedConv::ThisVal:
   case ManagedConv::ThisGCH:
+  case ManagedConv::ThisRef:
   case ManagedConv::Void:
   case ManagedConv::Err:
     break;
@@ -1115,11 +1172,21 @@ void StubWriter::emitArgument(unsigned Arg, const cli::ManagedType &CIL,
 }
 
 /// The access (ML2 (2)): newarr, newobj, ldsfld, ldfld, call, callvirt, or
-/// 'constrained. V' then callvirt for a value type's 'this'.
+/// 'constrained. V' then callvirt for a value type's 'this'. A cast stub
+/// accesses no member: its castclass stands in its place.
 void StubWriter::emitAccess() {
   const cli::ManagedSignature &Sig = Call.Sig;
   int NumParams = Sig.Params.size();
-  if (Call.isArrayConstructor()) {
+  if (Call.isCast()) {
+    // Plan 5.21.9 RM8: the argument, an 'object', cast to TYPE: a class as
+    // the declaration states its kind, or an array type by its TypeSpec. It
+    // throws InvalidCastException if the object is of another class. Tested
+    // first, since isArrayConstructor also holds for a cast to an array.
+    if (Call.Type.Kind == TK::SZArray)
+      type(cli::Opcode::Castclass, Call.Type, 0);
+    else
+      declaredType(cli::Opcode::Castclass);
+  } else if (Call.isArrayConstructor()) {
     type(cli::Opcode::Newarr, Call.Type.getElement(), 0);
   } else if (Call.isConstructor()) {
     member(cli::Opcode::Newobj, 1 - NumParams);
@@ -1139,11 +1206,12 @@ void StubWriter::emitAccess() {
         inheritedMember(cli::Opcode::Call, Delta);
         return;
       }
-      // callvirt for an instance method of a reference type ('this-obj':
-      // the runtime resolves an inherited member through V); call for a
-      // static method.
+      // callvirt for an instance method of a reference type ('this-obj' or
+      // 'this-ref': the runtime resolves an inherited member through V, and
+      // an override runs, plan 5.21.9 RM7); call for a static method.
       bool Virtual =
-          Sig.HasThis && Call.Conv.Params.front() == ManagedConv::ThisObj;
+          Sig.HasThis && (Call.Conv.Params.front() == ManagedConv::ThisObj ||
+                          Call.Conv.Params.front() == ManagedConv::ThisRef);
       member(Virtual ? cli::Opcode::Callvirt : cli::Opcode::Call, Delta);
       return;
     }
@@ -1244,35 +1312,48 @@ void StubWriter::emitResult() {
     bcl(cli::Opcode::Call, cli::BCLMemberId::GCHandle_ToIntPtr, 0);
     narrowHandle();
     return;
+  case ManagedConv::Ref:
+    // Plan 5.21.9 RM7: the reference, returned as it is: no GCHandle, and a
+    // null reference stays null. The stub's IL result is 'object'.
+    return;
   case ManagedConv::UTF8:
   case ManagedConv::UTF16:
   case ManagedConv::UTF32:
   case ManagedConv::ThisObj:
   case ManagedConv::ThisVal:
   case ManagedConv::ThisGCH:
+  case ManagedConv::ThisRef:
   case ManagedConv::Err:
     break;
   }
   llvm_unreachable("parseManagedCall checked the result conversion");
 }
 
-/// MX2: the zero value of the C result's IL type.
+/// MX2: the zero value of the C result's IL type, and for a reference null
+/// (plan 5.21.9 RM12).
 void StubWriter::emitZero(MSIL::ValType T) {
-  ldc(0);
   switch (T) {
   case MSIL::ValType::I32:
+    ldc(0);
     return;
   case MSIL::ValType::NativeInt:
+    ldc(0);
     op(cli::Opcode::Conv_i, 0);
     return;
   case MSIL::ValType::I64:
+    ldc(0);
     op(cli::Opcode::Conv_i8, 0);
     return;
   case MSIL::ValType::F32:
+    ldc(0);
     op(cli::Opcode::Conv_r4, 0);
     return;
   case MSIL::ValType::F64:
+    ldc(0);
     op(cli::Opcode::Conv_r8, 0);
+    return;
+  case MSIL::ValType::Object:
+    op(cli::Opcode::Ldnull, 1);
     return;
   }
 }
@@ -1349,7 +1430,8 @@ void StubWriter::build() {
   label(FilterEnd, 1);
   op(cli::Opcode::Endfilter, -1);
 
-  // The handler: *err = code, and the zero value of the C result.
+  // The handler: *err = code, and the zero value of the C result (null for a
+  // reference).
   label(HandlerBegin, 1);
   op(cli::Opcode::Pop, -1);
   ldarg(NumParams - 1);

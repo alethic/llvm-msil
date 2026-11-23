@@ -23,13 +23,22 @@
 //     (ARG_TEE), 'ldsfld; ldc.i4; add' (GLOBAL_ADDR) and 'ldnull; throw'
 //     (TRAP), and 0 for every other structural record, including CONST_I64
 //     ('ldc; conv.i' never holds two values);
-//   - registers are of the four classes I32, I64, F32 and F64 only (one CIL
-//     type per class, decision D2);
+//   - registers are of the five classes I32, I64, F32, F64 and OBJ only (one
+//     CIL type per class, decision D2; OBJ is R-a's 'object', plan 5.21.7
+//     RB2, MIR class 'obj', RV26: four classes become five);
 //   - every record but ARGUMENT_<RC> implicitly defines ARGUMENTS and every
 //     ARGUMENT_<RC> implicitly uses it, which keeps the arguments at the
 //     function entry.
 // The flags that RegStackify relies on (side effects, rematerialization) are
-// checked against plan 5.4 as well.
+// checked against plan 5.4 as well. R-a's records (5.21.7 RB3: MSILInstrRef.td)
+// follow the same contract: the core records of the OBJ class, CONST_NULL
+// ('ldnull': one push, no operand but its def), CEQ_OBJ (two objects in, an
+// int32 out), the compare-and-branch records BEQ_OBJ and BNE_UN_OBJ (two
+// pops) and BR_IF_OBJ and BR_UNLESS_OBJ (one pop), which are conditional
+// branches like BR_IF, and SELECT_OBJ (SELECT_<RC>'s operand list, plan 5.4,
+// expanded by the custom inserter). The tables of MSILMCTargetDesc.h know
+// the OBJ class's ARGUMENT, COPY and TEE records, and CONST_NULL is no scalar
+// constant there (RB3).
 //
 //===----------------------------------------------------------------------===//
 
@@ -80,31 +89,44 @@ struct RecordSpec {
   unsigned PeakExtra;
 };
 
-const unsigned RegClasses[] = {MSIL::I32RegClassID, MSIL::I64RegClassID,
-                               MSIL::F32RegClassID, MSIL::F64RegClassID};
-const char *const RCSuffix[] = {"I32", "I64", "F32", "F64"};
+// The five register classes (plan 5.4; OBJ since R-a, 5.21.7 RB2).
+constexpr unsigned NumClasses = 5;
+const unsigned RegClasses[NumClasses] = {
+    MSIL::I32RegClassID, MSIL::I64RegClassID, MSIL::F32RegClassID,
+    MSIL::F64RegClassID, MSIL::OBJRegClassID};
+const char *const RCSuffix[NumClasses] = {"I32", "I64", "F32", "F64", "OBJ"};
 
-// The per-class records of plan 5.4, indexed like RegClasses.
-const unsigned ArgumentOps[] = {MSIL::ARGUMENT_I32, MSIL::ARGUMENT_I64,
-                                MSIL::ARGUMENT_F32, MSIL::ARGUMENT_F64};
-const unsigned CopyOps[] = {MSIL::COPY_I32, MSIL::COPY_I64, MSIL::COPY_F32,
-                            MSIL::COPY_F64};
-const unsigned TeeOps[] = {MSIL::TEE_I32, MSIL::TEE_I64, MSIL::TEE_F32,
-                           MSIL::TEE_F64};
-const unsigned LocalGetOps[] = {MSIL::LOCAL_GET_I32, MSIL::LOCAL_GET_I64,
-                                MSIL::LOCAL_GET_F32, MSIL::LOCAL_GET_F64};
-const unsigned LocalSetOps[] = {MSIL::LOCAL_SET_I32, MSIL::LOCAL_SET_I64,
-                                MSIL::LOCAL_SET_F32, MSIL::LOCAL_SET_F64};
-const unsigned LocalTeeOps[] = {MSIL::LOCAL_TEE_I32, MSIL::LOCAL_TEE_I64,
-                                MSIL::LOCAL_TEE_F32, MSIL::LOCAL_TEE_F64};
-const unsigned ArgGetOps[] = {MSIL::ARG_GET_I32, MSIL::ARG_GET_I64,
-                              MSIL::ARG_GET_F32, MSIL::ARG_GET_F64};
-const unsigned ArgSetOps[] = {MSIL::ARG_SET_I32, MSIL::ARG_SET_I64,
-                              MSIL::ARG_SET_F32, MSIL::ARG_SET_F64};
-const unsigned ArgTeeOps[] = {MSIL::ARG_TEE_I32, MSIL::ARG_TEE_I64,
-                              MSIL::ARG_TEE_F32, MSIL::ARG_TEE_F64};
-const unsigned DropOps[] = {MSIL::DROP_I32, MSIL::DROP_I64, MSIL::DROP_F32,
-                            MSIL::DROP_F64};
+// The per-class records of plan 5.4, indexed like RegClasses (the OBJ ones
+// from MSILInstrRef.td's ARGUMENT and LOCAL multiclasses, 5.21.7 RB3).
+const unsigned ArgumentOps[NumClasses] = {
+    MSIL::ARGUMENT_I32, MSIL::ARGUMENT_I64, MSIL::ARGUMENT_F32,
+    MSIL::ARGUMENT_F64, MSIL::ARGUMENT_OBJ};
+const unsigned CopyOps[NumClasses] = {MSIL::COPY_I32, MSIL::COPY_I64,
+                                      MSIL::COPY_F32, MSIL::COPY_F64,
+                                      MSIL::COPY_OBJ};
+const unsigned TeeOps[NumClasses] = {
+    MSIL::TEE_I32, MSIL::TEE_I64, MSIL::TEE_F32, MSIL::TEE_F64, MSIL::TEE_OBJ};
+const unsigned LocalGetOps[NumClasses] = {
+    MSIL::LOCAL_GET_I32, MSIL::LOCAL_GET_I64, MSIL::LOCAL_GET_F32,
+    MSIL::LOCAL_GET_F64, MSIL::LOCAL_GET_OBJ};
+const unsigned LocalSetOps[NumClasses] = {
+    MSIL::LOCAL_SET_I32, MSIL::LOCAL_SET_I64, MSIL::LOCAL_SET_F32,
+    MSIL::LOCAL_SET_F64, MSIL::LOCAL_SET_OBJ};
+const unsigned LocalTeeOps[NumClasses] = {
+    MSIL::LOCAL_TEE_I32, MSIL::LOCAL_TEE_I64, MSIL::LOCAL_TEE_F32,
+    MSIL::LOCAL_TEE_F64, MSIL::LOCAL_TEE_OBJ};
+const unsigned ArgGetOps[NumClasses] = {MSIL::ARG_GET_I32, MSIL::ARG_GET_I64,
+                                        MSIL::ARG_GET_F32, MSIL::ARG_GET_F64,
+                                        MSIL::ARG_GET_OBJ};
+const unsigned ArgSetOps[NumClasses] = {MSIL::ARG_SET_I32, MSIL::ARG_SET_I64,
+                                        MSIL::ARG_SET_F32, MSIL::ARG_SET_F64,
+                                        MSIL::ARG_SET_OBJ};
+const unsigned ArgTeeOps[NumClasses] = {MSIL::ARG_TEE_I32, MSIL::ARG_TEE_I64,
+                                        MSIL::ARG_TEE_F32, MSIL::ARG_TEE_F64,
+                                        MSIL::ARG_TEE_OBJ};
+const unsigned DropOps[NumClasses] = {MSIL::DROP_I32, MSIL::DROP_I64,
+                                      MSIL::DROP_F32, MSIL::DROP_F64,
+                                      MSIL::DROP_OBJ};
 
 std::vector<RecordSpec> structuralRecords() {
   std::vector<RecordSpec> R;
@@ -116,7 +138,7 @@ std::vector<RecordSpec> structuralRecords() {
   };
   const OperandSpec Local = other(MSIL::OPERAND_LOCAL);
   const OperandSpec Arg = other(MSIL::OPERAND_ARG);
-  for (unsigned I = 0; I != 4; ++I) {
+  for (unsigned I = 0; I != NumClasses; ++I) {
     const OperandSpec RC = reg(RegClasses[I]);
     const std::string S = RCSuffix[I];
     Add(ArgumentOps[I], "ARGUMENT_" + S, 1, 0, {RC, I32Imm}, false, 0);
@@ -163,6 +185,19 @@ std::vector<RecordSpec> structuralRecords() {
   Add(MSIL::CALL_INDIRECT, "CALL_INDIRECT", 0, 0, {}, true, 0);
   // Frame.
   Add(MSIL::LOCALLOC, "LOCALLOC", 1, 1, {I64, I32}, false, 0);
+  // References (R-a, 5.21.7 RB3, MSILInstrRef.td): 'ldnull' pushes one
+  // object and reads nothing; 'ceq' pops two objects and pushes an int32;
+  // 'beq' and 'bne.un' pop two objects, 'brtrue' and 'brfalse' one, each
+  // after its target block as BR_IF's operands are; SELECT_OBJ has plan
+  // 5.4's SELECT_<RC> operands.
+  const OperandSpec Obj = reg(MSIL::OBJRegClassID);
+  Add(MSIL::CONST_NULL, "CONST_NULL", 1, 0, {Obj}, false, 0);
+  Add(MSIL::CEQ_OBJ, "CEQ_OBJ", 1, 2, {I32, Obj, Obj}, false, 0);
+  Add(MSIL::BEQ_OBJ, "BEQ_OBJ", 0, 2, {BBOp, Obj, Obj}, false, 0);
+  Add(MSIL::BNE_UN_OBJ, "BNE_UN_OBJ", 0, 2, {BBOp, Obj, Obj}, false, 0);
+  Add(MSIL::BR_IF_OBJ, "BR_IF_OBJ", 0, 1, {BBOp, Obj}, false, 0);
+  Add(MSIL::BR_UNLESS_OBJ, "BR_UNLESS_OBJ", 0, 1, {BBOp, Obj}, false, 0);
+  Add(MSIL::SELECT_OBJ, "SELECT_OBJ", 1, 3, {Obj, I32, Obj, Obj}, false, 0);
   return R;
 }
 
@@ -241,8 +276,9 @@ TEST_F(MSILStackEffectTest, MSILRecordsPushAtMostOneValue) {
 }
 
 // One CIL type per register class (decision D2): every register operand of
-// every record is I32, I64 (native int), F32 or F64.
-TEST_F(MSILStackEffectTest, MSILRegisterOperandsUseTheFourClasses) {
+// every record is I32, I64 (native int), F32, F64 or, since R-a, OBJ (object,
+// plan 5.21.7 RB2).
+TEST_F(MSILStackEffectTest, MSILRegisterOperandsUseTheFiveClasses) {
   for (unsigned Opc : targetOpcodes()) {
     SCOPED_TRACE(MII->getName(Opc).str());
     const MCInstrDesc &Desc = MII->get(Opc);
@@ -295,7 +331,7 @@ TEST_F(MSILStackEffectTest, MSILArgumentsOrdering) {
 // The flags of plan 5.4 that RegStackify, rematerialization and branch
 // analysis rely on.
 TEST_F(MSILStackEffectTest, MSILRecordFlagsMatchPlan54) {
-  for (unsigned I = 0; I != 4; ++I) {
+  for (unsigned I = 0; I != NumClasses; ++I) {
     SCOPED_TRACE(RCSuffix[I]);
     const MCInstrDesc &Argument = MII->get(ArgumentOps[I]);
     EXPECT_TRUE(Argument.hasUnmodeledSideEffects());
@@ -346,12 +382,17 @@ TEST_F(MSILStackEffectTest, MSILRecordFlagsMatchPlan54) {
     EXPECT_TRUE(Desc.isTerminator());
     EXPECT_TRUE(Desc.isBarrier());
   }
-  for (unsigned Opc : {MSIL::BR_IF, MSIL::BR_UNLESS}) {
+  // The conditional branches, R-a's on objects (5.21.7 RB3: 'brtrue',
+  // 'brfalse', 'beq', 'bne.un') among them, fall through when not taken, so
+  // branch analysis can invert and reverse them.
+  for (unsigned Opc : {MSIL::BR_IF, MSIL::BR_UNLESS, MSIL::BR_IF_OBJ,
+                       MSIL::BR_UNLESS_OBJ, MSIL::BEQ_OBJ, MSIL::BNE_UN_OBJ}) {
     SCOPED_TRACE(MII->getName(Opc).str());
     const MCInstrDesc &Desc = MII->get(Opc);
     EXPECT_TRUE(Desc.isBranch());
     EXPECT_TRUE(Desc.isTerminator());
     EXPECT_FALSE(Desc.isBarrier());
+    EXPECT_FALSE(Desc.isCall());
   }
 
   for (unsigned Opc : {MSIL::CALL_PARAMS, MSIL::CALL_RESULTS, MSIL::CALL,
@@ -364,6 +405,44 @@ TEST_F(MSILStackEffectTest, MSILRecordFlagsMatchPlan54) {
     EXPECT_TRUE(MII->get(Opc).variadicOpsAreDefs());
   }
   EXPECT_FALSE(MII->get(MSIL::CALL_PARAMS).variadicOpsAreDefs());
+
+  // R-a (5.21.7 RB3, RB7): 'ldnull' is a constant that RegStackify may clone
+  // to its uses and that ExplicitLocals writes for an undefined object; it
+  // reads and writes no memory and has no side effects, and neither has
+  // 'ceq' on two objects. SELECT_OBJ is expanded by the custom inserter, as
+  // every SELECT_<RC> is (plan 5.4, decision D34).
+  const MCInstrDesc &Null = MII->get(MSIL::CONST_NULL);
+  EXPECT_TRUE(Null.isRematerializable());
+  EXPECT_FALSE(Null.hasUnmodeledSideEffects());
+  EXPECT_FALSE(Null.mayLoad());
+  EXPECT_FALSE(Null.mayStore());
+  EXPECT_FALSE(Null.isBranch());
+  const MCInstrDesc &Ceq = MII->get(MSIL::CEQ_OBJ);
+  EXPECT_FALSE(Ceq.hasUnmodeledSideEffects());
+  EXPECT_FALSE(Ceq.mayLoad());
+  EXPECT_FALSE(Ceq.mayStore());
+  EXPECT_FALSE(Ceq.isBranch());
+  EXPECT_TRUE(MII->get(MSIL::SELECT_OBJ).usesCustomInsertionHook());
+
+  // The opcode tables of MSILMCTargetDesc.h (plan 5.3) know the OBJ class's
+  // structural records like the other classes' (5.21.7 RB3), and CONST_NULL
+  // is no scalar constant: isScalarConst serves the numeric constants only.
+  for (unsigned I = 0; I != NumClasses; ++I) {
+    SCOPED_TRACE(RCSuffix[I]);
+    EXPECT_TRUE(MSIL::isArgument(ArgumentOps[I]));
+    EXPECT_TRUE(MSIL::isCopy(CopyOps[I]));
+    EXPECT_TRUE(MSIL::isTee(TeeOps[I]));
+    EXPECT_FALSE(MSIL::isArgument(CopyOps[I]));
+    EXPECT_FALSE(MSIL::isCopy(TeeOps[I]));
+    EXPECT_FALSE(MSIL::isTee(CopyOps[I]));
+    EXPECT_FALSE(MSIL::isTee(LocalTeeOps[I]));
+  }
+  for (unsigned Opc :
+       {MSIL::CONST_I32, MSIL::CONST_I64, MSIL::CONST_F32, MSIL::CONST_F64})
+    EXPECT_TRUE(MSIL::isScalarConst(Opc)) << MII->getName(Opc).str();
+  EXPECT_FALSE(MSIL::isScalarConst(MSIL::CONST_NULL));
+  EXPECT_FALSE(MSIL::isArgument(MSIL::CONST_NULL));
+  EXPECT_FALSE(MSIL::isCopy(MSIL::CONST_NULL));
 }
 
 } // end anonymous namespace

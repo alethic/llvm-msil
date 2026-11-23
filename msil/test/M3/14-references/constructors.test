@@ -1,0 +1,192 @@
+# .ctor managed calls with references (the Framework references): newobj gives a new object of the class each time (System.Object, five in a loop, each different from the one before), System.Version and System.Text.StringBuilder take integer and C-string arguments, System.Exception::.ctor(string, class System.Exception) takes a String and an Exception reference (or NULL) and get_InnerException returns the same reference, System.ArgumentException::.ctor(string, string) keeps the parameter-name String reference that get_ParamName returns; array .ctors (newarr) of string[], object[] and class System.Version[] give array references, whose System.Array members store and load references (identity kept, an unset element NULL) after a checked cast to System.Array.
+# Plan 5.21.9 RM2 (a reference C type takes 'ref' for a '.ctor' type when
+# its key equals the CIL type's folded key, so a .ctor returns a reference
+# of exactly its class and an array .ctor one of exactly its array class;
+# arrays have only '.ctor'; an Exception parameter takes an Exception
+# reference), RM7 (a 'ref' argument is ldarg plus castclass, with no null
+# test, so NULL reaches the member as null; a 'ref' result is returned as
+# it is), 5.20.2 MA3 and 5.20.5 ML2 (a .ctor is newobj; an array TYPE with
+# 'instance void(int32)' is newarr), RM11 (these members bind only with
+# --reference: the program links against the .NET Framework 4.8
+# implementation assemblies, %{msil_refs_netfx}; the image runs on the
+# Framework, .NET 10 and WSL .NET 10), 5.21.2 RT2 and RT3 ('string[]',
+# 'object[]' and 'class System.Version[]' are array classes), 5.21.4 RS4,
+# RS5 and RS8 (a cast to System.Array is a checked cast). .NET's rules give
+# the values: newobj makes a new object each time; Version(1, 2, 3) prints
+# "1.2.3"; StringBuilder(string, int32) takes the capacity it is given when
+# that exceeds the text's length; Exception.InnerException and
+# ArgumentException.ParamName return the references the constructor got;
+# a new array's elements are null and SetValue and GetValue store and load
+# the reference itself (measured on the .NET Framework 4.8.1, .NET 10 and
+# WSL .NET 10). The members have no C library equivalent, so the expected
+# file is hand-written for both OSes (plan 5.20.11 MT3 and 5.17.4 as
+# amended for MC-1, under MC-1's reason; 5.21.14 RV28). Plan 5.17.13 (R-a,
+# M3/14-references).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Version") Version Version;
+typedef struct CLI_TYPE("System.Text.StringBuilder")
+    StringBuilder StringBuilder;
+typedef struct CLI_TYPE("System.Exception") Exception Exception;
+typedef struct CLI_TYPE("System.ArgumentException") ArgumentException
+    ArgumentException;
+typedef struct CLI_TYPE("System.Array") Array Array;
+typedef struct CLI_TYPE("string[]") Strings Strings;
+typedef struct CLI_TYPE("object[]") Objects Objects;
+typedef struct CLI_TYPE("class System.Version[]") Versions Versions;
+
+__attribute__((msil_method("System.Object", ".ctor", "instance void()")))
+Object ^new_object(void);
+
+__attribute__((msil_method("System.Version", ".ctor",
+                           "instance void(int32, int32, int32)")))
+Version ^new_version(int major, int minor, int build);
+
+__attribute__((msil_method("System.Version", "get_Minor", "instance int32()")))
+int version_minor(Version ^v);
+
+__attribute__((msil_method("System.Text.StringBuilder", ".ctor",
+                           "instance void(string, int32)")))
+StringBuilder ^new_builder(const char *text, int capacity);
+
+__attribute__((msil_method("System.Text.StringBuilder", "get_Capacity",
+                           "instance int32()")))
+int builder_capacity(StringBuilder ^sb);
+
+__attribute__((msil_method("System.Text.StringBuilder", "get_Length",
+                           "instance int32()")))
+int builder_length(StringBuilder ^sb);
+
+__attribute__((msil_method("System.Exception", ".ctor",
+                           "instance void(string, class System.Exception)")))
+Exception ^new_exception(String ^message, Exception ^inner);
+
+__attribute__((msil_method("System.Exception", "get_InnerException",
+                           "instance class System.Exception()")))
+Exception ^exception_inner(Exception ^e);
+
+__attribute__((msil_method("System.ArgumentException", ".ctor",
+                           "instance void(string, string)")))
+ArgumentException ^new_argument(String ^message, String ^param_name);
+
+__attribute__((msil_method("System.ArgumentException", "get_ParamName",
+                           "instance string()")))
+String ^argument_param_name(ArgumentException ^e);
+
+__attribute__((msil_method("string[]", ".ctor", "instance void(int32)")))
+Strings ^new_strings(int length);
+
+__attribute__((msil_method("object[]", ".ctor", "instance void(int32)")))
+Objects ^new_objects(int length);
+
+__attribute__((msil_method("class System.Version[]", ".ctor",
+                           "instance void(int32)")))
+Versions ^new_versions(int length);
+
+__attribute__((msil_method("System.Array", "get_Length", "instance int32()")))
+int array_length(Array ^a);
+
+__attribute__((msil_method("System.Array", "SetValue",
+                           "instance void(object, int32)")))
+void array_set(Array ^a, Object ^value, int index);
+
+__attribute__((msil_method("System.Array", "GetValue",
+                           "instance object(int32)")))
+Object ^array_get(Array ^a, int index);
+
+__attribute__((msil_method("System.Object", "ToString", "instance string()")))
+String ^to_string(Object ^o);
+
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+String ^concat_text(const char *a, const char *b);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static void put_string(const char *what, String ^s) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+static String ^text(const char *s) { return concat_text(s, ""); }
+
+int main(void) {
+  /* A new object per newobj. */
+  Object ^first = new_object();
+  Object ^second = new_object();
+  printf("two Objects: not NULL %d %d, different %d\n", first != NULL,
+         second != NULL, first != second);
+  int fresh = 0;
+  Object ^previous = first;
+  for (int i = 0; i < 5; ++i) {
+    Object ^made = new_object();
+    fresh += made != NULL && made != previous && made != first;
+    previous = made;
+  }
+  printf("five more in a loop, each new: %d\n", fresh);
+
+  /* Integer and C-string arguments. */
+  Version ^v = new_version(1, 2, 3);
+  put_string("Version(1, 2, 3)", to_string(v));
+  printf("its Minor: %d\n", version_minor(v));
+  StringBuilder ^sb = new_builder("capacity", 100);
+  printf("StringBuilder(\"capacity\", 100): length %d, capacity %d\n",
+         builder_length(sb), builder_capacity(sb));
+
+  /* Reference arguments: a String and an Exception, or NULL. */
+  Exception ^inner = new_exception(text("inner"), NULL);
+  Exception ^outer = new_exception(text("outer"), inner);
+  printf("InnerException: of the outer is the inner %d, of the inner NULL %d\n",
+         exception_inner(outer) == inner, exception_inner(inner) == NULL);
+  String ^param = text("width");
+  ArgumentException ^arg = new_argument(text("too wide"), param);
+  printf("ParamName returns the reference the .ctor got: %d\n",
+         argument_param_name(arg) == param);
+  put_string("ParamName", argument_param_name(arg));
+
+  /* Array .ctors. */
+  Strings ^names = new_strings(3);
+  Array ^names_array = (Array ^)names;
+  String ^name = text("element");
+  array_set(names_array, name, 1);
+  printf("string[3]: length %d, element 1 is the string %d, element 0 NULL "
+         "%d\n",
+         array_length(names_array), (String ^)array_get(names_array, 1) == name,
+         array_get(names_array, 0) == NULL);
+  Objects ^objects = new_objects(2);
+  Array ^objects_array = (Array ^)objects;
+  array_set(objects_array, v, 0);
+  array_set(objects_array, name, 1);
+  printf("object[2]: length %d, holds the Version %d and the string %d\n",
+         array_length(objects_array),
+         (Version ^)array_get(objects_array, 0) == v,
+         (String ^)array_get(objects_array, 1) == name);
+  Versions ^versions = new_versions(4);
+  Array ^versions_array = (Array ^)versions;
+  array_set(versions_array, v, 3);
+  printf("System.Version[4]: length %d, element 3 is the Version %d, element 2 "
+         "NULL %d\n",
+         array_length(versions_array),
+         (Version ^)array_get(versions_array, 3) == v,
+         array_get(versions_array, 2) == NULL);
+  printf("three arrays, three objects: %d\n",
+         names_array != objects_array && objects_array != versions_array &&
+             names_array != versions_array);
+  return 0;
+}

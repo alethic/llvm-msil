@@ -1,0 +1,15 @@
+UTF8Encoding: not null 1, the same object as Encoding 1
+UTF-8 decoded: 0068 00e9 006c 006c 006f 002c 0020 20ac 0020 d834 dd1e
+equal to the expected units: 1
+decoded again: same units 1, another object 1
+UTF-32 decoded: 0068 00e9 006c 006c 006f 002c 0020 20ac 0020 d834 dd1e
+UTF-32 and UTF-8 give the same units: 1
+from char16_t units: 0072 0065 0066 03a9
+the buffer changed, the string did not: 1
+StringToHGlobalAnsi: "plain ASCII text", equal 1
+empty text: not null 1, first unit 0
+a NULL String reference: null result 1
+NULL: (null string)
+HResults: 0x80131523 0x80131523 0x80131523 0x80131523
+four distinct exceptions: 1
+[exit 0]

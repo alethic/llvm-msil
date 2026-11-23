@@ -780,6 +780,9 @@ const char *vTableClassNameForType(const CIRGenModule &cgm, const Type *ty) {
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
     llvm_unreachable("HLSL doesn't support virtual functions");
+
+  case Type::CLIReference:
+    llvm_unreachable(".NET references (MSIL) have no C++ type information");
   }
 
   return nullptr;
@@ -1283,6 +1286,9 @@ mlir::Attribute CIRGenItaniumRTTIBuilder::buildTypeInfo(
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
     llvm_unreachable("HLSL doesn't support RTTI");
+
+  case Type::CLIReference:
+    llvm_unreachable(".NET references (MSIL) have no C++ type information");
   }
 
   assert(!cir::MissingFeatures::opGlobalDLLImportExport());

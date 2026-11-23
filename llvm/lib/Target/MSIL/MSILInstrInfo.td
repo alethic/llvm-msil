@@ -267,6 +267,7 @@ include "MSILInstrMemory.td"
 include "MSILInstrControl.td"
 include "MSILInstrCall.td"
 include "MSILInstrFrame.td"
+include "MSILInstrRef.td"
 
 //===----------------------------------------------------------------------===//
 // MC-level CIL instructions.

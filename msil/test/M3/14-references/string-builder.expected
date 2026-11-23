@@ -1,0 +1,16 @@
+Append returns the builder: 1 1 1
+length 9
+ToString: "refs, 427"
+after Insert: "<refs, 427"
+Insert returns the builder 1; two ToString calls: equal 1, two objects 1
+the first string is unchanged: 1
+another builder: 1, its length 9
+Clear returns the builder 1, length 0, text empty 1
+Concat: "refs, 427!"
+Substring(6, 2): "42"
+ToUpperInvariant: "REFS, 427!"
+get_Length 10, Equals("42") 1, Equals("43") 0
+IsNullOrEmpty: NULL 1, empty 1, text 0
+op_Equality(NULL, NULL) 1, op_Equality(text, NULL) 0
+Concat(NULL, text): "42"
+[exit 0]

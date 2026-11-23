@@ -271,6 +271,7 @@ bool TypePrinter::canPrefixQualifiers(const Type *T,
     case Type::ArrayParameter:
     case Type::Pointer:
     case Type::BlockPointer:
+    case Type::CLIReference:
     case Type::LValueReference:
     case Type::RValueReference:
     case Type::MemberPointer:
@@ -434,6 +435,26 @@ void TypePrinter::printBlockPointerAfter(const BlockPointerType *T,
                                           raw_ostream &OS) {
   SaveAndRestore NonEmptyPH(HasEmptyPlaceHolder, false);
   printAfter(T->getPointeeType(), OS);
+}
+
+void TypePrinter::printCLIReferenceBefore(const CLIReferenceType *T,
+                                          raw_ostream &OS) {
+  SaveAndRestore NonEmptyPH(HasEmptyPlaceHolder, false);
+  if (T->isSugared()) {
+    printBefore(T->getClassType(), OS);
+  } else {
+    // The class of the canonical type is the key's implicit struct, named by
+    // the .NET class's display name ("System.String ^"): no tag keyword.
+    ElaboratedTypePolicyRAII PolicyRAII(Policy);
+    printBefore(T->getClassType(), OS);
+  }
+  OS << '^';
+}
+
+void TypePrinter::printCLIReferenceAfter(const CLIReferenceType *T,
+                                         raw_ostream &OS) {
+  SaveAndRestore NonEmptyPH(HasEmptyPlaceHolder, false);
+  printAfter(T->getClassType(), OS);
 }
 
 // When printing a reference, the referenced type might also be a reference.

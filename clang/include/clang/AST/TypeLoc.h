@@ -1565,6 +1565,34 @@ public:
   }
 };
 
+struct CLIReferenceLocInfo {
+  SourceLocation CaretLoc;
+};
+
+/// Wrapper for source info for .NET references ('T ^', CLIReferenceType): the
+/// caret, then the TypeLoc of the class.
+class CLIReferenceTypeLoc
+    : public ConcreteTypeLoc<UnqualTypeLoc, CLIReferenceTypeLoc,
+                             CLIReferenceType, CLIReferenceLocInfo> {
+public:
+  SourceLocation getCaretLoc() const { return getLocalData()->CaretLoc; }
+  void setCaretLoc(SourceLocation Loc) { getLocalData()->CaretLoc = Loc; }
+
+  /// The 'cli_type' struct as written (the key's implicit struct for the
+  /// canonical type).
+  TypeLoc getClassLoc() const { return getInnerTypeLoc(); }
+
+  SourceRange getLocalSourceRange() const {
+    return SourceRange(getCaretLoc(), getCaretLoc());
+  }
+
+  void initializeLocal(ASTContext &Context, SourceLocation Loc) {
+    setCaretLoc(Loc);
+  }
+
+  QualType getInnerType() const { return getTypePtr()->getClassType(); }
+};
+
 struct MemberPointerLocInfo : public PointerLikeLocInfo {
   void *QualifierData = nullptr;
 };

@@ -163,6 +163,10 @@ const llvm::abi::Type *QualTypeMapper::convertTypeImpl(QualType QT) {
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
     llvm::reportFatalInternalError("Type not supported in ABI lowering");
+  case Type::CLIReference:
+    // A .NET reference (MSIL) is valid C that this library cannot lower: a
+    // usage error (no crash reproducer), not an internal one.
+    llvm::reportFatalUsageError("Type not supported in ABI lowering");
   }
   llvm_unreachable("unhandled type class in convertTypeImpl");
 }

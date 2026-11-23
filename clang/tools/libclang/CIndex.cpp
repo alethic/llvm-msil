@@ -1723,6 +1723,10 @@ bool CursorVisitor::VisitBlockPointerTypeLoc(BlockPointerTypeLoc TL) {
   return Visit(TL.getPointeeLoc());
 }
 
+bool CursorVisitor::VisitCLIReferenceTypeLoc(CLIReferenceTypeLoc TL) {
+  return Visit(TL.getClassLoc());
+}
+
 bool CursorVisitor::VisitMemberPointerTypeLoc(MemberPointerTypeLoc TL) {
   return Visit(TL.getPointeeLoc());
 }

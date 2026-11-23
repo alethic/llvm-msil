@@ -228,6 +228,7 @@ inline bool isArgument(unsigned Opc) {
   case MSIL::ARGUMENT_I64:
   case MSIL::ARGUMENT_F32:
   case MSIL::ARGUMENT_F64:
+  case MSIL::ARGUMENT_OBJ:
     return true;
   default:
     return false;
@@ -240,6 +241,7 @@ inline bool isCopy(unsigned Opc) {
   case MSIL::COPY_I64:
   case MSIL::COPY_F32:
   case MSIL::COPY_F64:
+  case MSIL::COPY_OBJ:
     return true;
   default:
     return false;
@@ -252,12 +254,15 @@ inline bool isTee(unsigned Opc) {
   case MSIL::TEE_I64:
   case MSIL::TEE_F32:
   case MSIL::TEE_F64:
+  case MSIL::TEE_OBJ:
     return true;
   default:
     return false;
   }
 }
 
+/// The constants with an immediate: CONST_NULL ('ldnull', a .NET reference's
+/// null) has none and is not one of them.
 inline bool isScalarConst(unsigned Opc) {
   switch (Opc) {
   case MSIL::CONST_I32:

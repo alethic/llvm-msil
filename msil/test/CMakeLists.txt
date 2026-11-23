@@ -125,6 +125,21 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
     # 5.20.11 MT3); their CodeGen test is in clang/test/CodeGen/MSIL.
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/attr-msil-method.c
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/SemaCXX/attr-msil-method.cpp
+    # .NET references in C (R-a, plan 5.21.14): the cli_type attribute, the caret and the Sema
+    # rules of references (RV1, RV3-RV8), their refusal in C++ (RV9), and <cli/cli.h> and the
+    # references on every MSIL triple in the driver (RV17; the header comes from the build's
+    # resource directory, which the clang target makes); their CodeGen tests are in
+    # clang/test/CodeGen/MSIL.
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-cli-type.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-ref-type.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-ref-ops.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-ref-storage.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-ref-functions.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-ref-jumps.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-ref-managed-calls.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/SemaCXX/msil-ref-cxx.cpp
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-cli-header.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-ref-driver.c
     )
 endif()
 # ExpandVariadics with the MSIL ABIs (M26): opt's test of the upstream pass.

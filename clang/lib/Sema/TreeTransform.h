@@ -909,6 +909,15 @@ public:
   /// type. Subclasses may override this routine to provide different behavior.
   QualType RebuildBlockPointerType(QualType PointeeType, SourceLocation Sigil);
 
+  /// Build a new .NET reference type 'T ^' (MSIL) for the key \p Key and
+  /// the class \p ClassType as transformed.
+  ///
+  /// By default, performs no semantic analysis: in C a class struct is never
+  /// transformed into another one. Subclasses may override this routine to
+  /// provide different behavior.
+  QualType RebuildCLIReferenceType(const IdentifierInfo *Key,
+                                   QualType ClassType, SourceLocation Caret);
+
   /// Build a new reference type given the type it references.
   ///
   /// By default, performs semantic analysis when building the
@@ -5920,6 +5929,34 @@ TreeTransform<Derived>::TransformBlockPointerType(TypeLocBuilder &TLB,
 
   BlockPointerTypeLoc NewT = TLB.push<BlockPointerTypeLoc>(Result);
   NewT.setSigilLoc(TL.getSigilLoc());
+  return Result;
+}
+
+template <typename Derived>
+QualType
+TreeTransform<Derived>::TransformCLIReferenceType(TypeLocBuilder &TLB,
+                                                  CLIReferenceTypeLoc TL) {
+  // The canonical type of a key holds the key's implicit struct, which is
+  // never dependent and which the source never names: nothing in it changes.
+  if (!TL.getTypePtr()->isSugared()) {
+    TLB.pushFullCopy(TL);
+    return TL.getType();
+  }
+
+  QualType ClassType = getDerived().TransformType(TLB, TL.getClassLoc());
+  if (ClassType.isNull())
+    return QualType();
+
+  QualType Result = TL.getType();
+  if (getDerived().AlwaysRebuild() || ClassType != TL.getClassLoc().getType()) {
+    Result = getDerived().RebuildCLIReferenceType(TL.getTypePtr()->getKey(),
+                                                  ClassType, TL.getCaretLoc());
+    if (Result.isNull())
+      return QualType();
+  }
+
+  CLIReferenceTypeLoc NewT = TLB.push<CLIReferenceTypeLoc>(Result);
+  NewT.setCaretLoc(TL.getCaretLoc());
   return Result;
 }
 
@@ -18059,6 +18096,12 @@ QualType TreeTransform<Derived>::RebuildBlockPointerType(QualType PointeeType,
                                                          SourceLocation Star) {
   return SemaRef.BuildBlockPointerType(PointeeType, Star,
                                        getDerived().getBaseEntity());
+}
+
+template <typename Derived>
+QualType TreeTransform<Derived>::RebuildCLIReferenceType(
+    const IdentifierInfo *Key, QualType ClassType, SourceLocation Caret) {
+  return SemaRef.Context.getCLIReferenceType(Key, ClassType);
 }
 
 template<typename Derived>

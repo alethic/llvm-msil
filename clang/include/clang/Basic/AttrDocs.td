@@ -7642,6 +7642,64 @@ same declaration.
   }];
 }
 
+def CLITypeDocs : Documentation {
+  let Category = DocCatDecl;
+  let Content = [{
+The ``__attribute__((cli_type(name)))`` attribute, also spelled
+``[[clang::cli_type(name)]]``, makes a C struct stand for a .NET reference type
+on targets whose object format is MSIL (such as ``x86_64-pc-windows-msvc-msil``
+and ``msil64-unknown-dotnet``); elsewhere it is ignored with clang's usual
+warning, and ``__has_attribute(cli_type)`` is true only on those targets. The
+header ``<cli/cli.h>`` defines ``CLI_TYPE(name)`` as this attribute and nothing
+else; on any other target it stops with an error.
+
+```c
+#include <cli/cli.h>
+#include <stddef.h>
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+
+static String ^as_string(Object ^o) {
+  if (!o)
+    return NULL;
+  return (String ^)o; // checked when it runs: InvalidCastException
+}
+```
+
+``name`` is a string literal: the full name of a class or interface
+(``"Ns.Name"``, ``"Ns.Outer/Inner"`` for a nested type), ``"System.String"``,
+``"System.Object"``, or an array type ``"<element>[]"`` whose element is a
+primitive type such as ``int32``, ``string``, ``object`` or ``class Ns.Name``.
+Value types (``valuetype``), a primitive type written alone (name the type by
+its full name, such as ``System.String``), ``class`` outside an array,
+pointers, resolution scopes and generic types are errors. Two names of one
+type, such as ``"string[]"`` and ``"class System.String[]"``, name one class,
+whatever the C structs are called. A misspelled class is found only where a
+managed call or a cast binds it.
+
+The attribute belongs on the first declaration of the struct; a later
+declaration repeats it or inherits it. Such a struct never has a body, because
+a .NET class has no layout in C memory.
+
+``T ^r``, with ``T`` such a struct, is a .NET object reference: a value that
+the .NET runtime tracks, held only in local variables, in the parameters and
+results of ``static``, prototyped, non-variadic functions whose address is never
+taken, and in the parameters and results of ``msil_method`` declarations. It
+is never in C memory: a pointer to ``T`` or to ``T ^``, ``T`` by value, a
+reference in a field, an array, a global or a static variable, ``sizeof`` and
+the address of a reference are errors, and an object that C memory must keep is
+held as a ``GCHandle`` number in an ``intptr_t``. A reference declared without
+an initializer is ``NULL``, and a jump past its declaration is an error.
+References support ``==`` and ``!=`` (identity), ``NULL`` and the other null
+pointer constants, ``!r``, ``if (r)``, ``&&``, ``||`` and ``?:``. A reference
+converts to a reference of ``System.Object`` by itself, and to another class
+only through a cast, which is checked when it runs and throws
+``System.InvalidCastException`` when the object is not of that class. In IL a
+reference is an ``object``. In C++ the attribute is accepted, so that C headers
+that use it compile, but the reference type ``T ^`` is not supported yet.
+  }];
+}
+
 def ArtificialDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{

@@ -39,6 +39,9 @@ ModulePass *createMSILFixFunctionBitcastsLegacyPass();
 ModulePass *createMSILPrepareVariadicsLegacyPass();
 ModulePass *createMSILLowerSjLjLegacyPass();
 ModulePass *createMSILLowerDynamicAllocaLegacyPass();
+/// Slot P15 (plan 5.21.7 RB10): promotes the static allocas of .NET
+/// references to values before instruction selection, at every level.
+ModulePass *createMSILPromoteReferencesLegacyPass();
 
 /// MSILFixFunctionBitcasts' "msil-lto" branch (cli::classifyCall's table,
 /// plan 5.9.8) before LTO optimization, so that no optimization folds a
@@ -88,6 +91,7 @@ void initializeMSILOptimizeLiveIntervalsLegacyPass(PassRegistry &);
 void initializeMSILOptimizeReturnedLegacyPass(PassRegistry &);
 void initializeMSILPrepareIRLegacyPass(PassRegistry &);
 void initializeMSILPrepareVariadicsLegacyPass(PassRegistry &);
+void initializeMSILPromoteReferencesLegacyPass(PassRegistry &);
 void initializeMSILRegColoringLegacyPass(PassRegistry &);
 void initializeMSILRegNumberingLegacyPass(PassRegistry &);
 void initializeMSILRegStackifyLegacyPass(PassRegistry &);

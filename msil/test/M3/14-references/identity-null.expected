@@ -1,0 +1,31 @@
+declared without an initializer: NULL 1, register NULL 1
+loop body 0: NULL at its declaration 1
+loop body 1: NULL at its declaration 1
+loop body 2: NULL at its declaration 1
+goto back over the declaration, pass 0: NULL 1
+goto back over the declaration, pass 1: NULL 1
+goto back over the declaration, pass 2: NULL 1
+pick(a, 1) is a 1, pick(a, 0) is NULL 1
+goto out of the initializer: a 1, NULL 1
+computed goto out of the initializer: a 1, NULL 1
+goto out of a ?: arm of the initializer: a 1, NULL 1
+String ^s = s, then set: a 1, not set: NULL 1
+initializers: 1 1 1 1
+assignments: 1 1 1 1
+arguments: 1 1 1 1
+returns: 1 1 1 1, and the argument back 1
+a == a 1, a == b 0, a != b 1, a != c 1
+Object o = a: o == a 1, a == o 1, o != b 1, o == NULL 0
+against null constants: a == NULL 0, NULL != a 1, a != 0 1
+conversions to Object: same_object(a, o) 1, same_object(a, b) 0, as_object(c) == c 1, same_object(NULL, n1) 1
+assigned o = c: o == c 1
+!a 0, !none 1, !!a 1
+if (a): taken
+if (none): not taken
+while (r) ran 3 times and r is NULL 1
+a && b 1, a && none 0, none || a 1, none || none 0
+a ? 1 : 2 = 1, none ? 1 : 2 = 2
+class ? : 1 1, with NULL 1 1, class and Object 1 1
+a ?: c is a 1, none ?: c is c 1
+used functions with a dead reference parameter: used_add 1001, used_live gave the live one back 1, called 1 time
+[exit 0]

@@ -33,7 +33,8 @@
 //   - SemaDecl.cpp's ActOnVariableDeclarator and ActOnFunctionDeclarator call
 //     checkMSILAsmLabel where they attach an asm label written with __asm__
 //     (T-M22). '#pragma redefine_extname' needs no call: it takes an
-//     identifier, which never contains the '.' of the reserved prefixes.
+//     identifier, which never contains the '.' or '<' of the reserved
+//     prefixes.
 //   - SemaDecl.cpp's ShouldWarnIfUnusedFileScopedDecl calls
 //     isStartupManagedCall beside its exemption of a constructor or
 //     destructor definition, so that a managed call with constructor or
@@ -112,13 +113,17 @@ bool checkMSILPragmaWeak(Sema &S, const NamedDecl &D, SourceLocation NameLoc);
 /// leading '\01'), written at \p Loc on a function or variable declaration,
 /// a definition or not, when it starts with a prefix that the toolchain
 /// reserves (plan 5.14.2 N3; T-M22): '__msil_mc.', which starts the name of a
-/// managed-call stub, or '__msil_mc_ctor.' or '__msil_mc_dtor.', which start
-/// the names of the forwarders that clang's CodeGen defines for a constructor
-/// or destructor managed call. A definition of such a name would replace the
-/// stub or the forwarder at link time. No C identifier contains the prefixes'
-/// '.', and no mangled name starts with them, so this also refuses every
-/// user definition with those names. (A dllexport forwarder is named the
-/// managed call's own symbol, which is not reserved.)
+/// managed-call stub, '__msil_mc_ctor.' or '__msil_mc_dtor.', which start the
+/// names of the forwarders that clang's CodeGen defines for a constructor or
+/// destructor managed call, or '<castclass>', the symbol of the cast stubs
+/// (plan 5.21.9 RM8). A definition whose name starts with one of the first
+/// three would replace the stub or the forwarder at link time, and a managed
+/// call whose label starts with '<castclass>' could take the IR name of a
+/// cast stub, '__msil_mc.<castclass>.__uniq.<n>'. No C identifier contains
+/// the prefixes' '.' or '<', and no mangled name starts with them, so this
+/// also refuses every user definition with those names and every managed
+/// call named like a cast stub. (A dllexport forwarder is named the managed
+/// call's own symbol, which is not reserved.)
 void checkMSILAsmLabel(Sema &S, llvm::StringRef Label, SourceLocation Loc);
 
 /// Whether \p FD is a function declaration without a body that has

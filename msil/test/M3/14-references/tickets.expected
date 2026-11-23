@@ -1,0 +1,15 @@
+each ticket gave its own object back: 1 1 1
+tickets are not 0: 1
+kept[0]: "first"
+kept[1]: "second"
+kept[2]: "third"
+distinct objects: 1
+two get_Target calls, one object: 1
+two tickets of one object: different numbers 1, same target 1 1
+records[0]: "in a struct"
+records[1] holds the shared object: 1
+heap[0]: "third"
+heap[0] and kept[2], one object: 1
+a ticket of NULL: not 0 1, target NULL 1
+tickets freed: 8
+[exit 0]

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemaMSILManagedCall.h"
+#include "SemaMSILReference.h"
 #include "TypeLocBuilder.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -9057,6 +9058,16 @@ void Sema::CheckVariableDeclarationType(VarDecl *NewVD) {
   if (T->isUndeducedType())
     return;
 
+  // MSIL: a .NET class has no value in C.
+  if (msil::diagnoseCLIClassByValue(*this, T, NewVD->getLocation())) {
+    NewVD->setInvalidDecl();
+    return;
+  }
+
+  // MSIL: the attributes that a .NET reference cannot have (RS25), checked
+  // here for a type deduced from the initializer.
+  msil::checkCLIReferenceVarAttrs(*this, NewVD);
+
   if (NewVD->hasAttrs())
     CheckAlignasUnderalignment(NewVD);
 
@@ -9248,8 +9259,9 @@ void Sema::CheckVariableDeclarationType(VarDecl *NewVD) {
   }
 
   bool isVM = T->isVariablyModifiedType();
-  if (isVM || NewVD->hasAttr<CleanupAttr>() ||
-      NewVD->hasAttr<BlocksAttr>())
+  // (MSIL: a jump must not skip a .NET reference's store of NULL.)
+  if (isVM || NewVD->hasAttr<CleanupAttr>() || NewVD->hasAttr<BlocksAttr>() ||
+      (NewVD->hasLocalStorage() && T->isCLIReferenceType()))
     setFunctionHasBranchProtectedScope();
 
   if ((isVM && NewVD->hasLinkage()) ||
@@ -11309,6 +11321,10 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   ProcessPragmaWeak(S, NewFD);
   ProcessPragmaExport(NewFD);
   checkAttributesAfterMerging(*this, *NewFD);
+
+  // MSIL .NET references: the signatures that cannot have one, and .NET
+  // classes by value (SemaMSILReference.cpp).
+  msil::checkCLIReferenceFunctionDecl(*this, NewFD);
 
   // MSIL managed calls: the checks of msil_method and msil_catch that need
   // the whole declaration, its previous declaration and its builtin identity
@@ -14963,8 +14979,10 @@ void Sema::ActOnUninitializedDecl(Decl *RealDecl) {
     }
 
     // In C, if the definition is const-qualified and has no initializer, it
-    // is left uninitialized unless it has static or thread storage duration.
-    if (!getLangOpts().CPlusPlus && Type.isConstQualified()) {
+    // is left uninitialized unless it has static or thread storage duration
+    // (or is an MSIL .NET reference, which starts as NULL).
+    if (!getLangOpts().CPlusPlus && Type.isConstQualified() &&
+        !Type->isCLIReferenceType()) {
       unsigned DiagID = diag::warn_default_init_const_unsafe;
       if (Var->getStorageDuration() == SD_Static ||
           Var->getStorageDuration() == SD_Thread)
@@ -16200,6 +16218,11 @@ ParmVarDecl *Sema::CheckParameter(DeclContext *DC, SourceLocation StartLoc,
                                          Context.getAdjustedParameterType(T),
                                          TSInfo, SC, nullptr);
 
+  // MSIL: a function type with a .NET reference that decays to a pointer.
+  if (msil::diagnoseCLIReferenceFunctionType(
+          *this, T, NameLoc, msil::CLIRefFunctionTypeForm::FunctionPointer))
+    New->setInvalidDecl();
+
   // Make a note if we created a new pack in the scope of a lambda, so that
   // we know that references to that pack must also be expanded within the
   // lambda scope.
@@ -17031,6 +17054,9 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body, bool IsInstantiation,
            diag::err_sycl_external_invalid_deleted_function)
           << SEAttr;
   }
+
+  // MSIL: a .NET reference in a function that calls setjmp.
+  msil::checkCLIReferenceSetjmpCaller(*this, FD, Body);
 
   {
     // Do not call PopExpressionEvaluationContext() if it is a lambda because
@@ -19421,6 +19447,9 @@ void Sema::ActOnTagFinishDefinition(Scope *S, Decl *TagD,
     if (RecordDecl *RD = dyn_cast<RecordDecl>(Tag))
       RD->completeDefinition();
   }
+
+  // MSIL: a struct that stands for a .NET class has no body.
+  msil::checkCLITypeDefinition(*this, Tag);
 
   if (auto *RD = dyn_cast<CXXRecordDecl>(Tag)) {
     FieldCollector->FinishClass();

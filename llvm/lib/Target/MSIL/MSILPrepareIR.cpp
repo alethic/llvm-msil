@@ -142,10 +142,16 @@
 ///   uses a pointer in a non-zero address space, uses a floating-point type
 ///   that CIL does not have (fp128, x86_fp80, ppc_fp128), uses a scalable
 ///   vector type or a target extension type (SVE's <vscale x 4 x i32> and
-///   target("aarch64.svcount")), reads vscale (llvm.vscale, the scalable form
+///   target("aarch64.svcount")) other than the .NET reference type
+///   target("msil.ref"), reads vscale (llvm.vscale, the scalable form
 ///   of llvm.experimental.get.vector.length) or reads or writes the
 ///   floating-point environment (llvm.get.fpenv, llvm.set.fpenv,
 ///   llvm.get.fpmode, llvm.set.fpmode) is an error, and its body is deleted.
+/// - The .NET references of C (plan 5.21.7 RB11) have rules of their own, in
+///   MSILReferences.cpp: a definition that breaks one loses its body (its
+///   inline asm operands are checked before lowerEmptyInlineAsm), the calls
+///   of a used declaration that breaks one are erased, and a global variable
+///   that holds a reference is erased.
 /// - A function definition or used declaration whose IL name is longer than
 ///   ilasm accepts is an error; a definition loses its body.
 /// - A declaration whose signature has a scalable vector or target extension
@@ -182,6 +188,7 @@
 #include "MSILManagedCalls.h"
 #include "MSILPortable.h"
 #include "MSILPreExpand.h"
+#include "MSILReferences.h"
 #include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/APInt.h"
@@ -263,9 +270,11 @@ static bool isFPTypeWithoutCILType(Type *Ty) {
 }
 
 /// Returns true if \p Ty is a scalable vector type or a target extension
-/// type, which CIL has no type for.
+/// type, which CIL has no type for. The .NET reference type, CIL's 'object',
+/// is MSILReferences.cpp's (plan 5.21.7 RB11).
 static bool isScalableOrTargetExtType(Type *Ty) {
-  return isa<ScalableVectorType>(Ty) || isa<TargetExtType>(Ty);
+  return isa<ScalableVectorType>(Ty) ||
+         (isa<TargetExtType>(Ty) && !MSIL::containsReferenceType(Ty));
 }
 
 namespace {
@@ -1314,6 +1323,9 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
         F, getScalableOrTargetExtTypeMessage(STTy), STLoc));
     HasError = true;
   }
+
+  // .NET references (plan 5.21.7 RB11).
+  HasError |= MSIL::diagnoseReferenceDefinition(F);
   return HasError;
 }
 
@@ -2302,6 +2314,10 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
         bool HasError = diagnoseILNameLength(F, TM);
         if (ObjectMode)
           HasError |= diagnoseImportStrings(F);
+        // .NET references (plan 5.21.7 RB11): its calls are erased below.
+        if (!is_contained(DeletedBodies, &F) &&
+            MSIL::diagnoseReferenceDeclaration(F))
+          DeletedBodies.push_back(&F);
         if (STFinder.inType(F.getFunctionType()) &&
             !is_contained(DeletedBodies, &F))
           STDecls.push_back(&F);
@@ -2310,9 +2326,14 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
       }
       continue;
     }
-    Changed |= lowerEmptyInlineAsm(F);
+    // .NET references in inline asm operands first (plan 5.21.7 RB11 rule
+    // 10): lowerEmptyInlineAsm would drop them silently.
+    bool RefAsmError = MSIL::diagnoseReferenceAsmOperands(F);
+    if (!RefAsmError)
+      Changed |= lowerEmptyInlineAsm(F);
     bool HasError = diagnoseILNameLength(F, TM);
-    HasError |= diagnoseDefinition(F, ASFinder, FPFinder, STFinder);
+    HasError |=
+        RefAsmError || diagnoseDefinition(F, ASFinder, FPFinder, STFinder);
     if (!HasError) {
       Changed |= endBlocksAtTraps(F);
       if (ObjectMode)
@@ -2382,6 +2403,9 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
       // target extension type (wasm.externref, spirv.*, dx.*, ...).
       Ctx.emitError("global variable " + MSIL::getIRName(GV) + ": " +
                     getScalableOrTargetExtTypeMessage(Ty));
+      ToErase.push_back(&GV);
+    } else if (MSIL::diagnoseReferenceGlobal(GV)) {
+      // .NET references (plan 5.21.7 RB11 rule 2).
       ToErase.push_back(&GV);
     } else if (GV.isThreadLocal()) {
       Ctx.emitError("thread-local variable " + MSIL::getIRName(GV) +

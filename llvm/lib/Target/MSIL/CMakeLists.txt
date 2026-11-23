@@ -37,6 +37,8 @@ add_llvm_target(MSILCodeGen
   MSILPortable.cpp
   MSILPreExpand.cpp
   MSILPrepareIR.cpp
+  MSILPromoteReferences.cpp
+  MSILReferences.cpp
   MSILRegColoring.cpp
   MSILRegNumbering.cpp
   MSILRegStackify.cpp

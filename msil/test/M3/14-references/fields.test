@@ -1,0 +1,237 @@
+# Fields read through references and array references passed to T[] parameters (the Framework references): String.Empty ('field string'), Type.EmptyTypes ('field class System.Type[]'), EventArgs.Empty ('field class System.EventArgs') and Type.Missing ('field object') read through 'ref' results are not NULL, give the same object on a second read and have the lengths and classes .NET gives them; the instance fields ProviderName and KeyContainerName of a CspParameters, read through 'this-ref' and 'ref', give the String reference and the NULL that its constructor got; Type.EmptyTypes passed to Type::GetConstructor(class System.Type[]) finds EventArgs's constructor without parameters; the string[] that String::Split returns for a NULL char[] goes to String::Join(string, string[]), the uint8[] of BitConverter::GetBytes(int32) to Convert::ToBase64String(uint8[]), and the char[] of String::ToCharArray() to String::.ctor(char[]), which also takes NULL for its array.
+# Plan 5.21.9 RM2 (a reference C type takes 'ref' for a CIL string, object,
+# 'class T' or 'T[]' parameter, result or field when its key equals the CIL
+# type's folded key: 'field string' takes String ^, 'field class
+# System.Type[]' the reference of the array class 'class System.Type[]',
+# 'field class System.EventArgs' EventArgs ^, 'field object' Object ^ and
+# CspParameters's 'instance field string' String ^, and the string[],
+# uint8[], char[] and 'class System.Type[]' parameters and results take
+# references of exactly those array classes; 'this' of System.Object,
+# System.String, System.Type, System.Array and CspParameters takes
+# 'this-ref'), RM7 (a 'ref' result is returned as it is; 'this-ref' reads an
+# instance field with ldfld; a 'ref' argument is ldarg plus castclass to the
+# member's parameter type, with no null test, so NULL reaches String::Split
+# and String::.ctor(char[]) as a null array and CspParameters's constructor
+# as a null string), 5.20.2 MA2 (a 'field' SIGNATURE is read-only access:
+# ldsfld for a static field, ldfld for an 'instance field'), RM11 (these
+# members bind only with --reference: the program links against the .NET
+# Framework 4.8 implementation assemblies, %{msil_refs_netfx}; the image
+# runs on the Framework, .NET 10 and WSL .NET 10), 5.21.2 RT2 and RT3
+# ('class System.Type[]', 'string[]', 'uint8[]' and 'char[]' are array
+# classes), 5.21.4 RS4 (a reference converts to Object by itself), RS5 (==
+# on two references of one class is identity) and RS8 (a cast to
+# System.Array is a checked cast).
+# System.Security.Cryptography.CspParameters is a class with public instance
+# fields of a reference type both in the Framework's mscorlib and in .NET's
+# System.Security.Cryptography, to which mscorlib's facade forwards it.
+# .NET's rules give the values: the four static fields are read-only, so a
+# second read gives the same object; String.Empty and Type.EmptyTypes have
+# length 0; Object.ToString names the class of EventArgs.Empty and of
+# Type.Missing (System.Reflection.Missing); CspParameters(int32, string,
+# string) stores its two strings in ProviderName and KeyContainerName as
+# they are, a null one as null; EventArgs has a public constructor without
+# parameters, whose ToString is "Void .ctor()"; Split with a null array
+# splits at white space, so "a bc  d" has four parts, the third empty;
+# GetBytes is little-endian on these hosts, so 0x01020304 gives the bytes 4,
+# 3, 2, 1, which are "BAMCAQ==" in base 64; String(char[]) makes a new
+# string with the array's characters, and an empty string for a null array
+# (measured on the .NET Framework 4.8.1, .NET 10, .NET 10 with
+# DOTNET_TieredCompilation=0, .NET 8 and WSL .NET 10). The members have no C
+# library equivalent, so the expected file is hand-written for both OSes
+# (plan 5.20.11 MT3 and 5.17.4 as amended for MC-1, under MC-1's reason;
+# 5.21.14 RV28). Plan 5.17.13 (R-a, M3/14-references).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Array") Array Array;
+typedef struct CLI_TYPE("System.EventArgs") EventArgs EventArgs;
+typedef struct CLI_TYPE("System.Type") Type Type;
+typedef struct CLI_TYPE("System.Reflection.ConstructorInfo")
+    ConstructorInfo ConstructorInfo;
+typedef struct CLI_TYPE("System.Security.Cryptography.CspParameters")
+    CspParameters CspParameters;
+typedef struct CLI_TYPE("class System.Type[]") Types Types;
+typedef struct CLI_TYPE("string[]") Strings Strings;
+typedef struct CLI_TYPE("uint8[]") Bytes Bytes;
+typedef struct CLI_TYPE("char[]") Chars Chars;
+
+/* Static fields read through 'ref' results. */
+__attribute__((msil_method("System.String", "Empty", "field string")))
+String ^string_empty(void);
+
+__attribute__((msil_method("System.Type", "EmptyTypes",
+                           "field class System.Type[]")))
+Types ^type_empty_types(void);
+
+__attribute__((msil_method("System.EventArgs", "Empty",
+                           "field class System.EventArgs")))
+EventArgs ^eventargs_empty(void);
+
+__attribute__((msil_method("System.Type", "Missing", "field object")))
+Object ^type_missing(void);
+
+/* Instance fields read through 'this-ref' and 'ref'. */
+#define CSP "System.Security.Cryptography.CspParameters"
+
+__attribute__((msil_method(CSP, ".ctor",
+                           "instance void(int32, string, string)")))
+CspParameters ^new_csp_parameters(int type, String ^provider,
+                                  String ^container);
+
+__attribute__((msil_method(CSP, "ProviderName", "instance field string")))
+String ^csp_provider_name(CspParameters ^parameters);
+
+__attribute__((msil_method(CSP, "KeyContainerName", "instance field string")))
+String ^csp_key_container_name(CspParameters ^parameters);
+
+/* Members that read the objects. */
+__attribute__((msil_method("System.String", "get_Length", "instance int32()")))
+int string_length(String ^s);
+
+__attribute__((msil_method("System.Array", "get_Length", "instance int32()")))
+int array_length(Array ^a);
+
+__attribute__((msil_method("System.Object", "ToString", "instance string()")))
+String ^object_to_string(Object ^o);
+
+__attribute__((msil_method("System.Object", "GetType",
+                           "instance class System.Type()")))
+Type ^object_type(Object ^o);
+
+__attribute__((msil_method("System.String", "op_Equality",
+                           "bool(string, string)")))
+_Bool string_equal(String ^a, String ^b);
+
+/* Array references passed to T[] parameters, and NULL for an array. */
+__attribute__((msil_method("System.Type", "GetConstructor",
+                           "instance class System.Reflection.ConstructorInfo("
+                           "class System.Type[])")))
+ConstructorInfo ^type_constructor(Type ^t, Types ^parameter_types);
+
+__attribute__((msil_method("System.String", "Split",
+                           "instance string[](char[])")))
+Strings ^string_split(String ^s, Chars ^separators);
+
+__attribute__((msil_method("System.String", "Join",
+                           "string(string, string[])")))
+String ^string_join(String ^separator, Strings ^values);
+
+__attribute__((msil_method("System.BitConverter", "GetBytes",
+                           "uint8[](int32)")))
+Bytes ^int_bytes(int value);
+
+__attribute__((msil_method("System.Convert", "ToBase64String",
+                           "string(uint8[])")))
+String ^to_base64(Bytes ^bytes);
+
+__attribute__((msil_method("System.String", "ToCharArray",
+                           "instance char[]()")))
+Chars ^string_chars(String ^s);
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char[])")))
+String ^string_from_chars(Chars ^chars);
+
+/* Built-in table entries: a String from UTF-16 units, and its units. */
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static void put_string(const char *what, String ^s) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+int main(void) {
+  /* String.Empty: a 'field string' read twice. */
+  String ^empty = string_empty();
+  String ^empty_again = string_empty();
+  printf("String.Empty: not NULL %d, the same object %d, length %d\n",
+         empty != NULL, empty == empty_again, string_length(empty));
+
+  /* Type.EmptyTypes: a 'field class System.Type[]' read twice. */
+  Types ^no_types = type_empty_types();
+  Types ^no_types_again = type_empty_types();
+  printf("Type.EmptyTypes: not NULL %d, the same object %d, length %d\n",
+         no_types != NULL, no_types == no_types_again,
+         array_length((Array ^)no_types));
+
+  /* EventArgs.Empty: a 'field class System.EventArgs' read twice. */
+  EventArgs ^no_args = eventargs_empty();
+  EventArgs ^no_args_again = eventargs_empty();
+  printf("EventArgs.Empty: not NULL %d, the same object %d\n", no_args != NULL,
+         no_args == no_args_again);
+  put_string("EventArgs.Empty's class", object_to_string(no_args));
+
+  /* Type.Missing: a 'field object' read twice. */
+  Object ^missing = type_missing();
+  Object ^missing_again = type_missing();
+  printf("Type.Missing: not NULL %d, the same object %d\n", missing != NULL,
+         missing == missing_again);
+  put_string("Type.Missing's class", object_to_string(missing));
+
+  /* CspParameters's instance fields: the String reference and the NULL
+     that its constructor got. */
+  static const char16_t provider_units[] = {'p', 'r', 'o', 'v', 'i',
+                                            'd', 'e', 'r', 0};
+  String ^provider = new_string(provider_units);
+  CspParameters ^parameters = new_csp_parameters(1, provider, NULL);
+  String ^provider_name = csp_provider_name(parameters);
+  printf("CspParameters.ProviderName: the same object %d\n",
+         provider_name == provider);
+  put_string("its text", provider_name);
+  printf("CspParameters.KeyContainerName: NULL %d\n",
+         csp_key_container_name(parameters) == NULL);
+
+  /* A field's array passed to a 'class System.Type[]' parameter:
+     EventArgs's public constructor without parameters. */
+  ConstructorInfo ^constructor =
+      type_constructor(object_type(no_args), no_types);
+  printf("EventArgs's constructor for Type.EmptyTypes: not NULL %d\n",
+         constructor != NULL);
+  put_string("that constructor", object_to_string(constructor));
+
+  /* A string[] from Split with a NULL char[] (split at white space),
+     passed to Join's string[] parameter. */
+  static const char16_t words_units[] = {'a', ' ', 'b', 'c', ' ', ' ',
+                                         'd', 0};
+  static const char16_t dash_units[] = {'-', 0};
+  Strings ^words = string_split(new_string(words_units), NULL);
+  printf("Split with a NULL array: %d parts\n", array_length((Array ^)words));
+  put_string("Join", string_join(new_string(dash_units), words));
+
+  /* A uint8[] from GetBytes, passed to ToBase64String's uint8[]. */
+  Bytes ^bytes = int_bytes(0x01020304);
+  printf("GetBytes: %d bytes\n", array_length((Array ^)bytes));
+  put_string("ToBase64String", to_base64(bytes));
+
+  /* A char[] from ToCharArray, passed to String::.ctor(char[]): a new
+     String with the same characters; then NULL for the char[]. */
+  static const char16_t text_units[] = {'f', 'i', 'e', 'l', 'd', 's', 0};
+  String ^text = new_string(text_units);
+  String ^copy = string_from_chars(string_chars(text));
+  printf("String(char[]): equal %d, the same object %d\n",
+         string_equal(copy, text), copy == text);
+  put_string("the copy", copy);
+  String ^from_null = string_from_chars(NULL);
+  printf("String(char[] NULL): not NULL %d, length %d, equal to String.Empty "
+         "%d\n",
+         from_null != NULL, string_length(from_null),
+         string_equal(from_null, empty));
+  return 0;
+}

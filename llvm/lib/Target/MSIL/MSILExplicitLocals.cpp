@@ -96,6 +96,8 @@ static unsigned getDropOpcode(const TargetRegisterClass *RC) {
     return MSIL::DROP_F32;
   if (RC == &MSIL::F64RegClass)
     return MSIL::DROP_F64;
+  if (RC == &MSIL::OBJRegClass)
+    return MSIL::DROP_OBJ;
   llvm_unreachable("Unexpected register class");
 }
 
@@ -110,6 +112,8 @@ static unsigned getLocalGetOpcode(const TargetRegisterClass *RC, bool IsArg) {
     return IsArg ? MSIL::ARG_GET_F32 : MSIL::LOCAL_GET_F32;
   if (RC == &MSIL::F64RegClass)
     return IsArg ? MSIL::ARG_GET_F64 : MSIL::LOCAL_GET_F64;
+  if (RC == &MSIL::OBJRegClass)
+    return IsArg ? MSIL::ARG_GET_OBJ : MSIL::LOCAL_GET_OBJ;
   llvm_unreachable("Unexpected register class");
 }
 
@@ -124,6 +128,8 @@ static unsigned getLocalSetOpcode(const TargetRegisterClass *RC, bool IsArg) {
     return IsArg ? MSIL::ARG_SET_F32 : MSIL::LOCAL_SET_F32;
   if (RC == &MSIL::F64RegClass)
     return IsArg ? MSIL::ARG_SET_F64 : MSIL::LOCAL_SET_F64;
+  if (RC == &MSIL::OBJRegClass)
+    return IsArg ? MSIL::ARG_SET_OBJ : MSIL::LOCAL_SET_OBJ;
   llvm_unreachable("Unexpected register class");
 }
 
@@ -138,10 +144,14 @@ static unsigned getLocalTeeOpcode(const TargetRegisterClass *RC, bool IsArg) {
     return IsArg ? MSIL::ARG_TEE_F32 : MSIL::LOCAL_TEE_F32;
   if (RC == &MSIL::F64RegClass)
     return IsArg ? MSIL::ARG_TEE_F64 : MSIL::LOCAL_TEE_F64;
+  if (RC == &MSIL::OBJRegClass)
+    return IsArg ? MSIL::ARG_TEE_OBJ : MSIL::LOCAL_TEE_OBJ;
   llvm_unreachable("Unexpected register class");
 }
 
 /// Get the type associated with the given register class.
+/// A local of the OBJ class holds a .NET reference: MVT::externref, which the
+/// method's '.locals' declare as 'object' (plan 5.21.7 RB1, RB7).
 static MVT typeForRegClass(const TargetRegisterClass *RC) {
   if (RC == &MSIL::I32RegClass)
     return MVT::i32;
@@ -151,6 +161,8 @@ static MVT typeForRegClass(const TargetRegisterClass *RC) {
     return MVT::f32;
   if (RC == &MSIL::F64RegClass)
     return MVT::f64;
+  if (RC == &MSIL::OBJRegClass)
+    return MVT::externref;
   llvm_unreachable("unrecognized register class");
 }
 
@@ -274,6 +286,19 @@ static bool explicitLocals(MachineFunction &MF) {
 
       if (MI.isDebugInstr() || MI.isLabel())
         continue;
+
+      // An undefined .NET reference becomes the null reference, 'ldnull'
+      // (plan 5.21.6 RI5, 5.21.7 RB7), which the def handling below writes to
+      // the value's local like any other def, so that no object local is read
+      // before it is written. Any other IMPLICIT_DEF is erased below. (A use
+      // that is marked undef instead, with no IMPLICIT_DEF left, gets its own
+      // 'ldnull' where its local.get would go.)
+      if (MI.getOpcode() == MSIL::IMPLICIT_DEF &&
+          MI.getOperand(0).getReg().isVirtual() &&
+          MRI.getRegClass(MI.getOperand(0).getReg()) == &MSIL::OBJRegClass) {
+        MI.setDesc(TII->get(MSIL::CONST_NULL));
+        Changed = true;
+      }
 
       if (MI.getOpcode() == MSIL::IMPLICIT_DEF) {
         MI.eraseFromParent();
@@ -412,6 +437,27 @@ static bool explicitLocals(MachineFunction &MF) {
           // Untie it first if this reg operand is tied to another operand.
           MI.untieRegOperand(MO.getOperandNo());
           MO.ChangeToImmediate(LocalId);
+          continue;
+        }
+
+        // An undefined .NET reference is the null reference, 'ldnull', also
+        // when no IMPLICIT_DEF is left for it (plan 5.21.6 RI5, 5.21.7 RB7,
+        // section 12 row '5.21.7 RB7 and 5.21.6 RI5 as built'): from -O1 on,
+        // ProcessImplicitDefs erases the IMPLICIT_DEF and marks its uses undef
+        // (PHIElimination gives a PHI's undef input a new one, no other use
+        // gets one), and later passes can mark uses undef too. RegColoring may
+        // since have merged the register with one that is written elsewhere,
+        // so the operand's flag decides, not the register's defs: a local.get
+        // here would read an object local that nothing has written on this
+        // path. The other classes keep the local.get.
+        if (MO.isUndef() && MRI.getRegClass(OldReg) == &MSIL::OBJRegClass) {
+          Register NewReg = MRI.createVirtualRegister(&MSIL::OBJRegClass);
+          InsertPt = BuildMI(MBB, InsertPt, InsertPt->getDebugLoc(),
+                             TII->get(MSIL::CONST_NULL), NewReg);
+          MO.setReg(NewReg);
+          MO.setIsUndef(false);
+          MFI.stackifyVReg(MRI, NewReg);
+          Changed = true;
           continue;
         }
 

@@ -79,6 +79,25 @@ let Class = BlockPointerType in {
   def : Creator<[{ return ctx.getBlockPointerType(pointeeType); }]>;
 }
 
+let Class = CLIReferenceType in {
+  def : Property<"key", Identifier> {
+    let Read = [{ node->getKey() }];
+  }
+  // The struct as written; none for the canonical type, whose class is the
+  // key's implicit struct, which the getter makes again and which is never
+  // serialized as a declaration.
+  def : Property<"classType", Optional<QualType>> {
+    let Read = [{
+      makeOptionalFromNullable(node->isSugared() ? node->getClassType()
+                                                 : QualType())
+    }];
+  }
+
+  def : Creator<[{
+    return ctx.getCLIReferenceType(key, makeNullableFromOptional(classType));
+  }]>;
+}
+
 let Class = ReferenceType in {
   def : Property<"pointeeTypeAsWritten", QualType> {
     let Read = [{ node->getPointeeTypeAsWritten() }];

@@ -5980,7 +5980,9 @@ static void TryDefaultInitialization(Sema &S,
   }
 
   // If the destination type has a lifetime property, zero-initialize it.
-  if (DestType.getQualifiers().hasObjCLifetime()) {
+  // So does an MSIL .NET reference, which starts as NULL.
+  if (DestType.getQualifiers().hasObjCLifetime() ||
+      DestType->isCLIReferenceType()) {
     Sequence.AddZeroInitializationStep(Entity.getType());
     return;
   }

@@ -1,0 +1,182 @@
+# Instance members through 'this-ref' run the object's override: Object::ToString, Equals(object) and GetHashCode declared on System.Object and called through Object references reach String's, StringBuilder's, Version's and Exception's overrides (callvirt), so ToString of a string is the same string object, equal strings and equal versions are Equals and hash alike, and two Objects are not; Exception::get_Message and set_Source/get_Source run through Exception references (virtual properties); IComparable::CompareTo runs String's and Version's implementations through interface references that checked casts make; the non-virtual Object::GetType with Type::get_FullName names each object's class, and the static Object::ReferenceEquals takes Object references.
+# Plan 5.21.9 RM7 ('this-ref' is ldarg.0, castclass to TYPE unless TYPE is
+# Object, then callvirt: the virtual test of the stub writer takes ThisRef
+# too, so an override runs; 'callvirt' for 'this-ref' is an item of the
+# milestone's review focus), RM2 ('this' of a class, an interface, String
+# or Object takes 'this-ref' when the keys are equal: the members declared
+# on System.Object take Object references, the IComparable member takes
+# IComparable references), RM11 (Object::ToString and the others bind
+# only with --reference: the program links against the .NET Framework 4.8
+# implementation assemblies, %{msil_refs_netfx}; the image runs on the
+# Framework, .NET 10 and WSL .NET 10), 5.21.2 RT6 (classes, interfaces,
+# System.String and System.Object are the kinds a 'cli_type' struct names),
+# 5.21.4 RS4 (a reference converts to Object by itself) and RS8 (a cast to
+# an interface is a checked cast). A non-virtual 'call' of System.Object's
+# methods would print the class name for ToString and compare identity for
+# Equals; callvirt gives .NET's overrides: String.ToString returns the
+# string itself; StringBuilder.ToString its text; Version.ToString
+# "major.minor"; Exception.ToString of an exception never thrown is
+# "<class>: <message>"; String.Equals and Version.Equals compare values and
+# their GetHashCode agree for equal values; Object.Equals is identity;
+# String.CompareTo orders "apple" before "banana" in every culture;
+# Version.CompareTo compares the components; Exception.Source returns the
+# string it was set to (measured on the .NET Framework 4.8.1, .NET 10 and
+# WSL .NET 10). The members have no C library equivalent, so the expected
+# file is hand-written for both OSes (plan 5.20.11 MT3 and 5.17.4 as
+# amended for MC-1, under MC-1's reason; 5.21.14 RV28). Plan 5.17.13 (R-a,
+# M3/14-references).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.StringBuilder")
+    StringBuilder StringBuilder;
+typedef struct CLI_TYPE("System.Version") Version Version;
+typedef struct CLI_TYPE("System.Type") Type Type;
+typedef struct CLI_TYPE("System.IComparable") IComparable IComparable;
+typedef struct CLI_TYPE("System.Exception") Exception Exception;
+typedef struct CLI_TYPE("System.InvalidOperationException")
+    InvalidOperationException InvalidOperationException;
+
+#define OBJECT "System.Object"
+
+__attribute__((msil_method(OBJECT, ".ctor", "instance void()")))
+Object ^new_object(void);
+
+__attribute__((msil_method(OBJECT, "ToString", "instance string()")))
+String ^to_string(Object ^o);
+
+__attribute__((msil_method(OBJECT, "Equals", "instance bool(object)")))
+_Bool object_equals(Object ^o, Object ^other);
+
+__attribute__((msil_method(OBJECT, "GetHashCode", "instance int32()")))
+int hash_code(Object ^o);
+
+__attribute__((msil_method(OBJECT, "GetType", "instance class System.Type()")))
+Type ^get_type(Object ^o);
+
+__attribute__((msil_method(OBJECT, "ReferenceEquals", "bool(object, object)")))
+_Bool reference_equals(Object ^a, Object ^b);
+
+__attribute__((msil_method("System.Type", "get_FullName", "instance string()")))
+String ^type_full_name(Type ^type);
+
+__attribute__((msil_method("System.IComparable", "CompareTo",
+                           "instance int32(object)")))
+int compare_to(IComparable ^c, Object ^other);
+
+__attribute__((msil_method("System.Text.StringBuilder", ".ctor",
+                           "instance void(string)")))
+StringBuilder ^new_builder(const char *text);
+
+__attribute__((msil_method("System.Version", ".ctor",
+                           "instance void(int32, int32)")))
+Version ^new_version(int major, int minor);
+
+__attribute__((msil_method("System.InvalidOperationException", ".ctor",
+                           "instance void(string)")))
+InvalidOperationException ^new_invalid_operation(const char *message);
+
+__attribute__((msil_method("System.Exception", "get_Message",
+                           "instance string()")))
+String ^exception_message(Exception ^e);
+
+__attribute__((msil_method("System.Exception", "set_Source",
+                           "instance void(string)")))
+void exception_set_source(Exception ^e, String ^source);
+
+__attribute__((msil_method("System.Exception", "get_Source",
+                           "instance string()")))
+String ^exception_source(Exception ^e);
+
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+String ^concat_text(const char *a, const char *b);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static void put_string(const char *what, String ^s) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+static String ^text(const char *s) { return concat_text(s, ""); }
+
+static void put_type(const char *what, Object ^o) {
+  put_string(what, type_full_name(get_type(o)));
+}
+
+static int sign(int v) { return v < 0 ? -1 : v > 0; }
+
+int main(void) {
+  String ^hello = text("hello");
+  String ^hello2 = text("hello");
+  StringBuilder ^builder = new_builder("built text");
+  Version ^v12 = new_version(1, 2);
+  Object ^plain = new_object();
+  InvalidOperationException ^bad = new_invalid_operation("bad state");
+
+  /* ToString: the override of each class runs. */
+  String ^same = to_string(hello);
+  printf("ToString of a string is the string itself: %d\n", same == hello);
+  put_string("ToString of a StringBuilder", to_string(builder));
+  put_string("ToString of a Version", to_string(v12));
+  put_string("ToString of an Object", to_string(plain));
+  put_string("ToString of an InvalidOperationException", to_string(bad));
+
+  /* Equals and GetHashCode: value equality where the class defines it. */
+  Version ^v12b = new_version(1, 2);
+  Object ^plain2 = new_object();
+  printf("Equals: equal strings %d, other text %d, equal versions %d, two "
+         "Objects %d, an Object and itself %d, a string and a builder %d\n",
+         object_equals(hello, hello2), object_equals(hello, text("help")),
+         object_equals(v12, v12b), object_equals(plain, plain2),
+         object_equals(plain, plain), object_equals(hello, builder));
+  printf("the equal strings and versions are two objects: %d %d\n",
+         hello != hello2, v12 != v12b);
+  printf("GetHashCode agrees for equal values: strings %d, versions %d\n",
+         hash_code(hello) == hash_code(hello2),
+         hash_code(v12) == hash_code(v12b));
+  printf("ReferenceEquals: equal strings %d, ToString's result %d\n",
+         reference_equals(hello, hello2), reference_equals(hello, same));
+
+  /* GetType names the object's class. */
+  put_type("GetType of a string", hello);
+  put_type("GetType of a StringBuilder", builder);
+  put_type("GetType of a Version", v12);
+  put_type("GetType of an Object", plain);
+  put_type("GetType of an InvalidOperationException", bad);
+
+  /* An interface member through interface references. */
+  IComparable ^apple = (IComparable ^)text("apple");
+  printf("CompareTo: \"apple\" with \"banana\" %d, with \"apple\" %d\n",
+         sign(compare_to(apple, text("banana"))),
+         sign(compare_to(apple, text("apple"))));
+  IComparable ^version = (IComparable ^)v12;
+  printf("CompareTo: 1.2 with 1.3 %d, with 1.2 %d, with 1.0 %d\n",
+         sign(compare_to(version, new_version(1, 3))),
+         sign(compare_to(version, v12b)),
+         sign(compare_to(version, new_version(1, 0))));
+
+  /* Virtual properties of Exception through an Exception reference. */
+  Exception ^e = (Exception ^)bad;
+  put_string("get_Message", exception_message(e));
+  String ^source = text("a source");
+  exception_set_source(e, source);
+  printf("get_Source returns the string set_Source got: %d\n",
+         exception_source(e) == source);
+  return 0;
+}

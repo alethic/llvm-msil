@@ -52,7 +52,12 @@
 #     enum-args, field-read, inherited, interfaces, null-handles,
 #     static-value-members and value-types: their --lto-emit-asm text's stubs
 #     check the declarations when they run and their LTO image's stubs do
-#     not, plan 5.20.6 MW2); none of these lines is checked here. O6 is
+#     not, plan 5.20.6 MW2) and R-a's for eight 14-references tests on every
+#     triple (casts, catch-ref, constructors, fields, gc-stress,
+#     instance-members, string-builder and string-table: their --lto-emit-asm
+#     text's cast, 'this-ref' and constructor stubs check the classes of
+#     references when they run and their LTO image's stubs do not, plan
+#     5.21.8 RO2); none of these lines is checked here. O6 is
 #     msil-verify.py's
 #     (--equiv-skip <the real file> --test <path> --md-baseline): b.exe has a
 #     metadata message that its baseline a.exe lacks (a literal field without

@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SemaMSILReference.h"
 #include "TypeLocBuilder.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -516,6 +517,8 @@ static void distributeObjCPointerTypeAttr(TypeProcessingState &state,
     switch (chunk.Kind) {
     case DeclaratorChunk::Pointer:
     case DeclaratorChunk::BlockPointer: {
+      if (msil::isCLIReferenceChunk(declarator, i - 1)) // MSIL: no pointer.
+        goto error;
       // But don't move an ARC ownership attribute to the return type
       // of a block.
       DeclaratorChunk *destChunk = nullptr;
@@ -575,7 +578,8 @@ static void distributeObjCPointerTypeAttrFromDeclarator(
     switch (chunk.Kind) {
     case DeclaratorChunk::Pointer:
     case DeclaratorChunk::BlockPointer:
-      innermost = i;
+      if (!msil::isCLIReferenceChunk(declarator, i)) // MSIL: no pointer.
+        innermost = i;
       continue;
 
     case DeclaratorChunk::Reference:
@@ -1623,6 +1627,10 @@ QualType Sema::BuildQualifiedType(QualType T, SourceLocation Loc,
   if (T.isNull())
     return QualType();
 
+  // MSIL: 'volatile', '__unaligned' and address spaces on a .NET reference.
+  if (msil::diagnoseCLIReferenceQualifiers(*this, T, Qs, Loc))
+    return QualType();
+
   // Ignore any attempt to form a cv-qualified reference.
   if (T->isReferenceType()) {
     Qs.removeConst();
@@ -1890,6 +1898,11 @@ QualType Sema::BuildPointerType(QualType T,
       return QualType();
     }
   }
+
+  // In MSIL, pointers to .NET classes and references, and function pointer
+  // types with references, are illegal.
+  if (msil::diagnoseCLIPointee(*this, T, Loc))
+    return QualType();
 
   // Build the pointer type.
   return Context.getPointerType(T);
@@ -4018,6 +4031,9 @@ classifyPointerDeclarator(Sema &S, QualType type, Declarator &declarator,
       break;
 
     case DeclaratorChunk::BlockPointer:
+      if (msil::isCLIReferenceChunk(declarator, i)) // MSIL: no pointer.
+        break;
+      [[fallthrough]];
     case DeclaratorChunk::MemberPointer:
       return numNormalPointers > 0 ? PointerDeclaratorKind::MultiLevelPointer
                                    : PointerDeclaratorKind::SingleLevelPointer;
@@ -4514,6 +4530,9 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
         break;
 
       case DeclaratorChunk::BlockPointer:
+        if (msil::isCLIReferenceChunk(D, i)) // MSIL: no pointer.
+          break;
+        [[fallthrough]];
       case DeclaratorChunk::MemberPointer:
         ++NumPointersRemaining;
         break;
@@ -4778,6 +4797,20 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
       T = S.BuildParenType(T);
       break;
     case DeclaratorChunk::BlockPointer:
+      // In MSIL, '^' over anything but a function type is a .NET reference
+      // (or an error), and a block type cannot have a reference.
+      if (S.Context.getTargetInfo().getTriple().isOSBinFormatMSIL() &&
+          !T->isFunctionType()) {
+        T = msil::buildCLIReferenceType(S, T, DeclType.Cls.TypeQuals,
+                                        DeclType.Loc);
+        break;
+      }
+      if (msil::diagnoseCLIReferenceFunctionType(
+              S, T, DeclType.Loc, msil::CLIRefFunctionTypeForm::BlockPointer)) {
+        T = QualType();
+        break;
+      }
+
       // If blocks are disabled, emit an error.
       if (!LangOpts.Blocks)
         S.Diag(DeclType.Loc, diag::err_blocks_disable) << LangOpts.OpenCL;
@@ -6322,6 +6355,10 @@ namespace {
       assert(Chunk.Kind == DeclaratorChunk::BlockPointer);
       TL.setCaretLoc(Chunk.Loc);
     }
+    void VisitCLIReferenceTypeLoc(CLIReferenceTypeLoc TL) {
+      assert(Chunk.Kind == DeclaratorChunk::BlockPointer);
+      TL.setCaretLoc(Chunk.Loc);
+    }
     void VisitPointerTypeLoc(PointerTypeLoc TL) {
       assert(Chunk.Kind == DeclaratorChunk::Pointer);
       TL.setStarLoc(Chunk.Loc);
@@ -6633,7 +6670,12 @@ QualType Sema::BuildAddressSpaceAttr(QualType &T, LangAS ASIdx, Expr *AddrSpace,
                                             AttrLoc))
       return QualType();
 
-    return Context.getAddrSpaceQualType(T, ASIdx);
+    // MSIL: no address space on a .NET reference.
+    QualType Qualified = Context.getAddrSpaceQualType(T, ASIdx);
+    if (msil::diagnoseCLIReferenceQualifiers(
+            *this, T, Qualified.getQualifiers(), AttrLoc))
+      return QualType();
+    return Qualified;
   }
 
   // A check with similar intentions as checking if a type already has an
@@ -7786,6 +7828,8 @@ static bool distributeNullabilityTypeAttr(TypeProcessingState &state,
     case DeclaratorChunk::Pointer:
     case DeclaratorChunk::BlockPointer:
     case DeclaratorChunk::MemberPointer:
+      if (msil::isCLIReferenceChunk(declarator, i - 1)) // MSIL: no pointer.
+        return false;
       return moveToChunk(chunk, false);
 
     case DeclaratorChunk::Paren:
@@ -9777,8 +9821,9 @@ bool Sema::RequireCompleteTypeImpl(SourceLocation Loc, QualType T,
 
   NamedDecl *Def = nullptr;
   bool AcceptSizeless = (Kind == CompleteTypeKind::AcceptSizeless);
-  bool Incomplete = (T->isIncompleteType(&Def) ||
-                     (!AcceptSizeless && T->isSizelessBuiltinType()));
+  // (isSizelessType: the sizeless builtin types and MSIL's .NET references.)
+  bool Incomplete =
+      (T->isIncompleteType(&Def) || (!AcceptSizeless && T->isSizelessType()));
 
   // Check that any necessary explicit specializations are visible. For an
   // enum, we just need the declaration, so don't check this.

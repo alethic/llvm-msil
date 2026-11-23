@@ -24,7 +24,11 @@
 //     the text of its attributes operand), the prefix and the
 //     internal-linkage postfix of the IR name of a managed-call declaration,
 //     and the names of the forwarders of exported and startup managed calls
-//     (plan 5.20.4).
+//     (plan 5.20.4);
+//   - for the .NET references of C (plan 5.21), 'T ^' of a struct with
+//     __attribute__((cli_type(NAME))): the parser of NAME with its key and
+//     display name, the IR type's name, the comparison helper's name, and the
+//     shape of the cast stubs that a C cast between two classes calls.
 //
 // Header only, like BCLMembers.h: clang's Sema and CodeGen, the MSIL target
 // and msil-ld share it, and clang links no new LLVM library for it.
@@ -161,6 +165,48 @@ inline constexpr StringLiteral ManagedDefaultAssembly = "mscorlib";
 /// The value type whose handle is the C value itself (MS5's 'gch' rows).
 inline constexpr StringLiteral GCHandleTypeName =
     "System.Runtime.InteropServices.GCHandle";
+
+/// The name of the IR type of a .NET reference (plan 5.21.6 RI1),
+/// target("msil.ref"), which has no parameters: a value that IL holds as an
+/// 'object' in a local, an argument, a result or on the evaluation stack,
+/// never in memory. Whatever the C class, the IR type is this one.
+inline constexpr StringLiteral ReferenceTypeName = "msil.ref";
+
+/// The prefix of the names that the toolchain reserves for the .NET reference
+/// helpers (plan 5.21.6 RI6): a toolchain name (plan 5.14.2 N3,
+/// isToolchainName), never bound natively. A definition of such a name is an
+/// error (the backend's T-RB7, msil-ld's T-RL1), and so is a declaration
+/// other than the helper's own.
+inline constexpr StringLiteral ReferenceHelperPrefix = "__msil_ref.";
+
+/// The comparison of two .NET references (plan 5.21.6 RI6): declared by
+/// clang as 'declare i1 @"__msil_ref.eq"(target("msil.ref"),
+/// target("msil.ref"))' with memory(none) nounwind willreturn speculatable,
+/// true when both operands are the same object or both are null (IL 'ceq'),
+/// and never defined: instruction selection makes each call a 'ceq', 'beq',
+/// 'bne.un', 'brtrue' or 'brfalse', so no object names it.
+inline constexpr StringLiteral ReferenceEqName = "__msil_ref.eq";
+
+/// Whether \p Name starts with ReferenceHelperPrefix.
+inline bool isReferenceHelperName(StringRef Name) {
+  return Name.starts_with(ReferenceHelperPrefix);
+}
+
+/// The symbol part of the IR name of a cast stub's declaration (plan 5.21.9
+/// RM8): '__msil_mc.<castclass>.__uniq.<n>', a managed-call name
+/// (ManagedCallPrefix) whose '.__uniq.<n>' postfix (getManagedCallUniqPostfix)
+/// hashes the declaration's !msil.managed.calls operands 1-6 and its function
+/// type, so that each class has its own stub and equal casts of two units
+/// merge under LTO. No C identifier or mangled name contains its '<', and
+/// clang refuses an asm label that starts with it (T-M22).
+inline constexpr StringLiteral ManagedCastSymbol = "<castclass>";
+
+/// MEMBER, SIGNATURE and the conversions of every cast stub (plan 5.21.9 RM8,
+/// isManagedCastShape). checkManagedMemberName refuses ManagedCastMember, so
+/// no msil_method written in source names it.
+inline constexpr StringLiteral ManagedCastMember = ".castclass";
+inline constexpr StringLiteral ManagedCastSignature = "object(object)";
+inline constexpr StringLiteral ManagedCastConversions = "ref;ref";
 
 /// Whether \p IRName is the IR name of a managed-call declaration or stub.
 inline bool isManagedCallName(StringRef IRName) {
@@ -1097,7 +1143,9 @@ inline Expected<ManagedType> parseManagedCatchType(StringRef Text) {
 /// reason (T-M2). A '`' (a generic method's arity) or '<' (its type
 /// arguments) after a member name makes a generic method ("Empty`1",
 /// "Empty<int32>"); anywhere else, as in the compiler-generated "<Clone>$",
-/// it makes the name invalid.
+/// it makes the name invalid. ".castclass" (ManagedCastMember), the MEMBER
+/// of the cast stubs that clang's CodeGen declares, is invalid here too: the
+/// backend and msil-ld test a cast stub (isManagedCastShape) before this.
 inline Error checkManagedMemberName(StringRef Member) {
   if (Member.empty())
     return detail::managedSigError("the member name is empty");
@@ -1218,6 +1266,168 @@ inline bool isRefusedCatchType(StringRef TypeName) {
 }
 
 //===----------------------------------------------------------------------===//
+// The 'cli_type' attribute (plan 5.21.2 RT2, RT3; 5.21.3 RC4)
+//===----------------------------------------------------------------------===//
+
+/// The .NET type that a 'cli_type' attribute names (parseCLITypeName).
+struct CLITypeName {
+  /// The type, folded at every level (foldCLIType): String, Object, a Class
+  /// or an SZArray.
+  ManagedType Type;
+  /// The key (getCLITypeKey): "string", "object", "class System.IO.Stream",
+  /// "string[]", "class Ns.Outer/Inner[]". Two spellings of one class or array
+  /// have one key, which identifies the C type of its references
+  /// (clang::CLIReferenceType).
+  std::string Key;
+  /// The display name (getCLITypeDisplayName): the class in the TYPE grammar
+  /// of msil_method (parseManagedTypeName), "System.String",
+  /// "Ns.Outer/Inner", "string[]", "class Ns.T[]", by which clang's
+  /// diagnostics, the debug information and the cast stubs name it.
+  std::string DisplayName;
+};
+
+/// \p T folded at every level, as a 'cli_type' key folds it: 'class
+/// System.String' is 'string' and 'class System.Object' is 'object', also as
+/// the element of an array or a pointer. Every other type is unchanged.
+inline ManagedType foldCLIType(const ManagedType &T) {
+  using TK = ManagedType::TypeKind;
+  switch (T.Kind) {
+  case TK::Class:
+    if (T.TypeName == "System.String")
+      return ManagedType::get(TK::String);
+    if (T.TypeName == "System.Object")
+      return ManagedType::get(TK::Object);
+    return T;
+  case TK::Pointer:
+    return ManagedType::getPointer(foldCLIType(T.getElement()));
+  case TK::SZArray:
+    return ManagedType::getSZArray(foldCLIType(T.getElement()));
+  default:
+    return T;
+  }
+}
+
+namespace detail {
+/// Prints \p T as listing text without a scope and with its names unquoted.
+inline void printCLITypeKey(raw_ostream &OS, const ManagedType &T) {
+  using TK = ManagedType::TypeKind;
+  switch (T.Kind) {
+  case TK::Class:
+    OS << "class " << T.TypeName;
+    return;
+  case TK::ValueType:
+    OS << "valuetype " << T.TypeName;
+    return;
+  case TK::Pointer:
+    printCLITypeKey(OS, T.getElement());
+    OS << '*';
+    return;
+  case TK::SZArray:
+    printCLITypeKey(OS, T.getElement());
+    OS << "[]";
+    return;
+  default:
+    OS << getManagedPrimitiveName(T.Kind);
+    return;
+  }
+}
+} // namespace detail
+
+/// The key of the .NET type \p T: the canonical listing text of foldCLIType
+/// of \p T, without a resolution scope and with its names unquoted, so that
+/// it reads back: "string", "object", "class System.IO.Stream", "string[]",
+/// "int32[]", "class Ns.Outer/Inner[]" ("class Ns.value", which
+/// ManagedType::print writes "class Ns.'value'"). The key of a 'cli_type'
+/// attribute's type (parseCLITypeName) identifies the C type of its
+/// references; a managed call's 'ref' and 'this-ref' conversions take a
+/// reference whose key is the CIL type's (plan 5.21.9 RM2).
+inline std::string getCLITypeKey(const ManagedType &T) {
+  std::string S;
+  raw_string_ostream OS(S);
+  detail::printCLITypeKey(OS, foldCLIType(T));
+  return S;
+}
+
+/// The display name of the key \p Key of a 'cli_type' type (getCLITypeKey;
+/// plan 5.21.3 RC4): "System.String" for "string", "System.Object" for
+/// "object", the full name for "class <name>", and an array's key itself
+/// ("string[]", "class Ns.T[]"), which is TYPE text of msil_method too.
+inline std::string getCLITypeDisplayName(StringRef Key) {
+  if (Key == "string")
+    return "System.String";
+  if (Key == "object")
+    return "System.Object";
+  if (!Key.ends_with("[]"))
+    Key.consume_front("class ");
+  return Key.str();
+}
+
+/// Parses the argument of a 'cli_type' attribute (plan 5.21.2 RT2): the TYPE
+/// grammar of msil_method (parseManagedTypeName) without value types:
+/// "Ns.Name" or "Ns.Outer/Inner" for a class or an interface,
+/// "System.String", "System.Object", or "<elem>[]" whose element is a listing
+/// primitive other than 'void', 'string', 'object' or 'class Ns.T'. The
+/// type is folded at every level (foldCLIType), and the key and the display
+/// name follow from it. The error's message is the reason that T-R1 quotes:
+///   - 'valuetype' alone or followed by a space gives "value types are not
+///     supported for MSIL yet";
+///   - a listing primitive written alone gives "'<text>' is a signature type;
+///     name the type by its full name, for example 'System.String'";
+///   - a resolution scope (a leading '[', or in an array a '[' after the
+///     element's 'class' or 'valuetype': "class [x]Ns.T[]") gives "a type is
+///     named without a resolution scope";
+///   - a pointer (a trailing '*') gives "a pointer type is not a .NET
+///     reference type";
+///   - every other refusal is parseManagedTypeName's: 'class' outside an
+///     array, generic types and instantiations, byrefs, invalid names and
+///     invalid array elements.
+inline Expected<CLITypeName> parseCLITypeName(StringRef Text) {
+  using TK = ManagedType::TypeKind;
+  StringRef T = Text.trim();
+  if (T.empty())
+    return detail::managedSigError("the type is empty");
+  if (T == "valuetype" || T.starts_with("valuetype "))
+    return detail::managedSigError(
+        "value types are not supported for MSIL yet");
+  // A resolution scope: a leading '[' (alone, before a name or before an
+  // array's element) and, in an array, a '[' after the element's first word
+  // 'class' or 'valuetype', the places where parseManagedSigType reads one.
+  // parseManagedTypeName's reason for it names msil_method's assembly
+  // argument, which 'cli_type' does not have.
+  StringRef Scoped = T;
+  if (T.ends_with("]")) {
+    StringRef Word = T.take_while(detail::isManagedNameChar);
+    if (Word == "class" || Word == "valuetype")
+      Scoped = T.drop_front(Word.size()).ltrim();
+  }
+  if (Scoped.starts_with('['))
+    return detail::managedSigError(
+        "a type is named without a resolution scope");
+  if (!T.ends_with("]")) {
+    // After the forms that parseManagedTypeName reports first: 'class ',
+    // generic type arguments and a byref.
+    if (T.ends_with('*') && !T.starts_with("class ") &&
+        !detail::hasManagedGenericArguments(T) && !T.contains('&'))
+      return detail::managedSigError(
+          "a pointer type is not a .NET reference type");
+    for (unsigned K = 0; K <= unsigned(TK::Object); ++K)
+      if (T == getManagedPrimitiveName(TK(K)))
+        return detail::managedSigError(
+            "'" + T +
+            "' is a signature type; name the type by its full name, for "
+            "example 'System.String'");
+  }
+  Expected<ManagedType> Parsed = parseManagedTypeName(T);
+  if (!Parsed)
+    return Parsed.takeError();
+  CLITypeName Name;
+  Name.Type = foldCLIType(*Parsed);
+  Name.Key = getCLITypeKey(Name.Type);
+  Name.DisplayName = getCLITypeDisplayName(Name.Key);
+  return Name;
+}
+
+//===----------------------------------------------------------------------===//
 // Conversion codes (plan 5.20.3 MS5) and their IR attribute
 //===----------------------------------------------------------------------===//
 
@@ -1239,6 +1449,13 @@ enum class ManagedConv : uint8_t {
   ThisGCH, ///< "this-gch": the 'this' GCHandle.
   Void,    ///< "void": no result.
   Err,     ///< "err": the trailing 'int *' of msil_catch (5.20.8).
+  Ref,     ///< "ref": a .NET reference (plan 5.21.9 RM1) of string, object,
+           ///< class T or T[], whose key is the CIL type's; passed with a
+           ///< castclass to the CIL type unless it is 'object', returned as
+           ///< it is.
+  ThisRef, ///< "this-ref": the 'this' reference of a class, an interface,
+           ///< System.String or System.Object TYPE: castclass to TYPE unless
+           ///< it is System.Object, then callvirt (ldfld for a field).
 };
 
 /// The code's text in the msil-managed-conv attribute.
@@ -1272,6 +1489,10 @@ inline StringRef getManagedConvName(ManagedConv C) {
     return "void";
   case ManagedConv::Err:
     return "err";
+  case ManagedConv::Ref:
+    return "ref";
+  case ManagedConv::ThisRef:
+    return "this-ref";
   }
   return "";
 }
@@ -1283,7 +1504,8 @@ inline std::optional<ManagedConv> parseManagedConvName(StringRef Name) {
       ManagedConv::UTF8,    ManagedConv::UTF16,   ManagedConv::UTF32,
       ManagedConv::Obj,     ManagedConv::Boxed,   ManagedConv::GCH,
       ManagedConv::ThisObj, ManagedConv::ThisVal, ManagedConv::ThisGCH,
-      ManagedConv::Void,    ManagedConv::Err,
+      ManagedConv::Void,    ManagedConv::Err,     ManagedConv::Ref,
+      ManagedConv::ThisRef,
   };
   for (ManagedConv C : All)
     if (getManagedConvName(C) == Name)
@@ -1339,9 +1561,9 @@ printManagedCallAttributes(bool DLLExport, std::optional<uint32_t> Constructor,
 }
 
 /// Parses the msil-managed-conv text. Besides the codes' spelling it checks
-/// their positions: a 'this-*' code only as the first parameter, 'err' only
-/// as the last, 'void' only as the result, and the result never a string,
-/// 'this-*' or 'err' code.
+/// their positions: a 'this-*' code ('this-ref' included) only as the first
+/// parameter, 'err' only as the last, 'void' only as the result, and the
+/// result never a string, 'this-*' or 'err' code.
 inline Expected<ManagedConvList> parseManagedConvList(StringRef Text) {
   auto [ParamText, ResultText] = Text.split(';');
   if (ParamText.size() == Text.size())
@@ -1357,7 +1579,7 @@ inline Expected<ManagedConvList> parseManagedConvList(StringRef Text) {
         return detail::managedSigError("unknown conversion code '" + Parts[I] +
                                        "'");
       bool IsThis = *C == ManagedConv::ThisObj || *C == ManagedConv::ThisVal ||
-                    *C == ManagedConv::ThisGCH;
+                    *C == ManagedConv::ThisGCH || *C == ManagedConv::ThisRef;
       if ((IsThis && I != 0) || (*C == ManagedConv::Err && I + 1 != E) ||
           *C == ManagedConv::Void)
         return detail::managedSigError("conversion code '" + Parts[I] +
@@ -1377,6 +1599,7 @@ inline Expected<ManagedConvList> parseManagedConvList(StringRef Text) {
   case ManagedConv::ThisObj:
   case ManagedConv::ThisVal:
   case ManagedConv::ThisGCH:
+  case ManagedConv::ThisRef:
   case ManagedConv::Err:
     return detail::managedSigError("conversion code '" + ResultText +
                                    "' is not valid for the result");
@@ -1385,6 +1608,49 @@ inline Expected<ManagedConvList> parseManagedConvList(StringRef Text) {
   }
   L.Result = *R;
   return L;
+}
+
+/// Whether a managed-call declaration whose attributes hold TYPE \p Type,
+/// MEMBER \p Member, SIGNATURE \p Signature and the conversions
+/// \p Conversions is a cast stub (plan 5.21.9 RM8): MEMBER '.castclass'
+/// (ManagedCastMember), SIGNATURE 'object(object)' and the conversions
+/// 'ref;ref' (spaces between the signature's tokens are free), and TYPE a
+/// type of the 'cli_type' grammar (parseCLITypeName) other than
+/// System.Object, to which a cast emits nothing: a class, an interface,
+/// System.String or an array. clang's CodeGen writes TYPE as the class's
+/// display name (CLITypeName::DisplayName). The stub's body is 'ldarg.0;
+/// castclass <TYPE>; ret', and it makes no member access. The backend
+/// (MSIL::parseManagedCall) and msil-ld test this before
+/// checkManagedMemberName, which refuses '.castclass' in every other
+/// declaration. Its one parameter and one conversion leave no room for
+/// msil_catch's error code, which their arity checks refuse.
+inline bool isManagedCastShape(StringRef Type, StringRef Member,
+                               StringRef Signature, StringRef Conversions) {
+  using TK = ManagedType::TypeKind;
+  if (Member != ManagedCastMember)
+    return false;
+  Expected<ManagedSignature> Sig = parseManagedSignature(Signature);
+  if (!Sig) {
+    consumeError(Sig.takeError());
+    return false;
+  }
+  if (Sig->HasThis || Sig->IsField || Sig->Return.Kind != TK::Object ||
+      Sig->Params.size() != 1 || Sig->Params[0].Kind != TK::Object)
+    return false;
+  Expected<ManagedConvList> Conv = parseManagedConvList(Conversions);
+  if (!Conv) {
+    consumeError(Conv.takeError());
+    return false;
+  }
+  if (Conv->Params.size() != 1 || Conv->Params[0] != ManagedConv::Ref ||
+      Conv->Result != ManagedConv::Ref)
+    return false;
+  Expected<CLITypeName> Name = parseCLITypeName(Type);
+  if (!Name) {
+    consumeError(Name.takeError());
+    return false;
+  }
+  return Name->Type.Kind != TK::Object;
 }
 
 //===----------------------------------------------------------------------===//

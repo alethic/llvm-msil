@@ -3789,6 +3789,9 @@ void ItaniumRTTIBuilder::BuildVTablePointer(const Type *Ty,
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
     llvm_unreachable("HLSL doesn't support virtual functions");
+
+  case Type::CLIReference:
+    llvm_unreachable(".NET references (MSIL) have no C++ type information");
   }
 
   llvm::Constant *VTable = nullptr;
@@ -4098,6 +4101,9 @@ llvm::Constant *ItaniumRTTIBuilder::BuildTypeInfo(
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
     llvm_unreachable("HLSL doesn't support RTTI");
+
+  case Type::CLIReference:
+    llvm_unreachable(".NET references (MSIL) have no C++ type information");
   }
 
   GV->replaceInitializer(llvm::ConstantStruct::getAnon(Fields));

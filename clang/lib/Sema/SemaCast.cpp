@@ -13,6 +13,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SemaMSILReference.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTStructuralEquivalence.h"
 #include "clang/AST/CXXInheritance.h"
@@ -3132,6 +3133,10 @@ void CastOperation::CheckCStyleCast() {
     Kind = CK_BitCast;
     return;
   }
+
+  // MSIL: casts to and from .NET references.
+  if (msil::checkCLIReferenceCast(Self, SrcExpr, DestType, Kind, OpRange))
+    return;
 
   if (!DestType->isScalarType() && !DestType->isVectorType() &&
       !DestType->isMatrixType()) {

@@ -1,0 +1,182 @@
+# References in a program of three units, through objects and through LTO, where each unit holds references only in its own static functions, locals, parameters and results and passes objects to the other units as tickets through external functions whose signatures have no reference; each unit declares the same managed calls and casts to String, so each object has a String cast stub of the same name, which LTO merges into one; static functions of one name in two units ('units', with different bodies) stay apart, and identity holds across the units (two tickets of one object give one object in another unit).
+# Plan 5.21.9 RM8 (a cast stub is named '__msil_mc.<castclass>.__uniq.<n>',
+# <n> from cli::getManagedCallUniqPostfix over its MR4 operands and its
+# function type, so equal casts merge under LTO and each class has its own
+# stub), 5.21.5 RG9 (the postfix hashes canonical types, so every unit's
+# String cast gets the same name), 5.21.4 RS3 and RS15 (references in the
+# signatures of static functions only; a function with external linkage
+# and a reference in its signature is refused, so the units exchange
+# tickets), 5.21.1 RA3 and 5.21.9 RM9 (a ticket is a raw GCHandle number
+# in an intptr_t, made with GCHandle::Alloc and read with get_Target),
+# 5.21.10 RL7 (full LTO with one partition keeps R-a's statics internal;
+# ThinLTO and --lto-partitions above 1 are refused with T-RB2, which
+# lld/test/MSIL/references.test pins). Every member is a built-in table
+# entry (GCHandle::Alloc, get_Target and Free, String::.ctor(char*),
+# Marshal::StringToHGlobalUni(string)), so no reference assemblies are
+# needed, and String is the one class the units cast to. The program runs
+# as every %{msil_prog} test does, through CIL objects or, under
+# msil_pipeline=lto, through bitcode and msil-ld's LTO. Then the -O2
+# program is built once more (%msil_prog_build) and llvm-cil-dump lists its
+# methods: under LTO the image holds exactly one cast stub, the String one,
+# ldarg.0; castclass System.String; ret (prefix ONESTUB); through objects
+# each object brings its own copy, and the image holds the String stub at
+# least once (prefix OBJSTUB; how msil-ld names the copies is its own
+# business, so their count is not pinned). The checks allow the '.param'
+# rows and the InitLocals flag that ilasm adds to the image of
+# --lto-emit-asm text under msil_link_output=il (equiv-allowed.txt's
+# ilasm-params and ilasm-initlocals). The members have no C library
+# equivalent, so the expected file is hand-written for both OSes (plan
+# 5.20.11 MT3 and 5.17.4 as amended for MC-1, under MC-1's reason; 5.21.14
+# RV28). Plan 5.17.13 (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/maker.c %t/checker.c
+# RUN: %{msil_prog}
+# RUN: %if msil-cil-dump %{ %msil_prog_build --level O2 --workdir %t.dump.d --out %t.dump.d/prog.exe --src %{msil_srcs} %}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump %t.dump.d/prog.exe > %t.dump %}
+# RUN: %if msil-cil-dump && msil-prog-pipeline=lto %{ FileCheck %s --check-prefix=ONESTUB --input-file %t.dump %}
+# RUN: %if msil-cil-dump && msil-prog-pipeline=obj %{ FileCheck %s --check-prefix=OBJSTUB --input-file %t.dump %}
+# ONESTUB-NOT: .method '__msil_mc.<castclass>.
+# ONESTUB:     .method '__msil_mc.<castclass>.__uniq.{{[0-9]+}}' object(object)
+# ONESTUB:      .maxstack 1{{( initlocals)? *$}}
+# ONESTUB-NEXT:  L{{[0-9]+}}: ldarg.0
+# ONESTUB-NEXT:  L{{[0-9]+}}: castclass [{{[^]]+}}]System.String
+# ONESTUB-NEXT:  L{{[0-9]+}}: ret
+# ONESTUB-NOT: .method '__msil_mc.<castclass>.
+# OBJSTUB:     .method '__msil_mc.<castclass>.__uniq.{{[0-9]+}}' object(object)
+# OBJSTUB:      .maxstack 1{{( initlocals)? *$}}
+# OBJSTUB-NEXT:  L{{[0-9]+}}: ldarg.0
+# OBJSTUB-NEXT:  L{{[0-9]+}}: castclass [{{[^]]+}}]System.String
+# OBJSTUB-NEXT:  L{{[0-9]+}}: ret
+#--- refs.h
+/* The declarations every unit repeats: the same managed calls in each. */
+#include <cli/cli.h>
+#include <stdint.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+
+#define GCHANDLE "valuetype System.Runtime.InteropServices.GCHandle"
+
+__attribute__((msil_method(GCHANDLE, "Alloc", GCHANDLE "(object)")))
+intptr_t ticket_new(Object ^o);
+
+__attribute__((msil_method(GCHANDLE, "get_Target", "instance object()")))
+Object ^ticket_target(intptr_t ticket);
+
+__attribute__((msil_method(GCHANDLE, "Free", "instance void()")))
+void ticket_free(intptr_t ticket);
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+/* maker.c */
+intptr_t make_numbered(int n);
+int maker_units(intptr_t ticket);
+/* checker.c */
+int checker_same_object(intptr_t a, intptr_t b);
+int checker_units(intptr_t ticket);
+#--- main.c
+#include "refs.h"
+#include <stdio.h>
+
+/* main.c's own 'units': the length in UTF-16 units. */
+static int units(String ^s) {
+  int n = 0;
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    ++n;
+  return n;
+}
+
+static String ^target_string(intptr_t ticket) {
+  return (String ^)ticket_target(ticket);
+}
+
+static void put_ticket(const char *what, intptr_t ticket) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(target_string(ticket)); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+int main(void) {
+  static const char16_t text[] = {'m', 'a', 'd', 'e', ' ', 'i', 'n',
+                                  ' ', 'm', 'a', 'i', 'n', 0};
+  String ^mine = new_string(text);
+  intptr_t t_mine = ticket_new(mine);
+  intptr_t t_mine_again = ticket_new(mine);
+  intptr_t t_made = make_numbered(7);
+
+  put_ticket("main's string", t_mine);
+  put_ticket("maker's string", t_made);
+  printf("units counted by main %d, by maker %d, by checker %d\n",
+         units(mine), maker_units(t_mine), checker_units(t_mine));
+  printf("maker's string counted by main %d, by maker %d, by checker %d\n",
+         units(target_string(t_made)), maker_units(t_made),
+         checker_units(t_made));
+  printf("checker: two tickets of main's string, one object %d; main's and "
+         "maker's strings %d\n",
+         checker_same_object(t_mine, t_mine_again),
+         checker_same_object(t_mine, t_made));
+  printf("main: the ticket's target is the reference in hand %d\n",
+         target_string(t_mine_again) == mine);
+
+  ticket_free(t_made);
+  ticket_free(t_mine_again);
+  ticket_free(t_mine);
+  return 0;
+}
+#--- maker.c
+#include "refs.h"
+
+/* maker.c's own 'units': the same name as main.c's and checker.c's. */
+static int units(String ^s) {
+  int n = 0;
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    ++n;
+  return n;
+}
+
+static String ^target_string(intptr_t ticket) {
+  return (String ^)ticket_target(ticket);
+}
+
+/* A new string "made in maker <n>" (n from 0 to 9), returned as a ticket. */
+intptr_t make_numbered(int n) {
+  static const char prefix[] = "made in maker ";
+  char16_t text[sizeof prefix + 1];
+  int i = 0;
+  for (; prefix[i]; ++i)
+    text[i] = (char16_t)prefix[i];
+  text[i++] = (char16_t)('0' + n % 10);
+  text[i] = 0;
+  String ^s = new_string(text);
+  return ticket_new(s);
+}
+
+int maker_units(intptr_t ticket) { return units(target_string(ticket)); }
+#--- checker.c
+#include "refs.h"
+
+/* checker.c's own 'units': 1000 plus the length, so a mix-up shows. */
+static int units(String ^s) {
+  int n = 1000;
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    ++n;
+  return n;
+}
+
+static String ^target_string(intptr_t ticket) {
+  return (String ^)ticket_target(ticket);
+}
+
+int checker_same_object(intptr_t a, intptr_t b) {
+  return target_string(a) == target_string(b);
+}
+
+int checker_units(intptr_t ticket) { return units(target_string(ticket)); }

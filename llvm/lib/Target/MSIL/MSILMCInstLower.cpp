@@ -491,16 +491,20 @@ void MSILMCInstLower::lowerImpl(const MachineInstr &MI,
   // own peak above max(pops, pushes): MSILStackCheck computes .maxstack from
   // that field, not from the expansion.
   switch (MI.getOpcode()) {
+  // Arguments and locals of every class, .NET references (OBJ, CIL 'object',
+  // plan 5.21.7 RB3) included.
   case MSIL::ARG_GET_I32:
   case MSIL::ARG_GET_I64:
   case MSIL::ARG_GET_F32:
   case MSIL::ARG_GET_F64:
+  case MSIL::ARG_GET_OBJ:
     Out.push_back(MSIL::buildVarInst(cli::Opcode::Ldarg, Imm(1)));
     return;
   case MSIL::ARG_TEE_I32:
   case MSIL::ARG_TEE_I64:
   case MSIL::ARG_TEE_F32:
   case MSIL::ARG_TEE_F64:
+  case MSIL::ARG_TEE_OBJ:
     Out.push_back(makeInst(cli::Opcode::Dup));
     Out.push_back(MSIL::buildVarInst(cli::Opcode::Starg, Imm(1)));
     return;
@@ -508,18 +512,21 @@ void MSILMCInstLower::lowerImpl(const MachineInstr &MI,
   case MSIL::ARG_SET_I64:
   case MSIL::ARG_SET_F32:
   case MSIL::ARG_SET_F64:
+  case MSIL::ARG_SET_OBJ:
     Out.push_back(MSIL::buildVarInst(cli::Opcode::Starg, Imm(0)));
     return;
   case MSIL::LOCAL_GET_I32:
   case MSIL::LOCAL_GET_I64:
   case MSIL::LOCAL_GET_F32:
   case MSIL::LOCAL_GET_F64:
+  case MSIL::LOCAL_GET_OBJ:
     Out.push_back(MSIL::buildVarInst(cli::Opcode::Ldloc, Imm(1)));
     return;
   case MSIL::LOCAL_TEE_I32:
   case MSIL::LOCAL_TEE_I64:
   case MSIL::LOCAL_TEE_F32:
   case MSIL::LOCAL_TEE_F64:
+  case MSIL::LOCAL_TEE_OBJ:
     Out.push_back(makeInst(cli::Opcode::Dup));
     Out.push_back(MSIL::buildVarInst(cli::Opcode::Stloc, Imm(1)));
     return;
@@ -527,6 +534,7 @@ void MSILMCInstLower::lowerImpl(const MachineInstr &MI,
   case MSIL::LOCAL_SET_I64:
   case MSIL::LOCAL_SET_F32:
   case MSIL::LOCAL_SET_F64:
+  case MSIL::LOCAL_SET_OBJ:
     Out.push_back(MSIL::buildVarInst(cli::Opcode::Stloc, Imm(0)));
     return;
 

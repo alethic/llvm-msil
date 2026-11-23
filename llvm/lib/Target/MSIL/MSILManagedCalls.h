@@ -23,6 +23,10 @@
 ///   whole-program text, which ilasm assembles without msil-ld's checks of
 ///   an object, the body also checks those at run time: TYPE's kind (T-M16)
 ///   and the enum widths (T-M7) (5.20.6 MW2 as amended).
+/// .NET references (5.21.9) pass through the stubs as 'object' values with
+/// the 'ref' and 'this-ref' conversions, and a C cast between two classes
+/// calls a cast stub, a declaration of the same kind whose body is one
+/// 'castclass' (ManagedCall::IsCast).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -157,14 +161,34 @@ struct ManagedCall {
   /// declares the member: System.ValueType, System.Object or System.Enum.
   cli::ManagedType InheritedFrom;
 
+  /// A cast stub (plan 5.21.9 RM8, cli::isManagedCastShape): MEMBER
+  /// '.castclass', SIGNATURE 'object(object)' and the conversions 'ref;ref',
+  /// for the class, System.String or array type TYPE. Its body is 'ldarg.0;
+  /// castclass <TYPE>; ret' (the SZARRAY token for an array). It makes no
+  /// member access, so callers test it (isCast()) before the predicates below
+  /// that describe the access, which answer for a cast stub:
+  /// - isConstructor(): false;
+  /// - isStaticMethod(): true for every cast stub, since 'object(object)' has
+  ///   no 'this' and is not a field;
+  /// - isArrayConstructor(): true for a cast to an array type, which
+  ///   parseManagedCall's assertion that TYPE is named or an array type
+  ///   relies on (an array type is not named).
+  bool IsCast = false;
+
+  /// A cast stub (IsCast).
+  bool isCast() const { return IsCast; }
   /// A constructor: newobj, or newarr for an array type.
   bool isConstructor() const { return Member == ".ctor"; }
+  /// TYPE is an array type: its constructor (newarr) or, with IsCast, the
+  /// type that a cast stub casts to.
   bool isArrayConstructor() const {
     return Type.Kind == cli::ManagedType::TypeKind::SZArray;
   }
-  /// A static method (no 'instance', not a field): its access is 'call'.
+  /// A static method (no 'instance', not a field): its access is 'call'. It
+  /// holds for a cast stub too, which makes no access (IsCast).
   bool isStaticMethod() const { return !Sig.HasThis && !Sig.IsField; }
-  /// The C parameters start with the 'this' handle.
+  /// The C parameters start with the 'this' handle or, for 'this-ref' (plan
+  /// 5.21.9 RM1), the 'this' reference.
   bool hasThisHandle() const { return Sig.HasThis && !isConstructor(); }
   /// An instance method whose 'this' is a managed pointer to a value type
   /// ('this-val' or 'this-gch'): its access depends on ThisAccess.
@@ -203,8 +227,9 @@ void resolveStandaloneTextAccess(ManagedCall &Call);
 /// already: an int32 length per UTF-8 or UTF-32 parameter, and with
 /// msil_catch the int32 code and the result (plan 5.20.5 ML2 (2)). Returns
 /// the index of the first one. They are all of primitive types, as
-/// MSILTargetStreamer::emitLocals needs; the run-time checks of
-/// whole-program text need no local (emitManagedCallStubBody).
+/// MSILTargetStreamer::emitLocals needs ('object' for a reference result,
+/// plan 5.21.9 RM7); the run-time checks of whole-program text need no local
+/// (emitManagedCallStubBody).
 unsigned appendManagedCallStubLocals(const ManagedCall &Call,
                                      const Signature &ILSig,
                                      SmallVectorImpl<cli::TypeSig> &Locals);
@@ -222,14 +247,16 @@ unsigned appendManagedCallStubLocals(const ManagedCall &Call,
 /// With \p TextChecks (whole-program text, which ilasm assembles without
 /// msil-ld's checks of an object; plan 5.20.6 MW2 as amended) the body
 /// checks at run time what msil-ld checks of an object (MK2, MK3):
-/// - TYPE's kind (T-M16): the castclass of a 'this-obj' handle, the unbox
-///   of a 'this-val' handle and, after a constructor's newobj, a class's
-///   castclass and a value type's box (that of a 'boxed' result, else of a
-///   copy that 'dup' makes and 'pop' drops) name TYPE as a TypeSpec of the
-///   declared kind ('class T', 'valuetype V'), which the runtime checks
-///   against the type's definition when it compiles the stub, unless that
-///   kind is fixed and right (System.String and System.Object as classes,
-///   the one-byte value types of MSIL::isOneByteValueType as value types);
+/// - TYPE's kind (T-M16): the castclass of a 'this-obj' handle and of a
+///   'this-ref' reference, the unbox of a 'this-val' handle, a cast stub's
+///   castclass of a class (plan 5.21.9 RM7, RM8) and, after a constructor's
+///   newobj, a class's castclass and a value type's box (that of a 'boxed'
+///   result, else of a copy that 'dup' makes and 'pop' drops) name TYPE as a
+///   TypeSpec of the declared kind ('class T', 'valuetype V'), which the
+///   runtime checks against the type's definition when it compiles the stub,
+///   unless that kind is fixed and right (System.String and System.Object as
+///   classes, the one-byte value types of MSIL::isOneByteValueType as value
+///   types);
 /// - before anything else, for each 'enum' parameter, then an 'enum' result
 ///   (not a constructor's), that its 'valuetype E' is an enum of the C
 ///   integer's width: typeof(E).IsEnum ('ldtoken E', Type::GetTypeFromHandle,

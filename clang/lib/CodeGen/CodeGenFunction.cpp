@@ -17,6 +17,7 @@
 #include "CGCleanup.h"
 #include "CGDebugInfo.h"
 #include "CGHLSLRuntime.h"
+#include "CGMSILReferences.h"
 #include "CGOpenMPRuntime.h"
 #include "CodeGenModule.h"
 #include "CodeGenPGO.h"
@@ -255,6 +256,7 @@ TypeEvaluationKind CodeGenFunction::getEvaluationKind(QualType type) {
     case Type::Builtin:
     case Type::Pointer:
     case Type::BlockPointer:
+    case Type::CLIReference:
     case Type::LValueReference:
     case Type::RValueReference:
     case Type::MemberPointer:
@@ -1655,6 +1657,9 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   } else
     llvm_unreachable("no definition for emitted function");
 
+  // MSIL: a C function returning a .NET reference traps if control gets here.
+  emitMSILMissingReturnTrap(*this, FD);
+
   // C++11 [stmt.return]p2:
   //   Flowing off the end of a function [...] results in undefined behavior in
   //   a value-returning function.
@@ -2601,6 +2606,7 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
     case Type::BitInt:
     case Type::HLSLInlineSpirv:
     case Type::PredefinedSugar:
+    case Type::CLIReference:
       llvm_unreachable("type class is never variably-modified!");
 
     case Type::Adjusted:

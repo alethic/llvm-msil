@@ -14,6 +14,7 @@
 #include "CGCleanup.h"
 #include "CGDebugInfo.h"
 #include "CGHLSLRuntime.h"
+#include "CGMSILReferences.h"
 #include "CGObjCRuntime.h"
 #include "CGOpenMPRuntime.h"
 #include "CGRecordLayout.h"
@@ -2670,6 +2671,8 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
   case CK_AnyPointerToBlockPointerCast:
   case CK_BitCast: {
     Value *Src = Visit(E);
+    if (DestTy->isCLIReferenceType()) // MSIL: from one .NET class to another.
+      return emitMSILReferenceCast(CGF, Src, E->getType(), DestTy);
     llvm::Type *SrcTy = Src->getType();
     llvm::Type *DstTy = ConvertType(DestTy);
 
@@ -2930,6 +2933,8 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     if (MustVisitNullValue(E))
       CGF.EmitIgnoredExpr(E);
 
+    if (DestTy->isCLIReferenceType()) // MSIL: the null .NET reference.
+      return getMSILNullReference(VMContext);
     return CGF.CGM.getNullPointer(cast<llvm::PointerType>(ConvertType(DestTy)),
                               DestTy);
 
@@ -5279,6 +5284,8 @@ Value *ScalarExprEmitter::EmitCompare(const BinaryOperator *E,
   Value *Result;
   QualType LHSTy = E->getLHS()->getType();
   QualType RHSTy = E->getRHS()->getType();
+  if (LHSTy->isCLIReferenceType()) // MSIL: identity of two .NET references.
+    return emitMSILReferenceComparison(CGF, E);
   if (const MemberPointerType *MPT = LHSTy->getAs<MemberPointerType>()) {
     assert(E->getOpcode() == BO_EQ ||
            E->getOpcode() == BO_NE);

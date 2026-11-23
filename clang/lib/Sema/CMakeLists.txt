@@ -69,6 +69,7 @@ add_clang_library(clangSema
   SemaM68k.cpp
   SemaMIPS.cpp
   SemaMSILManagedCall.cpp
+  SemaMSILReference.cpp
   SemaMSP430.cpp
   SemaModule.cpp
   SemaNVPTX.cpp

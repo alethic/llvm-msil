@@ -1,0 +1,77 @@
+# A checked cast that fails throws: after casts that succeed, an Object reference that holds a UTF8Encoding is cast to String and the result is used, so the cast stub's castclass throws System.InvalidCastException, which ends the program as an unhandled exception at every level.
+# Plan 5.21.4 RS8 (a cast from one class to another is checked at run
+# time; the user's pick "Keep checked casts", section 12's row
+# 'Conversions and casts between .NET classes', 2026-11-21: a failed cast
+# throws InvalidCastException), 5.21.5 RG5 and 5.21.9 RM8 (a cast to
+# another class calls the cast stub ldarg.0; castclass <TYPE>; ret; the
+# Object to String cast is not free, since the target is not Object),
+# ECMA-335 Partition III 4.3 (castclass throws InvalidCastException when
+# the object is not of the class), 5.20.8 MX1 (an exception that nothing
+# catches escapes as an ordinary unhandled .NET exception). Every type and
+# member is a built-in table entry (UTF8Encoding::.ctor(bool, bool),
+# Encoding::GetString(uint8*, int32), Marshal::StringToHGlobalUni(string)),
+# so no reference assemblies are needed. The program ends on an unhandled
+# exception (a loud failure, plan 5.17.4), so the transcript is
+# hand-written for both OSes: the lines before the cast, then the status
+# line '[unhandled exception: System.InvalidCastException]'. The LOUD line
+# matches the program's own stderr line, written before the cast; the
+# runtime's report of the exception is never matched.
+# cast-loud-unused.test has a failed cast whose value is unused. Plan
+# 5.17.13 (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: cast-loud: casting an Object that holds a UTF8Encoding to String
+# LOUD-NOT: cast-loud: returned from the failed cast
+#--- main.c
+#include <cli/cli.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.Encoding") Encoding Encoding;
+typedef struct CLI_TYPE("System.Text.UTF8Encoding") UTF8Encoding UTF8Encoding;
+
+__attribute__((msil_method("System.Text.UTF8Encoding", ".ctor",
+                           "instance void(bool, bool)")))
+UTF8Encoding ^new_utf8(_Bool emit_bom, _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.Encoding", "GetString",
+                           "instance string(uint8*, int32)")))
+String ^get_string(Encoding ^encoding, const unsigned char *bytes, int count);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static void put_string(const char *what, String ^s) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+int main(void) {
+  UTF8Encoding ^utf8 = new_utf8(0, 1);
+  Object ^encoder = utf8;
+  static const unsigned char text[] = "a string";
+  Object ^text_object = get_string((Encoding ^)encoder, text, 8);
+
+  /* Casts that succeed. */
+  put_string("Object to String", (String ^)text_object);
+  printf("Object to Encoding: the same object %d\n",
+         (Encoding ^)encoder == (Encoding ^)utf8);
+
+  /* The cast that fails: a UTF8Encoding is not a String. */
+  fflush(stdout);
+  fputs("cast-loud: casting an Object that holds a UTF8Encoding to String\n",
+        stderr);
+  fflush(stderr);
+  String ^wrong = (String ^)encoder;
+  put_string("returned from the failed cast", wrong);
+  fprintf(stderr, "cast-loud: returned from the failed cast\n");
+  return 0;
+}

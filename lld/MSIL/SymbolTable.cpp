@@ -28,6 +28,7 @@
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CLI/ImageLayout.h"
+#include "llvm/CLI/ManagedSignature.h"
 #include "llvm/CLI/Signature.h"
 #include "llvm/CLI/TrailerDefs.h"
 #include "llvm/IR/Instruction.h"
@@ -1073,6 +1074,17 @@ void SymbolTable::bindLateSymbols() {
       // function (plan 5.14.2 N4, 5.15.4), so it is neither bound nor
       // reported; the import-annotation pass leaves it alone too.
       if (!sym->isData() && isSetjmpFamilyName(sym->getName()))
+        continue;
+      // Nor is a function that code generation defines or refuses itself,
+      // whatever the reference's visibility (plan 5.20.7 MK5, 5.21.10 RL4;
+      // a hidden or protected one would be reported below): a managed call
+      // '__msil_mc.<s>', whose stub slot P0 makes, and a reference helper
+      // '__msil_ref.<...>', where instruction selection makes each call of
+      // '__msil_ref.eq' a ceq or a branch and the backend refuses any other
+      // (T-RB7). The import-annotation pass leaves them alone too, and
+      // reports an undefined '__msil_mc.' name that is no managed call.
+      if (!sym->isData() && (cli::isManagedCallName(sym->getName()) ||
+                             cli::isReferenceHelperName(sym->getName())))
         continue;
       if (sym->visibility() == STV_DEFAULT) {
         // A native object given on the command line defines it: the lookup

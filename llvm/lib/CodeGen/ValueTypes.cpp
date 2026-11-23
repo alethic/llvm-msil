@@ -310,6 +310,9 @@ MVT MVT::getVT(Type *Ty, bool HandleUnknown){
       return MVT(MVT::aarch64svcount);
     else if (TargetExtTy->getName() == "wasm.externref")
       return MVT(MVT::externref);
+    // MSIL's .NET object reference shares the opaque reference value type.
+    else if (TargetExtTy->getName() == "msil.ref")
+      return MVT(MVT::externref);
     else if (TargetExtTy->getName() == "wasm.funcref")
       return MVT(MVT::funcref);
     else if (TargetExtTy->getName().starts_with("spirv."))

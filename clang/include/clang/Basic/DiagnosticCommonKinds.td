@@ -299,6 +299,9 @@ let CategoryName = "Inline Assembly Issue" in {
 def err_msil_asm_unsupported : Error<
   "%select{inline assembly|Microsoft-style inline assembly|"
   "file-scope assembly}0 is not supported for the MSIL target '%1'">;
+def err_msil_ref_asm_operand : Error<
+  "a .NET reference as an inline assembly operand is not supported for MSIL "
+  "yet">;
 def err_asm_invalid_type_in_input : Error<
   "invalid type %0 in asm input for constraint '%1'">;
 

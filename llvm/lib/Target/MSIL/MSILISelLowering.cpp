@@ -35,6 +35,7 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicsWebAssembly.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Target/TargetMachine.h"
@@ -72,11 +73,15 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // There is no stack pointer: arguments travel on the evaluation stack.
 
   // Set up the register classes. I64 holds pointers and 64-bit integers, both
-  // CIL native int.
+  // CIL native int. OBJ holds .NET references, IR target("msil.ref"), which
+  // MVT::getVT maps to MVT::externref: CIL 'object' values that live only in
+  // IL locals, arguments, results and on the evaluation stack, never in
+  // memory (plan 5.21.7 RB2).
   addRegisterClass(MVT::i32, &MSIL::I32RegClass);
   addRegisterClass(MVT::i64, &MSIL::I64RegClass);
   addRegisterClass(MVT::f32, &MSIL::F32RegClass);
   addRegisterClass(MVT::f64, &MSIL::F64RegClass);
+  addRegisterClass(MVT::externref, &MSIL::OBJRegClass);
   // Compute derived properties from the register classes.
   computeRegisterProperties(Subtarget->getRegisterInfo());
 
@@ -272,8 +277,13 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // triangle (decision D34), because generic legalization emits SELECT
   // (variable i128 shifts, min/max). The fused forms are split into SETCC
   // plus SELECT or BRCOND; instruction selection turns BRCOND of a SETCC into
-  // one CIL compare-and-branch (beq, blt.un, ...; MSILInstrControl.td).
-  for (MVT T : {MVT::i32, MVT::i64, MVT::f32, MVT::f64}) {
+  // one CIL compare-and-branch (beq, blt.un, ...; MSILInstrControl.td). A
+  // .NET reference has SELECT_OBJ but no SETCC: IR cannot compare one
+  // ('icmp' refuses target types), and LowerCall turns each call of the
+  // comparison helper __msil_ref.eq into MSILISD::REF_EQ or REF_IS_NULL,
+  // whose BRCOND is a beq, bne.un, brtrue or brfalse (MSILInstrRef.td, plan
+  // 5.21.7 RB2, RB4).
+  for (MVT T : {MVT::i32, MVT::i64, MVT::f32, MVT::f64, MVT::externref}) {
     setOperationAction(ISD::SELECT, T, Legal);
     setOperationAction({ISD::SELECT_CC, ISD::BR_CC}, T, Expand);
   }
@@ -409,6 +419,12 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     setTruncStoreAction(T, MVT::f16, Expand);
     setTruncStoreAction(T, MVT::bf16, Expand);
   }
+  // A .NET reference is never in memory: OBJ has no ldind or stind form
+  // (MSILInstrRef.td), and MSILPromoteReferences (slot P15) turns every slot
+  // of one into an IL local, or reports it, before instruction selection. A
+  // LOAD or STORE of one that is left anyway is reported as T-RB6
+  // (LowerReferenceLoadStore, plan 5.21.7 RB2).
+  setOperationAction({ISD::LOAD, ISD::STORE}, MVT::externref, Custom);
   // memcpy, memmove and memset are never expanded into loads and stores,
   // whatever their size: MSILSelectionDAGInfo turns each into cpblk, initblk
   // or Buffer::MemoryCopy (decision D15).
@@ -578,6 +594,22 @@ bool MSILTargetLowering::convertSelectOfConstantsToMath(EVT /*VT*/) const {
   // CIL has no select, so arithmetic on the 0/1 compare result is better than
   // a select of constants, which needs a branch.
   return true;
+}
+
+void MSILTargetLowering::computeKnownBitsForTargetNode(
+    const SDValue Op, KnownBits &Known, const APInt & /*DemandedElts*/,
+    const SelectionDAG & /*DAG*/, unsigned /*Depth*/) const {
+  switch (Op.getOpcode()) {
+  default:
+    break;
+  case MSILISD::REF_EQ:
+  case MSILISD::REF_IS_NULL:
+    // 'ceq' of two references pushes an int32 0 or 1 (plan 5.21.7 RB4), so
+    // DAGCombiner drops the masks and extensions of the helper's i1 result
+    // and the boolean patterns (bool_node) take it.
+    Known.Zero.setBitsFrom(1);
+    break;
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -771,6 +803,10 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
     return LowerBF16Conversion(Op, DAG);
   case ISD::ATOMIC_FENCE:
     return LowerATOMIC_FENCE(Op, DAG);
+  // Only the memory accesses of a .NET reference are Custom.
+  case ISD::LOAD:
+  case ISD::STORE:
+    return LowerReferenceLoadStore(Op, DAG);
   default:
     reportFatalInternalError(Twine("MSIL: unexpected operation in "
                                    "LowerOperation: ") +
@@ -872,6 +908,7 @@ MSILTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   case MSIL::SELECT_I64:
   case MSIL::SELECT_F32:
   case MSIL::SELECT_F64:
+  case MSIL::SELECT_OBJ:
     return emitSelect(MI, BB);
   default:
     llvm_unreachable("Unexpected instr type to insert");
@@ -1340,6 +1377,43 @@ SDValue MSILTargetLowering::LowerUnsupported(SDValue Op, SelectionDAG &DAG,
   DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
       DAG.getMachineFunction().getFunction(), What, SDLoc(Op).getDebugLoc()));
   return getDummyResults(Op, DAG);
+}
+
+/// Returns the null .NET reference, which CONST_NULL ('ldnull') selects: the
+/// node that SelectionDAGBuilder::getValueImpl makes of the zeroinitializer
+/// of every IR type that MVT::getVT maps to MVT::externref, target("msil.ref")
+/// among them (plan 5.21.6 RI2).
+static SDValue getNullReference(const SDLoc &DL, SelectionDAG &DAG) {
+  return DAG.getNode(
+      ISD::INTRINSIC_WO_CHAIN, DL, MVT::externref,
+      DAG.getTargetConstant(Intrinsic::wasm_ref_null_extern, DL, MVT::i32));
+}
+
+SDValue MSILTargetLowering::LowerReferenceLoadStore(SDValue Op,
+                                                    SelectionDAG &DAG) const {
+  // The constructor makes LOAD and STORE Custom only for MVT::externref, so
+  // the value loaded or stored is a reference. A reference lives only in IL
+  // locals, arguments, results and on the evaluation stack (Design.md
+  // section 4: C memory never holds a GC reference), and MSILPromoteReferences
+  // (slot P15) has turned every slot of one into an IL local or reported it
+  // (T-RB4), so this is a backstop: report the access, then drop it, giving
+  // a load the null reference.
+  auto *Mem = cast<MemSDNode>(Op);
+  assert((Op.getOpcode() == ISD::LOAD
+              ? Op.getValueType()
+              : cast<StoreSDNode>(Mem)->getValue().getValueType()) ==
+             MVT::externref &&
+         "Only a load or a store of a .NET reference is Custom");
+  SDLoc DL(Op);
+  DAG.getContext()->diagnose(
+      DiagnosticInfoUnsupported(DAG.getMachineFunction().getFunction(),
+                                "a .NET reference is loaded from or stored "
+                                "to memory",
+                                DL.getDebugLoc()));
+  SDValue Chain = Mem->getChain();
+  if (Op.getOpcode() == ISD::STORE)
+    return Chain;
+  return DAG.getMergeValues({getNullReference(DL, DAG), Chain}, DL);
 }
 
 SDValue MSILTargetLowering::LowerStackSaveRestore(SDValue Op,

@@ -1,0 +1,13 @@
+two Objects: not NULL 1 1, different 1
+five more in a loop, each new: 5
+Version(1, 2, 3): "1.2.3"
+its Minor: 2
+StringBuilder("capacity", 100): length 8, capacity 100
+InnerException: of the outer is the inner 1, of the inner NULL 1
+ParamName returns the reference the .ctor got: 1
+ParamName: "width"
+string[3]: length 3, element 1 is the string 1, element 0 NULL 1
+object[2]: length 2, holds the Version 1 and the string 1
+System.Version[4]: length 4, element 3 is the Version 1, element 2 NULL 1
+three arrays, three objects: 1
+[exit 0]

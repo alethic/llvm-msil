@@ -1,0 +1,130 @@
+# Checked casts between .NET classes on msil64-unknown-dotnet, with built-in table types only: casts up to a base class, back down, to Object and to the own class keep the reference's identity, a cast of NULL is NULL, casts of Object references to array classes (string[], uint8[]) succeed and the two spellings of string[] are one type, an unused cast that succeeds runs and changes nothing; then an Object reference that holds a UTF8Encoding is cast to String, whose cast stub's castclass throws System.InvalidCastException, which ends the program.
+# Plan 5.21.4 RS8 (a C cast from one class to another is checked at run
+# time; free when the classes are equal or the target is Object; a null
+# constant to a reference; a reference to void), 5.21.5 RG5 (the cast
+# declaration has no memory attributes, so an unused cast runs), 5.21.9
+# RM8 (cast stubs: ldarg.0; castclass <TYPE>; ret, castclass taking the
+# SZARRAY token for an array TYPE), 5.21.2 RT3 ("string[]" and "class
+# System.String[]" are one key), ECMA-335 Partition III 4.3 (castclass
+# passes null and throws InvalidCastException for an object of another
+# class), 5.20.8 MX1 (an exception nothing catches escapes as an ordinary
+# unhandled .NET exception). Every type and member is a built-in table
+# entry (UTF8Encoding, Encoding, EntryPointNotFoundException, Exception,
+# Environment::GetCommandLineArgs, BitConverter::GetBytes,
+# Exception::get_HResult), so no --reference is needed before P-2. Each
+# failed check sets one bit of the exit status, and a failed check returns
+# before the loud cast, so the transcript then shows the bits instead of
+# the exception.
+# The loud cast (plan 5.17.4): the transcript is hand-written for both
+# OSes, the status line '[unhandled exception: System.InvalidCastException]'
+# that msil-run.py derives from the runtime's report. A portable program
+# has no output channel before P-2, so it cannot write a message of its
+# own; the LOUD line matches the toolchain's entry point '<msil>Main' in the
+# stack trace of the runtime's report, never the runtime's wording: .NET
+# prints the frame as '<msil>Main(String[])' and the Framework as
+# '<msil>Main(String[] )', so the pattern stops at the parenthesis (the
+# form of ../02-managed-calls/handles.test). A link that writes
+# --lto-emit-asm text cannot import c.dll (msil_link_output=il), so the
+# test needs linked images. Plan 5.21.14 RV28 (R-a, Portable/08-references).
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O2}
+# LOUD: <msil>Main(
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.Encoding") Encoding Encoding;
+typedef struct CLI_TYPE("System.Text.UTF8Encoding") UTF8Encoding UTF8Encoding;
+typedef struct CLI_TYPE("System.Exception") Exception Exception;
+typedef struct CLI_TYPE("System.EntryPointNotFoundException")
+    EntryPointNotFoundException EntryPointNotFoundException;
+typedef struct CLI_TYPE("string[]") Strings Strings;
+typedef struct CLI_TYPE("class System.String[]") StringsToo StringsToo;
+typedef struct CLI_TYPE("uint8[]") Bytes Bytes;
+
+__attribute__((msil_method("System.Text.UTF8Encoding", ".ctor",
+                           "instance void(bool, bool)")))
+UTF8Encoding ^new_utf8(_Bool emit_bom, _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.Encoding", "GetString",
+                           "instance string(uint8*, int32)")))
+String ^get_string(Encoding ^encoding, const unsigned char *bytes, int count);
+
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+EntryPointNotFoundException ^new_not_found(const char *message);
+
+__attribute__((msil_method("System.Exception", "get_HResult",
+                           "instance int32()")))
+int exception_hresult(Exception ^e);
+
+__attribute__((msil_method("System.Environment", "GetCommandLineArgs",
+                           "string[]()")))
+Strings ^command_line(void);
+
+__attribute__((msil_method("System.BitConverter", "GetBytes",
+                           "uint8[](int32)")))
+Bytes ^int_bytes(int value);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+#define COR_E_ENTRYPOINTNOTFOUND 0x80131523u
+
+static Encoding ^as_encoding(Object ^o) { return (Encoding ^)o; }
+
+int main(void) {
+  /* 0: up, down, to Object and to the own class. */
+  UTF8Encoding ^utf8 = new_utf8(0, 1);
+  Encoding ^base = (Encoding ^)utf8;
+  UTF8Encoding ^down = (UTF8Encoding ^)base;
+  Object ^o = utf8;
+  CHECK(0, (Object ^)base == utf8 && down == utf8 && (Object ^)down == o);
+  CHECK(0, as_encoding(o) == base && (UTF8Encoding ^)utf8 == utf8);
+
+  /* 1: a string through Object and back. */
+  static const unsigned char text[] = "cast me";
+  String ^s = get_string(base, text, 7);
+  Object ^so = s;
+  CHECK(1, (String ^)so == s && so != o);
+
+  /* 2: NULL. */
+  Object ^nothing = NULL;
+  CHECK(2, (Encoding ^)nothing == NULL && (String ^)NULL == NULL);
+  CHECK(2, as_encoding(nothing) == NULL);
+
+  /* 3: array classes, and the two spellings of string[]. */
+  Strings ^args = command_line();
+  Object ^args_object = args;
+  StringsToo ^args_too = args;
+  CHECK(3, args != NULL && (Strings ^)args_object == args && args_too == args);
+  Bytes ^bytes = int_bytes(0x01020304);
+  Object ^bytes_object = bytes;
+  CHECK(3, bytes != NULL && (Bytes ^)bytes_object == bytes);
+
+  /* 4: an exception class to Exception. */
+  EntryPointNotFoundException ^not_found = new_not_found("not found");
+  Exception ^e = (Exception ^)not_found;
+  CHECK(4, (unsigned)exception_hresult(e) == COR_E_ENTRYPOINTNOTFOUND);
+  CHECK(4, (Object ^)e == not_found);
+
+  /* 5: an unused cast that succeeds. */
+  (void)(Encoding ^)o;
+  CHECK(5, o == utf8);
+  if (fails)
+    return (int)fails;
+
+  /* The loud cast: a UTF8Encoding is not a String. */
+  String ^wrong = (String ^)o;
+  return wrong != NULL ? 64 : 65; /* never reached */
+}

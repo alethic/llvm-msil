@@ -1,0 +1,1575 @@
+## .NET references through msil-ld (ImplementationPlan.md 5.21.10 RL1-RL7,
+## RV27 of 5.21.14; milestone R-a). A reference is a C value of type 'T ^'
+## for a CLI_TYPE struct T (5.21.1 RA1): target("msil.ref") in IR (5.21.6
+## RI1) and 'object' in IL (RI3). A managed call passes it with the
+## conversion codes 'ref' and 'this-ref' (5.21.9 RM1, RM2, RM7); a C cast to
+## another class calls a cast stub '__msil_mc.<castclass>.__uniq.<n>', whose
+## body is 'ldarg.0; castclass <TYPE>; ret' (RM8); and '==' calls the helper
+## '__msil_ref.eq' (RI6), which instruction selection turns into ceq, beq,
+## bne.un, brtrue or brfalse (5.21.7 RB5), so that no object names it. The
+## members are Inputs/fakepack/FakeWidgets.il's, over the core library
+## FakeRuntime.il (managed-calls.test). Each input is IR in the form that
+## clang -O2 -flto writes for the C in its comments (without target
+## attributes, debug information and summary, and with its values renamed),
+## or hand-written IR where it says so.
+## - Binding with references (RL1, RL3, RL5; 5.20.7 MK1): calls.ll on
+##   x86_64-pc-windows-msvc-msil, x86_64-unknown-linux-gnu-msil and
+##   msil64-unknown-dotnet. Each object's link-info lists every stub, the
+##   cast stubs among them, and the static functions pick and use_casts as
+##   LOCAL FUNCTION symbols, and no '__msil_ref' symbol (SYMHDR, SYMTAB).
+##   Each object links with --reference without a diagnostic. In the image
+##   every member access, and each newarr and isinst token, names its type
+##   in FakeWidgets or FakeRuntime (BIND); each cast stub is exactly
+##   'ldarg.0; castclass <TYPE>; ret', a stub with no member access, for a
+##   class, System.String, int32[], string[], class Contoso.Widget[], the
+##   nested class Contoso.Outer/Inner and the interface Contoso.IWidget
+##   (CASTS); a 'ref' argument is 'ldarg' and a 'castclass' to the member's
+##   parameter type, none for 'object', a 'ref' result is returned as it
+##   is, and 'this-ref' is 'ldarg.0', a 'castclass' to TYPE (none for
+##   System.Object) and then 'callvirt', for the method that is not virtual
+##   (Resize) too, or 'ldfld' (RM7); a field of a class type gives a 'ref'
+##   result: the instance field Part, a Contoso.Outer/Inner, is 'ldarg.0',
+##   a 'castclass' to Contoso.Widget, which declares it, and 'ldfld', and
+##   the static field Last, a Contoso.Widget, is 'ldsfld', each returned as
+##   it is, and their MemberRefs name both classes in FakeWidgets (BIND);
+##   with msil_catch the result local is 'object' and the handler's zero is
+##   'ldnull' (RM7, RM12); the signatures of the stubs and of the static
+##   functions and the locals of main and use_casts hold 'object' (RL5)
+##   (STUBS). The images refer to FakeRuntime and FakeWidgets only, and no
+##   line names '__msil_ref' (REFS).
+## - Without references (MK1): table.ll's managed calls of built-in table
+##   members (GetCommandLineArgs() and BitConverter::GetBytes(int32) with
+##   'ref' results, StringToHGlobalUni(string) with a String ^, the
+##   EntryPointNotFoundException constructor, Exception::get_HResult() and
+##   Encoding::GetString(uint8*, int32) through 'this-ref', UTF8Encoding's
+##   constructor, String::.ctor(char*), and GCHandle's Alloc and get_Target
+##   with tickets) and its casts to System.Exception, System.String and
+##   string[] and, from a UTF8Encoding ^, to System.Text.Encoding link on each
+##   triple without a diagnostic and refer to [mscorlib] only (TABLE and
+##   TCAST with S=[mscorlib], TREFS-LIB); with --reference the Windows and
+##   msil64-unknown-dotnet objects bind to FakeRuntime instead
+##   (S=[FakeRuntime], TREFS-FAKE).
+## - LTO and text: calls.ll as bitcode links in full LTO on a host triple
+##   and on msil64-unknown-dotnet, and as one ThinLTO module, which imports
+##   nothing, so pick and use_casts stay internal, with the same cast stubs.
+##   Under --lto-emit-asm it gives the same text without and with
+##   --reference (with references msil-ld checks every declaration, RL1 and
+##   RL2, and finds no error), whose stubs print 5.20.6 MW2's kind check
+##   ('castclass class [mscorlib]T' for a class, interface or array of a
+##   class; System.String keeps its TypeRef), and whose field stubs give
+##   the class of Part and of Last as 'class [mscorlib]T' too (TEXT), which
+##   names no '__msil_ref' and imports nothing (TXTHDR), and which ilasm
+##   assembles.
+##   Under --lto-partitions=2 the partition split makes the static functions
+##   external and hidden, and slot P1 refuses each function with a
+##   reference in its signature that remains, the definition and a
+##   declaration in the other partition alike (RL7; 5.21.7 RB11 rule 3,
+##   T-RB2, sorted):
+##   'a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet',
+##   after the '<unknown>:0:0: in function <f> <type>: ' that msil-ld prints
+##   for a back-end error of an LTO link.
+## - T-M16 (RL2, RL3; 5.20.7 MK3): kinds.ll names the struct Contoso.Point
+##   as a class (CLI_TYPE("Contoso.Point")). With references its 'this-ref'
+##   TYPE (point_sum), its 'ref' parameter (wrap_point, whose member the
+##   binder then does not find, 5.11.9) and its cast stub, named
+##   '<castclass>', are each
+##   'managed call '<f>': 'Contoso.Point' is a value type, but the declaration uses it as a reference type'
+##   (sorted): from the objects' castclass tokens on a host triple and on
+##   msil64-unknown-dotnet, in an LTO link, and from the declarations under
+##   --lto-emit-asm. A class (Contoso.Widget), an interface (Contoso.IWidget)
+##   and an array (int32[]) get no error. Without references --lto-emit-asm
+##   links and its text makes the kind check when the program runs (KTEXT),
+##   and the object fails with 5.11.7's text for each type outside the table
+##   (sorted).
+## - Declarations that slot P0 refuses (RL1; bad.ll): msil-ld takes 'ref',
+##   'this-ref' and RM8's cast shape as P0 does, so it skips 'ref' for an
+##   int32 parameter or with a pointer in IR, 'this-ref' of a value type or
+##   after the first parameter, a cast stub of System.Object and one with
+##   "msil-managed-decl", and each gets P0's error once, in its order, in an
+##   image link and under --lto-emit-asm, with and without references:
+##   'managed call '<f>' has invalid "msil-managed-*" attributes: <reason>'.
+## - The helper is never bound (RL4, RL6): helper.ll compares two
+##   references from managed calls, so its call of '__msil_ref.eq' survives
+##   LTO's optimizer. It links without a diagnostic in full LTO at -O2 and
+##   -O0, under --lto-partitions=2, as a ThinLTO module, on
+##   msil64-unknown-dotnet, under --lto-emit-asm without and with
+##   --reference and at -O0, and beside a native library that exports
+##   '__msil_ref.eq' (helper.lib on Windows, libhelper.so on Linux), in
+##   images and in text: main compares with 'ceq', and no output names the
+##   helper, imports it or names a native library (HELPER, HTEXT).
+##   hidden.ll declares the helper and the managed call hidden (the managed
+##   call as clang declares it under '#pragma GCC visibility push(hidden)'),
+##   and links too, in an image and under --lto-emit-asm without and with
+##   --reference: msil-ld neither binds nor reports an undefined
+##   '__msil_ref.' or '__msil_mc.' function, hidden or not, before LTO's
+##   code generation, which defines the stub and lowers the helper's calls
+##   (5.20.7 MK5). Another '__msil_ref.' name (other.ll's
+##   '__msil_ref.ne') is not bound or reported by msil-ld: code generation
+##   refuses it (5.21.7 RB11 rule 11, T-RB7):
+##   ''<name>' is reserved for the MSIL toolchain'.
+## - T-RL1 (RL4): a definition of a '__msil_ref.' name is
+##   '<file>: defines '<name>', which is reserved for the MSIL toolchain (a reference helper)'
+##   for each GLOBAL, WEAK or COMMON function or variable: in bitcode
+##   (def.ll, in its symbol table's order, functions first) in full LTO,
+##   under --lto-emit-asm, under --lto-partitions=2 and as a ThinLTO module,
+##   on a host triple and on msil64-unknown-dotnet; in a CIL object, in its
+##   symbol order (variables first): defobj.ll's, which llc compiles under
+##   '__msil_REF.' names and rename.py renames, as an object of another
+##   toolchain might define them (slot P1 refuses a '__msil_ref.' function
+##   definition, T-RB7); and in an archive member that a bitcode reference
+##   to the helper extracts, 'libdef.a(defobj.o)'. Internal definitions get
+##   no error. An object never references the helper (RB5), so the member
+##   is never extracted for one.
+## - ThinLTO (RL7): thin-m.ll's main calls thin-a.ll's g, which calls the
+##   static size_of, whose parameter is a reference. Full LTO links. As
+##   ThinLTO modules, in either input order, main's module imports g, so
+##   size_of is promoted, external and hidden, as 'size_of.llvm.<n>': its
+##   definition and the declaration that main's module calls once it has
+##   inlined g each get T-RB2. Under --lto-partitions=2 the definition and
+##   the declaration in the other partition each get T-RB2 too.
+## - T-RB5 through the LTO table pass (5.21.7 RB12): under the module flag
+##   msil-lto, MSILFixFunctionBitcasts adapts a call whose type differs from
+##   the definition's by 5.9.8's table, before LTO's optimizer
+##   (obj-lto.test). A difference that involves a reference is
+##   'call of '<g>' passes '<A>' where it takes '<P>': a .NET reference cannot be converted'
+##   and never an adapter: take-ref.ll passes a reference where take.ll's
+##   take takes a pointer, passes an extra reference to count (the table
+##   would drop an extra argument with a warning) and expects a reference
+##   from get, which returns a pointer; hold-ptr.ll passes a pointer to
+##   hold.ll's reference parameter. In full LTO at -O2 and -O0, under
+##   --lto-emit-asm and on msil64-unknown-dotnet, in either input order.
+## - Cast stubs and LTO (5.21.9 RM8): cast-a.ll and cast-b.ll each cast to
+##   Contoso.Widget. Linked as objects, each object keeps its own LOCAL stub
+##   (the second renamed '<name><msil>1', as obj-resolve.test's locals); in
+##   full LTO the two declarations, equal in name and operands, are one stub,
+##   with no T-M17 (TWO, ONE). A -shared library exports one() and neither
+##   the stub nor the managed calls.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir refs none withrefs helper merge
+# RUN: yaml2obj %S/Inputs/fakepack/FakeRuntime.yaml -o refs/FakeRuntime.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeWidgets.yaml -o refs/FakeWidgets.dll
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+## An image that refers to FakeRuntime and FakeWidgets only and names no
+## '__msil_ref' anywhere: REFS has only the assembly references, so the
+## implicit check-nots cover every other line.
+# DEFINE: %{refs} = FileCheck %s --check-prefix=REFS --implicit-check-not=assemblyref --implicit-check-not=mscorlib \
+# DEFINE:   --implicit-check-not=msil.bcl --implicit-check-not=__msil_ref
+
+## Binding with references, through objects, on each triple.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil calls.ll -o win.o
+# RUN: llvm-cil-dump --link-info win.o > win.sym
+# RUN: FileCheck %s %{crash} --check-prefix=SYMHDR --input-file=win.sym -DTRIPLE=x86_64-pc-windows-msvc-msil \
+# RUN:   --implicit-check-not=__msil_ref --implicit-check-not="{{(GLOBAL|WEAK) .*__msil_mc}}"
+# RUN: FileCheck %s --check-prefix=SYMTAB --input-file=win.sym
+# RUN: msil-ld win.o --reference=refs -o win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win.exe > win.txt
+# RUN: FileCheck %s --check-prefix=BIND --input-file=win.txt
+# RUN: FileCheck %s --check-prefixes=CASTS,STUBS --input-file=win.txt
+# RUN: %{refs} --input-file=win.txt
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil calls.ll -o lnx.o
+# RUN: llvm-cil-dump --link-info lnx.o > lnx.sym
+# RUN: FileCheck %s %{crash} --check-prefix=SYMHDR --input-file=lnx.sym -DTRIPLE=x86_64-unknown-linux-gnu-msil \
+# RUN:   --implicit-check-not=__msil_ref --implicit-check-not="{{(GLOBAL|WEAK) .*__msil_mc}}"
+# RUN: FileCheck %s --check-prefix=SYMTAB --input-file=lnx.sym
+# RUN: msil-ld lnx.o --reference=refs -o lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx.exe > lnx.txt
+# RUN: FileCheck %s --check-prefix=BIND --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefixes=CASTS,STUBS --input-file=lnx.txt
+# RUN: %{refs} --input-file=lnx.txt
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet calls.ll -o net.o
+# RUN: llvm-cil-dump --link-info net.o > net.sym
+# RUN: FileCheck %s %{crash} --check-prefix=SYMHDR --input-file=net.sym -DTRIPLE=msil64-unknown-dotnet \
+# RUN:   --implicit-check-not=__msil_ref --implicit-check-not="{{(GLOBAL|WEAK) .*__msil_mc}}"
+# RUN: FileCheck %s --check-prefix=SYMTAB --input-file=net.sym
+# RUN: msil-ld net.o --reference=refs -o net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump net.exe > net.txt
+# RUN: FileCheck %s --check-prefix=BIND --input-file=net.txt
+# RUN: FileCheck %s --check-prefixes=CASTS,STUBS --input-file=net.txt
+# RUN: %{refs} --input-file=net.txt
+
+## The header line only: the implicit check-nots then cover every line.
+# SYMHDR:     {{^}}LinkInfo v1.0 triple=[[TRIPLE]] {{.+$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL DEFAULT 'main' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT 'pick' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT 'use_casts' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.describe' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.describe_or_null' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_new' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_size' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_resize' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_serial' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_part' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_last' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.object_hash' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.widget_score' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.new_bytes' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.new_widgets' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.inner_new' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.inner_depth' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.ticket_new' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.ticket_target' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.<castclass>.__uniq.166036594012079310185973893725517444100' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.<castclass>.__uniq.217053442791668919835724198844101650842' method=0x{{[0-9A-F]+}}{{$}}
+# SYMTAB-DAG: {{^}}Symbol {{[0-9]+}} FUNCTION LOCAL DEFAULT '__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208' method=0x{{[0-9A-F]+}}{{$}}
+
+# BIND-DAG: {{^    L[0-9]+: }}call string(object, string, class [FakeWidgets]Contoso.Widget, int32[], string[]) [FakeWidgets]Contoso.Widget::'Describe'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void(string, int32) [FakeWidgets]Contoso.Widget::'.ctor'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance int32() [FakeWidgets]Contoso.Widget::'get_Size'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance void(int32) [FakeWidgets]Contoso.Widget::'Resize'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}ldfld int64 [FakeWidgets]Contoso.Widget::'Serial'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}ldfld class [FakeWidgets]Contoso.Outer/Inner [FakeWidgets]Contoso.Widget::'Part'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}ldsfld class [FakeWidgets]Contoso.Widget [FakeWidgets]Contoso.Widget::'Last'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance int32() [FakeRuntime]System.Object::'GetHashCode'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}callvirt instance int32() [FakeWidgets]Contoso.IWidget::'Score'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newarr {{(uint8|\[FakeRuntime\]System\.Byte)}}{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newarr [FakeWidgets]Contoso.Widget{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}newobj instance void() [FakeWidgets]Contoso.Outer/Inner::'.ctor'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call int32(class [FakeWidgets]Contoso.Outer/Inner) [FakeWidgets]Contoso.Outer/Inner::'Depth'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call valuetype [FakeRuntime]System.Runtime.InteropServices.GCHandle(object) [FakeRuntime]System.Runtime.InteropServices.GCHandle::'Alloc'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}call instance object() [FakeRuntime]System.Runtime.InteropServices.GCHandle::'get_Target'{{$}}
+# BIND-DAG: {{^    L[0-9]+: }}isinst [FakeWidgets]Contoso.WidgetException{{$}}
+
+## The images' methods are in name order.
+# CASTS-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.166036594012079310185973893725517444100' object(object) {{.+$}}
+# CASTS-NEXT:  {{^    }}.maxstack 1{{$}}
+# CASTS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# CASTS-NEXT:  {{^    L1: }}castclass class [FakeWidgets]Contoso.Widget[]{{$}}
+# CASTS-NEXT:  {{^    L2: }}ret{{$}}
+# CASTS-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851' object(object) {{.+$}}
+# CASTS-NEXT:  {{^    }}.maxstack 1{{$}}
+# CASTS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# CASTS-NEXT:  {{^    L1: }}castclass [FakeRuntime]System.String{{$}}
+# CASTS-NEXT:  {{^    L2: }}ret{{$}}
+# CASTS-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.217053442791668919835724198844101650842' object(object) {{.+$}}
+# CASTS-NEXT:  {{^    }}.maxstack 1{{$}}
+# CASTS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# CASTS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.Outer/Inner{{$}}
+# CASTS-NEXT:  {{^    L2: }}ret{{$}}
+# CASTS-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875' object(object) {{.+$}}
+# CASTS-NEXT:  {{^    }}.maxstack 1{{$}}
+# CASTS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# CASTS-NEXT:  {{^    L1: }}castclass int32[]{{$}}
+# CASTS-NEXT:  {{^    L2: }}ret{{$}}
+# CASTS-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208' object(object) {{.+$}}
+# CASTS-NEXT:  {{^    }}.maxstack 1{{$}}
+# CASTS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# CASTS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.IWidget{{$}}
+# CASTS-NEXT:  {{^    L2: }}ret{{$}}
+# CASTS-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868' object(object) {{.+$}}
+# CASTS-NEXT:  {{^    }}.maxstack 1{{$}}
+# CASTS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# CASTS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# CASTS-NEXT:  {{^    L2: }}ret{{$}}
+# CASTS-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194' object(object) {{.+$}}
+# CASTS-NEXT:  {{^    }}.maxstack 1{{$}}
+# CASTS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# CASTS-NEXT:  {{^    L1: }}castclass string[]{{$}}
+# CASTS-NEXT:  {{^    L2: }}ret{{$}}
+
+# STUBS-LABEL: {{^  }}.method '__msil_mc.describe' object(object, object, object, object, object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack {{[0-9]+}}{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}ldarg.1{{$}}
+# STUBS-NEXT:  {{^    L2: }}castclass [FakeRuntime]System.String{{$}}
+# STUBS-NEXT:  {{^    L3: }}ldarg.2{{$}}
+# STUBS-NEXT:  {{^    L4: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# STUBS-NEXT:  {{^    L5: }}ldarg.3{{$}}
+# STUBS-NEXT:  {{^    L6: }}castclass int32[]{{$}}
+# STUBS-NEXT:  {{^    L7: }}ldarg.s 4{{$}}
+# STUBS-NEXT:  {{^    L8: }}castclass string[]{{$}}
+# STUBS-NEXT:  {{^    L9: }}call string(object, string, class [FakeWidgets]Contoso.Widget, int32[], string[]) [FakeWidgets]Contoso.Widget::'Describe'{{$}}
+# STUBS-NEXT:  {{^    L10: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.describe_or_null' object(object, object, object, object, object, native int) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack {{[0-9]+}}{{$}}
+# STUBS-NEXT:  {{^    }}.locals (int32, object){{$}}
+# STUBS:       {{^    L[0-9]+: }}call string(object, string, class [FakeWidgets]Contoso.Widget, int32[], string[]) [FakeWidgets]Contoso.Widget::'Describe'{{$}}
+# STUBS-NEXT:  {{^    L[0-9]+: }}stloc.1{{$}}
+# STUBS:       {{^    L[0-9]+: }}isinst [FakeWidgets]Contoso.WidgetException{{$}}
+# STUBS:       {{^    L[0-9]+: }}ldnull{{$}}
+# STUBS-NEXT:  {{^    L[0-9]+: }}stloc.1{{$}}
+# STUBS:       {{^    L[0-9]+: }}ldloc.1{{$}}
+# STUBS-NEXT:  {{^    L[0-9]+: }}ret{{$}}
+# STUBS-NEXT:  {{^    }}.try L{{[0-9]+}} to L{{[0-9]+}} filter L{{[0-9]+}} handler L{{[0-9]+}} to L{{[0-9]+}}{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.inner_depth' int32(object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.Outer/Inner{{$}}
+# STUBS-NEXT:  {{^    L2: }}call int32(class [FakeWidgets]Contoso.Outer/Inner) [FakeWidgets]Contoso.Outer/Inner::'Depth'{{$}}
+# STUBS-NEXT:  {{^    L3: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.inner_new' object() {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}newobj instance void() [FakeWidgets]Contoso.Outer/Inner::'.ctor'{{$}}
+# STUBS-NEXT:  {{^    L1: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.new_bytes' object(int32) {{.+$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.new_widgets' object(int32) {{.+$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.object_hash' int32(object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}callvirt instance int32() [FakeRuntime]System.Object::'GetHashCode'{{$}}
+# STUBS-NEXT:  {{^    L2: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.ticket_new' native int(object) {{.+$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.ticket_target' object(native int) {{.+$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.widget_last' object() {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldsfld class [FakeWidgets]Contoso.Widget [FakeWidgets]Contoso.Widget::'Last'{{$}}
+# STUBS-NEXT:  {{^    L1: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.widget_new' object(object, int32) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 2{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}castclass [FakeRuntime]System.String{{$}}
+# STUBS-NEXT:  {{^    L2: }}ldarg.1{{$}}
+# STUBS-NEXT:  {{^    L3: }}newobj instance void(string, int32) [FakeWidgets]Contoso.Widget::'.ctor'{{$}}
+# STUBS-NEXT:  {{^    L4: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.widget_part' object(object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# STUBS-NEXT:  {{^    L2: }}ldfld class [FakeWidgets]Contoso.Outer/Inner [FakeWidgets]Contoso.Widget::'Part'{{$}}
+# STUBS-NEXT:  {{^    L3: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.widget_resize' void(object, int32) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 2{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# STUBS-NEXT:  {{^    L2: }}ldarg.1{{$}}
+# STUBS-NEXT:  {{^    L3: }}callvirt instance void(int32) [FakeWidgets]Contoso.Widget::'Resize'{{$}}
+# STUBS-NEXT:  {{^    L4: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.widget_score' int32(object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.IWidget{{$}}
+# STUBS-NEXT:  {{^    L2: }}callvirt instance int32() [FakeWidgets]Contoso.IWidget::'Score'{{$}}
+# STUBS-NEXT:  {{^    L3: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.widget_serial' native int(object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# STUBS-NEXT:  {{^    L2: }}ldfld int64 [FakeWidgets]Contoso.Widget::'Serial'{{$}}
+# STUBS-LABEL: {{^  }}.method '__msil_mc.widget_size' int32(object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack 1{{$}}
+# STUBS-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# STUBS-NEXT:  {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# STUBS-NEXT:  {{^    L2: }}callvirt instance int32() [FakeWidgets]Contoso.Widget::'get_Size'{{$}}
+# STUBS-NEXT:  {{^    L3: }}ret{{$}}
+# STUBS-LABEL: {{^  }}.method 'main' int32() {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack {{[0-9]+}}{{$}}
+# STUBS-NEXT:  {{^    }}.locals ({{.*}}object{{.*}}){{$}}
+# STUBS-LABEL: {{^  }}.method 'pick' object(object, object, int32) {{.+$}}
+# STUBS-LABEL: {{^  }}.method 'use_casts' int32(object) {{.+$}}
+# STUBS-NEXT:  {{^    }}.maxstack {{[0-9]+}}{{$}}
+# STUBS-NEXT:  {{^    }}.locals ({{.*}}object{{.*}}){{$}}
+
+# REFS:      {{^}}assemblyref 'FakeRuntime' ver 8.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# REFS-NEXT: {{^}}assemblyref 'FakeWidgets' ver 1.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+
+## Without references: the built-in table; the same objects with references.
+# DEFINE: %{tlib} = FileCheck %s --check-prefix=TREFS-LIB --implicit-check-not=assemblyref --implicit-check-not=Fake \
+# DEFINE:   --implicit-check-not=msil.bcl --implicit-check-not=__msil_ref
+# DEFINE: %{tfake} = FileCheck %s --check-prefix=TREFS-FAKE --implicit-check-not=assemblyref \
+# DEFINE:   --implicit-check-not=mscorlib --implicit-check-not=msil.bcl --implicit-check-not=__msil_ref
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil table.ll -o twin.o
+# RUN: msil-ld twin.o -o twin.exe 2>&1 | count 0
+# RUN: llvm-cil-dump twin.exe > twin.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=twin.txt "-DS=[mscorlib]"
+# RUN: FileCheck %s --check-prefix=TCAST --input-file=twin.txt "-DS=[mscorlib]"
+# RUN: %{tlib} --input-file=twin.txt
+# RUN: msil-ld twin.o --reference=refs -o twin-refs.exe 2>&1 | count 0
+# RUN: llvm-cil-dump twin-refs.exe > twin-refs.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=twin-refs.txt "-DS=[FakeRuntime]"
+# RUN: FileCheck %s --check-prefix=TCAST --input-file=twin-refs.txt "-DS=[FakeRuntime]"
+# RUN: %{tfake} --input-file=twin-refs.txt
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil table.ll -o tlnx.o
+# RUN: msil-ld tlnx.o -o tlnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump tlnx.exe > tlnx.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=tlnx.txt "-DS=[mscorlib]"
+# RUN: FileCheck %s --check-prefix=TCAST --input-file=tlnx.txt "-DS=[mscorlib]"
+# RUN: %{tlib} --input-file=tlnx.txt
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet table.ll -o tnet.o
+# RUN: msil-ld tnet.o -o tnet.exe 2>&1 | count 0
+# RUN: llvm-cil-dump tnet.exe > tnet.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=tnet.txt "-DS=[mscorlib]"
+# RUN: FileCheck %s --check-prefix=TCAST --input-file=tnet.txt "-DS=[mscorlib]"
+# RUN: %{tlib} --input-file=tnet.txt
+# RUN: msil-ld tnet.o --reference=refs -o tnet-refs.exe 2>&1 | count 0
+# RUN: llvm-cil-dump tnet-refs.exe > tnet-refs.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=tnet-refs.txt "-DS=[FakeRuntime]"
+# RUN: FileCheck %s --check-prefix=TCAST --input-file=tnet-refs.txt "-DS=[FakeRuntime]"
+# RUN: %{tfake} --input-file=tnet-refs.txt
+
+# TREFS-LIB:  {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# TREFS-FAKE: {{^}}assemblyref 'FakeRuntime' ver 8.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call string[]() [[S]]System.Environment::'GetCommandLineArgs'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call uint8[](int32) [[S]]System.BitConverter::'GetBytes'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call native int(string) [[S]]System.Runtime.InteropServices.Marshal::'StringToHGlobalUni'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}newobj instance void(string) [[S]]System.EntryPointNotFoundException::'.ctor'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}callvirt instance int32() [[S]]System.Exception::'get_HResult'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}newobj instance void(bool, bool) [[S]]System.Text.UTF8Encoding::'.ctor'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}callvirt instance string(uint8*, int32) [[S]]System.Text.Encoding::'GetString'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}newobj instance void(char*) [[S]]System.String::'.ctor'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call valuetype [[S]]System.Runtime.InteropServices.GCHandle(object) [[S]]System.Runtime.InteropServices.GCHandle::'Alloc'{{$}}
+# TABLE-DAG: {{^    L[0-9]+: }}call instance object() [[S]]System.Runtime.InteropServices.GCHandle::'get_Target'{{$}}
+
+# TCAST-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.109583808350125573493476830695955507172' object(object) {{.+$}}
+# TCAST-NEXT:  {{^    }}.maxstack 1{{$}}
+# TCAST-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# TCAST-NEXT:  {{^    L1: }}castclass [[S]]System.Text.Encoding{{$}}
+# TCAST-NEXT:  {{^    L2: }}ret{{$}}
+# TCAST-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851' object(object) {{.+$}}
+# TCAST-NEXT:  {{^    }}.maxstack 1{{$}}
+# TCAST-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# TCAST-NEXT:  {{^    L1: }}castclass [[S]]System.String{{$}}
+# TCAST-NEXT:  {{^    L2: }}ret{{$}}
+# TCAST-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.61099266254295873569861551746569464354' object(object) {{.+$}}
+# TCAST-NEXT:  {{^    }}.maxstack 1{{$}}
+# TCAST-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# TCAST-NEXT:  {{^    L1: }}castclass [[S]]System.Exception{{$}}
+# TCAST-NEXT:  {{^    L2: }}ret{{$}}
+# TCAST-LABEL: {{^  }}.method '__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194' object(object) {{.+$}}
+# TCAST-NEXT:  {{^    }}.maxstack 1{{$}}
+# TCAST-NEXT:  {{^    L0: }}ldarg.0{{$}}
+# TCAST-NEXT:  {{^    L1: }}castclass string[]{{$}}
+# TCAST-NEXT:  {{^    L2: }}ret{{$}}
+
+## LTO, ThinLTO, --lto-emit-asm and --lto-partitions=2.
+# RUN: cat win.head calls.ll > calls-win.ll
+# RUN: cat net.head calls.ll > calls-net.ll
+# RUN: llvm-as calls-win.ll -o calls-win.bc
+# RUN: llvm-as calls-net.ll -o calls-net.bc
+# RUN: opt -module-summary calls-win.ll -o calls-win.thin.bc
+# RUN: msil-ld calls-win.bc --reference=refs -o lto-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto-win.exe > lto-win.txt
+# RUN: FileCheck %s --check-prefix=CASTS --input-file=lto-win.txt
+# RUN: %{refs} --input-file=lto-win.txt
+# RUN: msil-ld calls-net.bc --reference=refs -o lto-net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto-net.exe > lto-net.txt
+# RUN: FileCheck %s --check-prefix=CASTS --input-file=lto-net.txt
+# RUN: %{refs} --input-file=lto-net.txt
+# RUN: msil-ld calls-win.thin.bc --reference=refs -o thin-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump thin-win.exe > thin-win.txt
+# RUN: FileCheck %s --check-prefix=CASTS --input-file=thin-win.txt
+# RUN: %{refs} --input-file=thin-win.txt
+# RUN: msil-ld --lto-emit-asm calls-win.bc -o none/calls-win.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm calls-win.bc --reference=refs -o withrefs/calls-win.il 2>&1 | count 0
+# RUN: diff none/calls-win.il withrefs/calls-win.il
+# RUN: FileCheck %s --check-prefix=TEXT --input-file=none/calls-win.il
+# RUN: FileCheck %s --check-prefix=TXTHDR --input-file=none/calls-win.il --implicit-check-not=__msil_ref \
+# RUN:   --implicit-check-not=pinvokeimpl
+# RUN: %if ilasm %{ %ilasm-verify -output=calls-text.dll none/calls-win.il %}
+# RUN: not msil-ld --lto-partitions=2 calls-win.bc --reference=refs -o x.exe 2> err.txt
+# RUN: grep error: err.txt | count 3
+# RUN: sort err.txt | %{err} --check-prefix=PARTS
+# RUN: not msil-ld --lto-partitions=2 calls-net.bc --reference=refs -o x.exe 2> err.txt
+# RUN: grep error: err.txt | count 3
+# RUN: sort err.txt | %{err} --check-prefix=PARTS
+# RUN: not ls x.exe
+
+## The first line only: the implicit check-nots then cover every line.
+# TXTHDR:     {{^}}// MSIL module generated by LLVM{{$}}
+# TEXT-LABEL: {{^}}.method assembly static int32 '__msil_mc.widget_size'(object) cil managed{{$}}
+# TEXT:       {{^  }}ldarg.0{{$}}
+# TEXT-NEXT:  {{^  }}castclass class [mscorlib]Contoso.Widget{{$}}
+# TEXT-NEXT:  {{^  }}callvirt instance int32 [mscorlib]Contoso.Widget::get_Size(){{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+# TEXT-LABEL: {{^}}.method assembly static object '__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868'(object) cil managed{{$}}
+# TEXT:       {{^  }}ldarg.0{{$}}
+# TEXT-NEXT:  {{^  }}castclass class [mscorlib]Contoso.Widget{{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+# TEXT-LABEL: {{^}}.method assembly static object '__msil_mc.widget_part'(object) cil managed{{$}}
+# TEXT:       {{^  }}ldarg.0{{$}}
+# TEXT-NEXT:  {{^  }}castclass class [mscorlib]Contoso.Widget{{$}}
+# TEXT-NEXT:  {{^  }}ldfld class [mscorlib]Contoso.Outer/Inner [mscorlib]Contoso.Widget::Part{{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+# TEXT-LABEL: {{^}}.method assembly static object '__msil_mc.widget_last'() cil managed{{$}}
+# TEXT:       {{^  }}ldsfld class [mscorlib]Contoso.Widget [mscorlib]Contoso.Widget::Last{{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+# TEXT-LABEL: {{^}}.method assembly static object '__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851'(object) cil managed{{$}}
+# TEXT:       {{^  }}ldarg.0{{$}}
+# TEXT-NEXT:  {{^  }}castclass [mscorlib]System.String{{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+# TEXT-LABEL: {{^}}.method assembly static object '__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875'(object) cil managed{{$}}
+# TEXT:       {{^  }}ldarg.0{{$}}
+# TEXT-NEXT:  {{^  }}castclass int32[]{{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+# TEXT-LABEL: {{^}}.method assembly static object '__msil_mc.<castclass>.__uniq.166036594012079310185973893725517444100'(object) cil managed{{$}}
+# TEXT:       {{^  }}ldarg.0{{$}}
+# TEXT-NEXT:  {{^  }}castclass class [mscorlib]Contoso.Widget[]{{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+# TEXT-LABEL: {{^}}.method assembly static object '__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208'(object) cil managed{{$}}
+# TEXT:       {{^  }}ldarg.0{{$}}
+# TEXT-NEXT:  {{^  }}castclass class [mscorlib]Contoso.IWidget{{$}}
+# TEXT-NEXT:  {{^  }}ret{{$}}
+
+## pick's definition and its declaration in the other partition, then
+## use_casts.
+# PARTS:      {{^}}msil-ld: error: <unknown>:0:0: in function pick target("msil.ref") (target("msil.ref"), target("msil.ref"), i32): a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet{{$}}
+# PARTS-NEXT: {{^}}msil-ld: error: <unknown>:0:0: in function pick target("msil.ref") (target("msil.ref"), target("msil.ref"), i32): a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet{{$}}
+# PARTS-NEXT: {{^}}msil-ld: error: <unknown>:0:0: in function use_casts i32 (target("msil.ref")): a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet{{$}}
+
+## T-M16.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil kinds.ll -o kinds-win.o
+# RUN: not msil-ld kinds-win.o --reference=refs -o x.exe 2>&1 | sort | %{err} --check-prefixes=TM16,TM16-UNDEF \
+# RUN:   -DO=kinds-win.o
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet kinds.ll -o kinds-net.o
+# RUN: not msil-ld kinds-net.o --reference=refs -o x.exe 2>&1 | sort | %{err} --check-prefixes=TM16,TM16-UNDEF \
+# RUN:   -DO=kinds-net.o
+# RUN: cat lnx.head kinds.ll > kinds-lnx.ll
+# RUN: llvm-as kinds-lnx.ll -o kinds-lnx.bc
+# RUN: not msil-ld kinds-lnx.bc --reference=refs -o x.exe 2>&1 | sort | %{err} --check-prefixes=TM16,TM16-UNDEF \
+# RUN:   -DO=x.exe.lto.o
+# RUN: not msil-ld --lto-emit-asm kinds-lnx.bc --reference=refs -o x.il 2>&1 | sort | %{err} --check-prefix=TM16
+# RUN: msil-ld --lto-emit-asm kinds-lnx.bc -o none/kinds-lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=KTEXT --input-file=none/kinds-lnx.il
+# RUN: not msil-ld kinds-win.o -o x.exe 2>&1 | sort | %{err} --check-prefix=KNOREF
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+# TM16:            {{^}}msil-ld: error: managed call '<castclass>': 'Contoso.Point' is a value type, but the declaration uses it as a reference type{{$}}
+# TM16-NEXT:       {{^}}msil-ld: error: managed call 'point_sum': 'Contoso.Point' is a value type, but the declaration uses it as a reference type{{$}}
+# TM16-NEXT:       {{^}}msil-ld: error: managed call 'wrap_point': 'Contoso.Point' is a value type, but the declaration uses it as a reference type{{$}}
+# TM16-UNDEF-NEXT: {{^}}msil-ld: error: undefined .NET member 'object Contoso.Widget::Wrap(class Contoso.Point)' (requested by [[O]]); 'Contoso.Widget' is defined in FakeWidgets 1.0.0.0 [null] (refs{{[/\\]}}FakeWidgets.dll) but has no such member; overloads present: object Wrap(valuetype Contoso.Point){{$}}
+
+# KTEXT-LABEL: {{^}}.method assembly static object '__msil_mc.<castclass>.__uniq.306622794157727670624867859662146191652'(object) cil managed{{$}}
+# KTEXT:       {{^  }}ldarg.0{{$}}
+# KTEXT-NEXT:  {{^  }}castclass class [mscorlib]Contoso.Point{{$}}
+# KTEXT-NEXT:  {{^  }}ret{{$}}
+# KTEXT-LABEL: {{^}}.method assembly static int32 '__msil_mc.point_sum'(object) cil managed{{$}}
+# KTEXT:       {{^  }}ldarg.0{{$}}
+# KTEXT-NEXT:  {{^  }}castclass class [mscorlib]Contoso.Point{{$}}
+# KTEXT-NEXT:  {{^  }}callvirt instance int32 [mscorlib]Contoso.Point::Sum(){{$}}
+
+# KNOREF:      {{^}}msil-ld: error: .NET member 'Contoso.IWidget' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+# KNOREF-NEXT: {{^}}msil-ld: error: .NET member 'Contoso.Point' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+# KNOREF-NEXT: {{^}}msil-ld: error: .NET member 'Contoso.Widget' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+
+## Declarations that slot P0 refuses: msil-ld's checks skip them, so each
+## gets only P0's error, in every mode, with and without references.
+# RUN: cat lnx.head bad.ll > bad-lnx.ll
+# RUN: llvm-as bad-lnx.ll -o bad-lnx.bc
+# RUN: not msil-ld bad-lnx.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=BAD
+# RUN: not msil-ld bad-lnx.bc -o x.exe 2>&1 | %{err} --check-prefix=BAD
+# RUN: not msil-ld --lto-emit-asm bad-lnx.bc --reference=refs -o x.il 2>&1 | %{err} --check-prefix=BAD
+# RUN: not msil-ld --lto-emit-asm bad-lnx.bc -o x.il 2>&1 | %{err} --check-prefix=BAD
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+# BAD:      {{^}}msil-ld: error: managed call 'ref_int' has invalid "msil-managed-*" attributes: parameter 1: conversion 'ref' does not fit the .NET type 'int32' and the IR type 'target("msil.ref")'{{$}}
+# BAD-NEXT: {{^}}msil-ld: error: managed call 'ref_ptr' has invalid "msil-managed-*" attributes: parameter 1: conversion 'ref' does not fit the .NET type 'object' and the IR type 'ptr'{{$}}
+# BAD-NEXT: {{^}}msil-ld: error: managed call 'this_val' has invalid "msil-managed-*" attributes: parameter 1: conversion 'this-ref' does not fit the .NET type 'valuetype Contoso.Point' and the IR type 'target("msil.ref")'{{$}}
+# BAD-NEXT: {{^}}msil-ld: error: managed call 'this_second' has invalid "msil-managed-*" attributes: conversions: conversion code 'this-ref' is not valid at parameter 2{{$}}
+# BAD-NEXT: {{^}}msil-ld: error: managed call '<castclass>' has invalid "msil-managed-*" attributes: member: '.castclass' is not a valid member name{{$}}
+# BAD-NEXT: {{^}}msil-ld: error: managed call '<castclass>' has invalid "msil-managed-*" attributes: "msil-managed-decl" belongs only to a static method or to an instance method whose 'this' conversion is 'this-val' or 'this-gch'{{$}}
+
+## The helper is never bound.
+# RUN: cat win.head helper.ll > helper-win.ll
+# RUN: cat lnx.head helper.ll > helper-lnx.ll
+# RUN: cat net.head helper.ll > helper-net.ll
+# RUN: llvm-as helper-win.ll -o helper-win.bc
+# RUN: llvm-as helper-lnx.ll -o helper-lnx.bc
+# RUN: llvm-as helper-net.ll -o helper-net.bc
+# RUN: opt -module-summary helper-win.ll -o helper-win.thin.bc
+# RUN: llvm-lib /machine:x64 /def:helper.def /out:helper.lib
+# RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux-gnu helper.s -o helper-elf.o
+# RUN: ld.lld -shared -soname libhelper.so helper-elf.o -o libhelper.so
+# DEFINE: %{helper} = FileCheck %s --check-prefix=HELPER --implicit-check-not=__msil_ref \
+# DEFINE:   --implicit-check-not=moduleref --implicit-check-not=pinvokeimpl
+# DEFINE: %{htext} = FileCheck %s --check-prefix=HTEXT --implicit-check-not=__msil_ref \
+# DEFINE:   --implicit-check-not=pinvokeimpl
+# RUN: msil-ld helper-win.bc --reference=refs -o helper/full.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/full.exe | %{helper}
+# RUN: msil-ld --lto-O0 helper-win.bc --reference=refs -o helper/o0.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/o0.exe | %{helper}
+# RUN: msil-ld --lto-partitions=2 helper-win.bc --reference=refs -o helper/p2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/p2.exe | %{helper}
+# RUN: msil-ld helper-win.thin.bc --reference=refs -o helper/thin.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/thin.exe | %{helper}
+# RUN: msil-ld helper-net.bc --reference=refs -o helper/net.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/net.exe | %{helper}
+# RUN: msil-ld helper-win.bc helper.lib --reference=refs -o helper/lib.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/lib.exe | %{helper}
+# RUN: msil-ld helper-lnx.bc libhelper.so --reference=refs -o helper/so.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/so.exe | %{helper}
+# RUN: msil-ld --lto-emit-asm helper-win.bc -o helper/text.il 2>&1 | count 0
+# RUN: %{htext} --input-file=helper/text.il
+# RUN: msil-ld --lto-emit-asm helper-win.bc --reference=refs -o helper/text-refs.il 2>&1 | count 0
+# RUN: %{htext} --input-file=helper/text-refs.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 helper-win.bc -o helper/text-o0.il 2>&1 | count 0
+# RUN: %{htext} --input-file=helper/text-o0.il
+# RUN: msil-ld --lto-emit-asm helper-win.bc helper.lib -o helper/text-lib.il 2>&1 | count 0
+# RUN: %{htext} --input-file=helper/text-lib.il
+# RUN: msil-ld --lto-emit-asm helper-lnx.bc libhelper.so -o helper/text-so.il 2>&1 | count 0
+# RUN: %{htext} --input-file=helper/text-so.il
+# RUN: cat win.head hidden.ll > hidden-win.ll
+# RUN: llvm-as hidden-win.ll -o hidden-win.bc
+# RUN: msil-ld --lto-emit-asm hidden-win.bc -o helper/hidden.il 2>&1 | count 0
+# RUN: %{htext} --input-file=helper/hidden.il
+# RUN: msil-ld --lto-emit-asm hidden-win.bc --reference=refs -o helper/hidden-refs.il 2>&1 | count 0
+# RUN: %{htext} --input-file=helper/hidden-refs.il
+# RUN: msil-ld hidden-win.bc --reference=refs -o helper/hidden.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/hidden.exe | %{helper}
+# RUN: cat win.head other.ll > other-win.ll
+# RUN: llvm-as other-win.ll -o other-win.bc
+# RUN: not msil-ld other-win.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TRB7
+# RUN: not msil-ld --lto-emit-asm other-win.bc -o x.il 2>&1 | %{err} --check-prefix=TRB7
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+## No CHECK-LABEL, so the implicit check-nots cover every line.
+# HELPER:       {{^  }}.method 'main' int32() {{.+$}}
+# HELPER:       {{^    L[0-9]+: }}ldc.i4.2{{$}}
+# HELPER-NEXT:  {{^    L[0-9]+: }}call object(object, int32) '<Module>'::'__msil_mc.widget_new'{{$}}
+# HELPER-NEXT:  {{^    L[0-9]+: }}ceq{{$}}
+# HTEXT:        {{^}}.method public static int32 'main'() cil managed{{$}}
+# HTEXT:        {{^  }}ldc.i4.2{{$}}
+# HTEXT-NEXT:   {{^  }}call object '__msil_mc.widget_new'(object, int32){{$}}
+# HTEXT-NEXT:   {{^  }}ceq{{$}}
+# TRB7: {{^}}msil-ld: error: <unknown>:0:0: in function __msil_ref.ne i1 (target("msil.ref"), target("msil.ref")): '__msil_ref.ne' is reserved for the MSIL toolchain{{$}}
+
+## T-RL1: bitcode in each LTO mode, objects, and an archive member.
+# RUN: cat win.head def.ll > def-win.ll
+# RUN: cat net.head def.ll > def-net.ll
+# RUN: llvm-as def-win.ll -o def-win.bc
+# RUN: llvm-as def-net.ll -o def-net.bc
+# RUN: opt -module-summary def-win.ll -o def-win.thin.bc
+# RUN: opt -module-summary def-net.ll -o def-net.thin.bc
+# RUN: not msil-ld def-win.bc -o x.exe 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-win.bc
+# RUN: not msil-ld --lto-emit-asm def-win.bc -o x.il 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-win.bc
+# RUN: not msil-ld --lto-partitions=2 def-win.bc -o x.exe 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-win.bc
+# RUN: not msil-ld def-win.thin.bc -o x.exe 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-win.thin.bc
+# RUN: not msil-ld def-net.bc -o x.exe 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-net.bc
+# RUN: not msil-ld --lto-emit-asm def-net.bc -o x.il 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-net.bc
+# RUN: not msil-ld --lto-partitions=2 def-net.bc -o x.exe 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-net.bc
+# RUN: not msil-ld def-net.thin.bc -o x.exe 2>&1 | %{err} --check-prefix=TRL1-BC -DF=def-net.thin.bc
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil helper.ll -o helper-win.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil defobj.ll -o defobj-llc.o
+# RUN: %python rename.py defobj-llc.o defobj.o
+# RUN: llvm-cil-dump --link-info defobj.o | FileCheck %s --check-prefix=DEFOBJ
+# RUN: not msil-ld helper-win.o defobj.o --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TRL1-OBJ -DF=defobj.o
+# RUN: llvm-ar rcs libdef.a defobj.o
+# RUN: not msil-ld helper-win.bc libdef.a --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=TRL1-OBJ \
+# RUN:   "-DF=libdef.a(defobj.o)"
+# RUN: not msil-ld --lto-emit-asm helper-win.bc libdef.a -o x.il 2>&1 | %{err} --check-prefix=TRL1-OBJ \
+# RUN:   "-DF=libdef.a(defobj.o)"
+# RUN: msil-ld helper-win.o libdef.a --reference=refs -o helper/obj.exe 2>&1 | count 0
+# RUN: llvm-cil-dump helper/obj.exe | %{helper}
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+# TRL1-BC:       {{^}}msil-ld: error: [[F]]: defines '__msil_ref.eq', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# TRL1-BC-NEXT:  {{^}}msil-ld: error: [[F]]: defines '__msil_ref.weak', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# TRL1-BC-NEXT:  {{^}}msil-ld: error: [[F]]: defines '__msil_ref.data', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# TRL1-BC-NEXT:  {{^}}msil-ld: error: [[F]]: defines '__msil_ref.common', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# DEFOBJ:        {{^}}Symbol 0 DATA GLOBAL DEFAULT '__msil_ref.data' {{.+$}}
+# DEFOBJ-NEXT:   {{^}}Symbol 1 DATA COMMON DEFAULT '__msil_ref.common' {{.+$}}
+# DEFOBJ-NEXT:   {{^}}Symbol 2 DATA WEAK DEFAULT '__msil_ref.weakdata' {{.+$}}
+# DEFOBJ-NEXT:   {{^}}Symbol 3 DATA LOCAL DEFAULT '__msil_ref.count' {{.+$}}
+# DEFOBJ-NEXT:   {{^}}Symbol 4 FUNCTION GLOBAL DEFAULT '__msil_ref.eq' {{.+$}}
+# DEFOBJ-NEXT:   {{^}}Symbol 5 FUNCTION WEAK DEFAULT '__msil_ref.weak' {{.+$}}
+# DEFOBJ-NEXT:   {{^}}Symbol 6 FUNCTION LOCAL DEFAULT '__msil_ref.local' {{.+$}}
+# TRL1-OBJ:      {{^}}msil-ld: error: [[F]]: defines '__msil_ref.data', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# TRL1-OBJ-NEXT: {{^}}msil-ld: error: [[F]]: defines '__msil_ref.common', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# TRL1-OBJ-NEXT: {{^}}msil-ld: error: [[F]]: defines '__msil_ref.weakdata', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# TRL1-OBJ-NEXT: {{^}}msil-ld: error: [[F]]: defines '__msil_ref.eq', which is reserved for the MSIL toolchain (a reference helper){{$}}
+# TRL1-OBJ-NEXT: {{^}}msil-ld: error: [[F]]: defines '__msil_ref.weak', which is reserved for the MSIL toolchain (a reference helper){{$}}
+
+## ThinLTO's promotion and the partition split.
+# RUN: cat win.head thin-a.ll > thin-a-win.ll
+# RUN: cat win.head thin-m.ll > thin-m-win.ll
+# RUN: llvm-as thin-a-win.ll -o thin-a.bc
+# RUN: llvm-as thin-m-win.ll -o thin-m.bc
+# RUN: opt -module-summary thin-a-win.ll -o thin-a.thin.bc
+# RUN: opt -module-summary thin-m-win.ll -o thin-m.thin.bc
+# RUN: msil-ld thin-a.bc thin-m.bc --reference=refs -o thin-full.exe 2>&1 | count 0
+# RUN: llvm-cil-dump thin-full.exe | FileCheck %s --check-prefix=THIN-FULL
+# RUN: not msil-ld thin-a.thin.bc thin-m.thin.bc --reference=refs -o x.exe 2> err.txt
+# RUN: grep error: err.txt | count 2
+# RUN: %{err} --check-prefix=THIN --input-file=err.txt
+# RUN: not msil-ld thin-m.thin.bc thin-a.thin.bc --reference=refs -o x.exe 2> err.txt
+# RUN: grep error: err.txt | count 2
+# RUN: %{err} --check-prefix=THIN --input-file=err.txt
+# RUN: not msil-ld --lto-partitions=2 thin-a.bc thin-m.bc --reference=refs -o x.exe 2> err.txt
+# RUN: grep error: err.txt | count 2
+# RUN: %{err} --check-prefix=THIN-PARTS --input-file=err.txt
+# RUN: not ls x.exe
+
+# THIN-FULL:  {{^  }}.method 'size_of' int32(object) {{.+$}}
+# THIN:       {{^}}msil-ld: error: <unknown>:0:0: in function size_of.llvm.{{[0-9]+}} i32 (target("msil.ref")): a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet{{$}}
+# THIN:       {{^}}msil-ld: error: <unknown>:0:0: in function size_of.llvm.{{[0-9]+}} i32 (target("msil.ref")): a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet{{$}}
+# THIN-PARTS: {{^}}msil-ld: error: <unknown>:0:0: in function size_of i32 (target("msil.ref")): a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet{{$}}
+# THIN-PARTS: {{^}}msil-ld: error: <unknown>:0:0: in function size_of i32 (target("msil.ref")): a function with a .NET reference in its signature that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1) is not supported for MSIL yet{{$}}
+
+## T-RB5 through the LTO table pass.
+# RUN: cat win.head take.ll > take-win.ll
+# RUN: cat win.head take-ref.ll > take-ref-win.ll
+# RUN: cat net.head take.ll > take-net.ll
+# RUN: cat net.head take-ref.ll > take-ref-net.ll
+# RUN: cat win.head hold.ll > hold-win.ll
+# RUN: cat win.head hold-ptr.ll > hold-ptr-win.ll
+# RUN: llvm-as take-win.ll -o take-win.bc
+# RUN: llvm-as take-ref-win.ll -o take-ref-win.bc
+# RUN: llvm-as take-net.ll -o take-net.bc
+# RUN: llvm-as take-ref-net.ll -o take-ref-net.bc
+# RUN: llvm-as hold-win.ll -o hold-win.bc
+# RUN: llvm-as hold-ptr-win.ll -o hold-ptr-win.bc
+# RUN: not msil-ld take-win.bc take-ref-win.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=RB5
+# RUN: not msil-ld --lto-O0 take-ref-win.bc take-win.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=RB5
+# RUN: not msil-ld --lto-emit-asm take-win.bc take-ref-win.bc -o x.il 2>&1 | %{err} --check-prefix=RB5
+# RUN: not msil-ld take-net.bc take-ref-net.bc --reference=refs -o x.exe 2>&1 | %{err} --check-prefix=RB5
+# RUN: not msil-ld hold-win.bc hold-ptr-win.bc -o x.exe 2>&1 | %{err} --check-prefix=RB5-HOLD
+# RUN: not msil-ld --lto-emit-asm hold-ptr-win.bc hold-win.bc -o x.il 2>&1 | %{err} --check-prefix=RB5-HOLD
+# RUN: not ls x.exe
+# RUN: not ls x.il
+
+# RB5:      {{^}}msil-ld: error: <unknown>:0:0: in function main i32 (): call of 'take' passes 'target("msil.ref")' where it takes 'ptr': a .NET reference cannot be converted{{$}}
+# RB5:      {{^}}msil-ld: error: <unknown>:0:0: in function main i32 (): call of 'count' passes 'target("msil.ref")' where it takes 'void': a .NET reference cannot be converted{{$}}
+# RB5:      {{^}}msil-ld: error: <unknown>:0:0: in function main i32 (): call of 'get' passes 'ptr' where it takes 'target("msil.ref")': a .NET reference cannot be converted{{$}}
+# RB5-HOLD: {{^}}msil-ld: error: <unknown>:0:0: in function main i32 (): call of 'hold' passes 'ptr' where it takes 'target("msil.ref")': a .NET reference cannot be converted{{$}}
+
+## Cast stubs under LTO, and a library.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil cast-a.ll -o cast-a.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil cast-b.ll -o cast-b.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil cast-main.ll -o cast-main.o
+# RUN: msil-ld cast-a.o cast-b.o cast-main.o --reference=refs -o merge/obj.exe 2>&1 | count 0
+# RUN: llvm-cil-dump merge/obj.exe > merge/obj.txt
+# RUN: FileCheck %s --check-prefix=TWO --input-file=merge/obj.txt
+# RUN: %{refs} --input-file=merge/obj.txt
+# RUN: cat win.head cast-a.ll > cast-a-win.ll
+# RUN: cat win.head cast-b.ll > cast-b-win.ll
+# RUN: cat win.head cast-main.ll > cast-main-win.ll
+# RUN: llvm-as cast-a-win.ll -o cast-a.bc
+# RUN: llvm-as cast-b-win.ll -o cast-b.bc
+# RUN: llvm-as cast-main-win.ll -o cast-main.bc
+# RUN: msil-ld cast-a.bc cast-b.bc cast-main.bc --reference=refs -o merge/lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump merge/lto.exe > merge/lto.txt
+# RUN: FileCheck %s --check-prefix=ONE --input-file=merge/lto.txt
+# RUN: %{refs} --input-file=merge/lto.txt --implicit-check-not="<msil>1'"
+# RUN: msil-ld -shared cast-a.o --reference=refs -o merge/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info merge/lib.dll | FileCheck %s %{crash} --check-prefix=LIB-SYMTAB \
+# RUN:   --implicit-check-not=__msil_mc
+# RUN: llvm-cil-dump merge/lib.dll > merge/lib.txt
+# RUN: %python %S/Inputs/shared/listing.py members merge/lib.txt lib | FileCheck %s --check-prefix=LIB-EXPORTS \
+# RUN:   --implicit-check-not=__msil_mc
+
+# TWO-LABEL:   {{^  }}.method '__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868' object(object) {{.+$}}
+# TWO-NEXT:    {{^    }}.maxstack 1{{$}}
+# TWO-NEXT:    {{^    L0: }}ldarg.0{{$}}
+# TWO-NEXT:    {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# TWO-NEXT:    {{^    L2: }}ret{{$}}
+# TWO-LABEL:   {{^  }}.method '__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868<msil>1' object(object) {{.+$}}
+# TWO-NEXT:    {{^    }}.maxstack 1{{$}}
+# TWO-NEXT:    {{^    L0: }}ldarg.0{{$}}
+# TWO-NEXT:    {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# TWO-NEXT:    {{^    L2: }}ret{{$}}
+# TWO-LABEL:   {{^  }}.method 'one' int32() {{.+$}}
+# TWO:         {{^    L[0-9]+: }}call object(object) '<Module>'::'__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868'{{$}}
+# TWO-LABEL:   {{^  }}.method 'two' int32() {{.+$}}
+# TWO:         {{^    L[0-9]+: }}call object(object) '<Module>'::'__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868<msil>1'{{$}}
+# ONE-LABEL:   {{^  }}.method '__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868' object(object) {{.+$}}
+# ONE-NEXT:    {{^    }}.maxstack 1{{$}}
+# ONE-NEXT:    {{^    L0: }}ldarg.0{{$}}
+# ONE-NEXT:    {{^    L1: }}castclass [FakeWidgets]Contoso.Widget{{$}}
+# ONE-NEXT:    {{^    L2: }}ret{{$}}
+# LIB-SYMTAB:  {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil {{.+$}}
+# LIB-EXPORTS: {{^}}.class 'lib' flags={{.+$}}
+# LIB-EXPORTS: {{^  }}.method 'one' int32() {{.+$}}
+
+#--- win.head
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+#--- lnx.head
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+#--- net.head
+target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+target triple = "msil64-unknown-dotnet"
+#--- calls.ll
+;; The C includes <cli/cli.h>, <stddef.h> and <stdint.h> and declares
+;;   typedef struct CLI_TYPE("System.Object") Object Object;
+;;   typedef struct CLI_TYPE("System.String") String String;
+;;   typedef struct CLI_TYPE("Contoso.Widget") Widget Widget;
+;;   typedef struct CLI_TYPE("Contoso.IWidget") IWidget IWidget;
+;;   typedef struct CLI_TYPE("Contoso.Outer/Inner") Inner Inner;
+;;   typedef struct CLI_TYPE("int32[]") Ints Ints;
+;;   typedef struct CLI_TYPE("string[]") Strings Strings;
+;;   typedef struct CLI_TYPE("uint8[]") Bytes Bytes;
+;;   typedef struct CLI_TYPE("class Contoso.Widget[]") Widgets Widgets;
+;; and these managed calls, whose msil_method arguments are the attributes.
+
+;; String ^describe(Object ^, String ^, Widget ^, Ints ^, Strings ^);
+;; 'ref' for object, string, a class and two arrays, and a 'ref' result
+declare target("msil.ref") @__msil_mc.describe(target("msil.ref"), target("msil.ref"), target("msil.ref"), target("msil.ref"), target("msil.ref")) #0
+
+;; The same member with msil_catch("Contoso.WidgetException", 5):
+;; String ^describe_or_null(Object ^, String ^, Widget ^, Ints ^, Strings ^, int *);
+declare target("msil.ref") @__msil_mc.describe_or_null(target("msil.ref"), target("msil.ref"), target("msil.ref"), target("msil.ref"), target("msil.ref"), ptr noundef) #1
+
+;; Widget ^widget_new(String ^, int); a constructor
+declare target("msil.ref") @__msil_mc.widget_new(target("msil.ref"), i32 noundef) #2
+
+;; int widget_size(Widget ^); 'this-ref' of a virtual property getter
+declare i32 @__msil_mc.widget_size(target("msil.ref")) #3
+
+;; void widget_resize(Widget ^, int); 'this-ref' of a method that is not virtual
+declare void @__msil_mc.widget_resize(target("msil.ref"), i32 noundef) #4
+
+;; long long widget_serial(Widget ^); 'this-ref' of an instance field
+declare i64 @__msil_mc.widget_serial(target("msil.ref")) #5
+
+;; Inner ^widget_part(Widget ^); 'this-ref' of an instance field whose type
+;; is another class, with a 'ref' result
+declare target("msil.ref") @__msil_mc.widget_part(target("msil.ref")) #25
+
+;; Widget ^widget_last(void); a static field of a class type, with a 'ref'
+;; result
+declare target("msil.ref") @__msil_mc.widget_last() #26
+
+;; int object_hash(Object ^); 'this-ref' of System.Object
+declare i32 @__msil_mc.object_hash(target("msil.ref")) #6
+
+;; int widget_score(IWidget ^); 'this-ref' of an interface
+declare i32 @__msil_mc.widget_score(target("msil.ref")) #7
+
+;; Bytes ^new_bytes(int); Widgets ^new_widgets(int); arrays
+declare target("msil.ref") @__msil_mc.new_bytes(i32 noundef) #8
+declare target("msil.ref") @__msil_mc.new_widgets(i32 noundef) #9
+
+;; Inner ^inner_new(void); int inner_depth(Inner ^); a nested class
+declare target("msil.ref") @__msil_mc.inner_new() #10
+declare i32 @__msil_mc.inner_depth(target("msil.ref")) #11
+
+;; intptr_t ticket_new(Object ^); Object ^ticket_target(intptr_t);
+;; GCHandle's Alloc and get_Target: a ticket in and out
+declare i64 @__msil_mc.ticket_new(target("msil.ref")) #12
+declare target("msil.ref") @__msil_mc.ticket_target(i64 noundef) #13
+
+;; The cast stubs of (Widget ^), (String ^), (Ints ^), (Strings ^),
+;; (Widgets ^), (Inner ^) and (IWidget ^) applied to an Object ^.
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref")) #14
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851"(target("msil.ref")) #15
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875"(target("msil.ref")) #16
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194"(target("msil.ref")) #17
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.166036594012079310185973893725517444100"(target("msil.ref")) #18
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.217053442791668919835724198844101650842"(target("msil.ref")) #19
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208"(target("msil.ref")) #20
+
+;; '==' and '!='
+declare i1 @__msil_ref.eq(target("msil.ref"), target("msil.ref")) #21
+
+declare void @llvm.lifetime.start.p0(ptr captures(none))
+declare void @llvm.lifetime.end.p0(ptr captures(none))
+
+;; static __attribute__((noinline)) Widget ^pick(Widget ^a, Widget ^b, int c) {
+;;   return c ? a : b;
+;; }
+define internal fastcc target("msil.ref") @pick(target("msil.ref") %a, target("msil.ref") %b, i32 noundef %c) unnamed_addr #22 {
+entry:
+  %tobool.not = icmp eq i32 %c, 0
+  %cond = select i1 %tobool.not, target("msil.ref") %b, target("msil.ref") %a
+  ret target("msil.ref") %cond
+}
+
+;; static __attribute__((noinline)) int use_casts(Object ^o) {
+;;   Widget ^w = (Widget ^)o; String ^s = (String ^)o; Ints ^i = (Ints ^)o;
+;;   Strings ^ss = (Strings ^)o; Widgets ^ws = (Widgets ^)o;
+;;   Inner ^in = (Inner ^)o; IWidget ^iw = (IWidget ^)o;
+;;   int err = 0;
+;;   int r = widget_size(w) + (describe(o, s, w, i, ss) == s) + (ws != NULL);
+;;   r += inner_depth(in) + widget_score(iw);
+;;   r += (describe_or_null(o, s, w, i, ss, &err) != NULL) + err;
+;;   return r;
+;; }
+define internal fastcc i32 @use_casts(target("msil.ref") %o) unnamed_addr #23 {
+entry:
+  %err = alloca i32, align 4
+  %w = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref") %o) #24
+  %s = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851"(target("msil.ref") %o) #24
+  %i = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875"(target("msil.ref") %o) #24
+  %ss = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194"(target("msil.ref") %o) #24
+  %ws = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.166036594012079310185973893725517444100"(target("msil.ref") %o) #24
+  %in = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.217053442791668919835724198844101650842"(target("msil.ref") %o) #24
+  %iw = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208"(target("msil.ref") %o) #24
+  call void @llvm.lifetime.start.p0(ptr nonnull %err) #24
+  store i32 0, ptr %err, align 4
+  %size = tail call i32 @__msil_mc.widget_size(target("msil.ref") %w) #24
+  %d = tail call target("msil.ref") @__msil_mc.describe(target("msil.ref") %o, target("msil.ref") %s, target("msil.ref") %w, target("msil.ref") %i, target("msil.ref") %ss) #24
+  %d.eq = tail call i1 @__msil_ref.eq(target("msil.ref") %d, target("msil.ref") %s)
+  %d.int = zext i1 %d.eq to i32
+  %ws.null = tail call i1 @__msil_ref.eq(target("msil.ref") %ws, target("msil.ref") zeroinitializer)
+  %ws.ne = xor i1 %ws.null, true
+  %ws.int = zext i1 %ws.ne to i32
+  %depth = tail call i32 @__msil_mc.inner_depth(target("msil.ref") %in) #24
+  %score = tail call i32 @__msil_mc.widget_score(target("msil.ref") %iw) #24
+  %c = call target("msil.ref") @__msil_mc.describe_or_null(target("msil.ref") %o, target("msil.ref") %s, target("msil.ref") %w, target("msil.ref") %i, target("msil.ref") %ss, ptr noundef nonnull %err) #24
+  %c.null = call i1 @__msil_ref.eq(target("msil.ref") %c, target("msil.ref") zeroinitializer)
+  %c.ne = xor i1 %c.null, true
+  %c.int = zext i1 %c.ne to i32
+  %e = load i32, ptr %err, align 4
+  %r1 = add i32 %size, %ws.int
+  %r2 = add i32 %r1, %depth
+  %r3 = add i32 %r2, %score
+  %r4 = add i32 %r3, %d.int
+  %r5 = add i32 %r4, %e
+  %r6 = add i32 %r5, %c.int
+  call void @llvm.lifetime.end.p0(ptr nonnull %err) #24
+  ret i32 %r6
+}
+
+;; int main(void) {
+;;   Widget ^w = widget_new(NULL, 3);
+;;   widget_resize(w, 4);
+;;   Object ^o = w;
+;;   Object ^back = ticket_target(ticket_new(o));
+;;   Widget ^p = pick(w, (Widget ^)back, widget_size(w));
+;;   int r = use_casts(back) + (int)widget_serial(p) + object_hash(o);
+;;   r += new_bytes(2) == NULL;
+;;   r += new_widgets(2) == NULL;
+;;   r += inner_new() == NULL;
+;;   r += widget_part(p) == NULL;
+;;   r += widget_last() == w;
+;;   return r;
+;; }
+define i32 @main() #24 {
+entry:
+  %w = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 3) #24
+  tail call void @__msil_mc.widget_resize(target("msil.ref") %w, i32 noundef 4) #24
+  %t = tail call i64 @__msil_mc.ticket_new(target("msil.ref") %w) #24
+  %back = tail call target("msil.ref") @__msil_mc.ticket_target(i64 noundef %t) #24
+  %size = tail call i32 @__msil_mc.widget_size(target("msil.ref") %w) #24
+  %bw = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref") %back) #24
+  %p = tail call fastcc target("msil.ref") @pick(target("msil.ref") %w, target("msil.ref") %bw, i32 noundef %size)
+  %u = tail call fastcc i32 @use_casts(target("msil.ref") %back)
+  %serial = tail call i64 @__msil_mc.widget_serial(target("msil.ref") %p) #24
+  %serial.int = trunc i64 %serial to i32
+  %hash = tail call i32 @__msil_mc.object_hash(target("msil.ref") %w) #24
+  %bytes = tail call target("msil.ref") @__msil_mc.new_bytes(i32 noundef 2) #24
+  %bytes.null = tail call i1 @__msil_ref.eq(target("msil.ref") %bytes, target("msil.ref") zeroinitializer)
+  %bytes.int = zext i1 %bytes.null to i32
+  %widgets = tail call target("msil.ref") @__msil_mc.new_widgets(i32 noundef 2) #24
+  %widgets.null = tail call i1 @__msil_ref.eq(target("msil.ref") %widgets, target("msil.ref") zeroinitializer)
+  %widgets.int = zext i1 %widgets.null to i32
+  %inner = tail call target("msil.ref") @__msil_mc.inner_new() #24
+  %inner.null = tail call i1 @__msil_ref.eq(target("msil.ref") %inner, target("msil.ref") zeroinitializer)
+  %inner.int = zext i1 %inner.null to i32
+  %part = tail call target("msil.ref") @__msil_mc.widget_part(target("msil.ref") %p) #24
+  %part.null = tail call i1 @__msil_ref.eq(target("msil.ref") %part, target("msil.ref") zeroinitializer)
+  %part.int = zext i1 %part.null to i32
+  %last = tail call target("msil.ref") @__msil_mc.widget_last() #24
+  %last.eq = tail call i1 @__msil_ref.eq(target("msil.ref") %last, target("msil.ref") %w)
+  %last.int = zext i1 %last.eq to i32
+  %r1 = add i32 %u, %serial.int
+  %r2 = add i32 %r1, %hash
+  %r3 = add i32 %r2, %bytes.int
+  %r4 = add i32 %r3, %widgets.int
+  %r5 = add i32 %r4, %inner.int
+  %r6 = add i32 %r5, %part.int
+  %r7 = add i32 %r6, %last.int
+  ret i32 %r7
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Describe" "msil-managed-sig"="string(object, string, class Contoso.Widget, int32[], string[])" "msil-managed-conv"="ref,ref,ref,ref,ref;ref" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Describe" "msil-managed-sig"="string(object, string, class Contoso.Widget, int32[], string[])" "msil-managed-conv"="ref,ref,ref,ref,ref,err;ref" "msil-managed-catch"="Contoso.WidgetException=5" }
+attributes #2 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="ref,val;ref" }
+attributes #3 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #4 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Resize" "msil-managed-sig"="instance void(int32)" "msil-managed-conv"="this-ref,val;void" }
+attributes #5 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Serial" "msil-managed-sig"="instance field int64" "msil-managed-conv"="this-ref;val" }
+attributes #6 = { "msil-managed-type"="System.Object" "msil-managed-member"="GetHashCode" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #7 = { "msil-managed-type"="Contoso.IWidget" "msil-managed-member"="Score" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #8 = { "msil-managed-type"="uint8[]" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32)" "msil-managed-conv"="val;ref" }
+attributes #9 = { "msil-managed-type"="class Contoso.Widget[]" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(int32)" "msil-managed-conv"="val;ref" }
+attributes #10 = { "msil-managed-type"="Contoso.Outer/Inner" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void()" "msil-managed-conv"=";ref" }
+attributes #11 = { "msil-managed-type"="Contoso.Outer/Inner" "msil-managed-member"="Depth" "msil-managed-sig"="int32(class Contoso.Outer/Inner)" "msil-managed-conv"="ref;val" }
+attributes #12 = { "msil-managed-type"="valuetype System.Runtime.InteropServices.GCHandle" "msil-managed-member"="Alloc" "msil-managed-sig"="valuetype System.Runtime.InteropServices.GCHandle(object)" "msil-managed-conv"="ref;gch" }
+attributes #13 = { "msil-managed-type"="valuetype System.Runtime.InteropServices.GCHandle" "msil-managed-member"="get_Target" "msil-managed-sig"="instance object()" "msil-managed-conv"="this-gch;ref" }
+attributes #14 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #15 = { "msil-managed-type"="System.String" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #16 = { "msil-managed-type"="int32[]" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #17 = { "msil-managed-type"="string[]" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #18 = { "msil-managed-type"="class Contoso.Widget[]" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #19 = { "msil-managed-type"="Contoso.Outer/Inner" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #20 = { "msil-managed-type"="Contoso.IWidget" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #21 = { mustprogress nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #22 = { mustprogress nofree noinline norecurse nosync nounwind willreturn memory(none) }
+attributes #23 = { noinline nounwind }
+attributes #24 = { nounwind }
+attributes #25 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Part" "msil-managed-sig"="instance field class Contoso.Outer/Inner" "msil-managed-conv"="this-ref;ref" }
+attributes #26 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Last" "msil-managed-sig"="field class Contoso.Widget" "msil-managed-conv"=";ref" }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6, !7, !8, !9, !10, !11, !12, !13, !14, !15, !16, !17, !18, !19, !20, !21, !22}
+!0 = !{!"__msil_mc.describe", !"Contoso.Widget", !"Describe", !"string(object, string, class Contoso.Widget, int32[], string[])", !"", !"ref,ref,ref,ref,ref;ref", !""}
+!1 = !{!"__msil_mc.describe_or_null", !"Contoso.Widget", !"Describe", !"string(object, string, class Contoso.Widget, int32[], string[])", !"", !"ref,ref,ref,ref,ref,err;ref", !"Contoso.WidgetException=5"}
+!2 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"ref,val;ref", !""}
+!3 = !{!"__msil_mc.widget_size", !"Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-ref;val", !""}
+!4 = !{!"__msil_mc.widget_resize", !"Contoso.Widget", !"Resize", !"instance void(int32)", !"", !"this-ref,val;void", !""}
+!5 = !{!"__msil_mc.widget_serial", !"Contoso.Widget", !"Serial", !"instance field int64", !"", !"this-ref;val", !""}
+!6 = !{!"__msil_mc.object_hash", !"System.Object", !"GetHashCode", !"instance int32()", !"", !"this-ref;val", !""}
+!7 = !{!"__msil_mc.widget_score", !"Contoso.IWidget", !"Score", !"instance int32()", !"", !"this-ref;val", !""}
+!8 = !{!"__msil_mc.new_bytes", !"uint8[]", !".ctor", !"instance void(int32)", !"", !"val;ref", !""}
+!9 = !{!"__msil_mc.new_widgets", !"class Contoso.Widget[]", !".ctor", !"instance void(int32)", !"", !"val;ref", !""}
+!10 = !{!"__msil_mc.inner_new", !"Contoso.Outer/Inner", !".ctor", !"instance void()", !"", !";ref", !""}
+!11 = !{!"__msil_mc.inner_depth", !"Contoso.Outer/Inner", !"Depth", !"int32(class Contoso.Outer/Inner)", !"", !"ref;val", !""}
+!12 = !{!"__msil_mc.ticket_new", !"valuetype System.Runtime.InteropServices.GCHandle", !"Alloc", !"valuetype System.Runtime.InteropServices.GCHandle(object)", !"", !"ref;gch", !""}
+!13 = !{!"__msil_mc.ticket_target", !"valuetype System.Runtime.InteropServices.GCHandle", !"get_Target", !"instance object()", !"", !"this-gch;ref", !""}
+!14 = !{!"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868", !"Contoso.Widget", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!15 = !{!"__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851", !"System.String", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!16 = !{!"__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875", !"int32[]", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!17 = !{!"__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194", !"string[]", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!18 = !{!"__msil_mc.<castclass>.__uniq.166036594012079310185973893725517444100", !"class Contoso.Widget[]", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!19 = !{!"__msil_mc.<castclass>.__uniq.217053442791668919835724198844101650842", !"Contoso.Outer/Inner", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!20 = !{!"__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208", !"Contoso.IWidget", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!21 = !{!"__msil_mc.widget_part", !"Contoso.Widget", !"Part", !"instance field class Contoso.Outer/Inner", !"", !"this-ref;ref", !""}
+!22 = !{!"__msil_mc.widget_last", !"Contoso.Widget", !"Last", !"field class Contoso.Widget", !"", !";ref", !""}
+#--- table.ll
+;; The C includes <cli/cli.h> and declares
+;;   typedef struct CLI_TYPE("System.Object") Object Object;
+;;   typedef struct CLI_TYPE("System.String") String String;
+;;   typedef struct CLI_TYPE("string[]") Strings Strings;
+;;   typedef struct CLI_TYPE("uint8[]") Bytes Bytes;
+;;   typedef struct CLI_TYPE("System.Exception") Exception Exception;
+;;   typedef struct CLI_TYPE("System.EntryPointNotFoundException") EntryPointNotFoundException EntryPointNotFoundException;
+;;   typedef struct CLI_TYPE("System.Text.Encoding") Encoding Encoding;
+;;   typedef struct CLI_TYPE("System.Text.UTF8Encoding") UTF8Encoding UTF8Encoding;
+;; and these managed calls of built-in table members.
+
+;; Strings ^args(void); a string[] result
+declare target("msil.ref") @__msil_mc.args() #0
+
+;; Bytes ^bytes_of(int); a uint8[] result
+declare target("msil.ref") @__msil_mc.bytes_of(i32 noundef) #1
+
+;; intptr_t to_hglobal(String ^); a 'string' parameter takes a String ^
+declare i64 @__msil_mc.to_hglobal(target("msil.ref")) #2
+
+;; EntryPointNotFoundException ^epnf_new(String ^); a constructor
+declare target("msil.ref") @__msil_mc.epnf_new(target("msil.ref")) #3
+
+;; int hresult(Exception ^); 'this-ref' of a table class
+declare i32 @__msil_mc.hresult(target("msil.ref")) #4
+
+;; UTF8Encoding ^utf8_new(_Bool, _Bool);
+;; String ^decode(Encoding ^, const unsigned char *, int);
+;; String ^string_new(const char16_t *);
+declare target("msil.ref") @__msil_mc.utf8_new(i1 noundef zeroext, i1 noundef zeroext) #5
+declare target("msil.ref") @__msil_mc.decode(target("msil.ref"), ptr noundef, i32 noundef) #6
+declare target("msil.ref") @__msil_mc.string_new(ptr noundef) #7
+
+;; intptr_t ticket_new(Object ^); Object ^ticket_target(intptr_t);
+declare i64 @__msil_mc.ticket_new(target("msil.ref")) #8
+declare target("msil.ref") @__msil_mc.ticket_target(i64 noundef) #9
+
+;; The cast stubs of (Exception ^), (String ^) and (Strings ^) applied to an
+;; Object ^, and of (Encoding ^) applied to a UTF8Encoding ^.
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.61099266254295873569861551746569464354"(target("msil.ref")) #10
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851"(target("msil.ref")) #11
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194"(target("msil.ref")) #12
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.109583808350125573493476830695955507172"(target("msil.ref")) #13
+
+declare i1 @__msil_ref.eq(target("msil.ref"), target("msil.ref")) #14
+
+;; static __attribute__((noinline)) int run(Object ^o) {
+;;   Exception ^e = (Exception ^)o; String ^s = (String ^)o;
+;;   Strings ^ss = (Strings ^)o;
+;;   String ^text = decode((Encoding ^)utf8_new(0, 1), NULL, 0);
+;;   return hresult(e) + (int)to_hglobal(s) + (ss == args()) +
+;;          (text == string_new(NULL));
+;; }
+define internal fastcc i32 @run(target("msil.ref") %o) unnamed_addr #15 {
+entry:
+  %e = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.61099266254295873569861551746569464354"(target("msil.ref") %o) #16
+  %s = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851"(target("msil.ref") %o) #16
+  %ss = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194"(target("msil.ref") %o) #16
+  %u = tail call target("msil.ref") @__msil_mc.utf8_new(i1 noundef zeroext false, i1 noundef zeroext true) #16
+  %enc = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.109583808350125573493476830695955507172"(target("msil.ref") %u) #16
+  %text = tail call target("msil.ref") @__msil_mc.decode(target("msil.ref") %enc, ptr noundef null, i32 noundef 0) #16
+  %hr = tail call i32 @__msil_mc.hresult(target("msil.ref") %e) #16
+  %h = tail call i64 @__msil_mc.to_hglobal(target("msil.ref") %s) #16
+  %h.int = trunc i64 %h to i32
+  %a = tail call target("msil.ref") @__msil_mc.args() #16
+  %a.eq = tail call i1 @__msil_ref.eq(target("msil.ref") %ss, target("msil.ref") %a)
+  %a.int = zext i1 %a.eq to i32
+  %n = tail call target("msil.ref") @__msil_mc.string_new(ptr noundef null) #16
+  %n.eq = tail call i1 @__msil_ref.eq(target("msil.ref") %text, target("msil.ref") %n)
+  %n.int = zext i1 %n.eq to i32
+  %r1 = add i32 %hr, %h.int
+  %r2 = add i32 %r1, %a.int
+  %r3 = add i32 %r2, %n.int
+  ret i32 %r3
+}
+
+;; int main(void) {
+;;   Object ^o = epnf_new(NULL);
+;;   return run(ticket_target(ticket_new(o))) + (bytes_of(1) != NULL);
+;; }
+define i32 @main() #16 {
+entry:
+  %o = tail call target("msil.ref") @__msil_mc.epnf_new(target("msil.ref") zeroinitializer) #16
+  %t = tail call i64 @__msil_mc.ticket_new(target("msil.ref") %o) #16
+  %back = tail call target("msil.ref") @__msil_mc.ticket_target(i64 noundef %t) #16
+  %r = tail call fastcc i32 @run(target("msil.ref") %back)
+  %b = tail call target("msil.ref") @__msil_mc.bytes_of(i32 noundef 1) #16
+  %b.null = tail call i1 @__msil_ref.eq(target("msil.ref") %b, target("msil.ref") zeroinitializer)
+  %b.ne = xor i1 %b.null, true
+  %b.int = zext i1 %b.ne to i32
+  %s = add i32 %r, %b.int
+  ret i32 %s
+}
+
+attributes #0 = { "msil-managed-type"="System.Environment" "msil-managed-member"="GetCommandLineArgs" "msil-managed-sig"="string[]()" "msil-managed-conv"=";ref" }
+attributes #1 = { "msil-managed-type"="System.BitConverter" "msil-managed-member"="GetBytes" "msil-managed-sig"="uint8[](int32)" "msil-managed-conv"="val;ref" }
+attributes #2 = { "msil-managed-type"="System.Runtime.InteropServices.Marshal" "msil-managed-member"="StringToHGlobalUni" "msil-managed-sig"="native int(string)" "msil-managed-conv"="ref;val" }
+attributes #3 = { "msil-managed-type"="System.EntryPointNotFoundException" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string)" "msil-managed-conv"="ref;ref" }
+attributes #4 = { "msil-managed-type"="System.Exception" "msil-managed-member"="get_HResult" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #5 = { "msil-managed-type"="System.Text.UTF8Encoding" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(bool, bool)" "msil-managed-conv"="bool,bool;ref" }
+attributes #6 = { "msil-managed-type"="System.Text.Encoding" "msil-managed-member"="GetString" "msil-managed-sig"="instance string(uint8*, int32)" "msil-managed-conv"="this-ref,val,val;ref" }
+attributes #7 = { "msil-managed-type"="System.String" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(char*)" "msil-managed-conv"="val;ref" }
+attributes #8 = { "msil-managed-type"="valuetype System.Runtime.InteropServices.GCHandle" "msil-managed-member"="Alloc" "msil-managed-sig"="valuetype System.Runtime.InteropServices.GCHandle(object)" "msil-managed-conv"="ref;gch" }
+attributes #9 = { "msil-managed-type"="valuetype System.Runtime.InteropServices.GCHandle" "msil-managed-member"="get_Target" "msil-managed-sig"="instance object()" "msil-managed-conv"="this-gch;ref" }
+attributes #10 = { "msil-managed-type"="System.Exception" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #11 = { "msil-managed-type"="System.String" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #12 = { "msil-managed-type"="string[]" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #13 = { "msil-managed-type"="System.Text.Encoding" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #14 = { mustprogress nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #15 = { noinline nounwind }
+attributes #16 = { nounwind }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6, !7, !8, !9, !10, !11, !12, !13}
+!0 = !{!"__msil_mc.args", !"System.Environment", !"GetCommandLineArgs", !"string[]()", !"", !";ref", !""}
+!1 = !{!"__msil_mc.bytes_of", !"System.BitConverter", !"GetBytes", !"uint8[](int32)", !"", !"val;ref", !""}
+!2 = !{!"__msil_mc.to_hglobal", !"System.Runtime.InteropServices.Marshal", !"StringToHGlobalUni", !"native int(string)", !"", !"ref;val", !""}
+!3 = !{!"__msil_mc.epnf_new", !"System.EntryPointNotFoundException", !".ctor", !"instance void(string)", !"", !"ref;ref", !""}
+!4 = !{!"__msil_mc.hresult", !"System.Exception", !"get_HResult", !"instance int32()", !"", !"this-ref;val", !""}
+!5 = !{!"__msil_mc.utf8_new", !"System.Text.UTF8Encoding", !".ctor", !"instance void(bool, bool)", !"", !"bool,bool;ref", !""}
+!6 = !{!"__msil_mc.decode", !"System.Text.Encoding", !"GetString", !"instance string(uint8*, int32)", !"", !"this-ref,val,val;ref", !""}
+!7 = !{!"__msil_mc.string_new", !"System.String", !".ctor", !"instance void(char*)", !"", !"val;ref", !""}
+!8 = !{!"__msil_mc.ticket_new", !"valuetype System.Runtime.InteropServices.GCHandle", !"Alloc", !"valuetype System.Runtime.InteropServices.GCHandle(object)", !"", !"ref;gch", !""}
+!9 = !{!"__msil_mc.ticket_target", !"valuetype System.Runtime.InteropServices.GCHandle", !"get_Target", !"instance object()", !"", !"this-gch;ref", !""}
+!10 = !{!"__msil_mc.<castclass>.__uniq.61099266254295873569861551746569464354", !"System.Exception", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!11 = !{!"__msil_mc.<castclass>.__uniq.192657436925186573345542108237517125851", !"System.String", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!12 = !{!"__msil_mc.<castclass>.__uniq.71888943646280768012337390341430800194", !"string[]", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!13 = !{!"__msil_mc.<castclass>.__uniq.109583808350125573493476830695955507172", !"System.Text.Encoding", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+#--- kinds.ll
+;; The C names the struct Contoso.Point as a class (clang cannot know that it
+;; is a value type); it includes <cli/cli.h> and declares
+;;   typedef struct CLI_TYPE("System.Object") Object Object;
+;;   typedef struct CLI_TYPE("Contoso.Point") Point Point;
+;;   typedef struct CLI_TYPE("Contoso.Widget") Widget Widget;
+;;   typedef struct CLI_TYPE("Contoso.IWidget") IWidget IWidget;
+;;   typedef struct CLI_TYPE("int32[]") Ints Ints;
+
+;; int point_sum(Point ^); 'this-ref' of Contoso.Point
+declare i32 @__msil_mc.point_sum(target("msil.ref")) #0
+
+;; Object ^wrap_point(Point ^) with the signature "object(class
+;; Contoso.Point)"; a 'ref' parameter of Contoso.Point
+declare target("msil.ref") @__msil_mc.wrap_point(target("msil.ref")) #1
+
+;; int widget_size(Widget ^); int widget_score(IWidget ^);
+declare i32 @__msil_mc.widget_size(target("msil.ref")) #2
+declare i32 @__msil_mc.widget_score(target("msil.ref")) #3
+
+;; The cast stubs of (Point ^), (Widget ^), (IWidget ^) and (Ints ^).
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.306622794157727670624867859662146191652"(target("msil.ref")) #4
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref")) #5
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208"(target("msil.ref")) #6
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875"(target("msil.ref")) #7
+
+declare i1 @__msil_ref.eq(target("msil.ref"), target("msil.ref")) #8
+
+;; static __attribute__((noinline)) int use(Object ^o) {
+;;   Point ^p = (Point ^)o; Widget ^w = (Widget ^)o;
+;;   IWidget ^iw = (IWidget ^)o; Ints ^is = (Ints ^)o;
+;;   return point_sum(p) + (wrap_point(p) == o) + widget_size(w) +
+;;          widget_score(iw) + (is == NULL);
+;; }
+define internal fastcc i32 @use(target("msil.ref") %o) unnamed_addr #9 {
+entry:
+  %p = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.306622794157727670624867859662146191652"(target("msil.ref") %o) #10
+  %w = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref") %o) #10
+  %iw = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208"(target("msil.ref") %o) #10
+  %is = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875"(target("msil.ref") %o) #10
+  %sum = tail call i32 @__msil_mc.point_sum(target("msil.ref") %p) #10
+  %wp = tail call target("msil.ref") @__msil_mc.wrap_point(target("msil.ref") %p) #10
+  %wp.eq = tail call i1 @__msil_ref.eq(target("msil.ref") %wp, target("msil.ref") %o)
+  %wp.int = zext i1 %wp.eq to i32
+  %size = tail call i32 @__msil_mc.widget_size(target("msil.ref") %w) #10
+  %score = tail call i32 @__msil_mc.widget_score(target("msil.ref") %iw) #10
+  %is.null = tail call i1 @__msil_ref.eq(target("msil.ref") %is, target("msil.ref") zeroinitializer)
+  %is.int = zext i1 %is.null to i32
+  %r1 = add i32 %sum, %wp.int
+  %r2 = add i32 %r1, %size
+  %r3 = add i32 %r2, %score
+  %r4 = add i32 %r3, %is.int
+  ret i32 %r4
+}
+
+;; int main(void) { return use(NULL); }
+define i32 @main() #10 {
+entry:
+  %r = tail call fastcc i32 @use(target("msil.ref") zeroinitializer)
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"="Sum" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Wrap" "msil-managed-sig"="object(class Contoso.Point)" "msil-managed-conv"="ref;ref" }
+attributes #2 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #3 = { "msil-managed-type"="Contoso.IWidget" "msil-managed-member"="Score" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #4 = { "msil-managed-type"="Contoso.Point" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #5 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #6 = { "msil-managed-type"="Contoso.IWidget" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #7 = { "msil-managed-type"="int32[]" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #8 = { mustprogress nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #9 = { noinline nounwind }
+attributes #10 = { nounwind }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5, !6, !7}
+!0 = !{!"__msil_mc.point_sum", !"Contoso.Point", !"Sum", !"instance int32()", !"", !"this-ref;val", !""}
+!1 = !{!"__msil_mc.wrap_point", !"Contoso.Widget", !"Wrap", !"object(class Contoso.Point)", !"", !"ref;ref", !""}
+!2 = !{!"__msil_mc.widget_size", !"Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-ref;val", !""}
+!3 = !{!"__msil_mc.widget_score", !"Contoso.IWidget", !"Score", !"instance int32()", !"", !"this-ref;val", !""}
+!4 = !{!"__msil_mc.<castclass>.__uniq.306622794157727670624867859662146191652", !"Contoso.Point", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!5 = !{!"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868", !"Contoso.Widget", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!6 = !{!"__msil_mc.<castclass>.__uniq.322291025314057643506683839113995668208", !"Contoso.IWidget", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!7 = !{!"__msil_mc.<castclass>.__uniq.227688874914582999024870418343660194875", !"int32[]", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+#--- bad.ll
+;; Hand-written IR that clang's Sema never writes: 'ref' for an int32
+;; parameter, 'ref' with a pointer in IR, 'this-ref' of a value type,
+;; 'this-ref' as the second conversion, a cast stub whose TYPE is
+;; System.Object (so it is no cast shape, and '.castclass' is no member
+;; name), and a cast stub with "msil-managed-decl".
+declare i32 @__msil_mc.ref_int(target("msil.ref")) #0
+declare i32 @__msil_mc.ref_ptr(ptr) #1
+declare i32 @__msil_mc.this_val(target("msil.ref")) #2
+declare void @__msil_mc.this_second(target("msil.ref"), target("msil.ref")) #3
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.1"(target("msil.ref")) #4
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.2"(target("msil.ref")) #5
+
+define i32 @main() {
+  %a = call i32 @__msil_mc.ref_int(target("msil.ref") zeroinitializer)
+  %b = call i32 @__msil_mc.ref_ptr(ptr null)
+  %c = call i32 @__msil_mc.this_val(target("msil.ref") zeroinitializer)
+  call void @__msil_mc.this_second(target("msil.ref") zeroinitializer, target("msil.ref") zeroinitializer)
+  %d = call target("msil.ref") @"__msil_mc.<castclass>.__uniq.1"(target("msil.ref") zeroinitializer)
+  %e = call target("msil.ref") @"__msil_mc.<castclass>.__uniq.2"(target("msil.ref") zeroinitializer)
+  %s = add i32 %a, %b
+  %t = add i32 %s, %c
+  ret i32 %t
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Guarded" "msil-managed-sig"="int32(int32)" "msil-managed-conv"="ref;val" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Keep" "msil-managed-sig"="valuetype System.Runtime.InteropServices.GCHandle(object)" "msil-managed-conv"="ref;val" }
+attributes #2 = { "msil-managed-type"="valuetype Contoso.Point" "msil-managed-member"="Sum" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #3 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="Resize" "msil-managed-sig"="instance void(object)" "msil-managed-conv"="this-ref,this-ref;void" }
+attributes #4 = { "msil-managed-type"="System.Object" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #5 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" "msil-managed-decl" }
+
+!msil.managed.calls = !{!0, !1, !2, !3, !4, !5}
+!0 = !{!"__msil_mc.ref_int", !"Contoso.Widget", !"Guarded", !"int32(int32)", !"", !"ref;val", !""}
+!1 = !{!"__msil_mc.ref_ptr", !"Contoso.Widget", !"Keep", !"valuetype System.Runtime.InteropServices.GCHandle(object)", !"", !"ref;val", !""}
+!2 = !{!"__msil_mc.this_val", !"valuetype Contoso.Point", !"Sum", !"instance int32()", !"", !"this-ref;val", !""}
+!3 = !{!"__msil_mc.this_second", !"Contoso.Widget", !"Resize", !"instance void(object)", !"", !"this-ref,this-ref;void", !""}
+!4 = !{!"__msil_mc.<castclass>.__uniq.1", !"System.Object", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+!5 = !{!"__msil_mc.<castclass>.__uniq.2", !"Contoso.Widget", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+#--- helper.ll
+;; Widget ^widget_new(String ^, int) as in calls.ll;
+;; int main(void) { return widget_new(NULL, 1) == widget_new(NULL, 2); }
+;; The helper's call survives LTO's optimizer: its operands are two calls.
+declare target("msil.ref") @__msil_mc.widget_new(target("msil.ref"), i32 noundef) #0
+declare i1 @__msil_ref.eq(target("msil.ref"), target("msil.ref")) #1
+
+define i32 @main() #2 {
+entry:
+  %a = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 1) #2
+  %b = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 2) #2
+  %eq = tail call i1 @__msil_ref.eq(target("msil.ref") %a, target("msil.ref") %b)
+  %r = zext i1 %eq to i32
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="ref,val;ref" }
+attributes #1 = { mustprogress nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #2 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"ref,val;ref", !""}
+#--- hidden.ll
+;; helper.ll with both declarations hidden: the managed call as clang
+;; declares it under '#pragma GCC visibility push(hidden)', and the helper
+;; (hand-written IR: clang declares it with default visibility).
+declare hidden target("msil.ref") @__msil_mc.widget_new(target("msil.ref"), i32 noundef) #0
+declare hidden i1 @__msil_ref.eq(target("msil.ref"), target("msil.ref")) #1
+
+define i32 @main() #2 {
+entry:
+  %a = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 1) #2
+  %b = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 2) #2
+  %eq = tail call i1 @__msil_ref.eq(target("msil.ref") %a, target("msil.ref") %b)
+  %r = zext i1 %eq to i32
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="ref,val;ref" }
+attributes #1 = { mustprogress nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #2 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"ref,val;ref", !""}
+#--- other.ll
+;; Hand-written IR: another '__msil_ref.' name, declared and called.
+declare target("msil.ref") @__msil_mc.widget_new(target("msil.ref"), i32 noundef) #0
+declare i1 @__msil_ref.ne(target("msil.ref"), target("msil.ref"))
+
+define i32 @main() #1 {
+entry:
+  %a = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 1) #1
+  %ne = tail call i1 @__msil_ref.ne(target("msil.ref") %a, target("msil.ref") zeroinitializer)
+  %r = zext i1 %ne to i32
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="ref,val;ref" }
+attributes #1 = { nounwind }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"ref,val;ref", !""}
+#--- helper.def
+LIBRARY helper.dll
+EXPORTS
+  __msil_ref.eq
+#--- helper.s
+## A native definition of the helper, for libhelper.so.
+  .text
+  .globl __msil_ref.eq
+  .type __msil_ref.eq,@function
+__msil_ref.eq:
+  ret
+#--- def.ll
+;; Hand-written IR: definitions of '__msil_ref.' names, which only the
+;; toolchain may define: a function, a weak function, a variable and a
+;; common variable, and an internal function and variable.
+@__msil_ref.data = global i32 7
+@__msil_ref.common = common global i32 0
+@__msil_ref.count = internal global i32 3
+
+define i1 @__msil_ref.eq(ptr %a, ptr %b) {
+  %c = icmp eq ptr %a, %b
+  ret i1 %c
+}
+
+define weak i32 @__msil_ref.weak() {
+  ret i32 1
+}
+
+define internal i32 @__msil_ref.local() {
+  %v = load i32, ptr @__msil_ref.count
+  ret i32 %v
+}
+
+define i32 @main() {
+  %a = call i1 @__msil_ref.eq(ptr null, ptr null)
+  %w = call i32 @__msil_ref.weak()
+  %l = call i32 @__msil_ref.local()
+  %d = load i32, ptr @__msil_ref.data
+  %c = load i32, ptr @__msil_ref.common
+  %s1 = add i32 %w, %l
+  %s2 = add i32 %s1, %d
+  %s3 = add i32 %s2, %c
+  ret i32 %s3
+}
+#--- defobj.ll
+;; Hand-written IR: variables and functions named '__msil_REF.' (a global,
+;; a common, a weak and an internal variable; a global, a weak and an
+;; internal function), which rename.py renames '__msil_ref.' in the object.
+@__msil_REF.data = global i32 7
+@__msil_REF.common = common global i32 0
+@__msil_REF.weakdata = weak global i32 5
+@__msil_REF.count = internal global i32 3
+
+define i1 @__msil_REF.eq(ptr %a, ptr %b) {
+  %c = icmp eq ptr %a, %b
+  ret i1 %c
+}
+
+define weak i32 @__msil_REF.weak() {
+  ret i32 1
+}
+
+define internal i32 @__msil_REF.local() {
+  %v = load i32, ptr @__msil_REF.count
+  ret i32 %v
+}
+
+define i32 @use_local() {
+  %v = call i32 @__msil_REF.local()
+  ret i32 %v
+}
+#--- rename.py
+"""Copy the CIL object argv[1] to argv[2], renaming every '__msil_REF.'
+name (the method names in the #Strings heap and the link-info record's
+symbol names) '__msil_ref.'. The lengths are equal, so no offset changes."""
+import sys
+
+with open(sys.argv[1], "rb") as f:
+    data = f.read()
+if b"__msil_REF." not in data:
+    sys.exit("rename.py: no '__msil_REF.' name in " + sys.argv[1])
+with open(sys.argv[2], "wb") as f:
+    f.write(data.replace(b"__msil_REF.", b"__msil_ref."))
+#--- thin-a.ll
+;; static __attribute__((noinline)) int size_of(Widget ^w) {
+;;   return widget_size(w);
+;; }
+;; int g(int n) { return size_of(widget_new(NULL, n)); }
+;; with widget_new and widget_size as in calls.ll.
+declare target("msil.ref") @__msil_mc.widget_new(target("msil.ref"), i32 noundef) #0
+declare i32 @__msil_mc.widget_size(target("msil.ref")) #1
+
+define i32 @g(i32 noundef %n) #2 {
+entry:
+  %w = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef %n) #2
+  %s = tail call fastcc i32 @size_of(target("msil.ref") %w)
+  ret i32 %s
+}
+
+define internal fastcc i32 @size_of(target("msil.ref") %w) unnamed_addr #3 {
+entry:
+  %s = tail call i32 @__msil_mc.widget_size(target("msil.ref") %w) #2
+  ret i32 %s
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="ref,val;ref" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #2 = { nounwind }
+attributes #3 = { noinline nounwind }
+
+!msil.managed.calls = !{!0, !1}
+!0 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"ref,val;ref", !""}
+!1 = !{!"__msil_mc.widget_size", !"Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-ref;val", !""}
+#--- thin-m.ll
+;; int g(int); int main(void) { return g(3); }
+declare i32 @g(i32 noundef)
+
+define i32 @main() {
+entry:
+  %r = tail call i32 @g(i32 noundef 3)
+  ret i32 %r
+}
+#--- take.ll
+;; int take(void *p) { return p != 0; }
+;; int count(int a) { return a + 1; }
+;; void *get(void) { return 0; }
+define i32 @take(ptr noundef %p) {
+  %c = icmp ne ptr %p, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+define i32 @count(i32 noundef %a) {
+  %r = add i32 %a, 1
+  ret i32 %r
+}
+
+define ptr @get() {
+  ret ptr null
+}
+#--- take-ref.ll
+;; Hand-written IR that clang refuses (T-R10): take, count and get declared
+;; with a .NET reference where take.ll's definitions have a pointer, one
+;; parameter fewer or a pointer result. The IR linker keeps each call's type.
+declare i32 @take(target("msil.ref"))
+declare i32 @count(i32, target("msil.ref"))
+declare target("msil.ref") @get()
+declare target("msil.ref") @__msil_mc.widget_new(target("msil.ref"), i32 noundef) #0
+
+define i32 @main() {
+  %w = call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 3)
+  %t = call i32 @take(target("msil.ref") %w)
+  %g = call target("msil.ref") @get()
+  %c = call i32 @count(i32 1, target("msil.ref") %g)
+  %r = add i32 %t, %c
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="ref,val;ref" }
+
+!msil.managed.calls = !{!0}
+!0 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"ref,val;ref", !""}
+#--- hold.ll
+;; Hand-written IR: an external definition with a .NET reference parameter
+;; (clang refuses it, T-R10).
+define i32 @hold(target("msil.ref") %r) {
+  ret i32 1
+}
+#--- hold-ptr.ll
+;; int hold(void *); int main(void) { return hold(0); }
+declare i32 @hold(ptr noundef)
+
+define i32 @main() {
+  %r = call i32 @hold(ptr noundef null)
+  ret i32 %r
+}
+#--- cast-a.ll
+;; int one(void) { Object ^o = widget_new(NULL, 1); return widget_size((Widget ^)o); }
+;; with widget_new and widget_size as in calls.ll.
+declare target("msil.ref") @__msil_mc.widget_new(target("msil.ref"), i32 noundef) #0
+declare i32 @__msil_mc.widget_size(target("msil.ref")) #1
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref")) #2
+
+define i32 @one() #3 {
+entry:
+  %o = tail call target("msil.ref") @__msil_mc.widget_new(target("msil.ref") zeroinitializer, i32 noundef 1) #3
+  %w = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref") %o) #3
+  %s = tail call i32 @__msil_mc.widget_size(target("msil.ref") %w) #3
+  ret i32 %s
+}
+
+attributes #0 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".ctor" "msil-managed-sig"="instance void(string, int32)" "msil-managed-conv"="ref,val;ref" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"="get_Size" "msil-managed-sig"="instance int32()" "msil-managed-conv"="this-ref;val" }
+attributes #2 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #3 = { nounwind }
+
+!msil.managed.calls = !{!0, !1, !2}
+!0 = !{!"__msil_mc.widget_new", !"Contoso.Widget", !".ctor", !"instance void(string, int32)", !"", !"ref,val;ref", !""}
+!1 = !{!"__msil_mc.widget_size", !"Contoso.Widget", !"get_Size", !"instance int32()", !"", !"this-ref;val", !""}
+!2 = !{!"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868", !"Contoso.Widget", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+#--- cast-b.ll
+;; int two(void) { Object ^o = ticket_target(0); return (Widget ^)o != NULL; }
+;; with ticket_target as in calls.ll.
+declare target("msil.ref") @__msil_mc.ticket_target(i64 noundef) #0
+declare target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref")) #1
+declare i1 @__msil_ref.eq(target("msil.ref"), target("msil.ref")) #2
+
+define i32 @two() #3 {
+entry:
+  %o = tail call target("msil.ref") @__msil_mc.ticket_target(i64 noundef 0) #3
+  %w = tail call target("msil.ref") @"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868"(target("msil.ref") %o) #3
+  %null = tail call i1 @__msil_ref.eq(target("msil.ref") %w, target("msil.ref") zeroinitializer)
+  %ne = xor i1 %null, true
+  %r = zext i1 %ne to i32
+  ret i32 %r
+}
+
+attributes #0 = { "msil-managed-type"="valuetype System.Runtime.InteropServices.GCHandle" "msil-managed-member"="get_Target" "msil-managed-sig"="instance object()" "msil-managed-conv"="this-gch;ref" }
+attributes #1 = { "msil-managed-type"="Contoso.Widget" "msil-managed-member"=".castclass" "msil-managed-sig"="object(object)" "msil-managed-conv"="ref;ref" }
+attributes #2 = { mustprogress nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #3 = { nounwind }
+
+!msil.managed.calls = !{!0, !1}
+!0 = !{!"__msil_mc.ticket_target", !"valuetype System.Runtime.InteropServices.GCHandle", !"get_Target", !"instance object()", !"", !"this-gch;ref", !""}
+!1 = !{!"__msil_mc.<castclass>.__uniq.43270141957106652608784572690135763868", !"Contoso.Widget", !".castclass", !"object(object)", !"", !"ref;ref", !""}
+#--- cast-main.ll
+;; int one(void), two(void); int main(void) { return one() + two(); }
+declare i32 @one()
+declare i32 @two()
+
+define i32 @main() {
+entry:
+  %a = tail call i32 @one()
+  %b = tail call i32 @two()
+  %s = add i32 %a, %b
+  ret i32 %s
+}

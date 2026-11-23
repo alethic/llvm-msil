@@ -123,12 +123,16 @@ void llvm::MSIL::computeSignatureVTs(const FunctionType *Ty,
     computeLegalValueVTs(ContextFunc, TM, Param, Params);
 }
 
+/// The value types of a method's parameters and results, spelled as
+/// EVT::getEVTString() prints them: the four of plan 5.4 and externref, a
+/// .NET reference (plan 5.21.7 RB6).
 static MVT parseMVT(StringRef Type) {
   return StringSwitch<MVT>(Type)
       .Case("i32", MVT::i32)
       .Case("i64", MVT::i64)
       .Case("f32", MVT::f32)
       .Case("f64", MVT::f64)
+      .Case("externref", MVT::externref)
       .Default(MVT::INVALID_SIMPLE_VALUE_TYPE);
 }
 

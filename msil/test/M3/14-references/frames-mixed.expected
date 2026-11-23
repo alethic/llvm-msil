@@ -1,0 +1,5 @@
+from_frame: 12 of 12 checks
+the results after the frames are gone: 1 1, two objects 1
+with_vla: 3 of 3 checks
+nest: 9 of 9 levels intact
+[exit 0]

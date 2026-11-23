@@ -1,0 +1,11 @@
+typeof 1, typeof_unqual assignable 1, __auto_type 1, auto 1
+const after the caret: 1
+Text is String: 1 1, compatible 1
+_Generic: String 1, Object 2, through a function 2
+compatible: StringRef and String ^ 1, String ^ and Object ^ 0
+statement expression 1, comma 1, counter 2
+register 1, nullptr 1 1, the null forms agree 1
+register assigned nullptr: 1
+s: "forms"
+other: "two"
+[exit 0]

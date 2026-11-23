@@ -47,6 +47,7 @@ def BuiltinType : TypeNode<Type>, AlwaysCanonical;
 def ComplexType : TypeNode<Type>;
 def PointerType : TypeNode<Type>;
 def BlockPointerType : TypeNode<Type>;
+def CLIReferenceType : TypeNode<Type>;
 def ReferenceType : TypeNode<Type, 1>;
 def LValueReferenceType : TypeNode<ReferenceType>;
 def RValueReferenceType : TypeNode<ReferenceType>;

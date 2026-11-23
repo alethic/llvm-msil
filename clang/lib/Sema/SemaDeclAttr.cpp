@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemaMSILManagedCall.h"
+#include "SemaMSILReference.h"
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -7679,6 +7680,11 @@ ProcessDeclAttribute(Sema &S, Decl *D, const ParsedAttr &AL,
     return;
   }
 
+  // MSIL: the attributes that a function or a variable with a .NET reference
+  // cannot have (SemaMSILReference.cpp).
+  if (msil::diagnoseCLIReferenceDeclAttr(S, D, AL))
+    return;
+
   switch (AL.getKind()) {
   default:
     if (AL.getInfo().handleDeclAttribute(S, D, AL) != ParsedAttrInfo::NotHandled)
@@ -7814,6 +7820,10 @@ ProcessDeclAttribute(Sema &S, Decl *D, const ParsedAttr &AL,
     break;
   case ParsedAttr::AT_MSILCatch:
     msil::handleMSILCatchAttr(S, D, AL);
+    break;
+  // MSIL .NET references (SemaMSILReference.cpp).
+  case ParsedAttr::AT_CLIType:
+    msil::handleCLITypeAttr(S, D, AL);
     break;
   case ParsedAttr::AT_IBOutlet:
     S.ObjC().handleIBOutlet(D, AL);
@@ -8877,6 +8887,11 @@ NamedDecl *Sema::DeclClonePragmaWeak(NamedDecl *ND, const IdentifierInfo *II,
 
 void Sema::DeclApplyPragmaWeak(Scope *S, NamedDecl *ND, const WeakInfo &W) {
   if (W.getAlias()) { // clone decl, impersonate __attribute(weak,alias(...))
+    // MSIL: no weak alias of a function whose type has a .NET reference
+    // (SemaMSILReference.cpp).
+    if (msil::diagnoseCLIReferencePragmaWeakAlias(*this, *ND, W.getAlias(),
+                                                  W.getLocation()))
+      return;
     IdentifierInfo *NDId = ND->getIdentifier();
     NamedDecl *NewD = DeclClonePragmaWeak(ND, W.getAlias(), W.getLocation());
     NewD->addAttr(

@@ -7,23 +7,26 @@
 //===----------------------------------------------------------------------===//
 //
 // msil-ld's checks of managed calls (ManagedCalls.h; plan 5.20.7 MK2-MK4,
-// MK7).
+// MK7; for the .NET references of C, plan 5.21.10 RL1-RL4).
 //
 // A stub's body has the shape of plan 5.20.5: the argument conversions, one
 // member access (call, callvirt, newobj, newarr, ldsfld or ldfld), the result
 // conversion and, with msil_catch, one filter clause whose filter tests
-// 'isinst <T>' per listed type. The access is the one call-like instruction
-// whose token is not one of the stub-internal members of 5.20.13 that the
-// conversions call (GCHandle's Alloc, ToIntPtr, FromIntPtr and get_Target,
-// the UTF-8 and UTF-32 encoders' constructors, Encoding::GetString(uint8*,
-// int32) and String::.ctor(char*)), except that a call directly after a
-// 'constrained.' prefix is the access whatever its token names (the
-// 'this-val' or 'this-gch' access of plan 5.20.5 ML2 (2) as amended). When
-// an unprefixed member is itself one of them, no call-like instruction
-// remains; such a member has no parameter that MK2 checks, so nothing is
-// lost. The member's parameters pair with the stub's
-// own parameters by plan 5.20.3 MS4's positions: a 'this' handle first for
-// an instance member other than a constructor.
+// 'isinst <T>' per listed type. The conversion of a 'ref' argument or of a
+// 'this-ref' 'this' is a castclass to its class (plan 5.21.9 RM7), and a cast
+// stub makes no member access: its body is 'ldarg.0; castclass <TYPE>; ret'
+// (RM8), so a stub makes at most one access (MK2 as amended). The access is
+// the one call-like instruction whose token is not one of the stub-internal
+// members of 5.20.13 that the conversions call (GCHandle's Alloc, ToIntPtr,
+// FromIntPtr and get_Target, the UTF-8 and UTF-32 encoders' constructors,
+// Encoding::GetString(uint8*, int32) and String::.ctor(char*)), except that a
+// call directly after a 'constrained.' prefix is the access whatever its
+// token names (the 'this-val' or 'this-gch' access of plan 5.20.5 ML2 (2) as
+// amended). When an unprefixed member is itself one of them, no call-like
+// instruction remains; such a member has no parameter that MK2 checks, so
+// nothing is lost. The member's parameters pair with the stub's own
+// parameters by plan 5.20.3 MS4's positions: a 'this' handle or reference
+// first for an instance member other than a constructor.
 //
 // A type that the references do not define is skipped: binding the stub's
 // tokens reports it with the binder's text.
@@ -662,9 +665,11 @@ static void checkStub(Checker &c, const ObjFile &f, const InputMethod &m,
   }
 
   // MK3: box, unbox and unbox.any name value types, castclass reference
-  // types; a constructor whose object is not boxed constructs a reference
-  // type; a member whose parent is a TypeSpec 'valuetype T' (a static method
-  // or field whose TYPE is 'valuetype T') is a value type's (T-M16).
+  // types (the castclass of an object handle, of a 'ref' argument or of a
+  // 'this-ref' 'this', and a cast stub's, plan 5.21.10 RL2 and RL3); a
+  // constructor whose object is not boxed constructs a reference type; a
+  // member whose parent is a TypeSpec 'valuetype T' (a static method or field
+  // whose TYPE is 'valuetype T') is a value type's (T-M16).
   for (const TypeUse &u : conversions)
     if (u.type != GCHandleTypeName)
       c.checkKind(fn, u.type, /*asValue=*/u.op != Opcode::Castclass);
@@ -817,16 +822,39 @@ static std::optional<std::string> getManagedCallStubText(const ObjFile &f,
 
 //===----------------------------------------------------------------------===//
 // The units that declare a managed call: T-M23, T-M17 in links with CIL
-// objects, T-M21
+// objects, T-M21; the reserved names of the reference helpers: T-RL1
 //===----------------------------------------------------------------------===//
 
-// T-M23's two forms: a stub name '__msil_mc.<...>', or a forwarder name
-// '__msil_mc_ctor.<s>' or '__msil_mc_dtor.<s>' (\p forwarder).
+namespace {
+// What a reserved name that an input defines stands for.
+enum class ReservedName {
+  // T-M23: a managed-call stub name '__msil_mc.<...>'.
+  Stub,
+  // T-M23: a forwarder name '__msil_mc_ctor.<s>' or '__msil_mc_dtor.<s>'.
+  Forwarder,
+  // T-RL1 (plan 5.21.10 RL4): a reference helper name '__msil_ref.<...>'.
+  ReferenceHelper,
+};
+} // namespace
+
+// T-M23's two forms and T-RL1: "<file>: defines '<name>', which is reserved
+// for the MSIL toolchain (<what>)".
 static void reportReservedName(const InputFile *file, StringRef name,
-                               bool forwarder) {
+                               ReservedName kind) {
+  StringRef what;
+  switch (kind) {
+  case ReservedName::Stub:
+    what = "a managed-call stub";
+    break;
+  case ReservedName::Forwarder:
+    what = "a managed-call forwarder";
+    break;
+  case ReservedName::ReferenceHelper:
+    what = "a reference helper";
+    break;
+  }
   error(toString(file) + ": defines '" + name +
-        "', which is reserved for the MSIL toolchain (" +
-        (forwarder ? "a managed-call forwarder" : "a managed-call stub") + ")");
+        "', which is reserved for the MSIL toolchain (" + what + ")");
 }
 
 // The symbol <s> of the forwarder name \p name ('__msil_mc_ctor.<s>' or
@@ -884,9 +912,11 @@ void lld::msil::checkReservedManagedCallNames(const ObjFile &f) {
         (sym.Flags & MSILLink::BindingMask) == MSILLink::BindingLocal)
       continue;
     if (isManagedCallName(sym.Name))
-      reportReservedName(&f, sym.Name, /*forwarder=*/false);
+      reportReservedName(&f, sym.Name, ReservedName::Stub);
     else if (isManagedForwarderName(sym.Name) && !isManagedCallForwarder(f, i))
-      reportReservedName(&f, sym.Name, /*forwarder=*/true);
+      reportReservedName(&f, sym.Name, ReservedName::Forwarder);
+    else if (isReferenceHelperName(sym.Name))
+      reportReservedName(&f, sym.Name, ReservedName::ReferenceHelper);
   }
 }
 
@@ -901,7 +931,11 @@ void lld::msil::checkReservedManagedCallNames(const BitcodeFile &f) {
     if (irSym.isUndefined())
       continue;
     if (isManagedCallName(name)) {
-      reportReservedName(&f, name, /*forwarder=*/false);
+      reportReservedName(&f, name, ReservedName::Stub);
+      continue;
+    }
+    if (isReferenceHelperName(name)) {
+      reportReservedName(&f, name, ReservedName::ReferenceHelper);
       continue;
     }
     if (!isManagedForwarderName(name))
@@ -922,7 +956,7 @@ void lld::msil::checkReservedManagedCallNames(const BitcodeFile &f) {
         declared->contains(
             (ManagedCallPrefix + splitForwarderName(name).first).str());
     if (!forwarder)
-      reportReservedName(&f, name, /*forwarder=*/true);
+      reportReservedName(&f, name, ReservedName::Forwarder);
   }
 }
 
@@ -1865,26 +1899,48 @@ bool lld::msil::checkBitcodeManagedCallUses(
 
 using TK = ManagedType::TypeKind;
 
+// Whether the managed-call declaration \p fn is a cast stub's (plan 5.21.9
+// RM8), which clang's CodeGen declares for a C cast from one .NET class to
+// another: MEMBER '.castclass', SIGNATURE 'object(object)', the conversions
+// 'ref;ref' and a class, System.String or array TYPE
+// (cli::isManagedCastShape, tested on the attributes as
+// MSIL::parseManagedCall tests them). Its stub's body is 'ldarg.0; castclass
+// <TYPE>; ret': it accesses no member.
+static bool isManagedCast(const Function &fn) {
+  auto attr = [&](StringRef kind) {
+    return fn.getFnAttribute(kind).getValueAsString();
+  };
+  return isManagedCastShape(attr(ManagedTypeAttr), attr(ManagedMemberAttr),
+                            attr(ManagedSigAttr), attr(ManagedConvAttr));
+}
+
 // Whether P0 accepts the managed-call declaration \p fn, whose parsed
 // attributes are \p type, \p member, \p sig, \p conv and \p numCatches
 // msil_catch entries (MSIL::parseManagedCall, plan 5.20.4 MR1); P0 reports
 // any other as "managed call '<f>' has invalid "msil-managed-*" attributes:
-// <reason>".
+// <reason>". The .NET references of plan 5.21.9 (RM1, RM6, RM8) are valid:
+// 'this-ref', 'ref' and the cast stubs (isManagedCast).
 static bool isValidManagedCall(const Function &fn, const ManagedType &type,
                                StringRef member, const ManagedSignature &sig,
                                const ManagedConvList &conv, size_t numCatches) {
-  if (Error e = checkManagedMemberName(member)) {
-    consumeError(std::move(e));
-    return false;
+  // A cast stub's MEMBER '.castclass' is one that checkManagedMemberName
+  // refuses, so that no msil_method names it, and checkManagedCallShape's
+  // rules are about the member that a cast stub does not access.
+  bool isCast = isManagedCast(fn);
+  if (!isCast) {
+    if (Error e = checkManagedMemberName(member)) {
+      consumeError(std::move(e));
+      return false;
+    }
+    if (checkManagedCallShape(type, member, sig))
+      return false;
   }
-  if (checkManagedCallShape(type, member, sig))
-    return false;
   if (fn.hasFnAttribute(ManagedAsmAttr) &&
       fn.getFnAttribute(ManagedAsmAttr).getValueAsString().empty())
     return false;
 
-  // One conversion per C parameter: the 'this' handle, the member's
-  // parameters and the error code pointer of msil_catch.
+  // One conversion per C parameter: the 'this' handle or reference, the
+  // member's parameters and the error code pointer of msil_catch.
   const FunctionType *fnType = fn.getFunctionType();
   const DataLayout &dl = fn.getDataLayout();
   bool isCtor = member == ".ctor";
@@ -1895,21 +1951,29 @@ static bool isValidManagedCall(const Function &fn, const ManagedType &type,
     return false;
   unsigned i = 0;
   if (thisHandle) {
+    // The 'this' handle, or the 'this' reference of a class, an interface,
+    // System.String or System.Object (plan 5.21.9 RM6).
     ManagedConv code = conv.Params[0];
-    bool fits = (code == ManagedConv::ThisObj && type.Kind == TK::Class) ||
-                (code == ManagedConv::ThisVal && type.Kind == TK::ValueType &&
-                 !type.isGCHandle()) ||
-                (code == ManagedConv::ThisGCH && type.isGCHandle());
-    if (!fits || !isManagedHandleType(fnType->getParamType(0), dl))
+    const Type *thisType = fnType->getParamType(0);
+    bool fits =
+        code == ManagedConv::ThisRef
+            ? fitsManagedConversion(code, type, thisType, dl)
+            : ((code == ManagedConv::ThisObj && type.Kind == TK::Class) ||
+               (code == ManagedConv::ThisVal && type.Kind == TK::ValueType &&
+                !type.isGCHandle()) ||
+               (code == ManagedConv::ThisGCH && type.isGCHandle())) &&
+                  isManagedHandleType(thisType, dl);
+    if (!fits)
       return false;
     ++i;
   }
   // "msil-managed-decl" belongs to a static method or a 'this-val' or
   // 'this-gch' instance method only, and names TYPE or one of the base types
-  // of a value type or an enum.
+  // of a value type or an enum. A cast stub accesses no member, which a type
+  // could declare.
   if (fn.hasFnAttribute(ManagedDeclAttr)) {
     StringRef decl = fn.getFnAttribute(ManagedDeclAttr).getValueAsString();
-    bool staticMethod = !sig.HasThis && !sig.IsField;
+    bool staticMethod = !sig.HasThis && !sig.IsField && !isCast;
     bool valueThis = thisHandle && !sig.IsField &&
                      (conv.Params[0] == ManagedConv::ThisVal ||
                       conv.Params[0] == ManagedConv::ThisGCH);
@@ -1919,7 +1983,12 @@ static bool isValidManagedCall(const Function &fn, const ManagedType &type,
       return false;
   }
   for (const ManagedType &p : sig.Params) {
-    if (!fitsManagedConversion(conv.Params[i], p, fnType->getParamType(i), dl))
+    // 'this-ref' converts only the 'this' reference (plan 5.21.9 RM1), never
+    // a member's parameter, though fitsManagedConversion accepts its types
+    // in any position.
+    ManagedConv code = conv.Params[i];
+    if (code == ManagedConv::ThisRef ||
+        !fitsManagedConversion(code, p, fnType->getParamType(i), dl))
       return false;
     ++i;
   }
@@ -1979,21 +2048,28 @@ static void checkDeclaration(Checker &c, const Function &fn) {
     return;
   StringRef f = getManagedCallSymbol(fn.getName());
   bool isCtor = member == ".ctor";
+  bool isCast = isManagedCast(fn);
   bool thisHandle = sig->HasThis && !isCtor;
   ManagedConv thisConv = thisHandle ? conv->Params.front() : ManagedConv::Void;
 
   // MK3: a value type TYPE for every member kind, as the stub's unbox
   // (this-val), its box (a constructor) or the member's TypeSpec parent (a
   // static method or field) names it; a class TYPE as the stub's castclass
-  // (this-obj) or unboxed newobj (a constructor) names it. A static member
-  // of a class TYPE has a TypeRef parent, which says nothing of the kind.
+  // (this-obj, this-ref, a cast stub) or unboxed newobj (a constructor)
+  // names it (plan 5.21.10 RL2). A static member of a class TYPE has a
+  // TypeRef parent, which says nothing of the kind, and an array TYPE (a
+  // constructor's newarr, a cast stub's castclass) is a TypeSpec, as in an
+  // object.
   if (type->Kind == TK::ValueType && !type->isGCHandle())
     c.checkKind(f, type->TypeName, /*asValue=*/true);
-  if (type->Kind == TK::Class && (thisConv == ManagedConv::ThisObj || isCtor))
+  if (type->Kind == TK::Class &&
+      (thisConv == ManagedConv::ThisObj || thisConv == ManagedConv::ThisRef ||
+       isCtor || isCast))
     c.checkKind(f, type->TypeName, /*asValue=*/false);
 
   // MK2 and MK3 per parameter: an enum (T-M7), a boxed handle's unbox.any,
-  // an object handle's castclass.
+  // an object handle's or a reference's castclass to a class (plan 5.21.10
+  // RL2).
   const FunctionType *fnType = fn.getFunctionType();
   for (auto [k, p] : enumerate(sig->Params)) {
     size_t j = k + (thisHandle ? 1 : 0);
@@ -2003,7 +2079,8 @@ static void checkDeclaration(Checker &c, const Function &fn) {
                   p.TypeName);
     else if (code == ManagedConv::Boxed)
       c.checkKind(f, p.TypeName, /*asValue=*/true);
-    else if (code == ManagedConv::Obj && p.Kind == TK::Class)
+    else if ((code == ManagedConv::Obj || code == ManagedConv::Ref) &&
+             p.Kind == TK::Class)
       c.checkKind(f, p.TypeName, /*asValue=*/false);
   }
   // A boxed result's box; an enum result (a field member's value) as MK2
@@ -2315,7 +2392,9 @@ void lld::msil::annotateManagedCallDeclaringTypes(Module &m) {
   };
   SmallVector<Call, 4> calls;
   for (Function &fn : m.functions()) {
-    if (!fn.hasFnAttribute(ManagedTypeAttr))
+    // A cast stub (plan 5.21.9 RM8) accesses no member, and P0 refuses the
+    // attribute on it.
+    if (!fn.hasFnAttribute(ManagedTypeAttr) || isManagedCast(fn))
       continue;
     auto attr = [&](StringRef kind) {
       return fn.getFnAttribute(kind).getValueAsString();

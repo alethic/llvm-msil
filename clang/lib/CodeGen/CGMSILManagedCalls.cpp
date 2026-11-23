@@ -9,14 +9,16 @@
 // The IR of the MSIL managed calls (ImplementationPlan.md 5.20.4): the IR name
 // of a function with msil_method (MR2), its IR attributes (MR1), the
 // forwarders of a managed call with dllexport, constructor or destructor, the
-// check of the managed calls that share one IR name (T-M24) and the
-// !msil.managed.calls operands (MR4). Sema has checked the attributes and
-// recorded the conversions of each declaration (SemaMSILManagedCall.cpp);
-// nothing here classifies a C type again.
+// check of the managed calls that share one IR name (T-M24), the declarations
+// of the cast stubs that a C cast between two .NET classes calls (plan 5.21.9
+// RM8) and the !msil.managed.calls operands (MR4). Sema has checked the
+// attributes and recorded the conversions of each declaration
+// (SemaMSILManagedCall.cpp); nothing here classifies a C type again.
 //
 //===----------------------------------------------------------------------===//
 
 #include "CGMSILManagedCalls.h"
+#include "CGMSILReferences.h"
 #include "CodeGenModule.h"
 #include "CodeGenTypes.h"
 #include "TargetInfo.h"
@@ -271,6 +273,26 @@ void CodeGen::mangleMSILManagedCallName(CodeGenModule &CGM, GlobalDecl GD,
   MangledName = std::move(Name);
 }
 
+/// Gives the IR declaration \p F of a managed call the attributes of plan
+/// 5.20.4 MR1: TYPE, MEMBER, SIGNATURE, ASSEMBLY when it is not empty, the
+/// conversions, and the msil_catch list when it is not empty, which
+/// emitMSILManagedCallsMetadata copies into the declaration's
+/// !msil.managed.calls operand (MR4).
+static void setMSILManagedCallAttributes(llvm::Function &F, StringRef Type,
+                                         StringRef Member, StringRef Signature,
+                                         StringRef Assembly,
+                                         StringRef Conversions,
+                                         StringRef Catches) {
+  F.addFnAttr(llvm::cli::ManagedTypeAttr, Type);
+  F.addFnAttr(llvm::cli::ManagedMemberAttr, Member);
+  F.addFnAttr(llvm::cli::ManagedSigAttr, Signature);
+  if (!Assembly.empty())
+    F.addFnAttr(llvm::cli::ManagedAsmAttr, Assembly);
+  F.addFnAttr(llvm::cli::ManagedConvAttr, Conversions);
+  if (!Catches.empty())
+    F.addFnAttr(llvm::cli::ManagedCatchAttr, Catches);
+}
+
 void CodeGen::addMSILManagedCallAttributes(const FunctionDecl &FD,
                                            llvm::Function &F) {
   if (FD.doesThisDeclarationHaveABody() || !isMSILManagedCall(FD))
@@ -279,15 +301,55 @@ void CodeGen::addMSILManagedCallAttributes(const FunctionDecl &FD,
   const auto *MA = Latest->getAttr<MSILMethodAttr>();
   if (!MA || MA->getConversions().empty())
     return;
-  F.addFnAttr(llvm::cli::ManagedTypeAttr, MA->getType());
-  F.addFnAttr(llvm::cli::ManagedMemberAttr, MA->getMember());
-  F.addFnAttr(llvm::cli::ManagedSigAttr, MA->getSignature());
-  if (!MA->getAssembly().empty())
-    F.addFnAttr(llvm::cli::ManagedAsmAttr, MA->getAssembly());
-  F.addFnAttr(llvm::cli::ManagedConvAttr, MA->getConversions());
-  std::string Catches = getMSILManagedCatchList(*Latest);
-  if (!Catches.empty())
-    F.addFnAttr(llvm::cli::ManagedCatchAttr, Catches);
+  setMSILManagedCallAttributes(
+      F, MA->getType(), MA->getMember(), MA->getSignature(), MA->getAssembly(),
+      MA->getConversions(), getMSILManagedCatchList(*Latest));
+}
+
+llvm::Function *
+CodeGen::getOrCreateMSILCastDeclaration(CodeGenModule &CGM,
+                                        const CLIReferenceType &Target) {
+  // TYPE is the class's display name (plan 5.21.3 RC4): a class, an
+  // interface, System.String or an array, never System.Object, to which a
+  // cast emits nothing (emitMSILReferenceCast).
+  std::string Type =
+      llvm::cli::getCLITypeDisplayName(Target.getKey()->getName());
+  assert(llvm::cli::isManagedCastShape(Type, llvm::cli::ManagedCastMember,
+                                       llvm::cli::ManagedCastSignature,
+                                       llvm::cli::ManagedCastConversions) &&
+         "a cast stub needs a class other than System.Object");
+  llvm::Module &M = CGM.getModule();
+  llvm::Type *Ref = getMSILReferenceType(M.getContext());
+  auto *FTy = llvm::FunctionType::get(Ref, {Ref}, /*isVarArg=*/false);
+  // The name hashes what an internal managed call's does (MR2 as amended):
+  // the !msil.managed.calls operands 1-6 and the function type, here the IR
+  // type, which every cast stub shares. So each class has its own stub, and
+  // the equal casts of two units have one name, which LTO merges.
+  std::string FunctionType;
+  llvm::raw_string_ostream OS(FunctionType);
+  FTy->print(OS);
+  std::string Name =
+      (llvm::cli::ManagedCallPrefix + llvm::cli::ManagedCastSymbol).str() +
+      llvm::cli::getManagedCallUniqPostfix(
+          {Type, llvm::cli::ManagedCastMember, llvm::cli::ManagedCastSignature,
+           /*Assembly=*/"", llvm::cli::ManagedCastConversions, /*Catches=*/"",
+           FunctionType});
+  if (llvm::Function *F = M.getFunction(Name);
+      F && F->isDeclaration() && F->getFunctionType() == FTy &&
+      F->hasFnAttribute(llvm::cli::ManagedTypeAttr))
+    return F;
+  // Sema refuses an asm label that would give a declaration of the source this
+  // name (T-M22). Should another global have it anyway, this declaration is
+  // renamed, which changes nothing: the backend and msil-ld know a cast stub
+  // by its attributes (llvm::cli::isManagedCastShape). Without memory
+  // attributes, a cast whose value is unused still runs and throws.
+  auto *F =
+      llvm::Function::Create(FTy, llvm::GlobalValue::ExternalLinkage, Name, M);
+  setMSILManagedCallAttributes(
+      *F, Type, llvm::cli::ManagedCastMember, llvm::cli::ManagedCastSignature,
+      /*Assembly=*/"", llvm::cli::ManagedCastConversions,
+      /*Catches=*/"");
+  return F;
 }
 
 void CodeGen::declareMSILManagedCallWithForwarders(CodeGenModule &CGM,

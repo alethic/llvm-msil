@@ -251,6 +251,7 @@ class ASTContext : public RefCountedBase<ASTContext> {
   mutable llvm::UniquingSet<PointerType> PointerTypes{GeneralTypesLog2InitSize};
   mutable llvm::UniquingSet<AdjustedType> AdjustedTypes;
   mutable llvm::UniquingSet<BlockPointerType> BlockPointerTypes;
+  mutable llvm::FoldingSet<CLIReferenceType> CLIReferenceTypes;
   mutable llvm::UniquingSet<LValueReferenceType, QualTypeBoolInfo>
       LValueReferenceTypes;
   mutable llvm::UniquingSet<RValueReferenceType, QualTypeBoolInfo>
@@ -1732,6 +1733,25 @@ public:
   /// Return the uniqued reference to the type for a block of the
   /// specified type.
   QualType getBlockPointerType(QualType T) const;
+
+  /// Return the .NET reference type 'T ^' (CLIReferenceType, MSIL targets)
+  /// whose key is \p Key: the class's folded canonical listing text, as
+  /// llvm::cli::parseCLITypeName gives it and the 'cli_type' attribute of the
+  /// struct records it. \p ClassType is the struct as written, unqualified,
+  /// and the result is a sugared type that holds it. A null \p ClassType, or
+  /// the key's implicit struct type, gives the canonical type, which holds
+  /// that struct: one implicit, never-completed struct per key, named by the
+  /// key's display name (llvm::cli::getCLITypeDisplayName), outside name
+  /// lookup and never serialized as a declaration. Either way the result's
+  /// class (CLIReferenceType::getClassType) is \p ClassType when it is not
+  /// null.
+  QualType getCLIReferenceType(const IdentifierInfo *Key,
+                               QualType ClassType = QualType()) const;
+
+  /// Whether this context has made a .NET reference type (only MSIL targets
+  /// do), so that a check that applies only to code with references can skip
+  /// a translation unit without one.
+  bool hasCLIReferenceTypes() const { return !CLIReferenceTypes.empty(); }
 
   /// Gets the struct used to keep track of the descriptor for pointer to
   /// blocks.

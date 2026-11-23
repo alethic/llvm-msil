@@ -1,0 +1,297 @@
+# Identity and NULL for .NET references: a reference local declared without an initializer is NULL at every level, also each time a loop body declares it again after the last iteration set it and each time a goto back over its declaration reaches it again, and a static function that sets its result on one path only returns NULL on the other (the 'pick' shape that -O1 and above would fold to the argument); a reference local declared with an initializer is NULL before the initializer runs, so a goto or a computed goto out of a statement expression in the initializer, or a goto out of one arm of ?: there, to a label in the variable's scope, and the self-initialization 's = s' leave it NULL at every level; every null pointer constant (NULL, 0, (void *)0, '\0') converts to a NULL reference in initializers, assignments, arguments and returns; == and != compare identity (two equal strings are two objects), also a class against Object and either against a null constant; !r, if (r), while (r), &&, || and the condition of ?: test for NULL; ?: chooses between two references of a class, a reference and NULL, or a class and Object; GNU r ?: s; a reference converts to Object by itself, in initializers, assignments, arguments and returns; and a 'used' static function gets NULL for a dead reference parameter (DeadArgumentElimination's poison from -O1 on) and a live one beside it intact, with an int result and with a reference result.
+# Plan 5.21.4 RS1 (automatic variables at every level, 'register' too),
+# RS2 (default initialization adds a zero-initialization step, so CodeGen
+# stores NULL at the declaration at every level; after SROA an unset
+# reference would be undef, and phi(a, undef) folds to a at -O1, recon
+# references.md 1.2's 'pick') with section 12's row '5.21.4 RS2 and
+# 5.21.5 RG3 amended' (review round 2, 2026-11-21: a declaration with an
+# initializer stores NULL before its initializer runs, so a jump out of
+# the initializer to a label in the variable's scope, a goto or a computed
+# goto in a GNU statement expression, in a ?: arm too, and 's = s', which
+# -Wuninitialized exempts, read NULL at every level; the noinline
+# functions jump_out, jump_out_computed, jump_out_of_arm and self_init run
+# each form once with the jump, or with s left unset, and once without),
+# RS28 (jumps back over a declaration stay allowed: the declaration stores
+# NULL again), RS3 (parameters and results of static, prototyped
+# functions), RS4 (any null pointer constant converts to a null reference;
+# any reference converts to the Object reference), RS5 (== and != on the
+# same class, Object against a class, a null pointer constant against a
+# reference: identity, IL ceq), RS6 (conditions, !, &&, || and a ?:
+# condition are rewritten as r != NULL; in GNU r ?: s only the condition
+# is), RS7 (?: operands: the same class, a reference and a null constant,
+# a class and Object, which gives Object), RS21 ('used' is accepted on a
+# function with a reference, 5.21.7 RB11 rule 4), 5.21.5 RG2 and RG4 (NULL
+# is zeroinitializer; == calls __msil_ref.eq, which the back end selects
+# as ceq, beq, bne.un, brtrue or brfalse, 5.21.7 RB4, RB5), 5.21.6 RI5
+# (undef and poison references become ldnull) with section 12's row
+# '5.21.7 RB7 and 5.21.6 RI5 as built' (2026-11-21: valid C reaches a
+# poison reference where DeadArgumentElimination keeps the signature of a
+# 'used' static function and passes poison for its dead reference
+# parameter from -O1 on; used_add's int result and used_live's reference
+# result come from the live parameter beside it, and used_live counts its
+# calls in a volatile variable, so no level deletes them) and 5.21.1 RA7.
+# The objects are strings that String::.ctor(char*) makes from UTF-16
+# units (a built-in table member, so no reference assemblies); each newobj
+# makes a new string, so equal texts are different objects. The selectors
+# come from volatile variables, so the optimizer cannot fold the paths the
+# program takes. Under %if msil-cil-dump the -O2 program is built once
+# more, as falls-off.test does, and llvm-cil-dump's listing of main shows
+# the arguments of the call of each 'used' function (prefix DEADARG):
+# ldnull for the dead parameter, then the live reference from its local,
+# then used_add's constant 1000; the listing numbers the instructions of a
+# method L0, L1 and so on, so the instruction n places before the call at
+# L<k> is L<k-n>. The members have no C library equivalent, so the
+# expected file is hand-written for both OSes (plan 5.20.11 MT3 and 5.17.4
+# as amended for MC-1, under MC-1's reason; 5.21.14 RV28). Plan 5.17.13
+# (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: %if msil-cil-dump %{ %msil_prog_build --level O2 --workdir %t.dump.d --out %t.dump.d/prog.exe --src %{msil_srcs} %}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump %t.dump.d/prog.exe > %t.dump %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=DEADARG --input-file %t.dump %}
+# DEADARG-LABEL: .method 'main' int32()
+# DEADARG-DAG:   L[[#ADD:]]: call int32(object, object, int32) '<Module>'::'used_add'
+# DEADARG-DAG:   L[[#ADD-3]]: ldnull
+# DEADARG-DAG:   L[[#ADD-2]]: ldloc
+# DEADARG-DAG:   L[[#ADD-1]]: ldc.i4 1000
+# DEADARG-DAG:   L[[#LIVE:]]: call object(object, object) '<Module>'::'used_live'
+# DEADARG-DAG:   L[[#LIVE-2]]: ldnull
+# DEADARG-DAG:   L[[#LIVE-1]]: ldloc
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+static volatile int zero = 0, one = 1, three = 3;
+
+/* A new string from ASCII text. */
+static String ^make(const char *text) {
+  char16_t units[32];
+  size_t i = 0;
+  for (; text[i] && i < 31; ++i)
+    units[i] = (char16_t)text[i];
+  units[i] = 0;
+  return new_string(units);
+}
+
+/* The result is set on one path only: NULL on the other, at every level. */
+static String ^pick(String ^a, int c) {
+  String ^s;
+  if (c)
+    s = a;
+  return s;
+}
+
+/* A declaration with an initializer stores NULL before the initializer
+   runs, so s is NULL where a jump leaves the initializer for a label in s's
+   scope, and after s = s, at every level; without that store -O1 and above
+   would fold each result to a. */
+
+/* A goto out of a statement expression in the initializer. */
+__attribute__((noinline)) static String ^jump_out(String ^a, int c) {
+  String ^s = ({
+    if (c)
+      goto out;
+    a;
+  });
+out:
+  return s;
+}
+
+/* A computed goto out of the initializer. */
+__attribute__((noinline)) static String ^jump_out_computed(String ^a, int c) {
+  void *target = &&out;
+  String ^s = ({
+    if (c)
+      goto *target;
+    a;
+  });
+out:
+  return s;
+}
+
+/* A goto out of one arm of ?: in the initializer. */
+__attribute__((noinline)) static String ^jump_out_of_arm(String ^a, int c) {
+  String ^s = c ? ({
+    goto out;
+    a;
+  })
+                : a;
+out:
+  return s;
+}
+
+/* The self-initialization s = s; s stays NULL unless c is nonzero. */
+__attribute__((noinline)) static String ^self_init(String ^a, int c) {
+  String ^s = s;
+  if (c)
+    s = a;
+  return s;
+}
+
+/* Returns its reference argument or NULL in each of the null forms. */
+static String ^null_or(String ^s, int form) {
+  switch (form) {
+  case 0:
+    return NULL;
+  case 1:
+    return 0;
+  case 2:
+    return (void *)0;
+  case 3:
+    return '\0';
+  default:
+    return s;
+  }
+}
+
+static int is_null(String ^s) { return s == NULL; }
+
+/* Implicit conversions to Object at the call and at the return. */
+static int same_object(Object ^a, Object ^b) { return a == b; }
+static Object ^as_object(String ^s) { return s; }
+
+/* Counts the steps of a while (r) loop that a static function ends. */
+static String ^step(String ^r, int *left) { return --*left > 0 ? r : NULL; }
+
+/* 'used' keeps these functions and their signatures, so from -O1 on
+   DeadArgumentElimination passes poison for the dead first parameter at
+   each call, and the back end passes ldnull for it. */
+static volatile int used_calls = 0;
+
+static __attribute__((used, noinline)) int used_add(String ^dead, String ^live,
+                                                    int x) {
+  return x + (live != NULL);
+}
+
+/* Returns its live parameter; counting its calls in a volatile variable
+   keeps each call, which -O1 and above would otherwise replace by the
+   argument. */
+static __attribute__((used, noinline)) String ^used_live(String ^dead,
+                                                         String ^live) {
+  ++used_calls;
+  return live;
+}
+
+int main(void) {
+  String ^a = make("same text");
+  String ^b = make("same text");
+  String ^c = make("other text");
+
+  /* NULL at the declaration. */
+  String ^unset;
+  register String ^unset_register;
+  printf("declared without an initializer: NULL %d, register NULL %d\n",
+         unset == NULL, unset_register == NULL);
+  for (int i = 0; i < three; ++i) {
+    String ^each;
+    printf("loop body %d: NULL at its declaration %d\n", i, each == NULL);
+    each = a;
+    if (each != a)
+      return 1;
+  }
+  int passes = 0;
+again:;
+  String ^after_goto;
+  printf("goto back over the declaration, pass %d: NULL %d\n", passes,
+         after_goto == NULL);
+  after_goto = a;
+  if (++passes < three)
+    goto again;
+  printf("pick(a, 1) is a %d, pick(a, 0) is NULL %d\n", pick(a, one) == a,
+         pick(a, zero) == NULL);
+
+  /* Jumps out of an initializer, and s = s. */
+  printf("goto out of the initializer: a %d, NULL %d\n",
+         jump_out(a, zero) == a, jump_out(a, one) == NULL);
+  printf("computed goto out of the initializer: a %d, NULL %d\n",
+         jump_out_computed(a, zero) == a, jump_out_computed(a, one) == NULL);
+  printf("goto out of a ?: arm of the initializer: a %d, NULL %d\n",
+         jump_out_of_arm(a, zero) == a, jump_out_of_arm(a, one) == NULL);
+  printf("String ^s = s, then set: a %d, not set: NULL %d\n",
+         self_init(a, one) == a, self_init(a, zero) == NULL);
+
+  /* Null pointer constants in initializers, assignments, arguments and
+     returns. */
+  String ^n1 = NULL, ^n2 = 0, ^n3 = (void *)0, ^n4 = '\0';
+  printf("initializers: %d %d %d %d\n", n1 == NULL, n2 == 0, n3 == (void *)0,
+         n4 == '\0');
+  n1 = a, n2 = a, n3 = a, n4 = a;
+  n1 = NULL, n2 = 0, n3 = (void *)0, n4 = '\0';
+  printf("assignments: %d %d %d %d\n", is_null(n1), is_null(n2), is_null(n3),
+         is_null(n4));
+  printf("arguments: %d %d %d %d\n", is_null(NULL), is_null(0),
+         is_null((void *)0), is_null('\0'));
+  printf("returns: %d %d %d %d, and the argument back %d\n",
+         is_null(null_or(a, zero)), is_null(null_or(a, one)),
+         is_null(null_or(a, one + 1)), is_null(null_or(a, three)),
+         null_or(a, three + one) == a);
+
+  /* Identity. */
+  printf("a == a %d, a == b %d, a != b %d, a != c %d\n", a == a, a == b,
+         a != b, a != c);
+  Object ^o = a;
+  printf("Object o = a: o == a %d, a == o %d, o != b %d, o == NULL %d\n",
+         o == a, a == o, o != b, o == NULL);
+  printf("against null constants: a == NULL %d, NULL != a %d, a != 0 %d\n",
+         a == NULL, NULL != a, a != 0);
+  printf("conversions to Object: same_object(a, o) %d, same_object(a, b) %d, "
+         "as_object(c) == c %d, same_object(NULL, n1) %d\n",
+         same_object(a, o), same_object(a, b), as_object(c) == c,
+         same_object(NULL, n1));
+  o = c;
+  printf("assigned o = c: o == c %d\n", o == c);
+
+  /* Truth tests. */
+  String ^none = NULL;
+  printf("!a %d, !none %d, !!a %d\n", !a, !none, !!a);
+  if (a)
+    printf("if (a): taken\n");
+  if (none)
+    printf("if (none): taken\n");
+  else
+    printf("if (none): not taken\n");
+  int left = three, steps = 0;
+  String ^r = a;
+  while (r) {
+    ++steps;
+    r = step(r, &left);
+  }
+  printf("while (r) ran %d times and r is NULL %d\n", steps, r == NULL);
+  printf("a && b %d, a && none %d, none || a %d, none || none %d\n", a && b,
+         a && none, none || a, none || none);
+  printf("a ? 1 : 2 = %d, none ? 1 : 2 = %d\n", a ? 1 : 2, none ? 1 : 2);
+
+  /* ?: operands. */
+  String ^chosen = one ? a : c;
+  String ^chosen0 = zero ? a : c;
+  String ^maybe = one ? NULL : a;
+  String ^maybe0 = zero ? NULL : a;
+  Object ^mixed = one ? a : o;
+  Object ^mixed0 = zero ? a : o;
+  printf("class ? : %d %d, with NULL %d %d, class and Object %d %d\n",
+         chosen == a, chosen0 == c, maybe == NULL, maybe0 == a, mixed == a,
+         mixed0 == c);
+
+  /* GNU r ?: s: the condition only. */
+  String ^g1 = a ?: c;
+  String ^g2 = none ?: c;
+  printf("a ?: c is a %d, none ?: c is c %d\n", g1 == a, g2 == c);
+
+  /* The dead first parameters of the 'used' functions. */
+  int sum = used_add(b, a, 1000);
+  String ^back = used_live(c, a);
+  printf("used functions with a dead reference parameter: used_add %d, "
+         "used_live gave the live one back %d, called %d time\n",
+         sum, back == a, used_calls);
+  return 0;
+}

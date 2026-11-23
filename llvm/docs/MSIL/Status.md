@@ -1,6 +1,6 @@
 # MSIL backend: status of Phase 2
 
-State after milestone MC-1 (2026-11-16, branch `msil`, with upstream llvm-project main at
+State after milestone R-a (2026-11-22, branch `msil`, with upstream llvm-project main at
 `1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
 M24-M35, M24 laid the foundations of Phase 3, M25 built the helper archive
 `clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple, and M26 made
@@ -146,7 +146,15 @@ converts the result, `msil_catch` maps listed exceptions to error codes and lets
 exception escape, `dllexport` (Windows triples) also exports the function under its C name and
 `constructor` calls it before `main`, and `msil-ld` binds the member through the built-in table
 or `--reference` and checks enum widths and value types against the references (section 2,
-"Managed calls from C and C++ (MC-1)"). How to build and use
+"Managed calls from C and C++ (MC-1)"). R-a gave C real .NET object references: a struct
+declared with `CLI_TYPE("Ns.T")` from `<cli/cli.h>` names a .NET class, and `T ^` is a
+reference to it, which lives only in IL locals, arguments, results and the evaluation stack,
+never in C memory and never through a GCHandle; references start as NULL at every
+declaration, compare by identity, convert to `System.Object` by themselves and to another
+class only by a C cast that a small stub checks when the program runs, and pass to managed
+calls with at most one `castclass` (a `this` reference calls with `callvirt`, so an override
+runs); C memory keeps an object only as a ticket, a raw GCHandle number, and everything else
+is a named compile error (section 2, "Real .NET references in C (R-a)"). How to build and use
 it is in [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in
 section 3 of [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every
 later amendment.
@@ -3393,6 +3401,7 @@ LR4).
   | `strsignal`, `signal.h`, `raise`, `sigprocmask` | absent until a signal design | |
   | fenv (`fe*`) | absent (`math_errhandling` is `MATH_ERRNO` only) | no step plans it |
   | Managed calls from C | work since MC-1, through the built-in table only until P-2's links pass `--reference` | the fuller managed calls after Phase 3 ("Managed calls from C and C++ (MC-1)" below) |
+  | .NET references in C (`T ^`) | work since R-a as on the host triples, with the same refusals (function addresses and function pointers with references among them, T-R11, T-R12), and through the built-in table only until P-2's links pass `--reference` | R-b, which may lift the function-address refusals on the portable triples through a managed `calli` ("Real .NET references in C (R-a)" below) |
   | `msil32-unknown-dotnet` code generation and links | P-4: T-P1 (MC-1's T-M19 text names `msil64-unknown-dotnet` there) | P-4 |
   | Native libraries and import attributes (T-P4, T-P2); constructors with arguments, null slots and the T-P8 sections; `-S` externals (T-P3); inline assembly with operands or text, architecture intrinsics; `__float128`, `-mlong-double-*`, `-fshort-wchar`; running in a 32-bit or big-endian process (T-P10) | permanent | |
 
@@ -3885,7 +3894,12 @@ module without a reference to the `setjmp` family is left untouched and keeps it
   function's body becomes `unreachable`, in IL `ldnull; throw`; a use in a global initializer
   becomes null): a use of a `setjmp` name other than a call, `taking the address of '<name>' is
   not supported for MSIL`; a call of another `returns_twice` function, `calling the
-  returns_twice function '<name>' is not supported for MSIL` (`vfork`, `getcontext`); a
+  returns_twice function '<name>' is not supported for MSIL` (`vfork`, `getcontext`), except a
+  call that has `returns_twice` on its call site alone (clang emits one after a redeclaration
+  that adds the attribute to a function already called, and through an alias declared
+  `returns_twice`), which P8 compiles as a plain call with no diagnostic: a silent state from
+  before R-a that has no OK of the user's yet, which section 12's row 'EH input (EH-0: P8 and
+  a call that is `returns_twice` on its call site alone)', 2026-11-22, hands to EH-0; a
   variadic declaration of a `setjmp` name without a fixed buffer parameter (of `sigsetjmp` or
   `__sigsetjmp`, also without a fixed savemask) or of a `longjmp` name without a fixed buffer
   or value parameter, `a variadic declaration of '<name>' is not supported for MSIL; declare it
@@ -4204,8 +4218,8 @@ handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates
   |---|---|---|
   | T-M1 | clang | `'msil_method' is only allowed on a function declaration without a body` |
   | T-M2 | clang | `'msil_method' <type\|member\|signature\|assembly> '<text>' is not valid: <reason>` (an empty ASSEMBLY: `'msil_method' assembly '' is not valid: it is empty`); for a catch type `'msil_catch' type '<text>' is not valid: <reason>` |
-  | T-M3 | clang | `<parameter <i>\|the 'this' handle\|the result> of '<f>' has C type '<T>', which cannot carry CIL type '<C>'` (`<i>` is the 1-based C position; a C type written through a typedef is followed by clang's ` (aka '<canonical type>')`) |
-  | T-M4 | clang | `'<f>' has <n> parameters; 'msil_method' needs <m> (<breakdown>)` (`1 parameter` when `<n>` is 1), for example `(1 CIL parameter and the 'msil_catch' error code)` |
+  | T-M3 | clang | `<parameter <i>\|the 'this' handle\|the 'this' reference\|the result> of '<f>' has C type '<T>', which cannot carry CIL type '<C>'` (`<i>` is the 1-based C position; a C type written through a typedef is followed by clang's ` (aka '<canonical type>')`; `the 'this' reference` since R-a, for a `this` whose C type is a reference) |
+  | T-M4 | clang | `'<f>' has <n> parameters; 'msil_method' needs <m> (<breakdown>)` (`1 parameter` when `<n>` is 1), for example `(1 CIL parameter and the 'msil_catch' error code)`; since R-a the breakdown says `a 'this' reference` where the first C parameter is a reference, as in `(a 'this' reference and no CIL parameters)` |
   | T-M5 | clang | `'msil_catch' needs 'msil_method' on the same declaration`; `the last parameter of '<f>' has C type '<T>'; 'msil_catch' needs a trailing 'int *' parameter` |
   | T-M6 | clang | `'msil_method' cannot be combined with '<import_module\|import_name\|alias\|ifunc\|weak>'` |
   | T-M7 | `msil-ld`, and the stubs of whole-program text when they run, as the message of a `System.InvalidProgramException` ("Output forms" below) | `managed call '<f>': parameter <i> passes <n> bits for '<E>', which is not an enum of that width` (`<i>` is the member's 1-based CIL parameter); for the result or a field read `managed call '<f>': the result has <n> bits for '<E>', which is not an enum of that width` |
@@ -4217,13 +4231,13 @@ handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates
   | T-M13 | clang | `'msil_method' on a C++ <member function\|function template\|constexpr function\|consteval function\|replaceable global allocation function\|replaceable global deallocation function> is not supported for MSIL yet` |
   | T-M14 | clang | `'<msil_method\|msil_catch>' must appear on the first declaration of '<f>'`; `'<msil_method\|msil_catch>' on this declaration of '<f>' differs from its first declaration`; each with the note `first declared here` |
   | T-M15 | clang | `'msil_catch' code <v> is not in the range 1 to 2147483647`; `'msil_catch' lists '<T>' twice` |
-  | T-M16 | `msil-ld` | `managed call '<f>': '<T>' is a <value\|reference> type, but the declaration uses it as a <reference\|value> type` |
+  | T-M16 | `msil-ld` | `managed call '<f>': '<T>' is a <value\|reference> type, but the declaration uses it as a <reference\|value> type` (since R-a also for a `ref` class parameter, a `this-ref` class TYPE and a cast stub's class TYPE, whose `<f>` is `<castclass>`) |
   | T-M17 | `msil-ld` (object, mixed and every LTO link), and the backend for llc on a module that `msil-ld` did not link and, in clang and llc, for a direct call that does not match its declaration, which `msil-ld` reports for its bitcode inputs before LTO, as each unit's optimizer left them (slot P0, in its LTO code generation, only for a call that LTO's optimizer made or in an input whose symbol table names no undefined `__msil_mc.` symbol) | `managed call '<f>' is declared with different 'msil_method' or 'msil_catch' arguments in different translation units`, or, for units whose declarations differ only in `dllexport`, `constructor` (its priority included) or `destructor` (the eighth operand), `managed call '<f>' is declared with different 'dllexport', 'constructor' or 'destructor' attributes in different translation units`; the first text also for units whose declarations make different stubs (different C prototypes, or on `msil64-unknown-dotnet` a `char` result built with and without `-funsigned-char`), and for a direct call whose function type differs from the declaration's or whose own `signext` or `zeroext` would change the declaration's stub, such as a narrow result read with the other signedness (a call through a cast pointer in one unit, or the call of a unit that declared another C prototype in an `llvm-link`ed module; such an extension arises only where the triple's ABI marks `char` and `short` values: their results and parameters on `msil64-unknown-dotnet`, only their parameters on the x86_64 Linux triples, and neither on the Windows and aarch64 Linux triples, where the same source compiles); ASSEMBLY counts only under `--lto-emit-asm` and for llc ("`msil-ld`: units that disagree" below) |
   | T-M18 | `msil-ld` | `managed call '<f>': reading the literal field '<T>::<F>' is not supported for MSIL yet` (`<T>` and `<F>` as the declaration spells TYPE and MEMBER) |
   | T-M19 | clang | `global constructor '<f>' takes arguments, which MSIL does not pass` (`global destructor` for a destructor; on `msil64-unknown-dotnet`, `constructor '<f>' takes arguments, which msil64-unknown-dotnet does not pass`, or `destructor`; on `msil32-unknown-dotnet`, which code generation refuses until P-4, the same text names `msil64-unknown-dotnet`), at the `constructor` or `destructor` attribute: a destructor managed call with any parameter; a constructor managed call with any parameter on the Windows triples and `msil64-unknown-dotnet`, and on the Linux triples one whose parameters are not a prefix of (`int32`, `native int`, `native int`) by the IL types that its C parameters lower to |
   | T-M20 | clang | `'msil_catch' cannot be combined with '<constructor\|destructor>'`, at the first `msil_catch`, or at the attribute when the `msil_catch` is inherited; T-M19 is then not reported |
   | T-M21 | `msil-ld` | `managed call '<f>' is exported from <A>, but <B> also defines '<f>'` (Windows triples): any other non-local definition of `<f>`, GLOBAL or WEAK, function or data, in a CIL object or a bitcode input (archive members and LTO's objects included), whatever the input order and whichever definition resolution keeps; `<A>` is the first input in load order with the forwarder, `<B>` the first other definer, and each name gets one line |
-  | T-M22 | clang | `asm label '<label>' is reserved for the MSIL toolchain (a managed-call stub)` for an asm label written with `__asm__` that starts with `__msil_mc.`, and the same text ending `(a managed-call forwarder)` for one that starts with `__msil_mc_ctor.` or `__msil_mc_dtor.`, on a variable or function declaration, a definition or not |
+  | T-M22 | clang | `asm label '<label>' is reserved for the MSIL toolchain (a managed-call stub)` for an asm label written with `__asm__` that starts with `__msil_mc.`, and the same text ending `(a managed-call forwarder)` for one that starts with `__msil_mc_ctor.` or `__msil_mc_dtor.`, on a variable or function declaration, a definition or not; since R-a the first text also for a label that starts with `<castclass>`, the name of R-a's cast stubs |
   | T-M23 | `msil-ld` | `<file>: defines '<name>', which is reserved for the MSIL toolchain (a managed-call stub)` for a non-local definition named `__msil_mc.<...>` in a CIL object or a bitcode input, and the same text ending `(a managed-call forwarder)` for a non-local `__msil_mc_ctor.<s>` or `__msil_mc_dtor.<s>` that is not clang's forwarder; a local definition (the internal forwarder of a `static` managed call) is never reported |
   | T-M24 | clang (CodeGen) | `managed calls '<f>' and '<g>' share the symbol '<s>' but differ in their <'msil_method' or 'msil_catch' arguments\|function types\|'dllexport', 'constructor' or 'destructor' attributes>` (the first that differs, in that order), at the later function's first declaration, with the note `'<f>' declared here` at the earlier one's: managed calls of two functions in one unit whose IR names are equal (asm labels, `#pragma redefine_extname`, a C++ asm label equal to another function's mangled name) |
   | T-M25 | clang (CodeGen) | `'<dllexport\|constructor\|destructor>' on managed call '<f>' needs the forwarder symbol '<n>', which another declaration in this translation unit already uses`, with the note `'<x>' declared here`, when a variable or a function definition of the unit has the forwarder's name; only the `dllexport` form is reachable from source, since T-M22 refuses the names of the other forwarders |
@@ -4241,7 +4255,10 @@ handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates
   `_BitInt(N)`, whatever N, a C++ scoped enumeration (`enum class`) or a `long double` yet. A
   *handle type* is `void *`, `intptr_t`, `uintptr_t` or a pointer to an
   incomplete struct type (the opaque typedef above), and a *pointer handle type* is `void *` or a
-  pointer to an incomplete struct type; widths are the target's (`native int` is 8
+  pointer to an incomplete struct type; since R-a neither is a pointer to a `cli_type` struct,
+  which clang refuses (T-R6), and the star-spelled handles are a recorded temporary workaround
+  until R-a2 (section 2, "Real .NET references in C (R-a)"). R-a appended the rows `ref` and
+  `this-ref` for its references (plan 5.21.9). Widths are the target's (`native int` is 8
   bytes on every triple that runs today):
 
   | CIL type | C type | Code | The stub's IL |
@@ -4261,6 +4278,8 @@ handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates
   | `valuetype V` (not an enum, not `GCHandle`) | a pointer handle type (`void *` or a pointer to an incomplete struct; the result of V's `.ctor`, any handle type) | `boxed` | in: the handle's object, `unbox.any V`; out: `box V`, then a new handle |
   | `valuetype System.Runtime.InteropServices.GCHandle` | a handle type | `gch` | the C value is the GCHandle's `IntPtr`: `GCHandle::FromIntPtr` in, `GCHandle::ToIntPtr` out, never boxed |
   | `this` of a reference type | a handle type | `this-obj` | the handle's object, `castclass T`, then `callvirt` (`ldfld` for a field) |
+  | `string`, `object`, `class T`, `T[]` (a parameter, the result, a `.ctor`'s object or array, a field) | a reference `T ^` whose class key equals the CIL type's folded key (R-a) | `ref` | in: `castclass` to the CIL type, none for `object`, with no null test; out: as is |
+  | `this` of a class, an interface, `System.String` or `System.Object` | a reference of TYPE's key (R-a) | `this-ref` | `castclass T` (none for `System.Object`), then `callvirt` (`ldfld` for a field) |
   | `this` of `valuetype V` | a handle type | `this-val` | the handle's object, `unbox V` (a managed pointer into the boxed copy), then `call V::M` or `constrained. V` and `callvirt` (below; `ldfld` for a field) |
   | `this` of `valuetype GCHandle` | a handle type | `this-gch` | `FromIntPtr`, `box GCHandle`, `unbox GCHandle`, then the same access as `this-val` (`call` for every `GCHandle` member of the built-in table) |
   | `void` result | `void` | `void` | |
@@ -4388,6 +4407,10 @@ handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates
   - Handles are valid on every thread and in every assembly of the process, `-static` copies
     included. On the .NET Framework a GCHandle belongs to its AppDomain (not measured, and no
     test crosses AppDomains). Leaks are silent, and handles left at exit are harmless.
+  - Since R-a an object that a function only uses can be a reference `T ^` with no GCHandle,
+    and C memory keeps an object as a ticket, a GCHandle number in an `intptr_t` (`gch`); the
+    silent states of tickets and handles, with the user's OK, are listed in section 2, "Real
+    .NET references in C (R-a)".
 - **Strings and arrays (plan 5.20.10).** A null C string gives a null string. A UTF-8 argument
   is counted up to its terminating 0 by an IL loop and decoded by a throwing
   `UTF8Encoding(false, true)`: invalid bytes (an invalid byte, a truncated sequence, an
@@ -4401,7 +4424,10 @@ handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates
   are handles: an array TYPE with `.ctor` makes one (`newarr`), `Marshal::Copy` overloads copy
   between it and C memory, and `System.Array` members (`get_Length`, `GetValue`, `SetValue`)
   reach its elements; there is no element-access conversion and no marshalling of C arrays,
-  and a C buffer is never an array handle (the handle rules above).
+  and a C buffer is never an array handle (the handle rules above). Since R-a a `string`
+  parameter also takes a `String ^` (`ref`), the UTF-8, UTF-16 and UTF-32 rows (S1-S3) stay
+  only until R-a2, as a recorded temporary workaround, and their silent cases have the user's
+  OK until then (section 2, "Real .NET references in C (R-a)").
 - **Exceptions (plan 5.20.8; brief Q24 (A)).** Without `msil_catch` the stub has no clause,
   and every exception escapes as an ordinary .NET exception: an unhandled exception with its
   stack trace in an executable (`[unhandled exception: <type>]` in the tests), an exception
@@ -4797,6 +4823,9 @@ handles (Q25 (a)), throwing UTF-8 and UTF-32 decoders (Q26 (a)) and no delegates
   export overloads for C# callers (FeatureIdeas.md item 3); types defined by C code; and
   inline IL. These wait for the fuller managed calls after Phase 3. A managed call with
   `destructor` waits for global destructors instead (M29; P-2 on the portable triples).
+  Object references without GCHandles came with R-a for C and come with R-a2 for C++, while
+  exports, calls between files, callbacks, function pointers, C++ byrefs and globals with
+  references stay with R-b (plan 5.20.14 as amended in section 12).
 - **Calls from .NET into C.** .NET code can call C functions without a managed call, and the
   toolchain neither sees nor checks such calls. Reflection finds a C function with external
   linkage, a `public` static method of `<Module>`, by its name (`Module::GetMethod`):
@@ -5052,12 +5081,620 @@ gains `msil-method.c`, `msil-method-uniq.c`, `msil-method-clash.c`, `msil-method
 `msil/test/harness` 159 (both unchanged), and `CLITests` with 488 tests in 23 suites (new: the
 25 of `CLIManagedSignatureTest` and two of `CLILinkInfoTest`).
 
+### Real .NET references in C (R-a)
+
+R-a (plan section 6, R-a) implements plan contract 5.21, the first slice of the real .NET
+references goal (the user, 2026-11-19: "What matters is when we start actually using real
+referenes, without GC handle."; section 12's program order of 2026-11-21 puts R-a right after
+MC-1). A C program can now hold a .NET object
+as a *reference*, a value of type `T ^` where `T` is a struct that names a .NET class with the
+attribute `cli_type`. A reference lives only in IL locals, arguments, results and the evaluation
+stack, where the runtime tracks it, never in C memory and never through a GCHandle; outside the
+stubs it is IL's `object`. Managed calls pass references to .NET members with at most one
+`castclass`, and a C cast from one class to another is checked when the program runs. R-a is C
+only (C++ follows as R-a2, directly before P-2) and applies on every MSIL object-format triple,
+the host triples and `msil64-unknown-dotnet` alike, in `-S` and llc text, in CIL objects, under LTO
+and in `--lto-emit-asm` text. It adds one IR type, `target("msil.ref")` (two entries in LLVM's
+core), one clang type class, the pass slot P15, a sixth value kind of the backend, `object`, two
+managed-call conversion codes, `ref` and `this-ref`, and cast stubs. It adds no link-info record
+minor, trailer definition, `BCLMembers.def` row, runtime support assembly, IR intrinsic or
+diagnostic group, and a module without references keeps its IL (the gate's `il-snapshot.py
+--compare` of `msil/test/M1`, `msil/test/M2` and `llvm/test/CodeGen/MSIL` against HEAD's IL). The
+decisions behind it are section 12's rows of 2026-11-21; only the parts that a row gives as the
+user's words or picks are the user's, and the rules that are Claude's decisions or readings are
+labelled so in plan 5.21.
+
+```c
+#include <cli/cli.h>                                         /* only CLI_TYPE */
+#include <stddef.h>
+#include <stdint.h>
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+__attribute__((msil_method("System.Object", "ToString", "instance string()")))
+String ^to_string(Object ^o);                                /* this-ref;ref: callvirt */
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle", "Alloc",
+                           "valuetype System.Runtime.InteropServices.GCHandle(object)")))
+intptr_t gc_alloc(Object ^o);                                /* ref;gch: a ticket */
+static intptr_t kept;                                        /* C memory keeps tickets */
+static String ^name_of(Object ^o) {
+  if (!o) return NULL;                                       /* a NULL test; NULL converts */
+  kept = gc_alloc(o);
+  return to_string(o);                                       /* the object's override runs */
+}
+static String ^as_string(Object ^o) { return (String ^)o; }  /* throws if not a string */
+```
+
+(`ToString` binds only with `--reference`; the `GCHandle` members are in the built-in table.)
+GettingStarted.md section 3, ".NET references in C", has a complete program.
+
+- **The class structs (plan 5.21.2).** The attribute `cli_type(N)`, in the GNU and the
+  `[[clang::cli_type(N)]]` spelling, goes on a struct (anything else is clang's attribute-subject
+  error) and exists on the MSIL object-format triples only: elsewhere it is clang's `unknown
+  attribute 'cli_type' ignored` warning, and `__has_attribute(cli_type)` is 1 exactly on MSIL
+  triples. clang's attribute reference documents it (`AttrDocs.td`). `<cli/cli.h>`, a header
+  among clang's own resource headers (`clang/lib/Headers/cli/cli.h`, installed as
+  `lib/clang/<major>/include/cli/cli.h` by the `clang-resource-headers` component), holds only
+  `#define CLI_TYPE(N) __attribute__((cli_type(N)))`, and on any other triple it stops with
+  `#error "<cli/cli.h> is only available on the MSIL targets"` (it tests `__MSIL__`); the header
+  is the user's pick "(a) <cli/cli.h> header".
+  - N is MC-1's TYPE grammar without `valuetype`: `"Ns.Name"`, `"Ns.Outer/Inner"` for a nested
+    class, or an array `"<elem>[]"` whose element is a listing primitive, `string`, `object` or
+    `class Ns.T`. Anything else is T-R1 with a reason: `value types are not supported for MSIL
+    yet` for `valuetype ...`, `'<t>' is a signature type; name the type by its full name, for
+    example 'System.String'` for a primitive alone (`"string"`, `"int32"`), `a type is named
+    without a resolution scope` for a text that starts with `[` (`"[mscorlib]System.String"`, an
+    array type such as `"[mscorlib]System.String[]"`, and `"[mscorlib]"` alone) and for an array
+    type whose element's first word, `class` or `valuetype`, is followed by a `[`
+    (`"class [x]Ns.T[]"`, `"valuetype[x]Ns.V[]"`; `valuetype` followed by a space gets the
+    value-type reason first), `a pointer type is not a .NET reference type` for a trailing `*`,
+    and MC-1's reasons otherwise (a `class ` prefix outside an array is one). Refusing the short
+    forms is Claude's decision; allowing them later breaks nothing.
+  - The *key* of a class folds every level (`class System.String` to `string`, `class
+    System.Object` to `object`) and is the canonical listing text (`string`, `string[]`, `class
+    System.IO.Stream`), so two spellings of one class or array, `"string[]"` and `"class
+    System.String[]"`, are one key. One key is one type, whatever the structs are called: two
+    `cli_type` structs that name `System.String` give one reference type, which needs no cast
+    (Claude's reading of the user's "The specifc names of the C structs or C prototypes and such
+    don't matter, since the attributes specify them."). The type itself prints with the class's
+    *display name*, MC-1's TYPE text (`System.String`, `Ns.Outer/Inner`, `string[]`, `class
+    Ns.T[]`), which diagnostics show as clang's aka text.
+  - The attribute goes on the struct's first declaration; a later one repeats it or inherits it,
+    else T-R2 with the note `first declared here` (an exact duplicate on one declaration is a
+    warning, a different one an error). A class struct never gets a body: a class has no layout in
+    C memory, so a definition with a body is T-R3, for good (value types will be marked
+    `valuetype`, never recognised by a body). The kinds are classes, interfaces, `System.String`,
+    `System.Object` and arrays. A misspelled class is found when a managed call or a cast stub
+    binds it (`msil-ld`, or a run of `-S` text), and never when the program only holds it in
+    locals, which name no type in IL. The struct may be declared at file or block scope; C++
+    accepts the attribute, so C headers compile there, but refuses the caret (T-R5).
+- **The type `T ^` (plan 5.21.3).** The parser is unchanged: `^` already makes a declarator chunk
+  with its qualifiers, so `String ^s`, `String ^const s`, `String ^f(String ^a)`, `(String ^)o` and
+  `typedef String ^R;` parse (the user's pick "Caret"). Over an unqualified `cli_type` struct the
+  caret makes a reference; over a function type it stays Apple's block pointer (Claude's reading);
+  over anything else it is T-R4, which replaces clang's blocks error and its `-fblocks` advice.
+  `-fblocks` stays off by default on the MSIL triples, and with it both meanings live side by side.
+  A qualified class (`const String ^`) is T-R19: a reference's own qualifiers follow the caret
+  (`String ^const`).
+  - The reference is a clang type of its own (`CLIReferenceType`, Claude's design), never a block
+    pointer, which C would convert to `void *` silently: one type per key, whose sugar keeps the
+    struct as written, so a diagnostic says `'String ^' (aka 'System.String ^')`. It is sizeless
+    and not scalar, so clang's sizeless rules give most of the storage refusals below, and braced
+    initializers stay refused; `__builtin_classify_type` gives -1 (`no_type_class`).
+    Precompiled headers and `clang -cc1 -ast-merge` carry it, `-ast-dump` shows it,
+    `-ast-print` prints a truth test as `r != 0` (below), and `-g` describes it as a
+    forward-declared structure named by the display name, as WebAssembly's reference types are.
+  - Mangling: none yet (R-a2's); a C `overloadable` function with a reference in its type gets
+    `cannot mangle this .NET reference type yet` in both manglers, once per place where the
+    mangler meets the type. Under `-funique-internal-linkage-names` the Itanium mangler (the Linux,
+    MinGW and portable triples) also mangles every internal C function that has a prototype, so a
+    `static` function or an internal managed call with a reference in its type gets the error there
+    too, when its code is generated (on the two MSVC triples the option mangles no C function).
+    ClangIR, which the build includes, reports `ClangIR code gen Not Yet Implemented: processing of
+    type: CLIReference` under `-fclangir`, and the compile stops there
+    with exit status 1, never with an assertion or a crash (null conversions to a reference
+    included). Under the experimental cc1 option `-fexperimental-abi-lowering`
+    (`-Xclang -fexperimental-abi-lowering` through the driver), LLVM's ABI library lowers the
+    signatures of the two x86_64 Linux and the four aarch64 MSIL triples (six of the ten), and it
+    refuses a function with a reference in its signature: `fatal error: error in backend: Type not
+    supported in ABI lowering`, exit status 1. That is a usage error, so the driver writes no crash
+    reproducer and no `frontend command failed` line, but on Windows hosts LLVM's bug-report banner
+    and a stack dump still follow it, as they follow every fatal usage error there (section 12's row
+    "5.21.13's 'unsupported' for `clang/lib/CodeGen/QualTypeMapper.cpp` as built", 2026-11-21; the
+    R-a triage agent's decision, not a user decision); `ref-abi.c`'s `EXPABI` lines pin the text.
+- **What C does with references (plan 5.21.4 RS1-RS9).** Everything else is an error, because the
+  type is neither scalar nor sized.
+  - References live in automatic variables (`register` included) at every level, in the
+    parameters and results of `static`, prototyped, non-variadic functions whose address is never
+    taken, and in managed calls.
+  - **NULL at start.** A reference declared without an initializer is NULL, at every level, each
+    time its declaration is reached (in a loop body, after a backward `goto`): default
+    initialization has a zero-initialization step, as ARC's pointers do, so clang stores NULL at
+    the declaration. Without it an unset reference would be `undef` after SROA, and `phi(a,
+    undef)` folds to `a` at `-O1` (the 'pick' shape: a function that sets its result on one path
+    only would return its argument on the other). A reference declared with an initializer is
+    NULL until its initializer has run, because the declaration stores NULL before the
+    initializer, as ARC does for a variable that its own initializer may read. So after a jump
+    out of the initializer to a label in the variable's scope (a `goto` or computed `goto` in a
+    GNU statement expression, also in a `?:` arm), and in the self-initialization
+    `String ^s = s;`, which `-Wuninitialized` does not report, the variable reads NULL at every
+    level; where nothing can read it before the initializer's store, SROA and P15 delete the
+    NULL store (section 12's row '5.21.4 RS2 and 5.21.5 RG3 amended', 2026-11-21; the R-a
+    triage agent's decision, not a user decision). `-ftrivial-auto-var-init=zero` and `=pattern`
+    never fill a reference, and the const-without-initializer warnings skip references.
+  - **Conversions.** A null pointer constant (`NULL`, `0`, `(void *)0`, `'\0'`, C23 `nullptr`)
+    converts to a NULL reference, and any reference converts to the `System.Object` reference, by
+    themselves, in initializers, assignments, arguments and returns; every other pair is clang's
+    incompatible-types error (`initializing 'int' with an expression of incompatible type 'String
+    ^' (aka 'System.String ^')`). That classes convert by themselves only to Object is the user's
+    pick "(a) Only to Object".
+  - **`==` and `!=`** compare identity (IL `ceq`) between references of one class, a class and
+    Object, or a reference and a null pointer constant. Other pairs, and `<`, `>`, `<=` and `>=`,
+    are clang's `invalid operands to binary expression`.
+  - **Truth tests** (the conditions of `if`, `while`, `for` and `do`, `!r`, `&&`, `||` and a `?:`
+    condition) test for NULL: Sema rewrites each into `r != NULL`, as AMDGPU's predicate is
+    (Claude's decision); in GNU `r ?: s` only the condition is rewritten. `_Bool b = r;` stays an
+    error.
+  - **`?:` operands**: two references of one class, a reference and a null pointer constant, or a
+    class and Object, which gives Object; two different classes are `incompatible operand types`.
+  - **Casts.** A C cast from one reference to another costs nothing when the classes are equal or
+    the target is Object; to another class it calls a *cast stub*, `ldarg.0; castclass T; ret`,
+    which checks the class when the program runs and throws `System.InvalidCastException` for an
+    object of another class (a NULL reference passes as NULL), also when the cast's value is unused:
+    the call has no memory attributes, so no optimizer deletes it. A null pointer constant casts to
+    a reference, and a reference to `void`. Any other cast to a reference is T-R22, and a cast from
+    a reference to a scalar clang's `err_typecheck_expect_scalar_operand`. Checked casts are the
+    user's pick "Keep checked casts"; narrowing managed-call declarations were not added in their
+    place (they could come later).
+  - `typedef`, `typeof`, `typeof_unqual`, `_Generic`, `__builtin_types_compatible_p`,
+    `__auto_type`, C23 `auto`, the comma operator, statement expressions and `const` after the
+    caret work as for any type.
+  - **Falling off the end** of a function that returns a reference gets clang's `-Wreturn-type`
+    warning and stops the program where it happens, at every level (Claude's decision): the
+    function takes the missing-return path that C++ functions take, `llvm.trap` and `unreachable`
+    where control can reach the closing brace, which the backend makes `ldnull; throw`, an
+    unhandled `System.NullReferenceException`. A caller that ignores the value stops too, the
+    price of an outcome that is the same at every level; without it the result would be NULL at
+    `-O0` and possibly another reference at `-O1` and above. A `return;` without a value in such
+    a function stops the program the same way, at the return, at every level. clang reports it
+    as `-Wreturn-mismatch`, an error by default, which `-Wno-error=return-mismatch` makes a
+    warning and `-Wno-return-mismatch` or `-Wno-return-type` turns off (section 12's row
+    '5.21.5 RG12 amended', 2026-11-21; the R-a triage agent's decision, not a user decision).
+- **What C cannot do (plan 5.21.4 RS10-RS30).** The texts are in the table below; "yet" marks what a
+  planned step may lift, and the texts about C memory are permanent (Claude's decision; Design.md
+  section 4: C memory never holds a .NET reference).
+  - Pointers and values: `String *` (T-R6), the class struct by value as a variable, `extern`
+    included, a parameter or a result (T-R7), `String ^*` (T-R8) and `&r` or
+    `__builtin_addressof(r)` (T-R9), all for good.
+  - Storage, by clang's sizeless rules and texts (`field has sizeless type 'String ^' (aka
+    'System.String ^')`, `non-local variable with sizeless type ...`, ...): structure and union
+    fields, bit-fields, arrays, VLAs, globals, `static` locals, `thread_local`, block-scope
+    `extern`, `sizeof`, `_Alignof`, `_Atomic`, `aligned`, `_Alignas`, compound literals, braced
+    initializers and `__builtin_bit_cast`.
+  - Functions: external linkage with a reference parameter or result (T-R10, except managed
+    calls, whose stubs are internal; R-b lifts it); the address of a function whose type has a
+    reference, by any decay outside a direct call, `&f`, `(&f)(r)`, `(*f)(r)` or
+    `__builtin_function_start` (T-R11; the host triples keep it, Design.md 4.5; R-b may lift it
+    on the portable triples); function pointer, block pointer and block types with a reference,
+    the adjusted type of a parameter included, so `void h(String ^cb(String ^))` is refused (T-R12);
+    a function without a prototype, a K&R definition included, also after a prototype (T-R13), a
+    reference passed to `...` (clang's hard error `cannot pass object of non-POD type ...` through
+    `err_cannot_pass_to_vararg`), to a function
+    without a prototype or read by `va_arg` (T-R14), and a variadic function with a reference
+    (T-R15); `constructor`, `destructor`, `alias`, `ifunc`, `weak`, `weakref`, `dllexport` and
+    `annotate` on such a function (T-R16), while `used` is accepted and an alias of it, which takes
+    no address in the AST, is refused by the backend (T-RB2) wherever the alias is kept (an
+    unused `static` alias compiles in whole-program text and where the optimizer drops it:
+    section 12's row '5.21.7 RB11 rule 4 as built for aliases in whole-program text',
+    2026-11-22); a function that calls `setjmp` (or another
+    `returns_twice` function) and has a reference (T-R17 with a note at the first reference; EH-2
+    decides when it lifts), which the backend refuses instead (T-RB3, below) where clang does not
+    know the call as one, as under `-ffreestanding` or `-fno-builtin`. The weak alias that
+    `#pragma weak <alias> = <f>` would declare is refused too when `<f>` is a function whose type
+    has a reference: T-R16 for `weak` on `<alias>`, reported at `<alias>` in the pragma, and the
+    pragma declares no alias (section 12's row
+    '5.21.4 RS21 as built for `#pragma weak <alias> = <f>`', 2026-11-22, the R-a triage agent's
+    decision, not a user decision).
+  - Qualifiers and attributes: `volatile`, `__unaligned` and address spaces on a reference
+    (T-R18; `restrict`, `_Atomic` and nullability get clang's own texts), `const` on the class
+    (T-R19), and `cleanup`, `uninitialized` and `__block` on a reference variable and `annotate`
+    on a reference variable or parameter, since clang's annotation takes the address of what it
+    annotates (T-R20, for good; `annotate` from section 12's row '5.21.4 RS25 amended',
+    2026-11-21, the R-a triage agent's decision, not a user decision), also on a variable whose
+    type `__auto_type` or C23 `auto` deduces as a reference (section 12's row "5.21.4 RS25 and
+    5.21.13's `clang/lib/Sema/SemaDecl.cpp` row amended", 2026-11-21, the R-a triage agent's
+    decision); T-R20's `<v>` is the variable's or parameter's name, or for a parameter without a
+    name its type as clang prints it, `'String ^' (aka 'System.String ^')` (section 12's row
+    "5.21.12 T-R20's `<v>` as built", 2026-11-21, the R-a triage agent's decision).
+  - Captures of a reference in a block, a captured statement or an OpenMP region (T-R21, for
+    good); a jump past a reference's declaration (`goto`, `switch`, a computed `goto`, `asm
+    goto`): clang's jump error with the note T-R23, since the jump would skip the NULL store
+    (Claude's decision, shown with the user's silent-states question; jumps out of the scope and
+    backward stay allowed, because the declaration stores NULL again, and so does a jump out of a
+    reference's initializer to a label in its scope, which skips no NULL store); a reference as
+    an inline assembly operand (T-R24; references as inline-IL operands are a later design
+    point); and the caret in C++ (T-R5, "yet": R-a2), Objective-C, OpenCL and CUDA (T-R5, for
+    good).
+  - Refused by clang as it is (and pinned by the tests): arithmetic, bitwise and relational
+    operators, unary `-`, `+` and `~`, `++`, `--`, `*r`, `r[i]`, `r->x` and `switch (r)`.
+
+  The texts (plan 5.21.12, each pinned whole by R-a's tests; clang's in the "Semantic Issue"
+  category with no diagnostic group, right after MC-1's block in `DiagnosticSemaKinds.td`, T-R24
+  beside `err_msil_asm_unsupported` in `DiagnosticCommonKinds.td`, in its "Inline Assembly Issue"
+  category; the backend's through `DiagnosticInfoUnsupported`, printed by llc and `msil-ld` as
+  `<location>: in function <f> <type>: <text>`, and as `global variable @<g>: <text>` for a
+  global, and by clang as `<file>:<line>:<col>: error: <text>`, or `error: <text>` alone where it
+  finds no source location):
+
+  | Id | Where | Text |
+  |---|---|---|
+  | T-R1 | clang | `'cli_type' type '<text>' is not valid: <reason>` |
+  | T-R2 | clang | `'cli_type' must appear on the first declaration of '<S>'`; `'cli_type' on this declaration of '<S>' differs from its first declaration`; note `first declared here` |
+  | T-R3 | clang | `'cli_type' struct '<S>' names the .NET class '<T>', which has no layout in C memory; a class struct has no body` |
+  | T-R4 | clang | `'^' needs a struct with the 'cli_type' attribute of a .NET class; '<T>' is not one` |
+  | T-R5 | clang | `.NET references in C++ are not supported for MSIL yet`; `.NET references in <Objective-C\|OpenCL\|CUDA> are not supported for MSIL` |
+  | T-R6 | clang | `'<T> *' points into C memory, which cannot hold the .NET class '<T>'; a reference to it is written '<T> ^'` |
+  | T-R7 | clang | `the .NET class '<T>' has no value in C; a reference to it is written '<T> ^'` |
+  | T-R8 | clang | `a pointer to the .NET reference type '<T>' is not supported for MSIL: C memory never holds a .NET reference` |
+  | T-R9 | clang | `taking the address of the .NET reference '<v>' is not supported for MSIL: C memory never holds a .NET reference` |
+  | T-R10 | clang | `'<f>' has external linkage; a .NET reference as <parameter <i>\|its result> is not supported for MSIL yet (declare '<f>' 'static')` |
+  | T-R11 | clang | `taking the address of '<f>', whose type has a .NET reference, is not supported for MSIL yet` |
+  | T-R12 | clang | `a <function pointer\|block pointer\|block> type with a .NET reference is not supported for MSIL yet` |
+  | T-R13 | clang | `a function without a prototype that takes or returns a .NET reference is not supported for MSIL` |
+  | T-R14 | clang | `passing the .NET reference type '<T>' to a function without a prototype is not supported for MSIL`; `'va_arg' of the .NET reference type '<T>' is not supported for MSIL` |
+  | T-R15 | clang | `a variadic function that takes or returns a .NET reference is not supported for MSIL yet` |
+  | T-R16 | clang | `'<attr>' on '<f>', whose type has a .NET reference, is not supported for MSIL yet` |
+  | T-R17 | clang | `a .NET reference in a function that calls '<g>' is not supported for MSIL yet`; note `a .NET reference is used here` |
+  | T-R18 | clang | `'<qualifier>' on the .NET reference type '<T>' is not supported for MSIL` |
+  | T-R19 | clang | `'<qualifier>' on the .NET class '<T>' is not supported for MSIL; a reference's own qualifiers follow '^', as in '<T> ^const'` |
+  | T-R20 | clang | `'<attr>' on the .NET reference '<v>' is not supported for MSIL` |
+  | T-R21 | clang | `capturing the .NET reference '<v>' in <a block\|a captured statement\|an OpenMP region> is not supported for MSIL` |
+  | T-R22 | clang | `converting '<S>' to the .NET reference type '<T>' is not supported for MSIL; only a .NET reference or a null pointer constant converts to it` |
+  | T-R23 | clang (a note of clang's jump error) | `jump bypasses the initialization of the .NET reference '<v>'` |
+  | T-R24 | clang (CodeGen) | `a .NET reference as an inline assembly operand is not supported for MSIL yet` |
+  | T-RB1 | backend (P1) | `a .NET reference cannot be held in C memory: <what>` (`the aggregate type '<T>'`, `<a\|an> '<attribute>' parameter` (with the article LLVM uses before each name: `a 'byval'`, `an 'sret'`, `an 'inalloca'`, `a 'preallocated'`, `a 'byref'`, `an 'elementtype'`), `a stack slot of more than one element`, `a stack slot outside the entry block`) |
+  | T-RB2 | backend (P1) | `a function with a .NET reference in its signature <reason> is not supported for MSIL yet` (`that is not 'static'`; `that ThinLTO or --lto-partitions made external (link with full LTO and --lto-partitions=1)`; `whose address is taken`; `called through a pointer or with another function type`; `that is variadic`) |
+  | T-RB3 | backend (P1) | `a .NET reference in a function that calls setjmp is not supported for MSIL yet` |
+  | T-RB4 | backend (P15) | `a .NET reference that cannot become an IL local is not supported for MSIL: <reason>` (`the slot's address escapes`, `the slot is copied as memory`, `a load through a pointer`, `a store through a pointer`) |
+  | T-RB5 | backend (P5) and `msil-ld`'s LTO table pass | `call of '<g>' passes '<A>' where it takes '<P>': a .NET reference cannot be converted` |
+  | T-RB6 | backend (instruction selection) | `a .NET reference is loaded from or stored to memory` |
+  | T-RB7 | backend (P1, and the call lowering) | `'<name>' is reserved for the MSIL toolchain` |
+  | T-RB8 | backend (P15) | `a .NET reference live across an exception handler is not supported for MSIL yet` |
+  | T-RB9 | backend (P1) | `a .NET reference in <a global variable\|an inline asm operand> is not supported for MSIL yet` |
+  | T-RB10 | backend (P1) | `<a volatile\|an atomic> access of a .NET reference is not supported for MSIL` |
+  | T-RB11 | backend (P1) | `a .NET reference as an operand or result of '<instruction or intrinsic>' is not supported for MSIL` |
+  | T-RB12 | backend (P1) | `a .NET reference as a variadic argument or as the type of 'va_arg' is not supported for MSIL` |
+  | T-RL1 | `msil-ld` | `<file>: defines '<name>', which is reserved for the MSIL toolchain (a reference helper)` |
+
+  The backend's texts are backstops behind clang's rules (C that clang accepts never reaches
+  them, but for the alias of T-R16's paragraph, T-RB2's LTO reason, T-RB3, T-RB2 `that is not
+  'static'` for a `static` function with a reference that is called but never defined (clang only
+  warns, `-Wundefined-internal`), T-RB2 for a call of such a function through
+  `__builtin_call_with_static_chain`, whose nest argument MSIL refuses in any call, and T-RB7 for
+  a function defined or called under an asm label that starts with `__msil_ref.`, such as
+  `int f(void) __asm__("__msil_ref.f");`), for IR from other front ends, hand-written IR and what
+  LTO makes; P1 deletes the body of a diagnosed function, erases the calls of a diagnosed
+  declaration and the diagnosed global, as it does for its other
+  errors, and each text is reported once per function, at its first place. C reaches T-RB3 in three
+  ways. Under `-ffreestanding` or `-fno-builtin` clang gives a declared `setjmp`, `_setjmp`,
+  `sigsetjmp`, `__sigsetjmp` or `_setjmpex` (and `vfork`, `getcontext` and `savectx`) no
+  `returns_twice` attribute, so T-R17 does not fire, but its code generation still marks the call
+  `returns_twice`. And P1 also fences, by name, the direct callers of a declaration that P8 lowers
+  as a setjmp site with or without that attribute (`setjmp`, `_setjmp`, `__sigsetjmp`,
+  `sigsetjmp`, `_setjmpex` and `_setjmp3`), so a hand-declared `_setjmp3`, which clang marks only
+  on its x86 builtin path, or another of those names declared without `returns_twice` gets T-RB3
+  too (section 12's row '5.21.7 RB11 rule 8 amended', 2026-11-21; the R-a triage agent's
+  decision, not a user decision). LLVM's inliners add the third, a rare one, beside a
+  `returns_twice` call that the target's fence does not see. The target's
+  `MSILTTIImpl::areInlineCompatible` keeps them from putting a function that holds a reference, in
+  its signature or its body, into one that calls `setjmp`, and a function that calls `setjmp` into
+  one that holds a reference, at every level and under LTO, `always_inline` and `flatten` included,
+  because LLVM asks the target before it honours either (`getAttributeBasedInliningDecision`); such
+  a call stays a call. For that fence a function calls `setjmp` when it calls `setjmp`, `_setjmp`,
+  `_setjmpex`, `_setjmp3`, `sigsetjmp`, `__sigsetjmp`, `vfork`, `getcontext` or `savectx` in a call
+  that P1 counts: one with `returns_twice`, or a call of a declaration of one of the six names
+  above (section 12's rows '5.21.7 RB11 rule 8 amended (inlining)', 2026-11-22, the fix on the
+  user's pick "(a) Fix in R-a first", its form Claude's, and '5.21.7 RB11 rule 8's
+  inlining fence as built', 2026-11-22, the R-a triage agent's decision, not a user
+  decision). That is a limit of the fence: an `always_inline` or `flatten` that
+  would cross it is not honoured, and clang gives no warning for that; only
+  `-Rpass-missed=inline` shows it, with LLVM's reason `conflicting target features`.
+  The fence does not see the other calls that P1 counts, which call none of those nine names: a
+  call of a function that has `returns_twice` (P8 refuses the call of such a declaration anyway,
+  and a function defined in C cannot return twice) and a call that clang marks `returns_twice` on
+  the call site alone (after a redeclaration that adds the attribute to a function already called,
+  and through an alias declared `returns_twice`). A function that makes such a call stays out of
+  every caller by LLVM's own rule, unless it has `returns_twice` itself (`isInlineViable`,
+  `CallAnalyzer`), so the third way exists only in a caller that makes such a call: an inliner can
+  put a function that holds a reference into it, from `-O1` on and at `-O0` through `always_inline`
+  or `flatten`, and P1 then refuses the caller with T-RB3. `__attribute__((noinline))` on the
+  function that holds the reference avoids it. The right answer is a fence that sees every call
+  that P1 counts; EH-2, which decides when T-R17 lifts, lifts the fence or gives it that answer.
+- **In IR and in the backend (plan 5.21.5-5.21.7).** clang lowers every reference, whatever its
+  class, to the target extension type `target("msil.ref")`, with no parameters: no IR type names a
+  class (the classes live in clang's types and in the stubs). LLVM's core knows the type (two
+  hooks: `Type.cpp`, with a `ptr` layout, HasZeroInit and CanBeLocal, not CanBeGlobal, and
+  `ValueTypes.cpp`, which maps it to `MVT::externref`, beside WebAssembly's `externref`), and IR
+  already refuses `bitcast`, `ptrtoint`, `inttoptr` and `icmp` on it. NULL is `zeroinitializer`;
+  at `-O0` a reference local is an `alloca` that P15 removes. `==` calls the helper `declare i1
+  @"__msil_ref.eq"(target("msil.ref"), target("msil.ref"))` (`memory(none) nounwind willreturn
+  speculatable`; `!=` negates it, and the result is an `int`), because LLVM refuses `icmp` on
+  target types; a checked cast calls its cast declaration, `__msil_mc.<castclass>.__uniq.<n>`
+  (below). Every MSIL ABI passes a reference Direct, with no ABI hook, on the ten MSIL triples. In
+  the backend the type is the value kind `object`, register class `OBJ` (MIR `obj`, `externref`
+  in `params:` and `results:`): arguments, locals (`.locals` print `object`), `ldnull`, `ceq`,
+  `beq`, `bne.un`, `brtrue`, `brfalse` and the `brtrue` triangle of a `select`. Instruction
+  selection turns each call of `__msil_ref.eq` into one of those, with no call, so no object, no
+  SYMTAB, no MemberRef and no text names the helper; any other function whose name starts with
+  `__msil_ref.` is T-RB7. An undefined reference value (`undef`, `poison`, an `IMPLICIT_DEF`)
+  becomes `ldnull` at every level, also at a use that LLVM's ProcessImplicitDefs pass (from `-O1`
+  on, erasing the `IMPLICIT_DEF` itself) or a later pass marks `undef`: `explicitLocals` gives
+  each use of register class `OBJ` that is marked `undef` an `ldnull` instead of a read of a
+  local. That is more than a safety net, because valid C reaches such values:
+  DeadArgumentElimination passes `poison` for a reference parameter that a `used` `static`
+  function never reads (section 12's row '5.21.7 RB7 and 5.21.6 RI5 as built', 2026-11-21; the
+  R-a triage agent's decision, not a user decision).
+  - **Slot P15, `MSILPromoteReferences`** (`msil-promote-references`, `-debug-pass=Structure`
+    name `MSIL Promote References`; `pipeline.ll` pins its line), which
+    `MSILPassConfig::addISelPrepare` adds after AtomicExpand and before
+    `TargetPassConfig::addISelPrepare()`, so after CodeGenPrepare and an exception model's
+    preparation, which may demote PHI nodes into new slots, runs at every level, under LTO and
+    for `optnone` functions. It promotes, with `PromoteMemToReg`, each static single-element
+    slot of exactly the reference type whose loads and stores all have that type; any slot left
+    that contains the type, and any load or store of it through another pointer, is T-RB4, after
+    which the function's body is a lone `unreachable` and the compilation fails. A slot used in
+    an exception pad, or in a block that an exception pad reaches, is never promoted: T-RB8 (no
+    pad survives to P15 today; EH-1 decides). Functions without reference slots are untouched.
+  - **P1's twelve rules** (slot P1, `MSILPrepareIR.cpp` calling `MSILReferences.cpp`): an
+    aggregate holding the type (T-RB1); a global holding it (T-RB9); a non-local function with it
+    in its signature (T-RB2 `that is not 'static'`, or the ThinLTO reason when it is hidden),
+    except managed-call stubs and the helper; its address taken, which counts aliases,
+    `llvm.global.annotations`, constructor tables and calls with another function type but not the
+    `llvm.used` and `llvm.compiler.used` lists (T-RB2); a call that is not a direct call of the
+    exact type (T-RB2); a variadic function (T-RB2), a variadic argument or `va_arg` (T-RB12);
+    `byval`, `sret`, `inalloca`, `preallocated`, `byref` or `elementtype` of it (T-RB1); a
+    caller of a `returns_twice` function, or a direct caller of a declaration that P8 lowers as a
+    setjmp site (above), with it (T-RB3); a slot of more than one element or outside the entry
+    block (T-RB1), a `volatile` or atomic access (T-RB10); an inline asm operand, checked before
+    the empty-asm lowering would drop it (T-RB9); a function definition named `__msil_ref.<...>`,
+    or a used function declaration of such a name other than the exact helper (T-RB7; P1 checks
+    no global variable's name: `msil-ld`'s T-RL1 refuses a non-local one, below); and every other
+    instruction or intrinsic with an operand or result of it (T-RB11). What passes: `ret`, `phi`,
+    `select`, `freeze`, the slots, loads, stores, lifetime markers and debug records that P15
+    removes, direct calls of the right
+    functions and `llvm.fake.use` (which clang emits for every local under
+    `-fextend-variable-liveness=all`, the driver's default at `-Og`).
+  - **P5** (`MSILFixFunctionBitcasts`): a call whose function type differs from its callee's and
+    involves the type is T-RB5, never a wrapper or a silent trap, in both modes and in `msil-ld`'s
+    pre-LTO table pass; it names the IL name and the first value whose type changes (`'void'` for
+    a missing one).
+  - The register colouring merges locals of one class only, so a merged local may keep a dead
+    object alive until it is overwritten or the method returns: GC timing, never a value (Claude's
+    reading: not a silent state).
+- **Output forms (plan 5.21.8).** Signatures and `.locals` hold `object` (`ELEMENT_TYPE_OBJECT`), in
+  text, in CIL objects and in `msil-ld`'s images, with no new token kind outside the stubs, and the
+  text assembles with both ilasms. `object` never reaches a `calli` signature, a P/Invoke, an
+  `ldftn` target, an address field, an export or a constructor: P1's rules refuse the functions
+  that could put it there.
+- **Managed calls with references (plan 5.21.9, which amends MC-1's contract 5.20).** Two
+  conversion codes are appended: `ref` (a reference parameter or result) and `this-ref` (a
+  reference `this`, only first, never a result).
+  - **Exact matching** (the user's pick "I think A is correct."): a reference takes `ref` for a
+    CIL `string`, `object`, `class T` or `T[]` parameter, result, `.ctor` type or field when its key
+    equals the CIL type's folded key, and `this-ref` for the `this` of a class, interface,
+    `System.String` or `System.Object` TYPE with the same key (an array TYPE has only `.ctor`). So
+    a `class System.IO.Stream` parameter takes only `Stream ^` (pass a `FileStream ^` through a C
+    cast), `object` takes `Object ^`, and `string` takes `String ^`, beside MC-1's C strings for
+    now (the workarounds below). Every other pair is T-M3, which now says `the 'this' reference`
+    for a reference `this` (`the 'this' handle` stays for handles), and T-M4's breakdown says
+    `a 'this' reference` (`'len' has 2 parameters; 'msil_method' needs 1 (a 'this' reference and
+    no CIL parameters)`). A managed call keeps its external linkage, since its stub is internal
+    (T-R10, T-R13 and T-R15 exempt it; MC-1's T-M12 covers variadic and unprototyped ones), but
+    takes no `dllexport`, `constructor` or `destructor` (T-R16) and no address (T-R11).
+  - **Stubs.** A `ref` argument is `ldarg` plus `castclass` to the member's parameter type, none
+    for `object` (no null test, GCHandle or box, so NULL reaches the member as null); `this-ref`
+    is `ldarg.0` and `castclass` to TYPE, none for `System.Object`, then `callvirt`, so an override
+    runs (`ToString` of a string returns the same string), or `ldfld` for a field; a `ref` result
+    is returned as it is; with `msil_catch` the result local is `object` and the handler's zero
+    value `ldnull`. In whole-program text the `castclass` of a `this-ref` stub or a cast stub to a
+    class other than `System.String` and `System.Object` names it through the kind-checking
+    TypeSpec `class [s]T` (5.20.6 MW2 as amended), which a run checks, while objects and images
+    name a TypeRef, which `msil-ld` checks.
+  - **Cast stubs.** A C cast to another class calls a declaration that clang makes, named
+    `__msil_mc.<castclass>.__uniq.<n>`, `<n>` hashed from its managed-call operands (TYPE the
+    class's display name, MEMBER `.castclass`, SIGNATURE `object(object)`, codes `ref;ref`) and its
+    function type, so each class has its own stub, the equal casts of several files merge under
+    LTO, and `msil-ld` sees an ordinary managed-call stub. Its body is `ldarg.0; castclass <TYPE>;
+    ret` (the SZARRAY token for an array class); it makes no member access, so MC-1's rule "at
+    most one member access" reads "a cast stub makes none". The shape is shared by the backend and
+    `msil-ld` (`cli::isManagedCastShape`); `.castclass` stays refused as a MEMBER written in
+    source, and T-M22 also refuses asm labels that start with `<castclass>`.
+  - **Tickets** stay MC-1's `gch` rows, all in the built-in table: `GCHandle::Alloc` declared as
+    `intptr_t f(Object ^)` is `ref;gch` and makes a ticket, and `GCHandle::get_Target` declared as
+    `Object ^f(intptr_t)` is `this-gch;ref` and gives the object back. MC-1's handle rows are
+    unchanged, and a pointer to a `cli_type` struct is never a handle (T-R6 refuses it first).
+  - `msil-ld` checks the references of a declaration against `--reference` as reference types
+    (T-M16, below). With the exact matching, a stub's `castclass` can fail only when two
+    assemblies define one type name, and then it throws. `GetByteCount`, `GetBytes` and
+    `Marshal::Copy` need `--reference`: R-a adds no `BCLMembers.def` row.
+- **`msil-ld` (plan 5.21.10).** `isValidManagedCall` takes `ref`, `this-ref` and the cast shape,
+  as the backend's `parseManagedCall` does (a cast with `msil-managed-decl` is invalid, and so is
+  `this-ref` on a member's own parameter). With references it checks a `this-ref` class TYPE, a
+  cast stub's class TYPE (named `<castclass>` in the text) and `ref` class parameters as reference
+  types, T-M16 (`managed call '<f>': '<T>' is a value type, but the declaration uses it as a
+  reference type`); array types are not checked. The object stub walk needed no change: it
+  collects a cast stub's `castclass` token, and a stub with no member access passes. The helper is
+  never bound: `msil-ld` skips every declaration named `__msil_ref.<...>` when it annotates
+  imports before LTO, and under `--lto-emit-asm` it neither binds nor reports a function
+  reference named `__msil_ref.<...>` or `__msil_mc.<...>`, whatever its visibility. That also fixed
+  an MC-1 defect: a managed-call declaration with hidden visibility (`#pragma GCC visibility
+  push(hidden)`) stopped `--lto-emit-asm` with `undefined hidden symbol: __msil_mc.<s>`. A
+  non-local definition of a `__msil_ref.` name, function or data, in a CIL object or a bitcode
+  input (an archive member included, named `lib(member)`) is T-RL1. `object` in signatures names no
+  type, so remapping and signature comparison pass it through. ThinLTO's promotion and
+  `--lto-partitions` above 1 make R-a's `static` functions external, which P1 refuses with T-RB2's
+  LTO reason (`link with full LTO and --lto-partitions=1`; Claude's decision, R-b lifts it).
+- **Verification and the runtimes (plan 5.21.11).** D21 gains no part: object locals, arguments,
+  results, `ldnull`, `ceq`, the object branches, select triangles and the stubs' `castclass`
+  verify with the existing allow-list (ILVerify and PEVerify report only InitLocals, which the
+  allow-list has, D13). `msil/test/harness/verify-object-locals.test` decides the shapes that the
+  plan's measurement left open (object locals beside the `localloc` frame, a filter clause with an
+  `object` result local, `ceq` and select on objects, `castclass` on entry) with both passes of
+  `msil-verify.py`, jitall and runs on .NET 10, TieredCompilation=0 and the .NET Framework 4.8,
+  and `frames-mixed`, `catch-ref` and `gc-stress` verify on every runtime of their legs. Design.md
+  4.2 and D13 stand (`.locals` are never `init`), because R-a's code never reads an object local
+  before it writes one: every declaration stores NULL, the jumps that would skip it are refused,
+  the stubs and instruction selection write their locals first, and an undefined reference, which
+  valid C reaches through DeadArgumentElimination (above), is `ldnull` at every level, never a
+  read of a local. That matters: the plan's measurement of 2026-11-19 (`zinit.il`) read only
+  `object` locals that a method never writes, which were null on every runtime, but a local that
+  a method reads before it writes it can be non-null in optimized code on .NET 10 and .NET 11.
+  Under `DOTNET_TieredCompilation=0`, on both, a method with a `localloc` frame that reads two
+  `object` locals before it writes them, called 20,000 times right after a method that leaves
+  objects in its own locals, read the second one as non-null in 19,999 calls (R-a's harness
+  experiment), and the same method without its `localloc` frame read a non-null object in all
+  20,000 calls (review round 1); no such read was non-null on the .NET Framework 4.8, on .NET 8
+  or under tiered compilation (section 5). D13 stands without plan 5.21.11's `localsinit`
+  fallback (section 12's row '5.21.7 RB7 and 5.21.6 RI5 as built', 2026-11-21; the R-a triage
+  agent's decision, not a user decision).
+- **Silent states with the user's OK** (the user's pick on the review page, 2026-11-04, item
+  prov-10, "silent states only with my OK"; section 12's row 'Silent states with the user's OK',
+  2026-11-21, OK'd with "OK all six", 2026-11-19, and "(a) OK as undefined", 2026-11-20). C memory
+  keeps an object only as a *ticket*, a raw GCHandle number in an `intptr_t` that `GCHandle::Alloc`
+  and `ToIntPtr` make (MC-1's `gch` rows; the user: "That's just a raw GCHandle integer."), and,
+  until R-a2, as one of MC-1's handles. These stay silent, as in C's own model for whatever is
+  released by hand:
+  1. A ticket that is never released leaks silently (MH6), also when a `longjmp` or a .NET
+     exception skips its release; a later checked-handle mode could list leaks at exit.
+  2. Using a ticket after its release (`GCHandle::Free`) is undefined (MH4): usually a loud
+     exception (a null target, then a `System.NullReferenceException` from the member access, or
+     the stub's `castclass` failing), but a recycled slot that now holds an object of the same
+     class goes unnoticed. Beside it, and also with the user's OK: a nonzero number passed where a
+     ticket is expected that was never a live ticket (never made by `GCHandle.Alloc` and
+     `ToIntPtr`) is undefined, as a wild pointer is in C: the process may crash, or the stub may
+     get a null object (MH4) or another live object (of another class, its `castclass` throws; of
+     that class, nothing shows). 0 stays null (MH1). The compiler does not check it; MC-1 already
+     took `intptr_t` tickets this way.
+  3. `==` on two tickets compares numbers, not objects: two tickets can name one object. (`==` on
+     references compares identity.)
+  4. Tickets and pointers mix: C converts between an integer and a pointer with a diagnostic that
+     is an error only by default (`-Wno-int-conversion` turns it off).
+  5. A pinned view of a string (its characters read in place through .NET's pinning members) can
+     be used after it is unpinned, or written through, which changes an immutable and possibly
+     shared string.
+  6. The four silent wrong-code states that EH-0 and its fix steps FX-1 to FX-3 end (FX-1 to FX-3: a
+     race, a `memset` length and `%L` in formats built at run time) last R-a's length longer,
+     because section 12's program order puts R-a before them. The user's tripwire bounds this
+     (section 12's row 'Program order amended (real .NET references)'): R-a was launched on
+     2026-11-21 and committed on 2026-11-22, inside the four weeks (by 2026-12-19) after which
+     the orchestrator would have stopped and asked the user whether EH-0 and FX-1 to FX-3 go first.
+
+  MC-1's C-string conversions S1-S3 are silent with the user's OK until R-a2 (the workarounds
+  below). A loud rule came with the six: the jumps past a reference's declaration are refused
+  (T-R23).
+- **Recorded temporary workarounds** (5.15.1 rule 1 as amended: each has its section 12 row, the
+  right answer and the step that replaces it):
+  - **MC-1's C strings S1-S3** (plan 5.21.9 RM3): a CIL `string` parameter takes a `String ^`, and
+    also, until R-a2 retires them directly before P-2, MC-1's C strings (`const char *` as UTF-8,
+    `const char16_t *` as UTF-16, `const char32_t *` as UTF-32, `const wchar_t *` by its width;
+    the user decided that they go, "Confirm", 2026-11-19, and when, "(a) Before P-2", 2026-11-20).
+    The right answer: C decodes and encodes explicitly with .NET's members (in, `new
+    UTF8Encoding(false, true)` and `Encoding::GetString(uint8*, int32)`, both in the built-in
+    table; out, `GetByteCount`, `GetBytes` and `Marshal::Copy`, which need `--reference`) and
+    passes `String ^`; a C string stays C memory. Silent meanwhile, with the user's OK given by
+    that pick: S1-S3 read up to the first 0 (S1 and S3 count up to it, S2's
+    `String::.ctor(char*)` stops at it), so an unterminated C string is read past its end and a
+    zero inside the text cuts it short; text in another encoding that is valid UTF-8 turns into
+    different text; and S2 never throws. Invalid UTF-8 or UTF-32 throws
+    `System.Text.DecoderFallbackException`, as before.
+  - **MC-1's star-spelled handles** (plan 5.21.9 RM10): `void *` and pointers to incomplete
+    structs (MC-1's opaque typedefs) stay handles until R-a2, directly before P-2, makes them
+    `intptr_t` or `uintptr_t` (the user's pick "(b) Retire before P-2", 2026-11-20). The right
+    answer: `*` is a real pointer into C memory, so an object is a reference `T ^` while a function
+    uses it and a ticket in an `intptr_t` while C memory keeps it. Boxed parameters and results (a
+    value type other than an enum or `GCHandle`, where an integer type means the `enum` row) keep
+    the star until value-type form B (`DateTime ^r`) or the step that the answer to references VT-9
+    names, so new code writes them with the star too; a value type's `.ctor` result already takes
+    `intptr_t` and moves with the rest (the boxed exception is Claude's reading: plan 5.21.9 RM10
+    and section 12's row '`*` is a real pointer into C memory').
+- **The portable triple.** `msil64-unknown-dotnet` takes the same rules, the attribute and the
+  header (plan section 12's row 'Contract rows', 2026-11-21: a reference is Direct there, and the
+  refusals stay loud as on the host triples). Until P-2 its links pass no references, so a portable
+  program calls only the built-in table's members. `msil/test/Portable/08-references` runs three
+  programs there in the post-commit `Portable` legs.
+- **Not in R-a (plan 5.21.16).** References in external, exported or cross-file functions, with
+  `object` or exact classes in IL signatures and checks between objects (R-b); function pointers
+  with references (never on the host triples; later on the portable ones through a managed
+  `calli`); callbacks from .NET into C (after P-3's delegates); perhaps globals as .NET static
+  fields; references across exception handlers and `setjmp` (EH-1, EH-2); value types (`DateTime
+  d`, and `DateTime ^r`, a boxed value held as a reference, value-type form B; references VT-1 to
+  VT-9); generics; `ldstr` (a CIL object has no user strings); and C++, which R-a2 adds before P-2
+  with locals and internal functions' parameters and results, templates by value, overloads and
+  mangling, refusing `String&`, lambda captures and class members for now.
+- **Tests.** clang (from the specification): `clang/test/Sema/msil-cli-type.c` (the spellings,
+  `__has_attribute`, keys, T-R1 to T-R3), `msil-ref-type.c` (the caret, blocks with and without
+  `-fblocks`, T-R4, T-R6 to T-R8, T-R18, T-R19, aka text, `-ast-dump` and `-ast-print`),
+  `msil-ref-ops.c` (every allowed form, each null form in `=` and `==`, `nullptr` under
+  `-std=c23`, GNU `r ?: s`, the refusals), `msil-ref-storage.c` (T-R9, the storage refusals,
+  T-R20 and T-R21), `msil-ref-functions.c` (T-R10 to
+  T-R17, both adjusted-parameter forms, `annotate`, `weakref` (also with `alias`, in both orders),
+  `#pragma weak <alias> = <f>` (before and after `<f>`'s declarations, also for a managed call),
+  `used`, `err_cannot_pass_to_vararg` whole, and a
+  `-c` line where `alias("f")` gets T-RB2), `msil-ref-jumps.c` (T-R23), `msil-ref-managed-calls.c`
+  (`ref`, `this-ref`, T-M3 and T-M4 with references, a `msil_catch` reference result, tickets,
+  T-M22's `<castclass>`), `clang/test/SemaCXX/msil-ref-cxx.cpp` (T-R5),
+  `clang/test/Driver/msil-cli-header.c` and `msil-ref-driver.c` (`<cli/cli.h>` per triple, no
+  default `-fblocks`), all on the eight host triples and `msil64-unknown-dotnet` and part of
+  `check-msil`; and in `clang/test/CodeGen/MSIL` `ref-abi.c` (the IR signature on all ten MSIL
+  triples), `ref-ir.c` (NULL stores, also before a written initializer, the 'pick' phi, the
+  helper, casts called when unused, `llvm.fake.use`, RG12's trap, also at a valueless `return;`,
+  at `-O0` to `-O3`, `-Os`, `-Oz` and `-Og`), `ref-managed-calls.c`,
+  `ref-auto-var-init.c`, `ref-debug-info.c`, `ref-asm.c`, `ref-mangling.c`, `ref-pch.c`,
+  `ref-ast-merge.c`, `ref-clangir.c` and `ref-setjmp-inline.c` (the inliners' setjmp fence in both
+  directions, also for `always_inline` callees, `flatten` callers and a `_setjmp3` declared without
+  a prototype, with controls that are still inlined, at `-O0` to `-O3`, `-Os` and `-Oz` on the
+  x86_64 Windows and Linux triples and `msil64-unknown-dotnet`, at `-O0` and `-O2` on the other six
+  host triples, and under full and thin LTO). llc (on the Windows, Linux and `msil64-unknown-dotnet`
+  triples, llc also aarch64): `reference-ir.ll` (the IR type and LLVM's own refusals),
+  `reference-values.ll` (whole bodies at `-O0` to `-O3`, objects through `llvm-cil-dump`, the
+  ilasm oracle), `reference-mir.mir`, `reference-compare.ll` (the helper in no text, MemberRef,
+  SYMTAB or P/Invoke), `reference-promote.ll` (P15, T-RB4, T-RB8), `reference-errors.ll` (every
+  P1, P5 and instruction-selection text in both modes), `reference-setjmp-inline.ll` (the inliners'
+  setjmp fence on IR `flatten`, the AlwaysInliner's worklist, which clang never reaches, since it
+  marks each call in a `flatten` function `always_inline`, with a control and a run without the
+  fence, and the call-site `returns_twice` form, which the fence does not see and P1 then refuses
+  with T-RB3, while LLVM's own rule keeps its other direction apart), `managed-call-ref.ll` and
+  `managed-call-cast.ll`, and P15's line in `pipeline.ll`. Unit tests: six new
+  `CLIManagedSignatureTest` cases (31; `parseCLITypeName`'s forms, keys and refusals, the code
+  names and positions, `isManagedCastShape`, `.castclass` refused in source), `Object` in
+  `MSILTypeUtilitiesTest` and the fifth register class in `MSILStackEffectTest`. `msil-ld`:
+  `lld/test/MSIL/references.test` (binding with and without `--reference` on three triples, T-M16,
+  the helper never bound, also beside native libraries that export `__msil_ref.eq` and from hidden
+  declarations, T-RL1, ThinLTO and `--lto-partitions=2` with T-RB2, T-RB5 through the LTO table
+  pass, cast stubs under LTO and `-shared`). Execution: `msil/test/M3/14-references` (18 tests),
+  `msil/test/Portable/08-references` (3) and `msil/test/harness/verify-object-locals.test`
+  (msil/test/README.md lists them). Under `msil_equiv=1` eight of the `14-references` tests skip
+  O4 (`msil/utils/equiv-allowed.txt`: `casts`, `catch-ref`, `constructors`, `fields`, `gc-stress`,
+  `instance-members`, `string-builder` and `string-table`), because the cast, `this-ref` and
+  constructor stubs of their `--lto-emit-asm` text check the classes of references when they run,
+  and those of their LTO image, which `msil-ld` checks at link time, do not.
+
+Tests in the tree after R-a: `llvm/test/CodeGen/MSIL` 184 (175 llc tests, 8 MIR tests and
+`irsymtab-linker-options.ll`; new: `reference-ir.ll`, `reference-values.ll`, `reference-mir.mir`,
+`reference-compare.ll`, `reference-promote.ll`, `reference-errors.ll`, `reference-setjmp-inline.ll`,
+`managed-call-ref.ll` and `managed-call-cast.ll`), `clang/test/CodeGen/MSIL` 48 (the eleven
+`ref-*.c` new), `clang/test/Sema`, `clang/test/SemaCXX` and `clang/test/Driver` gain the seven
+`msil-*.c` Sema tests, `msil-ref-cxx.cpp` and the two driver tests, `lld/test/MSIL` 146 (new:
+`references.test`), `msil/test/M3` 87 (18 in `14-references`), `msil/test/Portable` 47 (three in
+`08-references`), `msil/test/Programs` 248 (unchanged), `msil/test/harness` 160 (new:
+`verify-object-locals.test`), and `CLITests` with 494 tests in 23 suites (new: six of
+`CLIManagedSignatureTest`).
+
 ## 3. What Phase 2 does not do
 
 Phase 2 is the linker phase; most of what it leaves out is Phase 3's (plan section 7, P3-A and
 P3-B). The middle column says what a program meets today, the last one where it is planned:
 plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24, M25, M26,
-M27 and MC-1 changed name theirs. The rows describe the host triples; what the portable triple
+M27, MC-1 and R-a changed name theirs. The rows describe the host triples; what the portable triple
 `msil64-unknown-dotnet` leaves out, and until which step, is the table "What stays loud on
 msil64" in section 2, "The portable target msil64-unknown-dotnet (P-1a)", and the last rows
 below. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row whose
@@ -5072,6 +5709,7 @@ milestone has not come (section 1).
 | Dynamic `alloca`, VLAs, `stacksave`/`stackrestore`, `__builtin_frame_address` | since M26 a dynamic alloca on no loop of its function is a `localloc` in the middle of the method, and `stacksave`/`stackrestore` in such functions are deleted; one in a loop is `a dynamic stack allocation that can repeat within one call (a VLA or alloca in a loop) is not supported for MSIL yet`, and since M27 so is one that a `longjmp` can re-enter (one after a `setjmp` site with a wrapped call), even with no loop in the source; `__builtin_frame_address` is `llvm.frameaddress is not supported for MSIL yet` (section 2, M26). Until M26 every one was an error (`... phase 3 shadow stack`) | acyclic: done (M26); in loops, after a `setjmp` site with a wrapped call, and `__builtin_frame_address(0)`: M32's shadow stack (Design.md 4.2) |
 | `setjmp`/`longjmp` | done in M27 (section 2, "setjmp and longjmp (M27)"): every call that may `longjmp` after a `setjmp` site goes through a wrapper with a whole-body IL `.try` and filter, and `longjmp` throws an `ExternalException` that only the target frame's filter accepts, within one assembly and across library assemblies, on every pipeline and in `-S` and llc text. What stays: every `longjmp` is a first-chance CLR exception (about 26-44 us on the .NET Framework and .NET 8, 7-9 us on .NET 10); a `longjmp` out of a C function that native code called works on Windows and aborts the process on Linux (status 134, from M28 the thunk filter's FailFast), and through another assembly's function pointer it works on both OSes until M28, then on Windows only; `__builtin_setjmp`/`__builtin_longjmp` are `__builtin_setjmp ('llvm.eh.sjlj.setjmp') is not supported for MSIL; use setjmp` (and `longjmp`); taking the address of a `setjmp` name and calling another `returns_twice` function (`vfork`, `getcontext`) are errors; `msil-ld` still refuses to bind the family to a native library (N4), which only an object built without the lowering meets; the windows-gnu, musl and aarch64 spellings are unverified. From M24 to M27 it was an error on every path: on the Linux triples `-S` and llc reported `undefined function '_setjmp' is not defined in this module and is not a Phase-1 import` and `msil-ld` each name of the family, `<file>: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler`; on the Windows triples clang's `setjmp`, which passes the frame address, stopped at `llvm.frameaddress is not supported for MSIL yet`; and the builtins were `llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)`. Until M24 this row said only "error", which was wrong for the Linux object pipeline: `msil-ld` bound the functions to `libc.so.6` without a diagnostic, and simple programs ran by accident (backlog recon BL15) | done (M27), Design.md 4.6; native frames and other assemblies' pointers: M28 |
 | Calling .NET members from C and C++ | done in MC-1 (section 2, "Managed calls from C and C++ (MC-1)"): `msil_method` on a function declaration makes a stub with one member access, strings, integers, enums and GCHandle handles as conversions, `msil_catch` for listed exceptions; with `dllexport` (Windows triples) a managed call is also exported under its C name, and with `constructor` it runs before `main`; before MC-1 the attribute was unknown and the call an undefined symbol | a `destructor` managed call, an error until M29 (host triples) and P-2 (portable triples); delegates made from C function pointers, refused until P-3; spans and byrefs, structures by value, generic members, field writes, C++ member functions, checked `-S` text and a header generator: the fuller managed calls after Phase 3 |
+| .NET objects held in C as references (`T ^`) | done in R-a (section 2, "Real .NET references in C (R-a)"): a `CLI_TYPE` struct names a .NET class, and `T ^` references live in automatic variables and in the parameters and results of `static`, prototyped, non-variadic functions whose address is never taken, with `==`, `!=`, NULL, truth tests, `?:`, the conversion to `System.Object` and C casts that a cast stub checks when the program runs, and pass to managed calls with `ref` and `this-ref`; every other use is a named compile error (T-R1 to T-R24), behind which the backend's backstops (T-RB1 to T-RB12) refuse what other IR brings, and C memory keeps an object only as a ticket, a raw GCHandle number. Before R-a C held objects only as MC-1's GCHandle handles, and `^` was Apple's block pointer, refused without `-fblocks` | C++: R-a2, before P-2; external, exported and cross-file functions, function pointers, callbacks from .NET and perhaps globals: R-b; references across exception handlers and `setjmp`: EH-1 and EH-2; value types (`DateTime d`, `DateTime ^r`): after references VT-1 to VT-9 |
 | Atomics (`_Atomic`, `__atomic_*`, `__sync_*`) | error (only fences work): every atomic operation becomes a call of a function of libatomic's interface (`__atomic_load_4`, ...; since M25's lock-free cap of 8 bytes a 16-byte one is the generic `__atomic_load`, `__atomic_store`, ...), which `-S`, llc and `msil-ld --lto-emit-asm` report as `runtime helper '<name>' is an atomic operation that only msil-ld links` (until M25 `runtime helper '<name>' is not available for MSIL yet (phase 3)`). In a CIL object it is an undefined symbol, and since M24 `msil-ld` binds it natively only on the Linux triples, to `libatomic.so.1` when the link names it (`-latomic`, as a native build does; else `undefined symbol: <name>` with `>>> an atomic operation: link with -latomic, as a native build does`), never on the Windows triples (`>>> an atomic operation (libatomic's interface)`); the helper archive defines no `__atomic_*` function (compiler-rt's `atomic.c` stays out of it, R4/R5), and `__sync_*` names are compiler-runtime helpers, which never bind natively | M30 (the native lock path) |
 | Global destructors, `atexit` | error, also a destructor table (`.fini_array*`, `.CRT$XT*`) since M20 (`global destructors are not supported yet: <s> in <file>`). `atexit` binds to no native library: glibc defines it only in machine code (`symbol 'atexit' is defined only in native object code (.../libc_nonshared.a(atexit.oS)); MSIL cannot link machine code`), with a glibc sysroot that has `libc_nonshared.a`; with the E7 sysroot, whose `libc.so` script names no `libc_nonshared.a`, and on the Windows triples, whose UCRT does not export it, the link stops with `undefined symbol: atexit` (the matrix rows `p6-dtors`, `fini-array`, `crt-xt` and `atexit-order` pin these errors) | phase 3 (Design.md 4.1), which intercepts `atexit` |
 | `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. Where it differs, the helper archive `clang_rt.builtins` forwards since M25 the native `long double` functions that have a `double` counterpart (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...: 170 of `msil-ld`'s 174 names) to that counterpart, and a native binding of one of the others (`fromfpl`, `fromfpxl`, `ufromfpl`, `ufromfpxl` and every `_Float64x` and `_Float128` function), or of any of them in a link without the archive, is the permanent link error `native function '<name>' (<module>) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart` (section 2, "Native libraries and P/Invokes" and "The helper archive (M25)"; in M15-M24 every name was `... takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)`); windows-msvc and `aarch64-w64-windows-gnu` bind them. Since M26 an `L` length modifier before a floating conversion of a `printf` format is a clang warning on the triples where `long double` differs, and of a `scanf` format an error (section 2, M26), and c-testsuite's `00204`, which prints `%Lf`, is excluded on linux-gnu (section 1) | permanent (Design.md 3; section 6, item 14); native `long double` functions: forwarded in M25, the others permanent errors |
@@ -5257,6 +5895,12 @@ MC-1's managed-call stubs (plan 5.20.11 MT2) need no part of their own: their `.
 filter are the M27 shape, and their handle dereference (`GCHandle::FromIntPtr`, `box`,
 `unbox`, `get_Target`, then `castclass`, `unbox.any` or `unbox`) is verifiable, so the stubs
 pass both passes with the existing allow-list, and a new verifier class in a stub is a defect.
+R-a's references need no part either (plan 5.21.11): `object` locals, arguments and results,
+`ldnull`, `ceq`, the branches on objects, select triangles and the `castclass` of the stubs pass
+both passes with the existing allow-list, which `msil/test/harness/verify-object-locals.test`
+pins for the shapes that no earlier measurement covered (section 2, "Real .NET references in C
+(R-a)"); `.locals` stay without `init`, because R-a's code writes every `object` local before
+it reads it (section 5 says why that matters).
 
 Stack *types* are checked only by the verifiers (the JIT accepts most type errors silently), and
 mixing of `native int` and `int64` only by PEVerify, so that check runs on Windows. Every gate
@@ -5330,6 +5974,7 @@ deal with it:
 | The cost of a `longjmp` (M27: a first-chance `ExternalException`, a filter and a `leave`; per round trip, sjlj recon 6.3) | about 26 us on Windows, 44 us on Linux | about 6.6 us on Windows, 8.5 us on Linux | about 27 us | none: the design accepts it (R8); a call that may `longjmp` but does not costs 1-3 ns (5-8 ns on the Framework) for its wrapper; natively a round trip costs about 65 ns with glibc and 2 us with the UCRT |
 | A managed exception thrown through native frames (a `longjmp` out of a C function that native code called, such as a `qsort` comparator) | caught on Windows; on Linux the process aborts (SIGABRT, status 134) | same as .NET 8 | caught | before M28 only the undiagnosed callback gap (section 3) puts native frames there; from M28 the Linux thunks fail fast with a message instead (R8) |
 | A scalar passed where a method takes a struct (an integer for a value type that is not an enum; MC-1, recon `portable-mc1.md` 3.6) | `System.InvalidProgramException` | same as .NET 8 | accepted silently, with a wrong value (two `int32`s for `DateTime::op_Equality` give `True`) | a managed call passes an integer only for an enum of that width: with `--reference` `msil-ld` checks it against the TypeDef (T-M7, T-M16), and without references any value type but `GCHandle` is T-M8; the stubs of `-S`, llc and `--lto-emit-asm` text test it when they run and throw `System.InvalidProgramException` with T-M7's text |
+| An `object` local that a method reads before it writes it, with `.locals` without `init` (2026-11-21: 20,000 calls right after a method that leaves objects in its own locals; R-a's harness experiment, with a `localloc` frame, and review round 1, the same method without one) | null, also with `DOTNET_TieredCompilation=0` | null under tiered compilation; with `DOTNET_TieredCompilation=0` not null in 19,999 calls with the `localloc` frame (the second of two such locals) and in all 20,000 without it (.NET 11 the same) | null | R-a's code never reads an `object` local before writing it: every reference declaration stores NULL, the jumps that would skip that store are refused, the stubs and instruction selection write their locals first, and an undefined reference, which valid C reaches, is `ldnull` at every level (section 2, "Real .NET references in C (R-a)"); only locals that a method never writes were measured null on every runtime (plan 5.21.11's measurement of 2026-11-19, `zinit.il`) |
 
 - **Deep recursion.** `dotnet x.dll` on Windows runs `main` on the host's main thread, whose
   stack is 1.5 MB, while native Linux programs get 8 MB by default (`ulimit -s`, which the Linux

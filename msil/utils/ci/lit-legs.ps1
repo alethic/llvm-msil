@@ -53,8 +53,11 @@
 #   net8           every MSIL FileCheck directory (llvm/test/CodeGen/MSIL, clang/test/CodeGen/MSIL,
 #                  the clang driver tests, lld/test/MSIL, llvm/test/MC/MSIL, the llvm-cil-dump and
 #                  llvm-cil-copy tests, from M26 clang/test/Sema/msil-long-double-format.c and
-#                  llvm/test/Transforms/ExpandVariadics/msil-abi.ll, and from MC-1
-#                  clang/test/Sema/attr-msil-method.c and clang/test/SemaCXX/attr-msil-method.cpp)
+#                  llvm/test/Transforms/ExpandVariadics/msil-abi.ll, from MC-1
+#                  clang/test/Sema/attr-msil-method.c and clang/test/SemaCXX/attr-msil-method.cpp,
+#                  and from R-a the .NET reference tests clang/test/Sema/msil-cli-type.c and
+#                  msil-ref-*.c, clang/test/SemaCXX/msil-ref-cxx.cpp and
+#                  clang/test/Driver/msil-cli-header.c and msil-ref-driver.c)
 #                  and msil/test (M1, M2, M3 and the harness; msil/test/Programs
 #                  is filtered out: the corpus legs run it) under obj on .NET 8 (tiered) and on the
 #                  .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS clang's
@@ -363,6 +366,11 @@ $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
                'clang/test/Driver/msil-object.c', 'clang/test/Driver/msil-shared.c',
                'clang/test/Sema/attr-msil-method.c', 'clang/test/SemaCXX/attr-msil-method.cpp',
+               'clang/test/Sema/msil-cli-type.c', 'clang/test/Sema/msil-ref-type.c',
+               'clang/test/Sema/msil-ref-ops.c', 'clang/test/Sema/msil-ref-storage.c',
+               'clang/test/Sema/msil-ref-functions.c', 'clang/test/Sema/msil-ref-jumps.c',
+               'clang/test/Sema/msil-ref-managed-calls.c', 'clang/test/SemaCXX/msil-ref-cxx.cpp',
+               'clang/test/Driver/msil-cli-header.c', 'clang/test/Driver/msil-ref-driver.c',
                'clang/test/Sema/msil-long-double-format.c',
                'llvm/test/Transforms/ExpandVariadics/msil-abi.ll', 'lld/test/MSIL',
                'llvm/test/tools/llvm-cil-dump', 'llvm/test/tools/llvm-cil-copy', 'llvm/test/MC/MSIL',

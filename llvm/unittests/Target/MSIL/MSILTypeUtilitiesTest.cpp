@@ -10,7 +10,12 @@
 // (ImplementationPlan.md 5.3): an i64 is 'native int' on 64-bit triples
 // (decision D2), the CIL type names, the result and parameter-list text of
 // method signatures (output contract 5.1), and the equality and strict weak
-// ordering that let signatures be interned in a std::set.
+// ordering that let signatures be interned in a std::set. R-a's sixth value
+// kind (5.21.7 RB1, RV26): the .NET reference, MVT::externref (the value type
+// of target("msil.ref"), 5.21.6 RI2), is ValType::Object on every pointer
+// size, spelled 'object' in signatures (5.21.8 RO2), and a signature with an
+// object differs from one with a native int in the same place, though both
+// are pointer-sized.
 //
 //===----------------------------------------------------------------------===//
 
@@ -83,6 +88,15 @@ std::vector<Signature> distinctSignatures() {
       makeSig({}, {ValType::I32, ValType::I32}),
       makeSig({}, {ValType::I32, ValType::I32, ValType::I32, ValType::I32,
                    ValType::I32}),
+      // Objects (R-a): each differs from its native int twin.
+      makeSig({ValType::Object}, {}),
+      makeSig({}, {ValType::Object}),
+      makeSig({ValType::Object}, {ValType::Object}),
+      makeSig({ValType::Object}, {ValType::NativeInt}),
+      makeSig({ValType::NativeInt}, {ValType::Object}),
+      makeSig({ValType::I32}, {ValType::Object, ValType::Object}),
+      makeSig({ValType::I32}, {ValType::Object, ValType::NativeInt}),
+      makeSig({ValType::I32}, {ValType::NativeInt, ValType::Object}),
   };
 }
 
@@ -97,6 +111,12 @@ TEST(MSILTypeUtilitiesTest, MSILToValType) {
   EXPECT_EQ(ValType::I32, MSIL::toValType(MVT::i32, 32));
   EXPECT_EQ(ValType::F32, MSIL::toValType(MVT::f32, 32));
   EXPECT_EQ(ValType::F64, MSIL::toValType(MVT::f64, 32));
+  // 5.21.7 RB1: a .NET reference (MVT::externref, the value type of
+  // target("msil.ref")) is an object whatever the pointer size; it is never
+  // a native int, though its IR layout is a pointer's (5.21.6 RI1).
+  EXPECT_EQ(ValType::Object, MSIL::toValType(MVT::externref, 64));
+  EXPECT_EQ(ValType::Object, MSIL::toValType(MVT::externref, 32));
+  EXPECT_NE(ValType::NativeInt, MSIL::toValType(MVT::externref, 64));
 }
 
 TEST(MSILTypeUtilitiesTest, MSILValTypeNames) {
@@ -105,11 +125,13 @@ TEST(MSILTypeUtilitiesTest, MSILValTypeNames) {
   EXPECT_EQ("int64", MSIL::getValTypeName(ValType::I64));
   EXPECT_EQ("float32", MSIL::getValTypeName(ValType::F32));
   EXPECT_EQ("float64", MSIL::getValTypeName(ValType::F64));
+  // 5.21.8 RO2: 'object' in method headers and .locals.
+  EXPECT_EQ("object", MSIL::getValTypeName(ValType::Object));
 }
 
 TEST(MSILTypeUtilitiesTest, MSILPrintValTypeMatchesName) {
   for (ValType T : {ValType::I32, ValType::NativeInt, ValType::I64,
-                    ValType::F32, ValType::F64})
+                    ValType::F32, ValType::F64, ValType::Object})
     EXPECT_EQ(MSIL::getValTypeName(T).str(), valTypeText(T));
 }
 
@@ -122,6 +144,9 @@ TEST(MSILTypeUtilitiesTest, MSILPrintResult) {
   EXPECT_EQ("float32", resultText(makeSig({ValType::F32}, {})));
   EXPECT_EQ("float64", resultText(makeSig({ValType::F64}, {})));
   EXPECT_EQ("int64", resultText(makeSig({ValType::I64}, {})));
+  EXPECT_EQ("object", resultText(makeSig({ValType::Object}, {})));
+  EXPECT_EQ("object",
+            resultText(makeSig({ValType::Object}, {ValType::Object})));
 }
 
 TEST(MSILTypeUtilitiesTest, MSILPrintParamList) {
@@ -134,6 +159,11 @@ TEST(MSILTypeUtilitiesTest, MSILPrintParamList) {
   EXPECT_EQ("(float32, float64, int64, native int, int32)",
             paramText(makeSig({}, {ValType::F32, ValType::F64, ValType::I64,
                                    ValType::NativeInt, ValType::I32})));
+  EXPECT_EQ("(object)", paramText(makeSig({}, {ValType::Object})));
+  EXPECT_EQ("(int32, object, native int, object)",
+            paramText(makeSig({ValType::Object},
+                              {ValType::I32, ValType::Object,
+                               ValType::NativeInt, ValType::Object})));
 }
 
 TEST(MSILTypeUtilitiesTest, MSILMethodSignatureText) {
@@ -143,6 +173,11 @@ TEST(MSILTypeUtilitiesTest, MSILMethodSignatureText) {
   EXPECT_EQ("int32(native int, int32)", resultText(Sum) + paramText(Sum));
   Signature Puts = makeSig({ValType::I32}, {ValType::NativeInt});
   EXPECT_EQ("int32(native int)", resultText(Puts) + paramText(Puts));
+  // R-a: 'call object 'pick'(int32, object, object)' (5.21.8 RO2).
+  Signature Pick = makeSig({ValType::Object},
+                           {ValType::I32, ValType::Object, ValType::Object});
+  EXPECT_EQ("object(int32, object, object)",
+            resultText(Pick) + paramText(Pick));
 }
 
 TEST(MSILTypeUtilitiesTest, MSILSignatureEquality) {

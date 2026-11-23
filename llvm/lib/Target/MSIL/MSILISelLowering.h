@@ -78,6 +78,14 @@ public:
                                                 unsigned &NumIntermediates,
                                                 MVT &RegisterVT) const override;
 
+  /// MSILISD::REF_EQ and MSILISD::REF_IS_NULL are an int32 0 or 1 (plan
+  /// 5.21.7 RB4): every bit above bit 0 is known zero, so that a test of the
+  /// boolean folds and the boolean patterns (bool_node) take them.
+  void computeKnownBitsForTargetNode(const SDValue Op, KnownBits &Known,
+                                     const APInt &DemandedElts,
+                                     const SelectionDAG &DAG,
+                                     unsigned Depth = 0) const override;
+
   // Lowering hooks.
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
   void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
@@ -171,6 +179,13 @@ private:
   /// (decision D36 as amended); returns any other fence unchanged, for the
   /// MEMORY_BARRIER pattern.
   SDValue LowerATOMIC_FENCE(SDValue Op, SelectionDAG &DAG) const;
+  /// Reports a LOAD or STORE of a .NET reference (MVT::externref, which no
+  /// memory record takes) as T-RB6, "a .NET reference is loaded from or
+  /// stored to memory", and returns well-formed results: the null reference
+  /// and the input chain for a load, the input chain for a store (plan 5.21.7
+  /// RB2). MSILPromoteReferences (slot P15) removes or reports every such
+  /// access before instruction selection, so this is a backstop.
+  SDValue LowerReferenceLoadStore(SDValue Op, SelectionDAG &DAG) const;
   /// Reports \p What, the diagnostic text for an operation that Phase 1 does
   /// not support, and returns well-formed dummy results (zero for an integer
   /// value, the input chain for a chain), so that compilation continues.

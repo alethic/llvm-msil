@@ -1891,6 +1891,7 @@ static TemplateDeductionResult DeduceTemplateArgumentsByTypeMatch(
     case Type::ObjCInterface:
     case Type::ObjCObjectPointer:
     case Type::BitInt:
+    case Type::CLIReference:
       return (TDF & TDF_SkipNonDependent) ||
                      ((TDF & TDF_IgnoreQualifiers)
                           ? S.Context.hasSameUnqualifiedType(P, A)
@@ -7293,6 +7294,7 @@ MarkUsedTemplateParameters(ASTContext &Ctx, QualType T,
   case Type::BitInt:
   case Type::HLSLInlineSpirv:
   case Type::OverflowBehavior:
+  case Type::CLIReference:
 #define TYPE(Class, Base)
 #define ABSTRACT_TYPE(Class, Base)
 #define DEPENDENT_TYPE(Class, Base)

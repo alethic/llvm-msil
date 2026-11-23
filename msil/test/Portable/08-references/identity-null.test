@@ -1,0 +1,111 @@
+# Identity and NULL for .NET references on msil64-unknown-dotnet: a reference local declared without an initializer is NULL, also each time a loop body declares it again after the last iteration set it, and a static function that sets its result on one path only returns NULL on the other ('pick'); every null pointer constant converts to a NULL reference; == and != compare identity (two equal strings are two objects), also a class against Object; !r, if (r), &&, || and the condition of ?: test for NULL; ?: chooses between references, GNU r ?: s takes the condition only, and a reference converts to Object by itself.
+# Plan 5.21.4 RS1 and RS2 (reference locals at every level, NULL at the
+# declaration through Sema's zero-initialization step, so phi(a, undef)
+# never folds to a at -O1 and above), RS3, RS4 (null pointer constants and
+# the conversion to Object), RS5 (identity, IL ceq), RS6 (truth tests are
+# r != NULL), RS7 (?: operands), 5.21.5 RG2 and RG4, and 5.18's portable
+# triples, where 5.21.5 RG6 passes a reference Direct (section 12's row
+# 'Contract rows', 2026-11-21: 5.18.2 and 5.18.9). The objects are strings
+# that String::.ctor(char*) makes, a built-in table entry (no --reference
+# before P-2); each newobj makes a new string. The selectors come from
+# volatile variables, so the optimizer cannot fold the paths the program
+# takes. Each failed group sets one bit of the exit status. A link that
+# writes --lto-emit-asm text cannot import c.dll (msil_link_output=il), so
+# the test needs linked images. Plan 5.21.14 RV28 (R-a,
+# Portable/08-references).
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+static volatile int zero = 0, one = 1, three = 3;
+
+/* The result is set on one path only: NULL on the other, at every level. */
+static String ^pick(String ^a, int c) {
+  String ^s;
+  if (c)
+    s = a;
+  return s;
+}
+
+static int is_null(String ^s) { return s == NULL; }
+static String ^nothing(void) { return 0; }
+static int same_object(Object ^a, Object ^b) { return a == b; }
+
+int main(void) {
+  static const char16_t same_text[] = {'s', 'a', 'm', 'e', 0};
+  static const char16_t other_text[] = {'o', 't', 'h', 'e', 'r', 0};
+  String ^a = new_string(same_text);
+  String ^b = new_string(same_text);
+  String ^c = new_string(other_text);
+
+  /* 0: NULL at the declaration, also in each iteration of a loop body. */
+  String ^unset;
+  CHECK(0, unset == NULL);
+  for (int i = 0; i < three; ++i) {
+    String ^each;
+    CHECK(0, each == NULL);
+    each = a;
+    CHECK(0, each == a);
+  }
+
+  /* 1: a result set on one path only. */
+  CHECK(1, pick(a, one) == a);
+  CHECK(1, pick(a, zero) == NULL);
+
+  /* 2: null pointer constants. */
+  String ^n1 = NULL, ^n2 = 0, ^n3 = (void *)0, ^n4 = '\0';
+  CHECK(2, is_null(n1) && is_null(n2) && is_null(n3) && is_null(n4));
+  CHECK(2, is_null(NULL) && is_null(0) && is_null(nothing()));
+  n1 = a;
+  n1 = NULL;
+  CHECK(2, n1 == NULL && n1 == 0);
+
+  /* 3: identity; two equal strings are two objects. */
+  CHECK(3, a == a && a != b && b != c && !(a == b));
+
+  /* 4: Object against a class, and conversions to Object. */
+  Object ^o = a;
+  CHECK(4, o == a && a == o && o != b);
+  CHECK(4, same_object(a, o) && !same_object(a, b) && same_object(NULL, n2));
+  o = c;
+  CHECK(4, o == c);
+
+  /* 5: truth tests. */
+  String ^none = NULL;
+  CHECK(5, !none && !!a);
+  CHECK(5, (a && b) && !(a && none) && (none || a) && !(none || none));
+  int taken = 0;
+  if (a)
+    taken |= 1;
+  if (none)
+    taken |= 2;
+  CHECK(5, taken == 1);
+  CHECK(5, (a ? 1 : 2) == 1 && (none ? 1 : 2) == 2);
+
+  /* 6: ?: operands, and GNU r ?: s. */
+  CHECK(6, (one ? a : c) == a && (zero ? a : c) == c);
+  CHECK(6, (one ? NULL : a) == NULL && (zero ? NULL : a) == a);
+  Object ^mixed = zero ? a : o;
+  CHECK(6, mixed == c);
+  CHECK(6, (a ?: c) == a && (none ?: c) == c);
+  return (int)fails;
+}

@@ -4441,6 +4441,8 @@ llvm::DIType *CGDebugInfo::CreateTypeNode(QualType Ty, llvm::DIFile *Unit) {
     return CreateType(cast<PointerType>(Ty), Unit);
   case Type::BlockPointer:
     return CreateType(cast<BlockPointerType>(Ty), Unit);
+  case Type::CLIReference: // MSIL: this CreateType is in CGMSILReferences.cpp.
+    return CreateType(cast<CLIReferenceType>(Ty), Unit);
   case Type::Typedef:
     return CreateType(cast<TypedefType>(Ty), Unit);
   case Type::Record:

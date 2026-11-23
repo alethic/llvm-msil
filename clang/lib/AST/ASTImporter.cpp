@@ -1451,6 +1451,20 @@ ExpectedType ASTNodeImporter::VisitBlockPointerType(const BlockPointerType *T) {
   return Importer.getToContext().getBlockPointerType(*ToPointeeTypeOrErr);
 }
 
+ExpectedType ASTNodeImporter::VisitCLIReferenceType(const CLIReferenceType *T) {
+  const IdentifierInfo *ToKey = Importer.Import(T->getKey());
+  // The class of the canonical type is the key's implicit struct, which the
+  // "to" context makes for itself.
+  if (!T->isSugared())
+    return Importer.getToContext().getCLIReferenceType(ToKey);
+
+  ExpectedType ToClassTypeOrErr = import(T->getClassType());
+  if (!ToClassTypeOrErr)
+    return ToClassTypeOrErr.takeError();
+
+  return Importer.getToContext().getCLIReferenceType(ToKey, *ToClassTypeOrErr);
+}
+
 ExpectedType
 ASTNodeImporter::VisitLValueReferenceType(const LValueReferenceType *T) {
   // FIXME: Check for C++ support in "to" context.

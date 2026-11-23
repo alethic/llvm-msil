@@ -14,6 +14,7 @@
 #include "CGCXXABI.h"
 #include "CGCleanup.h"
 #include "CGDebugInfo.h"
+#include "CGMSILReferences.h"
 #include "CGOpenCLRuntime.h"
 #include "CGOpenMPRuntime.h"
 #include "CodeGenFunction.h"
@@ -1880,6 +1881,10 @@ CodeGenFunction::getAutoVarInitKind(QualType Ty, const VarDecl &D) {
   auto hasNoTrivialAutoVarInitAttr = [](const Decl *D) {
     return D && D->hasAttr<NoTrivialAutoVarInitAttr>();
   };
+  // MSIL: a .NET reference is never filled with a pattern or zeros, here or
+  // where a jump bypasses its declaration; the declaration stores NULL.
+  if (Ty->isCLIReferenceType())
+    return LangOptions::TrivialAutoVarInitKind::Uninitialized;
   if (D.isConstexpr() || D.getAttr<UninitializedAttr>() ||
       hasNoTrivialAutoVarInitAttr(Ty->getAsTagDecl()) ||
       hasNoTrivialAutoVarInitAttr(CurFuncDecl))
@@ -2136,6 +2141,11 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
     }
     LValue lv = MakeAddrLValue(Loc, type);
     lv.setNonGC(true);
+    // MSIL: a .NET reference is NULL while its written initializer runs: the
+    // initializer may read the variable or jump out to a label in its scope.
+    if (type->isCLIReferenceType() && !isa<ImplicitValueInitExpr>(Init))
+      EmitStoreOfScalar(getMSILNullReference(getLLVMContext()), lv,
+                        /*isInit=*/true);
     return EmitExprAsInit(Init, &D, lv, capturedByInit);
   }
 

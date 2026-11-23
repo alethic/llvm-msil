@@ -1,9 +1,10 @@
 ; The legacy codegen pipeline of MSILPassConfig (ImplementationPlan.md 5.3,
 ; recon passes-frame.md 4.2) was fixed in M2 (decision D33); M11 removed the
 ; second invoke lowering (section 12 rows of 2026-10-20, recon
-; m11/eh-passes.md), M26 fixed the IR slots of 5.13.6 (P-4), and M27 filled
-; slot P8. This test pins the order of the MSIL passes and of the generic
-; passes next to them, at -O0 and -O2 on the three triples:
+; m11/eh-passes.md), M26 fixed the IR slots of 5.13.6 (P-4), M27 filled
+; slot P8, and R-a added slot P15 (5.13.6 as amended in section 12 on
+; 2026-11-21, 5.21.7 RB10). This test pins the order of the MSIL passes and
+; of the generic passes next to them, at -O0 and -O2 on the three triples:
 ; - IR (5.13.6): MSILPrepareIR (P1) runs first of the target's IR passes, then
 ;   AddMissingPrototypes (P2), LowerInvoke (P3), UnreachableBlockElim (P4),
 ;   FixFunctionBitcasts (P5), PrepareVariadics (P6), ExpandVariadics (P7),
@@ -25,6 +26,13 @@
 ;   the model that clang's MinGW toolchain sets for x86_64
 ;   (-exception-model=seh, which is WinEH), even for C: llc turns it into an
 ;   "exception-model" module flag, which adds no pass either;
+; - ISel preparation (MSILPassConfig::addISelPrepare): AtomicExpand, then
+;   PromoteReferences (P15, R-a), which promotes the stack slots of .NET
+;   references at every optimization level, then the generic preparation
+;   passes of TargetPassConfig::addISelPrepare(), the stack protector among
+;   them. P15 is a module pass, so the pass manager runs a new function pass
+;   manager after it (a 'FunctionPass Manager' line, which these ordered
+;   checks skip);
 ; - instruction selection: ISel, then ArgumentMove, SetMemFlags and
 ;   CleanCodeAfterTrap;
 ; - no register allocator, no virtual register rewriter, and none of the
@@ -101,6 +109,7 @@
 ; CHECK:       Remove unreachable blocks from the CFG
 ; O2:          CodeGen Prepare
 ; CHECK:       Expand Atomic instructions
+; CHECK:       MSIL Promote References
 ; CHECK:       Insert stack protectors
 ; CHECK:       MSIL Instruction Selection
 ; CHECK:       MSIL Argument Move

@@ -32,6 +32,7 @@ class Module;
 
 namespace clang {
 
+class CLIReferenceType;
 class FunctionDecl;
 
 namespace CodeGen {
@@ -68,6 +69,25 @@ void mangleMSILManagedCallName(CodeGenModule &CGM, GlobalDecl GD,
 /// conversions (Sema did not classify the declaration, and reported why)
 /// nothing is added.
 void addMSILManagedCallAttributes(const FunctionDecl &FD, llvm::Function &F);
+
+/// The cast stub declaration (plan 5.21.9 RM8) that a C cast of a .NET
+/// reference to the class of \p Target calls (RG5, emitMSILReferenceCast in
+/// CGMSILReferences.h), created in \p CGM's module on first use: a
+/// declaration 'target("msil.ref") (target("msil.ref"))' named
+/// '__msil_mc.<castclass>.__uniq.<n>' (llvm::cli::ManagedCastSymbol), <n>
+/// from llvm::cli::getManagedCallUniqPostfix over the strings of its
+/// !msil.managed.calls operands 1-6 and its function type, with MR1's
+/// attributes: "msil-managed-type" the class's display name
+/// (llvm::cli::getCLITypeDisplayName of \p Target's key; a class, System.String
+/// or an array, never System.Object, to which a cast emits nothing),
+/// "msil-managed-member" '.castclass', "msil-managed-sig" 'object(object)'
+/// and "msil-managed-conv" 'ref;ref' (llvm::cli::isManagedCastShape), and no
+/// memory attributes, so that an unused cast still runs and throws. Its
+/// !msil.managed.calls operand comes with every managed-call declaration's
+/// (emitMSILManagedCallsMetadata). Equal casts of two units have one name, so
+/// LTO merges them, and each class has its own stub.
+llvm::Function *getOrCreateMSILCastDeclaration(CodeGenModule &CGM,
+                                               const CLIReferenceType &Target);
 
 /// EmitGlobal's step for the declaration \p GD: a managed-call declaration
 /// with dllexport, constructor or destructor gets its IR declaration now,

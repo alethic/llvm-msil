@@ -1,0 +1,54 @@
+# A checked cast whose value is unused still runs and throws at every level: '(void)(String ^)encoder', where the Object reference holds a UTF8Encoding, calls the cast stub, whose castclass throws System.InvalidCastException, so the optimizer never deletes the cast as dead code and the program ends as an unhandled exception at -O0 to -O3.
+# Plan 5.21.5 RG5 (the cast declaration has no memory attributes, so an
+# unused cast still runs and throws; the user's pick "Keep checked casts",
+# section 12's row 'Conversions and casts between .NET classes',
+# 2026-11-21), 5.21.4 RS8 (a reference to void is an allowed cast, and the
+# cast to String inside it is a checked one), 5.21.9 RM8 (the cast stub
+# ldarg.0; castclass <TYPE>; ret), ECMA-335 Partition III 4.3 (castclass
+# throws InvalidCastException when the object is not of the class). Every
+# type and member is a built-in table entry (UTF8Encoding::.ctor(bool,
+# bool)), so no reference assemblies are needed. The program ends on an
+# unhandled exception (a loud failure, plan 5.17.4), so the transcript is
+# hand-written for both OSes: the line before the cast, then the status
+# line '[unhandled exception: System.InvalidCastException]'; a deleted
+# cast would let the program print its last line and exit with 0 instead.
+# The LOUD line matches the program's own stderr line, written before the
+# cast; the runtime's report of the exception is never matched.
+# cast-loud.test has a failed cast whose value is used. Plan 5.17.13 (R-a,
+# M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O1}
+# RUN: %{msil_prog_loud_O2}
+# RUN: %{msil_prog_loud_O3}
+# LOUD: cast-loud-unused: casting an Object that holds a UTF8Encoding to String, value unused
+# LOUD-NOT: cast-loud-unused: returned from the failed cast
+#--- main.c
+#include <cli/cli.h>
+#include <stdio.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.UTF8Encoding") UTF8Encoding UTF8Encoding;
+
+__attribute__((msil_method("System.Text.UTF8Encoding", ".ctor",
+                           "instance void(bool, bool)")))
+UTF8Encoding ^new_utf8(_Bool emit_bom, _Bool throw_on_invalid);
+
+int main(void) {
+  Object ^encoder = new_utf8(0, 1);
+  printf("an encoder: not NULL %d\n", encoder != NULL);
+
+  /* The value of the cast is unused: only the check is left. */
+  fflush(stdout);
+  fputs("cast-loud-unused: casting an Object that holds a UTF8Encoding to "
+        "String, value unused\n",
+        stderr);
+  fflush(stderr);
+  (void)(String ^)encoder;
+  printf("returned from the failed cast\n");
+  fprintf(stderr, "cast-loud-unused: returned from the failed cast\n");
+  return 0;
+}

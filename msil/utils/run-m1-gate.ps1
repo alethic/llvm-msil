@@ -94,8 +94,10 @@
 #        or its problem count and first problems. It needs no build, so it also runs after a
 #        failed configure or build.                                                 (~10 s)
 #   9. msil/utils/ci/upstream-hooks.ps1 (M11; not with -SkipUpstreamHooks)        (~4 min)
-#        manifest (msil/utils/upstream-hooks.txt lists every upstream file the fork changes, and
-#        every object-format switch has an MSIL case), pins (action pins as upstream's), lit
+#        manifest (msil/utils/upstream-hooks.txt lists every upstream file the fork changes,
+#        every object-format switch has an MSIL case, and, from R-a, every switch over clang's
+#        type classes a CLIReference case, a 'default:' of its own or a generated case for
+#        every class), pins (action pins as upstream's), lit
 #        (the upstream lit tests of the hooked files), gtest (all of TargetParserTests and
 #        MCTests), compile (ARMAsmParser.cpp and lldb's GDBRemoteCommunicationClient.cpp in the
 #        private hooks build tree beside the checkout). CI runs it with -NoCompile -NoManifest

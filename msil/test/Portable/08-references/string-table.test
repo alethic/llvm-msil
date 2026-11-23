@@ -1,0 +1,139 @@
+# Strings as .NET references on msil64-unknown-dotnet, through msil-ld's built-in table alone: Encoding::GetString on a throwing UTF8Encoding and on a throwing UTF32Encoding (32-bit wchar_t text) gives String references through a 'this-ref' Encoding reference that a checked cast makes, Marshal::StringToHGlobalUni reads a String reference back as UTF-16 (compared in C with c.dll's memcmp), String::.ctor(char*) copies UTF-16 units from C memory, equal texts are different objects, a NULL String reference is a null string, and a String reference passes to a .ctor's 'string' parameter beside MC-1's UTF-8 C string.
+# Plan 5.21.9 RM2 ('ref' for a CIL 'string' parameter or result and for a
+# '.ctor' type, 'this-ref' for the 'this' of a class whose key equals
+# TYPE's), RM3 (a CIL 'string' parameter takes 'String ^'; MC-1's S1 stays
+# until R-a2), RM7 (a 'ref' argument is ldarg plus castclass, with no null
+# test; a 'ref' result is returned as it is), RM11 (built-in table members
+# only: UTF8Encoding::.ctor(bool, bool), UTF32Encoding::.ctor(bool, bool,
+# bool), Encoding::GetString(uint8*, int32), String::.ctor(char*),
+# Marshal::StringToHGlobalUni(string), EntryPointNotFoundException::
+# .ctor(string) and Exception::get_HResult()), 5.21.4 RS8 (the casts to
+# Encoding and Exception are checked casts), 5.20.11 MT1 (wchar_t is 32
+# bits on the portable triples). The expected units are the Unicode
+# encodings of the text: U+00E9 is C3 A9 in UTF-8, U+20AC is E2 82 AC,
+# U+1D11E is F0 9D 84 9E and the surrogate pair D834 DD1E. The HResult of
+# an EntryPointNotFoundException is COR_E_ENTRYPOINTNOTFOUND, 0x80131523.
+# Each failed group sets one bit of the exit status. A link that writes
+# --lto-emit-asm text cannot import c.dll (msil_link_output=il), so the
+# test needs linked images. Plan 5.21.14 RV28 (R-a, Portable/08-references).
+# UNSUPPORTED: msil-link-output=il
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <string.h>
+#include <uchar.h>
+
+_Static_assert(sizeof(wchar_t) == 4, "wchar_t is 32 bits on msil64");
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.Encoding") Encoding Encoding;
+typedef struct CLI_TYPE("System.Text.UTF8Encoding") UTF8Encoding UTF8Encoding;
+typedef struct CLI_TYPE("System.Text.UTF32Encoding")
+    UTF32Encoding UTF32Encoding;
+typedef struct CLI_TYPE("System.Exception") Exception Exception;
+typedef struct CLI_TYPE("System.EntryPointNotFoundException")
+    EntryPointNotFoundException EntryPointNotFoundException;
+
+__attribute__((msil_method("System.Text.UTF8Encoding", ".ctor",
+                           "instance void(bool, bool)")))
+UTF8Encoding ^new_utf8(_Bool emit_bom, _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.UTF32Encoding", ".ctor",
+                           "instance void(bool, bool, bool)")))
+UTF32Encoding ^new_utf32(_Bool big_endian, _Bool emit_bom,
+                         _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.Encoding", "GetString",
+                           "instance string(uint8*, int32)")))
+String ^get_string(Encoding ^encoding, const void *bytes, int count);
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+EntryPointNotFoundException ^new_not_found(String ^message);
+
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+EntryPointNotFoundException ^new_not_found_utf8(const char *message);
+
+__attribute__((msil_method("System.Exception", "get_HResult",
+                           "instance int32()")))
+int exception_hresult(Exception ^e);
+
+static unsigned fails;
+#define CHECK(bit, cond)                                                       \
+  do {                                                                         \
+    if (!(cond))                                                               \
+      fails |= 1u << (bit);                                                    \
+  } while (0)
+
+/* "h\u00e9llo \u20ac \U0001D11E" in UTF-8, in UTF-32 and in UTF-16. */
+static const char text8[] = "h\xc3\xa9llo \xe2\x82\xac \xf0\x9d\x84\x9e";
+static const wchar_t text32[] = L"h\u00e9llo \u20ac \U0001D11E";
+static const char16_t text16[] = {'h', 0xE9, 'l', 'l', 'o', ' ', 0x20AC,
+                                  ' ', 0xD834, 0xDD1E, 0};
+
+/* Whether a String reference holds exactly the UTF-16 units 'want'. */
+static int has_units(String ^s, const char16_t *want, size_t bytes) {
+  char16_t *u = string_units(s);
+  return u && memcmp(u, want, bytes) == 0;
+}
+
+#define COR_E_ENTRYPOINTNOTFOUND 0x80131523u
+
+int main(void) {
+  /* 0: UTF-8 through a throwing UTF8Encoding held as Encoding. */
+  UTF8Encoding ^utf8 = new_utf8(0, 1);
+  Encoding ^encoding = (Encoding ^)utf8;
+  CHECK(0, utf8 != NULL && (Object ^)encoding == utf8);
+  String ^hello = get_string(encoding, text8, (int)strlen(text8));
+  CHECK(0, has_units(hello, text16, sizeof text16));
+
+  /* 1: equal text, another object. */
+  String ^again = get_string(encoding, text8, (int)strlen(text8));
+  CHECK(1, again != hello && has_units(again, text16, sizeof text16));
+
+  /* 2: UTF-32 through a second encoder. */
+  UTF32Encoding ^utf32 = new_utf32(0, 0, 1);
+  String ^hello32 =
+      get_string((Encoding ^)utf32, text32, (int)(sizeof text32 - 4));
+  CHECK(2, has_units(hello32, text16, sizeof text16));
+
+  /* 3: String::.ctor(char*) copies the units out of C memory. */
+  char16_t buffer[] = {'r', 'e', 'f', 0};
+  String ^copied = new_string(buffer);
+  buffer[0] = 'X';
+  static const char16_t ref_units[] = {'r', 'e', 'f', 0};
+  CHECK(3, has_units(copied, ref_units, sizeof ref_units));
+
+  /* 4: the empty text is a string; a NULL reference is a null string. */
+  String ^empty = get_string(encoding, text8, 0);
+  char16_t *empty_units = string_units(empty);
+  CHECK(4, empty != NULL && empty_units && empty_units[0] == 0);
+  String ^none = NULL;
+  CHECK(4, string_units(none) == NULL);
+
+  /* 5: a String reference as a .ctor's 'string' parameter. */
+  EntryPointNotFoundException ^e1 = new_not_found(hello);
+  EntryPointNotFoundException ^e2 = new_not_found_utf8("a UTF-8 message");
+  EntryPointNotFoundException ^e3 = new_not_found(NULL);
+  CHECK(5, (unsigned)exception_hresult((Exception ^)e1) ==
+               COR_E_ENTRYPOINTNOTFOUND);
+  CHECK(5, (unsigned)exception_hresult((Exception ^)e2) ==
+               COR_E_ENTRYPOINTNOTFOUND);
+  CHECK(5, (unsigned)exception_hresult((Exception ^)e3) ==
+               COR_E_ENTRYPOINTNOTFOUND);
+  CHECK(5, e1 != e2 && e2 != e3 && e1 != e3);
+  return (int)fails;
+}

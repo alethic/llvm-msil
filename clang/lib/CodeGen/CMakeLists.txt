@@ -87,6 +87,7 @@ add_clang_library(clangCodeGen
   CGHLSLBuiltins.cpp
   CGLoopInfo.cpp
   CGMSILManagedCalls.cpp
+  CGMSILReferences.cpp
   CGNonTrivialStruct.cpp
   CGObjC.cpp
   CGObjCGNU.cpp

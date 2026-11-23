@@ -1,0 +1,587 @@
+# The OBJ register class in MIR (ImplementationPlan.md 5.21.7 RB2, RB3, RB6,
+# RB7, RB9; milestone R-a, RV22): the machine passes treat .NET references
+# (MVT::externref, the register class 'obj', CIL 'object') like the other
+# register classes, with the records of plan 5.4's operand lists that
+# MSILInstrRef.td defines for OBJ.
+# - parse.mir: machineFunctionInfo's params and results read and print
+#   'externref' (RB6: parseMVT), and the class prints as 'obj'.
+# - el.mir (ExplicitLocals, RB7): an object argument is read where it is used
+#   (ARG_GET_OBJ) and an unused one disappears; an object used in another
+#   block gets a CIL local (LOCAL_SET_OBJ, LOCAL_GET_OBJ); an unused def is
+#   followed by DROP_OBJ; a COPY_OBJ goes through an object local as a
+#   COPY_I32 goes through an int32 one; a value written to an argument's
+#   register is stored with ARG_SET_OBJ; and an IMPLICIT_DEF of
+#   the class is never erased: it becomes CONST_NULL ('ldnull'), written to
+#   its local or dropped like any other def, while an i32 IMPLICIT_DEF is
+#   still erased. An undef object use gets its own CONST_NULL ('ldnull'),
+#   also when its register is written elsewhere, while an undef i32 use
+#   still reads its local (section 12's row '5.21.7 RB7 and 5.21.6 RI5 as
+#   built after review round 1' of 2026-11-21).
+# - rs.mir (RegStackify, RB7): a non-rematerializable object with two uses
+#   stays on the stack once through TEE_OBJ, which ExplicitLocals turns into
+#   LOCAL_TEE_OBJ ('dup; stloc', StackPeakExtra 1, so .maxstack 2); a
+#   stackified object IMPLICIT_DEF becomes CONST_NULL; CONST_NULL is cloned
+#   to each use in another block, as the other constants are; MSILStackCheck
+#   counts objects as other values (RB9).
+# - il.mir: from ExplicitLocals on, the printed forms: '.locals' of type
+#   object, ldarg.0-3, ldarg.s, starg.s, ldloc.0-3, ldloc.s and stloc.s of
+#   objects, 'ldnull' (also for an IMPLICIT_DEF) and 'pop' (MSILMCInstLower,
+#   RB3); the text assembles. (reference-values.ll prints the tees, 'dup;
+#   stloc' and 'dup; starg.s'.)
+# - bf.mir (RB3: getInvertedBranch): branch folding reverses each object
+#   branch when its target is the layout successor: BR_IF_OBJ and
+#   BR_UNLESS_OBJ ('brtrue' and 'brfalse') into each other, and BEQ_OBJ and
+#   BNE_UN_OBJ ('beq' and 'bne.un') into each other, and drops the
+#   unconditional branch.
+# The converted CONST_NULL may or may not carry the implicit ARGUMENTS def of
+# a CONST_NULL built from scratch, as for the other classes'
+# conversions (reg-stackify-basic.mir); the checks accept both.
+
+# RUN: split-file %s %t
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=none -verify-machineinstrs %t/parse.mir -o - \
+# RUN:   | FileCheck %t/parse.mir
+# RUN: llc -mtriple=msil64-unknown-dotnet -run-pass=none -verify-machineinstrs %t/parse.mir -o - \
+# RUN:   | FileCheck %t/parse.mir
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=msil-explicit-locals -verify-machineinstrs \
+# RUN:   %t/el.mir -o - | FileCheck %t/el.mir
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=msil-explicit-locals -verify-machineinstrs \
+# RUN:   %t/el.mir -o - | FileCheck %t/el.mir
+# RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -run-pass=msil-explicit-locals -verify-machineinstrs \
+# RUN:   %t/el.mir -o - | FileCheck %t/el.mir
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=msil-reg-stackify -verify-machineinstrs \
+# RUN:   %t/rs.mir -o - | FileCheck %t/rs.mir --check-prefix=RS
+# RUN: llc -mtriple=msil64-unknown-dotnet -run-pass=msil-reg-stackify -verify-machineinstrs \
+# RUN:   %t/rs.mir -o - | FileCheck %t/rs.mir --check-prefix=RS
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs \
+# RUN:   -run-pass=msil-reg-stackify,msil-explicit-locals,msil-stack-check %t/rs.mir -o - \
+# RUN:   | FileCheck %t/rs.mir --check-prefix=EL
+# RUN: llc -mtriple=msil64-unknown-dotnet -verify-machineinstrs \
+# RUN:   -run-pass=msil-reg-stackify,msil-explicit-locals,msil-stack-check %t/rs.mir -o - \
+# RUN:   | FileCheck %t/rs.mir --check-prefix=EL
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=msil-explicit-locals -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %t/il.mir
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -start-before=msil-explicit-locals -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %t/il.mir
+# RUN: llc -mtriple=msil64-unknown-dotnet -start-before=msil-explicit-locals -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %t/il.mir
+# RUN: %if ilasm %{ llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=msil-explicit-locals \
+# RUN:   %t/il.mir -o %t/il.il && %ilasm-verify -output=%t/il.dll %t/il.il %}
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=branch-folder -verify-machineinstrs %t/bf.mir -o - \
+# RUN:   | FileCheck %t/bf.mir
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=branch-folder -verify-machineinstrs %t/bf.mir -o - \
+# RUN:   | FileCheck %t/bf.mir
+
+#--- parse.mir
+# CHECK-LABEL: name: obj_sig{{$}}
+# CHECK:       registers:
+# CHECK-NEXT:  - { id: 0, class: obj,
+# CHECK-NEXT:  - { id: 1, class: i32,
+# CHECK:       machineFunctionInfo:
+# CHECK-NEXT:    params: [ externref, i32 ]
+# CHECK-NEXT:    results: [ externref ]
+# CHECK:       body:
+# CHECK:       %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+# CHECK-NEXT:  %1:i32 = ARGUMENT_I32 1, implicit $arguments
+# CHECK-NEXT:  RETURN %0, implicit-def dead $arguments
+---
+name:            obj_sig
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: obj }
+  - { id: 1, class: i32 }
+machineFunctionInfo:
+  params:  [ externref, i32 ]
+  results: [ externref ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    %1:i32 = ARGUMENT_I32 1, implicit $arguments
+    RETURN %0, implicit-def dead $arguments
+...
+
+#--- el.mir
+# The used object argument is read where it is used; the unused ones
+# disappear without a DROP.
+# CHECK-LABEL: name: obj_args{{$}}
+# CHECK:       params: [ externref, i32, externref ]
+# CHECK:       body:
+# CHECK-NOT:   ARGUMENT_
+# CHECK:       [[A:%[0-9]+]]:obj = ARG_GET_OBJ 2,
+# CHECK-NEXT:  RETURN [[A]],
+# CHECK-NOT:   {{LOCAL_|ARG_SET|ARGUMENT_|DROP_}}
+---
+name:            obj_args
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref, i32, externref ]
+  results: [ externref ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    %1:i32 = ARGUMENT_I32 1, implicit $arguments
+    %2:obj = ARGUMENT_OBJ 2, implicit $arguments
+    RETURN %2, implicit-def dead $arguments
+...
+
+# An object used in the next block goes through a CIL local, local 0 (no
+# parameters); the second object, unused, is dropped.
+# CHECK-LABEL: name: obj_local{{$}}
+# CHECK:       bb.0:
+# CHECK:       {{^ +}}[[N:%[0-9]+]]:obj = CONST_NULL
+# CHECK-NEXT:  LOCAL_SET_OBJ 0, [[N]],
+# CHECK-NEXT:  {{^ +}}[[D:%[0-9]+]]:obj = CONST_NULL
+# CHECK-NEXT:  DROP_OBJ [[D]],
+# CHECK-NEXT:  BR %bb.1,
+# CHECK:       bb.1:
+# CHECK:       [[G:%[0-9]+]]:obj = LOCAL_GET_OBJ 0,
+# CHECK-NEXT:  RETURN [[G]],
+---
+name:            obj_local
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ externref ]
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $arguments
+    %0:obj = CONST_NULL implicit-def dead $arguments
+    dead %1:obj = CONST_NULL implicit-def dead $arguments
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    RETURN %0, implicit-def dead $arguments
+...
+
+# A COPY_OBJ is what a COPY_I32 is: the value read from the argument is
+# stored into an object local and read back for its use.
+# CHECK-LABEL: name: obj_copy{{$}}
+# CHECK:       body:
+# CHECK-NOT:   COPY_OBJ
+# CHECK:       [[A:%[0-9]+]]:obj = ARG_GET_OBJ 0,
+# CHECK-NEXT:  LOCAL_SET_OBJ 0, [[A]],
+# CHECK-NEXT:  [[L:%[0-9]+]]:obj = LOCAL_GET_OBJ 0,
+# CHECK-NEXT:  RETURN [[L]],
+# CHECK-NOT:   COPY_OBJ
+---
+name:            obj_copy
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref ]
+  results: [ externref ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    %1:obj = COPY_OBJ %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
+# A null written to an object argument's register (RegColoring's shape) is
+# stored into that parameter with ARG_SET_OBJ; every read of the register is
+# an ARG_GET_OBJ of it.
+# CHECK-LABEL: name: obj_arg_write{{$}}
+# CHECK:       body:
+# CHECK:       [[A:%[0-9]+]]:obj = ARG_GET_OBJ 0,
+# CHECK-NEXT:  DROP_OBJ [[A]],
+# CHECK-NEXT:  {{^ +}}[[N:%[0-9]+]]:obj = CONST_NULL
+# CHECK-NEXT:  ARG_SET_OBJ 0, [[N]],
+# CHECK-NEXT:  [[R:%[0-9]+]]:obj = ARG_GET_OBJ 0,
+# CHECK-NEXT:  RETURN [[R]],
+# CHECK-NOT:   {{LOCAL_|ARGUMENT_}}
+---
+name:            obj_arg_write
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref ]
+  results: [ externref ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    DROP_OBJ %0, implicit-def dead $arguments
+    %0:obj = CONST_NULL implicit-def dead $arguments
+    RETURN %0, implicit-def dead $arguments
+...
+
+# An object IMPLICIT_DEF is never erased: it becomes CONST_NULL and is
+# written to its local (used in the next block) or dropped (unused); the i32
+# IMPLICIT_DEF is erased as before.
+# CHECK-LABEL: name: obj_undef{{$}}
+# CHECK:       bb.0:
+# CHECK-NOT:   IMPLICIT_DEF
+# CHECK:       {{^ +}}[[N:%[0-9]+]]:obj = CONST_NULL{{(, implicit-def dead \$arguments)?$}}
+# CHECK-NEXT:  LOCAL_SET_OBJ 0, [[N]],
+# CHECK-NEXT:  {{^ +}}[[D:%[0-9]+]]:obj = CONST_NULL{{(, implicit-def dead \$arguments)?$}}
+# CHECK-NEXT:  DROP_OBJ [[D]],
+# CHECK-NEXT:  BR %bb.1,
+# CHECK:       bb.1:
+# CHECK-NOT:   IMPLICIT_DEF
+# CHECK:       [[G:%[0-9]+]]:obj = LOCAL_GET_OBJ 0,
+# CHECK-NEXT:  RETURN [[G]],
+# CHECK-NOT:   IMPLICIT_DEF
+---
+name:            obj_undef
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ externref ]
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $arguments
+    %0:obj = IMPLICIT_DEF
+    %1:obj = IMPLICIT_DEF
+    %2:i32 = IMPLICIT_DEF
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    RETURN %0, implicit-def dead $arguments
+...
+
+# An undef use of an object register (ProcessImplicitDefs' shape from -O1
+# on, with no IMPLICIT_DEF left) gets its own CONST_NULL where its local.get
+# would go, also when the register is written later (RegColoring's merge,
+# %0 here): only the defined read goes through the object local, local 1.
+# An undef i32 use still reads its local, as before.
+# CHECK-LABEL: name: obj_undef_use{{$}}
+# CHECK:       bb.0:
+# CHECK:       {{^ +}}[[N0:%[0-9]+]]:obj = CONST_NULL
+# CHECK-NEXT:  DROP_OBJ [[N0]],
+# CHECK-NEXT:  [[I:%[0-9]+]]:i32 = LOCAL_GET_I32 0,
+# CHECK-NEXT:  DROP_I32 undef [[I]],
+# CHECK-NEXT:  {{^ +}}[[D:%[0-9]+]]:obj = CONST_NULL
+# CHECK-NEXT:  LOCAL_SET_OBJ 1, [[D]],
+# CHECK-NEXT:  BR %bb.1,
+# CHECK:       bb.1:
+# CHECK:       [[G:%[0-9]+]]:obj = LOCAL_GET_OBJ 1,
+# CHECK-NEXT:  DROP_OBJ [[G]],
+# CHECK-NEXT:  {{^ +}}[[N2:%[0-9]+]]:obj = CONST_NULL
+# CHECK-NEXT:  RETURN [[N2]],
+---
+name:            obj_undef_use
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ externref ]
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $arguments
+    DROP_OBJ undef %0:obj, implicit-def dead $arguments
+    DROP_I32 undef %1:i32, implicit-def dead $arguments
+    %0:obj = CONST_NULL implicit-def dead $arguments
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    DROP_OBJ %0, implicit-def dead $arguments
+    RETURN undef %2:obj, implicit-def dead $arguments
+...
+
+#--- rs.mir
+# A value with two uses in one block whose def is not rematerializable (a
+# COPY_OBJ): TEE_OBJ keeps it on the stack for the first use and in a
+# register for the second; after ExplicitLocals, LOCAL_TEE_OBJ into local 0
+# and LOCAL_GET_OBJ, two deep.
+# RS-LABEL:   name: obj_tee{{$}}
+# RS:         body:
+# RS:         {{^ +}}[[DEF:%[0-9]+]]:obj = COPY_OBJ %0, {{.*}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}[[TEE:%[0-9]+]]:obj, %1:obj = TEE_OBJ [[DEF]], {{.*}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}DROP_OBJ [[TEE]], {{.*}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}RETURN %1, implicit-def dead $arguments{{$}}
+# EL-LABEL:   name: obj_tee{{$}}
+# EL:         maxStack: 2{{$}}
+# EL:         body:
+# EL:         [[A:%[0-9]+]]:obj = ARG_GET_OBJ 0,
+# EL-NEXT:    [[T:%[0-9]+]]:obj = LOCAL_TEE_OBJ 0, [[A]],
+# EL-NEXT:    DROP_OBJ [[T]],
+# EL-NEXT:    [[L:%[0-9]+]]:obj = LOCAL_GET_OBJ 0,
+# EL-NEXT:    RETURN [[L]],
+# EL-NOT:     {{TEE_OBJ|COPY_OBJ}}
+---
+name:            obj_tee
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref ]
+  results: [ externref ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    %1:obj = COPY_OBJ %0, implicit-def dead $arguments
+    DROP_OBJ %1, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
+# A stackified object IMPLICIT_DEF becomes CONST_NULL, so its push is an
+# explicit 'ldnull'.
+# RS-LABEL:   name: obj_undef_stackified{{$}}
+# RS:         {{^ +}}%0:obj = CONST_NULL {{(implicit-def dead \$arguments, )?}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    RETURN %0,
+# EL-LABEL:   name: obj_undef_stackified{{$}}
+# EL:         maxStack: 1{{$}}
+# EL:         body:
+# EL:         %0:obj = CONST_NULL
+# EL-NEXT:    RETURN %0,
+# EL-NOT:     IMPLICIT_DEF
+---
+name:            obj_undef_stackified
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ externref ]
+body: |
+  bb.0:
+    %0:obj = IMPLICIT_DEF
+    RETURN %0, implicit-def dead $arguments
+...
+
+# A CONST_NULL used in another block is not carried there on the stack: it
+# is rematerialized right before its use (the IL is 'ldnull' there), as the
+# numeric constants are.
+# RS-LABEL:   name: obj_null_remat{{$}}
+# RS:         bb.1:
+# RS:         {{^ +}}[[N:%[0-9]+]]:obj = CONST_NULL {{.*}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    RETURN [[N]],
+# EL-LABEL:   name: obj_null_remat{{$}}
+# EL:         maxStack: 1{{$}}
+# EL:         bb.1:
+# EL:         [[N:%[0-9]+]]:obj = CONST_NULL
+# EL-NEXT:    RETURN [[N]],
+# EL-NOT:     LOCAL_
+---
+name:            obj_null_remat
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ externref ]
+body: |
+  bb.0:
+    successors: %bb.1
+    %0:obj = CONST_NULL implicit-def dead $arguments
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    RETURN %0, implicit-def dead $arguments
+...
+
+#--- il.mir
+# Six object parameters and five object locals (one copy of each of the
+# first five arguments, read in the next block): ldarg.0 to ldarg.3, then
+# ldarg.s; stloc.0 to stloc.3, then stloc.s; ldloc.0 to ldloc.3, then
+# ldloc.s; starg.s for an argument; an unused value is 'pop'; and every
+# local is 'object'.
+# CHECK-LABEL: .method public static object 'obj_forms'(object, object, object, object, object, object) cil managed
+# CHECK-NEXT:  {{^\{$}}
+# CHECK-NEXT:  {{^  \.maxstack 1$}}
+# CHECK-NEXT:  {{^  \.locals \(object, object, object, object, object\)$}}
+# CHECK-NEXT:  {{^  ldarg\.0$}}
+# CHECK-NEXT:  {{^  stloc\.0$}}
+# CHECK-NEXT:  {{^  ldarg\.1$}}
+# CHECK-NEXT:  {{^  stloc\.1$}}
+# CHECK-NEXT:  {{^  ldarg\.2$}}
+# CHECK-NEXT:  {{^  stloc\.2$}}
+# CHECK-NEXT:  {{^  ldarg\.3$}}
+# CHECK-NEXT:  {{^  stloc\.3$}}
+# CHECK-NEXT:  {{^  ldarg\.s 4$}}
+# CHECK-NEXT:  {{^  stloc\.s 4$}}
+# CHECK-NEXT:  {{^  ldnull$}}
+# CHECK-NEXT:  {{^  starg\.s 5$}}
+# CHECK-NEXT:  {{^  br\.s @BB[0-9]+_1$}}
+# CHECK-NEXT:  {{^@BB[0-9]+_1:$}}
+# CHECK-NEXT:  {{^  ldloc\.0$}}
+# CHECK-NEXT:  {{^  pop$}}
+# CHECK-NEXT:  {{^  ldloc\.1$}}
+# CHECK-NEXT:  {{^  pop$}}
+# CHECK-NEXT:  {{^  ldloc\.2$}}
+# CHECK-NEXT:  {{^  pop$}}
+# CHECK-NEXT:  {{^  ldloc\.3$}}
+# CHECK-NEXT:  {{^  pop$}}
+# CHECK-NEXT:  {{^  ldarg\.s 5$}}
+# CHECK-NEXT:  {{^  pop$}}
+# CHECK-NEXT:  {{^  ldloc\.s 4$}}
+# CHECK-NEXT:  {{^  ret$}}
+# CHECK-NEXT:  {{^}}} // end of method 'obj_forms'
+
+# An object IMPLICIT_DEF that reaches ExplicitLocals unstackified is
+# 'ldnull', stored to its object local and read back.
+# CHECK-LABEL: .method public static object 'obj_undef_il'() cil managed
+# CHECK-NEXT:  {{^\{$}}
+# CHECK-NEXT:  {{^  \.maxstack 1$}}
+# CHECK-NEXT:  {{^  \.locals \(object\)$}}
+# CHECK-NEXT:  {{^  ldnull$}}
+# CHECK-NEXT:  {{^  stloc\.0$}}
+# CHECK-NEXT:  {{^  ldloc\.0$}}
+# CHECK-NEXT:  {{^  ret$}}
+# CHECK-NEXT:  {{^}}} // end of method 'obj_undef_il'
+--- |
+  source_filename = "reference-mir.c"
+
+  define target("msil.ref") @obj_forms(target("msil.ref") %a, target("msil.ref") %b, target("msil.ref") %c, target("msil.ref") %d, target("msil.ref") %e, target("msil.ref") %f) {
+    ret target("msil.ref") zeroinitializer
+  }
+
+  define target("msil.ref") @obj_undef_il() {
+    ret target("msil.ref") zeroinitializer
+  }
+...
+---
+name:            obj_forms
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref, externref, externref, externref, externref, externref ]
+  results: [ externref ]
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    %1:obj = ARGUMENT_OBJ 1, implicit $arguments
+    %2:obj = ARGUMENT_OBJ 2, implicit $arguments
+    %3:obj = ARGUMENT_OBJ 3, implicit $arguments
+    %4:obj = ARGUMENT_OBJ 4, implicit $arguments
+    %5:obj = ARGUMENT_OBJ 5, implicit $arguments
+    %10:obj = COPY_OBJ %0, implicit-def dead $arguments
+    %11:obj = COPY_OBJ %1, implicit-def dead $arguments
+    %12:obj = COPY_OBJ %2, implicit-def dead $arguments
+    %13:obj = COPY_OBJ %3, implicit-def dead $arguments
+    %14:obj = COPY_OBJ %4, implicit-def dead $arguments
+    %5:obj = CONST_NULL implicit-def dead $arguments
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    DROP_OBJ %10, implicit-def dead $arguments
+    DROP_OBJ %11, implicit-def dead $arguments
+    DROP_OBJ %12, implicit-def dead $arguments
+    DROP_OBJ %13, implicit-def dead $arguments
+    DROP_OBJ %5, implicit-def dead $arguments
+    RETURN %14, implicit-def dead $arguments
+...
+---
+name:            obj_undef_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ externref ]
+body: |
+  bb.0:
+    %0:obj = IMPLICIT_DEF
+    RETURN %0, implicit-def dead $arguments
+...
+
+#--- bf.mir
+# CHECK-LABEL: name: rev_if{{$}}
+# CHECK:       bb.0:
+# CHECK:       BR_UNLESS_OBJ %bb.2, %0,
+# CHECK-NOT:   BR
+# CHECK:       bb.1:
+---
+name:            rev_if
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    BR_IF_OBJ %bb.1, %0, implicit-def dead $arguments
+    BR %bb.2, implicit-def dead $arguments
+
+  bb.1:
+    %1:i32 = CONST_I32 1, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+
+  bb.2:
+    %2:i32 = CONST_I32 2, implicit-def dead $arguments
+    RETURN %2, implicit-def dead $arguments
+...
+
+# CHECK-LABEL: name: rev_unless{{$}}
+# CHECK:       bb.0:
+# CHECK:       BR_IF_OBJ %bb.2, %0,
+# CHECK-NOT:   BR
+# CHECK:       bb.1:
+---
+name:            rev_unless
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    BR_UNLESS_OBJ %bb.1, %0, implicit-def dead $arguments
+    BR %bb.2, implicit-def dead $arguments
+
+  bb.1:
+    %1:i32 = CONST_I32 1, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+
+  bb.2:
+    %2:i32 = CONST_I32 2, implicit-def dead $arguments
+    RETURN %2, implicit-def dead $arguments
+...
+
+# CHECK-LABEL: name: rev_eq{{$}}
+# CHECK:       bb.0:
+# CHECK:       BNE_UN_OBJ %bb.2, %0, %1,
+# CHECK-NOT:   BR
+# CHECK:       bb.1:
+---
+name:            rev_eq
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref, externref ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    %1:obj = ARGUMENT_OBJ 1, implicit $arguments
+    BEQ_OBJ %bb.1, %0, %1, implicit-def dead $arguments
+    BR %bb.2, implicit-def dead $arguments
+
+  bb.1:
+    %2:i32 = CONST_I32 1, implicit-def dead $arguments
+    RETURN %2, implicit-def dead $arguments
+
+  bb.2:
+    %3:i32 = CONST_I32 2, implicit-def dead $arguments
+    RETURN %3, implicit-def dead $arguments
+...
+
+# CHECK-LABEL: name: rev_ne{{$}}
+# CHECK:       bb.0:
+# CHECK:       BEQ_OBJ %bb.2, %0, %1,
+# CHECK-NOT:   BR
+# CHECK:       bb.1:
+---
+name:            rev_ne
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ externref, externref ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $arguments
+    %0:obj = ARGUMENT_OBJ 0, implicit $arguments
+    %1:obj = ARGUMENT_OBJ 1, implicit $arguments
+    BNE_UN_OBJ %bb.1, %0, %1, implicit-def dead $arguments
+    BR %bb.2, implicit-def dead $arguments
+
+  bb.1:
+    %2:i32 = CONST_I32 1, implicit-def dead $arguments
+    RETURN %2, implicit-def dead $arguments
+
+  bb.2:
+    %3:i32 = CONST_I32 2, implicit-def dead $arguments
+    RETURN %3, implicit-def dead $arguments
+...

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CGDebugInfo.h"
+#include "CGMSILReferences.h"
 #include "CGOpenMPRuntime.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
@@ -1645,6 +1646,8 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
     }
   } else if (!RV) {
     // Do nothing (return value is left uninitialized)
+    // MSIL: a C function returning a .NET reference traps here instead.
+    emitMSILMissingReturnTrap(*this, CurCodeDecl);
   } else if (FnRetTy->isReferenceType()) {
     // If this function returns a reference, take the address of the expression
     // rather than the value.
@@ -2898,8 +2901,11 @@ static bool hasOnlyKeptOutputs(CodeGenFunction &CGF, const GCCAsmStmt &S) {
 /// statement accepted here fails later. Any other GNU asm statement (asm
 /// goto included) and every Microsoft-style asm statement is an error. Only
 /// emitted functions get here, so unused asm in system headers (for example
-/// intrin.h) is accepted.
+/// intrin.h) is accepted. A .NET reference as an operand is an error first
+/// (T-R24), whatever the statement.
 static bool emitMSILAsmStmt(CodeGenFunction &CGF, const AsmStmt &S) {
+  if (diagnoseMSILReferenceAsmOperands(CGF, S))
+    return true;
   if (const auto *GS = dyn_cast<GCCAsmStmt>(&S);
       GS && GS->getNumLabels() == 0 &&
       StringRef(GS->getAsmString()).trim().empty()) {

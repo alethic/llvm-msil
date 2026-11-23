@@ -418,6 +418,12 @@ set(llvm_libc_wrapper_files
   llvm_libc_wrappers/time.h
 )
 
+# MSIL: <cli/cli.h>, CLI_TYPE for the .NET reference types of C; a list of its
+# own, so that it installs as include/cli/cli.h.
+set(msil_cli_files
+  cli/cli.h
+)
+
 set(zos_wrapper_files
   zos_wrappers/builtins.h
   zos_wrappers/grp.h
@@ -480,7 +486,8 @@ endfunction(clang_generate_header)
 foreach( f ${files} ${cuda_wrapper_files} ${cuda_wrapper_bits_files}
            ${cuda_wrapper_utility_files} ${ppc_wrapper_files} ${openmp_wrapper_files}
            ${zos_wrapper_files} ${hlsl_files} ${llvm_libc_wrapper_files}
-           ${llvm_offload_wrapper_files} ${gpu_hip_wrapper_files})
+           ${llvm_offload_wrapper_files} ${gpu_hip_wrapper_files}
+           ${msil_cli_files})
   copy_header_to_output_dir(${CMAKE_CURRENT_SOURCE_DIR} ${f})
 endforeach( f )
 
@@ -664,6 +671,11 @@ install(
 install(
   FILES ${openmp_wrapper_files}
   DESTINATION ${header_install_dir}/openmp_wrappers
+  COMPONENT clang-resource-headers)
+
+install(
+  FILES ${msil_cli_files}
+  DESTINATION ${header_install_dir}/cli
   COMPONENT clang-resource-headers)
 
 install(

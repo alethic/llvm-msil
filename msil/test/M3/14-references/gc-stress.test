@@ -1,0 +1,195 @@
+# References survive garbage collections that move objects: strings and builders held only in reference locals, parameters and results keep their identity and their text across compacting collections (GC.Collect(2, Forced, true, true)) and across loops that allocate garbage arrays, checked against the targets of tickets made before the collections; a loop keeps the previous iteration's string in a local across collections, a recursion 40 frames deep holds a reference local and a reference parameter in every frame while the bottom frame collects, a reference passed down and returned up through static functions comes back as the same object, and a reference local declared after a collection is still NULL.
+# Plan 5.21.1 RA1 (a reference is held only in IL locals, arguments,
+# results and the stack, where the runtime tracks it, with no GCHandle: a
+# collection that moves an object updates every such reference, while a
+# copy in C memory would go stale), 5.21.5 RG1 and 5.21.7 RB10 (-O0 locals
+# are allocas that P15 promotes, so they are IL locals at every level),
+# 5.21.4 RS2 (a reference local starts as NULL), 5.21.9 RM9 (tickets made
+# with GCHandle::Alloc keep their objects alive and their get_Target gives
+# the object, wherever it moved), 5.21.11 (object locals and arguments in
+# methods that run collections; zinit.il measured unwritten object locals
+# under GC.Collect, recon references.md section 7). GC.Collect(int32,
+# GCCollectionMode, bool, bool) with generation 2, mode Forced (1),
+# blocking and compacting is a full blocking compacting collection on the
+# .NET Framework 4.6 and later and on .NET; the program links against the
+# .NET Framework 4.8 implementation assemblies (%{msil_refs_netfx}),
+# because GC, StringBuilder, String::Equals and the array .ctor's element
+# type need them, and the image runs on the Framework, .NET 10 and WSL
+# .NET 10. Each check counts, and the program prints the counts, so a
+# reference the runtime does not track shows as a wrong count, a wrong
+# text or a crash. The members have no C library equivalent, so the
+# expected file is hand-written for both OSes (plan 5.20.11 MT3 and 5.17.4
+# as amended for MC-1, under MC-1's reason; 5.21.14 RV28). Plan 5.17.13
+# (R-a, M3/14-references).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.StringBuilder")
+    StringBuilder StringBuilder;
+typedef struct CLI_TYPE("object[]") Objects Objects;
+
+#define GCHANDLE "valuetype System.Runtime.InteropServices.GCHandle"
+#define SB "System.Text.StringBuilder"
+
+__attribute__((msil_method("System.GC", "Collect",
+                           "void(int32, valuetype System.GCCollectionMode, "
+                           "bool, bool)")))
+void gc_collect(int generation, int mode, _Bool blocking, _Bool compacting);
+
+__attribute__((msil_method("System.GC", "WaitForPendingFinalizers", "void()")))
+void gc_wait_for_pending_finalizers(void);
+
+__attribute__((msil_method("object[]", ".ctor", "instance void(int32)")))
+Objects ^new_objects(int length);
+
+__attribute__((msil_method(SB, ".ctor", "instance void()")))
+StringBuilder ^sb_new(void);
+
+__attribute__((msil_method(SB, "Append",
+                           "instance class System.Text.StringBuilder(string)")))
+StringBuilder ^sb_append_text(StringBuilder ^sb, const char *text);
+
+__attribute__((msil_method(SB, "Append",
+                           "instance class System.Text.StringBuilder(int32)")))
+StringBuilder ^sb_append_int(StringBuilder ^sb, int value);
+
+__attribute__((msil_method(SB, "ToString", "instance string()")))
+String ^sb_to_string(StringBuilder ^sb);
+
+__attribute__((msil_method("System.String", "Equals", "instance bool(string)")))
+_Bool string_equals(String ^s, String ^other);
+
+__attribute__((msil_method(GCHANDLE, "Alloc", GCHANDLE "(object)")))
+intptr_t ticket_new(Object ^o);
+
+__attribute__((msil_method(GCHANDLE, "get_Target", "instance object()")))
+Object ^ticket_target(intptr_t ticket);
+
+__attribute__((msil_method(GCHANDLE, "Free", "instance void()")))
+void ticket_free(intptr_t ticket);
+
+enum { GC_FORCED = 1 };
+
+/* A full, blocking, compacting collection. */
+static void collect(void) {
+  gc_collect(2, GC_FORCED, 1, 1);
+  gc_wait_for_pending_finalizers();
+}
+
+/* Garbage: arrays that nothing keeps. */
+static void churn(int arrays) {
+  for (int i = 0; i < arrays; ++i) {
+    Objects ^garbage = new_objects(2000);
+    if (!garbage)
+      return;
+  }
+}
+
+/* "<prefix><n>" as a new string. */
+static String ^numbered(const char *prefix, int n) {
+  StringBuilder ^sb = sb_new();
+  return sb_to_string(sb_append_int(sb_append_text(sb, prefix), n));
+}
+
+/* C text as a new string. */
+static String ^plain(const char *text) {
+  return sb_to_string(sb_append_text(sb_new(), text));
+}
+
+/* Each frame holds a reference local and a reference parameter; the
+   bottom frame collects. Returns how many frames found both intact. */
+static int deep(int depth, String ^from_caller, intptr_t caller_ticket) {
+  String ^mine = numbered("frame ", depth);
+  intptr_t ticket = ticket_new(mine);
+  int good = 0;
+  if (depth == 0) {
+    churn(50);
+    collect();
+  } else {
+    good = deep(depth - 1, mine, ticket);
+  }
+  good += string_equals(mine, numbered("frame ", depth)) &&
+          ticket_target(ticket) == mine &&
+          ticket_target(caller_ticket) == from_caller;
+  ticket_free(ticket);
+  return good;
+}
+
+/* A reference down and back up through static functions. */
+static String ^through(String ^s, int n) {
+  if (n == 0) {
+    collect();
+    return s;
+  }
+  churn(2);
+  return through(s, n - 1);
+}
+
+int main(void) {
+  /* References in locals across a compacting collection. */
+  String ^a = numbered("alpha ", 1);
+  String ^b = numbered("beta ", 2);
+  StringBuilder ^builder = sb_new();
+  sb_append_text(builder, "kept builder");
+  intptr_t ta = ticket_new(a), tb = ticket_new(b);
+  intptr_t tbuilder = ticket_new(builder);
+  churn(200);
+  collect();
+  printf("after a compacting collection: identity %d %d %d, text %d %d %d\n",
+         ticket_target(ta) == a, ticket_target(tb) == b,
+         ticket_target(tbuilder) == builder,
+         string_equals(a, numbered("alpha ", 1)),
+         string_equals(b, numbered("beta ", 2)),
+         string_equals(sb_to_string(builder), plain("kept builder")));
+
+  /* The previous iteration's string, across collections. */
+  String ^previous = NULL;
+  int previous_ok = 0, collections = 0;
+  for (int i = 0; i < 200; ++i) {
+    String ^current = numbered("item ", i);
+    churn(1);
+    if (i % 25 == 24) {
+      collect();
+      ++collections;
+    }
+    if (previous && string_equals(previous, numbered("item ", i - 1)))
+      ++previous_ok;
+    previous = current;
+  }
+  printf("loop: %d collections, the previous string intact %d times\n",
+         collections, previous_ok);
+
+  /* Deep frames. */
+  String ^root = numbered("root ", 0);
+  intptr_t troot = ticket_new(root);
+  printf("recursion: %d of 41 frames intact\n", deep(40, root, troot));
+
+  /* Down and back up. */
+  String ^c = numbered("gamma ", 3);
+  String ^back = through(c, 10);
+  printf("through ten calls and a collection: the same object %d, text %d\n",
+         back == c, string_equals(back, numbered("gamma ", 3)));
+
+  /* Declared after a collection: still NULL. */
+  collect();
+  String ^later;
+  printf("a reference local declared after a collection is NULL: %d\n",
+         later == NULL);
+
+  ticket_free(troot);
+  ticket_free(tbuilder);
+  ticket_free(tb);
+  ticket_free(ta);
+  return 0;
+}

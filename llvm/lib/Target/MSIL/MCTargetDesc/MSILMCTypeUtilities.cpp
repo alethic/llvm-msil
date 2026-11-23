@@ -41,6 +41,10 @@ MSIL::ValType MSIL::toValType(MVT VT, unsigned PointerSizeInBits) {
     return ValType::F32;
   case MVT::f64:
     return ValType::F64;
+  case MVT::externref:
+    // A .NET reference, IR target("msil.ref") (plan 5.21.7 RB1). Its class
+    // lives only in clang's type and in the managed-call stubs.
+    return ValType::Object;
   default:
     llvm_unreachable("MSIL: value type has no CIL type");
   }
@@ -58,6 +62,8 @@ StringRef MSIL::getValTypeName(ValType T) {
     return "float32";
   case ValType::F64:
     return "float64";
+  case ValType::Object:
+    return "object";
   }
   llvm_unreachable("MSIL: unknown ValType");
 }

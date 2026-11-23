@@ -1,0 +1,7 @@
+main's string: "made in main"
+maker's string: "made in maker 7"
+units counted by main 12, by maker 12, by checker 1012
+maker's string counted by main 15, by maker 15, by checker 1015
+checker: two tickets of main's string, one object 1; main's and maker's strings 0
+main: the ticket's target is the reference in hand 1
+[exit 0]

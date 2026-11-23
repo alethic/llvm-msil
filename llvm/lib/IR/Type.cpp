@@ -995,6 +995,12 @@ Expected<TargetExtType *> TargetExtType::checkParams(TargetExtType *TTy) {
                              "and at most one integer parameter");
   }
 
+  // Opaque types in the MSIL name space.
+  if (TTy->Name == "msil.ref" &&
+      (TTy->getNumTypeParameters() != 0 || TTy->getNumIntParameters() != 0))
+    return createStringError(
+        "target extension type msil.ref should have no parameters");
+
   return TTy;
 }
 
@@ -1105,6 +1111,12 @@ static TargetTypeInfo getTargetTypeInfo(const TargetExtType *Ty) {
   if (Name == "wasm.funcref" || Name == "wasm.externref")
     return TargetTypeInfo(PointerType::getUnqual(C), TargetExtType::HasZeroInit,
                           TargetExtType::CanBeGlobal,
+                          TargetExtType::CanBeLocal);
+
+  // A .NET object reference of the MSIL target. Its allocas become IL locals
+  // before instruction selection; it is never in a global.
+  if (Name == "msil.ref")
+    return TargetTypeInfo(PointerType::getUnqual(C), TargetExtType::HasZeroInit,
                           TargetExtType::CanBeLocal);
 
   return TargetTypeInfo(Type::getVoidTy(C));

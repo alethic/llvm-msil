@@ -1,0 +1,227 @@
+# setjmp and longjmp beside .NET references, in the shapes that the inliners' setjmp fence lets through at every level and under LTO: (1) a setjmp caller without references calls a static helper that holds String and Object references across a call that longjmps out of the helper's frame, so that the longjmp's exception unwinds a frame with live object locals up to the setjmp caller's wrapper, and without the longjmp the helper's result shows its references intact; (2) the same with a flatten setjmp caller; (3) a function that holds references calls a static function that calls '_setjmp3' by name, and the longjmp comes back to that site while the caller's references are live; (4) the same with that static function always_inline; after each longjmp the references that the callers of the setjmp caller hold keep their identity (==) and their text and length, and four longjmps are counted.
+# Plan 5.21.4 RS22 (clang refuses a reference in a function that calls a
+# returns_twice function, T-R17, checking each function as written), 5.21.7
+# RB11 rule 8 (P1 refuses a setjmp caller with a reference, T-RB3, after
+# LLVM's inliners) with section 12's rows '5.21.7 RB11 rule 8 amended' of
+# 2026-11-21 (rule 8's setjmp callers are also the direct callers of a
+# declaration whose name MSIL::isSetjmpName accepts, with or without
+# returns_twice, '_setjmp3' among them) and '5.21.7 RB11 rule 8 amended
+# (inlining)' of 2026-11-22 (MSILTTIImpl::areInlineCompatible keeps LLVM's
+# inliners, always_inline and flatten included, from inlining a callee that
+# holds a reference into a caller that calls setjmp, or a callee that calls
+# setjmp into a caller that holds a reference; such a call stays a call),
+# and 5.15.4 (MSILLowerSjLj, P8: each call after a setjmp site that may
+# longjmp goes through an internal wrapper whose whole body is an IL .try
+# with a fixed filter; longjmp arms the site's status block and throws
+# ExternalException, which the armed wrapper's filter takes, and its caller
+# dispatches to the site; '_setjmp3' is one of the setjmp names on every
+# triple). Built without the fence (-mllvm -ignore-tti-inline-compatible),
+# the program stops with T-RB3 in run1 and run3 from -O1 on, where LLVM
+# inlines hold into run1 and round3 into run3, and in run2 and run4 at -O0
+# too, where flatten and always_inline reach the AlwaysInliner. clang gives
+# the hand-declared '_setjmp3' no returns_twice, so only the fence keeps
+# round3 and round4 out of their callers, while LLVM's isInlineViable
+# already keeps run1 and run2, which call the returns_twice setjmp, out of
+# main, which holds references too. jump_if is noinline, so at every level
+# hold's references are live across a call, as run3's and run4's are across
+# the calls of round3 and round4. setjmp is the whole controlling expression
+# of an if statement (C17 7.13.1.1), and after a longjmp the program reads
+# only what C17 7.13.2.1 defines: a parameter that nothing modifies after
+# setjmp, the result of '_setjmp3' (a function to C), a volatile local of
+# the function that called it, memory, and the locals of the callers of the
+# setjmp caller, which the longjmp leaves alone. The selectors come from
+# volatile variables, so no level folds the paths the program takes, the
+# longjmps or the identity tests. Every member is a built-in table entry
+# (String::.ctor(char*), Marshal::StringToHGlobalUni(string)), so no
+# reference assemblies are needed, and the references and their conversions
+# name no class but System.String and System.Object, which whole-program
+# text does not check, so msil_equiv=1's O4 needs no line in
+# msil/utils/equiv-allowed.txt. The members have no C library equivalent, so
+# the expected file is hand-written, one for both OSes, which print the same
+# (plan 5.20.11 MT3 and 5.17.4 as amended for MC-1, under MC-1's reason;
+# 5.21.14 RV28). Plan 5.17.13 (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <setjmp.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+/* The MSVC name that the back end lowers as a setjmp site on every triple;
+   declared here, it has no returns_twice. */
+int _setjmp3(void *, int);
+
+/* The selectors: 1 and 2 never longjmp, 6 to 9 always do. */
+static volatile int one = 1, two = 2, six = 6, seven = 7, eight = 8, nine = 9;
+static jmp_buf env1, env2, env3, env4;
+static int longjmps;
+
+/* A new string from ASCII text. */
+static String ^text(const char *ascii) {
+  char16_t units[16];
+  int i = 0;
+  for (; ascii[i] && i < 15; ++i)
+    units[i] = (char16_t)ascii[i];
+  units[i] = 0;
+  return new_string(units);
+}
+
+/* The number of UTF-16 units in s. */
+static int length(String ^s) {
+  char16_t *u = string_units(s);
+  int n = 0;
+  while (u && u[n])
+    ++n;
+  return n;
+}
+
+/* Whether s holds exactly the units of ascii. */
+static int holds(String ^s, const char *ascii) {
+  char16_t *u = string_units(s);
+  int i = 0;
+  if (!u)
+    return 0;
+  for (; ascii[i]; ++i)
+    if (u[i] != (char16_t)ascii[i])
+      return 0;
+  return u[i] == 0;
+}
+
+/* Prints whether a and b still hold their texts and o is still a. */
+static void check(const char *whose, String ^a, const char *a_text, String ^b,
+                  const char *b_text, Object ^o) {
+  printf("  %s references: a holds \"%s\" %d (length %d), b holds \"%s\" %d, "
+         "o == a %d, o == b %d\n",
+         whose, a_text, holds(a, a_text), length(a), b_text, holds(b, b_text),
+         o == a, o == b);
+}
+
+/* Longjmps to env with v when v is above 2. A call at every level, so the
+   references of its callers are live across it. */
+__attribute__((noinline)) static void jump_if(jmp_buf env, int v) {
+  if (v > 2) {
+    ++longjmps;
+    longjmp(env, v);
+  }
+}
+
+/* (1) and (2): String and Object references, live across a call that
+   longjmps out of this frame when v is above 2. Without the longjmp the
+   result shows them intact: 100 times the length of s, 10 for o == s and 1
+   for o != t (t holds the same text). */
+static int hold(jmp_buf env, int v) {
+  String ^s = text("delta");
+  String ^t = text("delta");
+  Object ^o = one ? s : t;
+  jump_if(env, v);
+  return length(s) * 100 + (o == s) * 10 + (o != t);
+}
+
+/* (1): a setjmp caller without references. After the longjmp v keeps its
+   value, which nothing modifies after setjmp and which the longjmp passed
+   too. */
+int run1(int v) {
+  if (setjmp(env1))
+    return 1000 + v;
+  return hold(env1, v);
+}
+
+/* (2): the same with flatten, which inlines every call it can. */
+__attribute__((flatten)) int run2(int v) {
+  if (setjmp(env2))
+    return 2000 + v;
+  return hold(env2, v);
+}
+
+/* (3): calls _setjmp3 and holds no reference; jump_if longjmps back to the
+   site when v is above 2, and the result is then 10 times the longjmp's
+   value plus the volatile stage. */
+static int round3(int v) {
+  volatile int stage = 0;
+  int r = _setjmp3(env3, 0);
+  if (r)
+    return r * 10 + stage;
+  stage = 3;
+  jump_if(env3, v);
+  return v;
+}
+
+/* (3): references live in this frame across the call of round3, inside
+   which the longjmp comes back. */
+int run3(int v) {
+  String ^a = text("kept");
+  String ^b = text("spare");
+  Object ^o = one ? a : b;
+  int r = round3(v);
+  printf("(3) round3(%d) = %d, %s\n", v, r,
+         v > 2 ? "after the longjmp back into it" : "no longjmp");
+  check("run3's", a, "kept", b, "spare", o);
+  return r;
+}
+
+/* (4): round3, always_inline. */
+static inline __attribute__((always_inline)) int round4(int v) {
+  volatile int stage = 0;
+  int r = _setjmp3(env4, 0);
+  if (r)
+    return r * 10 + stage;
+  stage = 4;
+  jump_if(env4, v);
+  return v;
+}
+
+/* (4): run3 with round4. */
+int run4(int v) {
+  String ^a = text("held");
+  String ^b = text("other");
+  Object ^o = one ? a : b;
+  int r = round4(v);
+  printf("(4) round4(%d) = %d, %s\n", v, r,
+         v > 2 ? "after the longjmp back into it" : "no longjmp");
+  check("run4's", a, "held", b, "other", o);
+  return r;
+}
+
+int main(void) {
+  String ^a = text("main");
+  String ^b = text("second");
+  Object ^o = one ? a : b;
+  int v;
+
+  v = one;
+  printf("(1) run1(%d) = %d, no longjmp\n", v, run1(v));
+  v = six;
+  printf("(1) run1(%d) = %d, after the longjmp out of hold\n", v, run1(v));
+  check("main's", a, "main", b, "second", o);
+
+  v = two;
+  printf("(2) run2(%d) = %d, no longjmp\n", v, run2(v));
+  v = eight;
+  printf("(2) run2(%d) = %d, after the longjmp out of hold\n", v, run2(v));
+  check("main's", a, "main", b, "second", o);
+
+  run3(one);
+  run3(seven);
+  check("main's", a, "main", b, "second", o);
+
+  run4(two);
+  run4(nine);
+  check("main's", a, "main", b, "second", o);
+
+  printf("longjmps: %d\n", longjmps);
+  return 0;
+}

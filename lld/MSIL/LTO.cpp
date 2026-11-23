@@ -1084,6 +1084,13 @@ static void annotateImports(const Module &m, ImportAnnotation &out,
     // method that accesses the .NET member, and the binder binds the member.
     if (f.hasFnAttribute(cli::ManagedTypeAttr))
       continue;
+    // Nor is a reference helper (plan 5.21.6 RI6, 5.21.10 RL4), which no
+    // native library may define (plan 5.14.2 N3): instruction selection makes
+    // each call of '__msil_ref.eq' a ceq or a branch, and the backend refuses
+    // any other function of such a name (T-RB7), so reportUnbound would
+    // misreport it.
+    if (cli::isReferenceHelperName(name))
+      continue;
     bool isUsed = hasLiveUses(f, &dropped);
 
     // An explicit import module is used as it is, unchecked (plan 5.10.7),

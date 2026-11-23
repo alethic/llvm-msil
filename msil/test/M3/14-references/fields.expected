@@ -1,0 +1,19 @@
+String.Empty: not NULL 1, the same object 1, length 0
+Type.EmptyTypes: not NULL 1, the same object 1, length 0
+EventArgs.Empty: not NULL 1, the same object 1
+EventArgs.Empty's class: "System.EventArgs"
+Type.Missing: not NULL 1, the same object 1
+Type.Missing's class: "System.Reflection.Missing"
+CspParameters.ProviderName: the same object 1
+its text: "provider"
+CspParameters.KeyContainerName: NULL 1
+EventArgs's constructor for Type.EmptyTypes: not NULL 1
+that constructor: "Void .ctor()"
+Split with a NULL array: 4 parts
+Join: "a-bc--d"
+GetBytes: 4 bytes
+ToBase64String: "BAMCAQ=="
+String(char[]): equal 1, the same object 0
+the copy: "fields"
+String(char[] NULL): not NULL 1, length 0, equal to String.Empty 1
+[exit 0]

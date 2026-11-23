@@ -2686,6 +2686,21 @@ def MSILCatch : InheritableAttr, TargetSpecificAttr<TargetMSIL> {
   let PragmaAttributeSupport = 0;
 }
 
+// A struct that stands for a .NET reference type; 'T ^' of such a struct is a
+// .NET object reference.
+def CLIType : InheritableAttr, TargetSpecificAttr<TargetMSIL> {
+  let Spellings = [Clang<"cli_type">];
+  let Args = [StringArgument<"Name">,
+              // Not spelled in source and not printed: the key, the folded
+              // canonical listing text of Name (llvm::cli::parseCLITypeName),
+              // written by Sema when it checks Name.
+              StringArgument<"Key", /*opt=*/1, /*fake=*/1>];
+  let Subjects = SubjectList<[Struct], ErrorDiag>;
+  let Documentation = [CLITypeDocs];
+  // Each struct names its own class.
+  let PragmaAttributeSupport = 0;
+}
+
 def NoSplitStack : InheritableAttr {
   let Spellings = [GCC<"no_split_stack">];
   let Subjects = SubjectList<[Function], ErrorDiag>;

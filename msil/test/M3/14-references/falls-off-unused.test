@@ -1,0 +1,100 @@
+# A static function whose result is a reference stops the program where control reaches its closing brace, at every level, also when the caller ignores the result: made_or_falls returns a new String (String::.ctor(char*)) when its argument is nonzero, as a first call whose result is used shows, and otherwise falls off its end, where clang's trap ends the program as an unhandled System.NullReferenceException although the second call ignores the result.
+# Plan 5.21.5 RG12 (Claude's decision: a C function on an MSIL triple whose
+# result is a reference takes the missing-return path that C++ functions
+# take, with llvm.trap and unreachable where control can reach the closing
+# brace, at every optimization level; C makes falling off the end
+# undefined only when the caller uses the value, and a program that
+# ignores the value stops too, the price of an outcome that is the same at
+# every level, 5.17.13), the trap's IL 'ldnull; throw' (a
+# NullReferenceException, M1/03-control/trap.ll), 5.20.8 MX1 (an exception
+# that nothing catches escapes as an ordinary unhandled .NET exception).
+# clang/test/CodeGen/MSIL/ref-ir.c pins the IR of RG12 at every level; this
+# test runs it. The harness compiles with -Werror=return-type, so the test
+# turns the warning off through %{msil_copts}. The argument comes from
+# volatile variables, so no level knows which path a call takes. The
+# function returns a new object, not a parameter, and the first call uses
+# its result, so DeadArgumentElimination keeps the reference result from
+# -O1 on (were every result ignored, it would make the method void and the
+# test would no longer cover references): the -O2 program is built once
+# more and llvm-cil-dump shows the method with its 'object' result and the
+# trap's 'ldnull; throw' (prefix METHOD). Every member is a built-in table
+# entry (String::.ctor(char*), Marshal::StringToHGlobalUni(string)), so no
+# reference assemblies are needed. The program ends on an unhandled
+# exception (a loud failure, plan 5.17.4), so the transcript is
+# hand-written for both OSes: the lines printed before the call, then the
+# status line '[unhandled exception: System.NullReferenceException]'; a
+# call that returned would let the program print its last line and exit
+# with 0 instead. The LOUD line matches the program's own stderr line,
+# written before the call; the trap has no message of its own, and the
+# runtime's report of the exception is never matched. LOUD-NOT pins that
+# the call never returned. falls-off.test uses the result of the call that
+# falls off the end. Plan 5.17.13 (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: a loud failure (plan 5.17.4)
+# REDEFINE: %{msil_copts} = -Wno-return-type
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog_loud_O0}
+# RUN: %{msil_prog_loud_O1}
+# RUN: %{msil_prog_loud_O2}
+# RUN: %{msil_prog_loud_O3}
+# RUN: %if msil-cil-dump %{ %msil_prog_build --level O2 --workdir %t.dump.d --out %t.dump.d/prog.exe --src %{msil_srcs} %}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump %t.dump.d/prog.exe > %t.dump %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=METHOD --input-file %t.dump %}
+# LOUD: falls-off-unused: calling a reference function that falls off its end, result ignored
+# LOUD-NOT: falls-off-unused: returned from the function that fell off its end
+# METHOD:      .method 'made_or_falls' object(int32)
+# METHOD-NOT:  .method
+# METHOD:      L{{[0-9]+}}: ldnull
+# METHOD-NEXT: L{{[0-9]+}}: throw
+#--- main.c
+#include <cli/cli.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.String") String String;
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+/* Volatile, so no level knows which path each call takes. */
+static volatile int yes = 1;
+static volatile int no = 0;
+
+static void put_string(const char *what, String ^s) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+/* A new String when 'make' is nonzero; otherwise control reaches the
+   closing brace. */
+__attribute__((noinline)) static String ^made_or_falls(int make) {
+  static const char16_t units[] = {'m', 'a', 'd', 'e', 0};
+  if (make)
+    return new_string(units);
+}
+
+int main(void) {
+  /* This call uses the result, so the function keeps its reference
+     result at every level. */
+  String ^made = made_or_falls(yes);
+  printf("returned a new String: not NULL %d\n", made != NULL);
+  put_string("the String", made);
+
+  /* The call whose function falls off its end; its result is ignored. */
+  fflush(stdout);
+  fputs("falls-off-unused: calling a reference function that falls off its "
+        "end, result ignored\n",
+        stderr);
+  fflush(stderr);
+  made_or_falls(no);
+  printf("returned from the function that fell off its end\n");
+  fprintf(stderr, "falls-off-unused: returned from the function that fell off "
+                  "its end\n");
+  return 0;
+}

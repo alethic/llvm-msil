@@ -72,6 +72,13 @@
 /// that signature (plan 5.8.3 R3) and msil-ld checks it against the
 /// definition. A call of an alias is a direct call of the alias's symbol.
 ///
+/// .NET references (IR target("msil.ref"), MVT::externref, CIL 'object')
+/// pass through arguments, results and calls like any other value. IR cannot
+/// compare two of them, so clang calls the helper __msil_ref.eq (plan 5.21.6
+/// RI6), which is never a method or a symbol: each call becomes 'ceq' of the
+/// two references (MSILISD::REF_EQ), or a test for null (REF_IS_NULL), with
+/// no call (plan 5.21.7 RB5).
+///
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/MSILMCTargetDesc.h"
@@ -87,6 +94,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CLI/ImageLayout.h"
+#include "llvm/CLI/ManagedCallIR.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -96,6 +104,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/IntrinsicsWebAssembly.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -212,6 +221,52 @@ static void passInt128ByPointer(TargetLowering::CallLoweringInfo &CLI) {
   CLI.Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Stores);
   CLI.Outs = std::move(Outs);
   CLI.OutVals = std::move(OutVals);
+}
+
+/// Whether \p V is the null .NET reference: the node that
+/// SelectionDAGBuilder::getValueImpl makes of a zeroinitializer of
+/// MVT::externref (plan 5.21.6 RI2), or an undefined reference, which is
+/// 'ldnull' too (RI5; MSILRegStackify, MSILExplicitLocals).
+static bool isNullReference(SDValue V) {
+  return V.isUndef() ||
+         (V.getOpcode() == ISD::INTRINSIC_WO_CHAIN &&
+          V.getConstantOperandVal(0) == Intrinsic::wasm_ref_null_extern);
+}
+
+/// Lowers a call of the reference comparison helper (cli::ReferenceEqName,
+/// i1 (target("msil.ref"), target("msil.ref")), plan 5.21.6 RI6), whose
+/// result says whether its two references are the same object or both null,
+/// without a call (plan 5.21.7 RB5): MSILISD::REF_IS_NULL of the other
+/// operand when one operand is the null reference, the constant 1 when both
+/// are, and MSILISD::REF_EQ of the two otherwise, each an int32 0 or 1 that
+/// instruction selection makes a 'ceq', or a beq, bne.un, brtrue or brfalse
+/// under a branch (MSILInstrRef.td). No MemberRef, P/Invoke declaration or
+/// symbol names the helper. Returns the chain, which the helper does not
+/// use (it reads no memory).
+static SDValue lowerReferenceEq(TargetLowering::CallLoweringInfo &CLI,
+                                SmallVectorImpl<SDValue> &InVals) {
+  SelectionDAG &DAG = CLI.DAG;
+  const SDLoc &DL = CLI.DL;
+  assert(CLI.OutVals.size() == 2 && CLI.Ins.size() == 1 &&
+         CLI.Ins[0].VT == MVT::i32 &&
+         "the helper takes two references and returns an i1 in an int32");
+  SDValue LHS = CLI.OutVals[0];
+  SDValue RHS = CLI.OutVals[1];
+  assert(LHS.getValueType() == MVT::externref &&
+         RHS.getValueType() == MVT::externref &&
+         "the helper's operands are references");
+  bool LHSIsNull = isNullReference(LHS);
+  bool RHSIsNull = isNullReference(RHS);
+  SDValue Result;
+  if (LHSIsNull && RHSIsNull)
+    Result = DAG.getConstant(1, DL, MVT::i32);
+  else if (LHSIsNull || RHSIsNull)
+    Result =
+        DAG.getNode(MSILISD::REF_IS_NULL, DL, MVT::i32, LHSIsNull ? RHS : LHS);
+  else
+    Result = DAG.getNode(MSILISD::REF_EQ, DL, MVT::i32, LHS, RHS);
+  InVals.push_back(Result);
+  return CLI.Chain;
 }
 
 // Test whether the given calling convention is supported. Every call is a
@@ -510,6 +565,29 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     // too). The call stays what the IR says: an indirect call, with the call
     // site's signature, through the function's address.
     F = nullptr;
+  }
+
+  // A function with a reserved name of the .NET reference helpers (plan
+  // 5.21.6 RI6): a call of the comparison helper __msil_ref.eq is a 'ceq'
+  // (lowerReferenceEq), never a call. MSILPrepareIR refuses every definition
+  // and every other declaration of such an IR name (T-RB7, plan 5.21.7 RB11
+  // rule 11) and every call of the helper with another function type (T-RB2,
+  // rule 5), so the errors here are backstops, which keep a reserved name
+  // from becoming a method, a P/Invoke declaration or a symbol. Only a call
+  // of a function whose IR name starts with LLVM's '\1' escape (hand-written
+  // IR) gets its first error here in a full pipeline, since its IL name drops
+  // the escape.
+  if (F) {
+    StringRef Name = MSIL::getILName(*F, DAG.getTarget());
+    if (cli::isReferenceHelperName(Name)) {
+      if (F->getName() != cli::ReferenceEqName || !F->isDeclaration() ||
+          !cli::isManagedReferenceEqType(F->getFunctionType()))
+        return Reject(Twine("'") + Name +
+                      "' is reserved for the MSIL toolchain");
+      if (!CLI.CB || CLI.CB->getFunctionType() != F->getFunctionType())
+        return Reject("mismatched call signature");
+      return lowerReferenceEq(CLI, InVals);
+    }
   }
 
   // A declaration that names a trailer definition: in whole-program text its

@@ -16640,6 +16640,7 @@ GCCTypeClass EvaluateBuiltinClassifyType(QualType T,
     return GCCTypeClass::Vector;
 
   case Type::BlockPointer:
+  case Type::CLIReference:
   case Type::ConstantMatrix:
   case Type::ObjCObject:
   case Type::ObjCInterface:

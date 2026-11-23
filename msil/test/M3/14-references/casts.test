@@ -1,0 +1,151 @@
+# Checked casts between .NET classes that succeed, with built-in table types only: a cast up to a base class, back down, to Object and to the object's own class returns the same reference, so identity holds through every cast; a cast of a NULL reference or of a null constant is NULL (castclass passes null); casts of Object references to array classes (string[] from Environment::GetCommandLineArgs, uint8[] from BitConverter::GetBytes) succeed, and the two spellings of one array class name one type, which needs no cast; exception classes cast to System.Exception reach Exception::get_HResult; a cast whose value is unused, a cast inside an expression and a cast in a static function's return all run.
+# Plan 5.21.4 RS8 (a C cast from one reference to another: free when the
+# classes are equal or the target is Object, else a cast stub that checks
+# the class at run time; a null constant to a reference; a reference to
+# void), 5.21.5 RG5 (the stub's declaration has no memory attributes, so a
+# cast whose value is unused still runs), 5.21.9 RM8 (cast stubs: a
+# declaration named '__msil_mc.<castclass>.__uniq.<n>' whose body is
+# ldarg.0; castclass <TYPE>; ret, castclass taking the SZARRAY token for an
+# array TYPE; one stub per class), 5.21.2 RT2 and RT3 (the key folds
+# 'class System.String' to 'string' at every level, so "string[]" and
+# "class System.String[]" are one key and one type, 5.21.1 RA6), 5.21.4
+# RS4 (a reference converts to Object by itself) and RS5. ECMA-335
+# Partition III 4.3: castclass of a null reference gives null. Every type
+# and member is a built-in table entry (UTF8Encoding, UTF32Encoding,
+# Encoding::GetString, EntryPointNotFoundException::.ctor(string),
+# ExternalException::.ctor(string, int32), Exception::get_HResult(),
+# Environment::GetCommandLineArgs() and BitConverter::GetBytes(int32)), so
+# no reference assemblies are needed. The HResult of an
+# EntryPointNotFoundException is COR_E_ENTRYPOINTNOTFOUND, 0x80131523, and
+# ExternalException(string, int32) sets the HResult it is given (measured
+# on the .NET Framework 4.8.1, .NET 10 and WSL .NET 10). The members have
+# no C library equivalent, so the expected file is hand-written for both
+# OSes (plan 5.20.11 MT3 and 5.17.4 as amended for MC-1, under MC-1's
+# reason; 5.21.14 RV28). cast-loud.test and cast-loud-unused.test have the
+# casts that fail. Plan 5.17.13 (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdio.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.Encoding") Encoding Encoding;
+typedef struct CLI_TYPE("System.Text.UTF8Encoding") UTF8Encoding UTF8Encoding;
+typedef struct CLI_TYPE("System.Text.UTF32Encoding")
+    UTF32Encoding UTF32Encoding;
+typedef struct CLI_TYPE("System.Exception") Exception Exception;
+typedef struct CLI_TYPE("System.EntryPointNotFoundException")
+    EntryPointNotFoundException EntryPointNotFoundException;
+typedef struct CLI_TYPE("System.Runtime.InteropServices.ExternalException")
+    ExternalException ExternalException;
+/* Two spellings of one array class: one key, one type. */
+typedef struct CLI_TYPE("string[]") Strings Strings;
+typedef struct CLI_TYPE("class System.String[]") StringsToo StringsToo;
+typedef struct CLI_TYPE("uint8[]") Bytes Bytes;
+
+__attribute__((msil_method("System.Text.UTF8Encoding", ".ctor",
+                           "instance void(bool, bool)")))
+UTF8Encoding ^new_utf8(_Bool emit_bom, _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.UTF32Encoding", ".ctor",
+                           "instance void(bool, bool, bool)")))
+UTF32Encoding ^new_utf32(_Bool big_endian, _Bool emit_bom,
+                         _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.Encoding", "GetString",
+                           "instance string(uint8*, int32)")))
+String ^get_string(Encoding ^encoding, const unsigned char *bytes, int count);
+
+__attribute__((msil_method("System.EntryPointNotFoundException", ".ctor",
+                           "instance void(string)")))
+EntryPointNotFoundException ^new_not_found(const char *message);
+
+__attribute__((msil_method("System.Runtime.InteropServices.ExternalException",
+                           ".ctor", "instance void(string, int32)")))
+ExternalException ^new_external(const char *message, int hresult);
+
+__attribute__((msil_method("System.Exception", "get_HResult",
+                           "instance int32()")))
+int exception_hresult(Exception ^e);
+
+__attribute__((msil_method("System.Environment", "GetCommandLineArgs",
+                           "string[]()")))
+Strings ^command_line(void);
+
+__attribute__((msil_method("System.BitConverter", "GetBytes",
+                           "uint8[](int32)")))
+Bytes ^int_bytes(int value);
+
+/* A cast in a static function's return. */
+static Encoding ^as_encoding(Object ^o) { return (Encoding ^)o; }
+
+int main(void) {
+  UTF8Encoding ^utf8 = new_utf8(0, 1);
+
+  /* Up to the base class, back down, to Object and to the own class. */
+  Encoding ^base = (Encoding ^)utf8;
+  UTF8Encoding ^down = (UTF8Encoding ^)base;
+  Object ^as_object = (Object ^)base;
+  UTF8Encoding ^own = (UTF8Encoding ^)utf8;
+  printf("up %d, down %d, to Object %d, own class %d\n",
+         (Object ^)base == utf8, down == utf8, as_object == utf8, own == utf8);
+
+  /* From Object, through a static function, and inside an expression. */
+  Object ^o = utf8;
+  printf("Object to Encoding %d, through a function %d, in an expression %d\n",
+         (Encoding ^)o == base, as_encoding(o) == base,
+         (UTF8Encoding ^)(Encoding ^)o == utf8);
+
+  /* A second encoder: casts tell the two objects apart only by identity. */
+  UTF32Encoding ^utf32 = new_utf32(0, 0, 1);
+  Encoding ^base32 = (Encoding ^)utf32;
+  printf("the UTF-32 encoder: Encoding %d, not the UTF-8 one %d\n",
+         base32 == (Object ^)utf32, base32 != base);
+
+  /* The decoded strings through Object and back. */
+  static const unsigned char text[] = "cast me";
+  String ^s = get_string(base, text, 7);
+  Object ^so = s;
+  String ^back = (String ^)so;
+  printf("String through Object and back: %d, still not the encoder %d\n",
+         back == s, so != o);
+
+  /* NULL: a NULL reference, a null constant, and NULL through Object. */
+  Object ^nothing = NULL;
+  printf("casts of NULL: %d %d %d %d\n", (Encoding ^)nothing == NULL,
+         (String ^)NULL == NULL, (String ^)(Object ^)0 == NULL,
+         as_encoding(nothing) == NULL);
+
+  /* Array classes. */
+  Strings ^args = command_line();
+  Object ^args_object = args;
+  Strings ^args_back = (Strings ^)args_object;
+  StringsToo ^args_too = args;
+  Bytes ^bytes = int_bytes(0x01020304);
+  Object ^bytes_object = bytes;
+  printf("string[]: not NULL %d, back through Object %d, the other spelling "
+         "%d\n",
+         args != NULL, args_back == args, args_too == args_back);
+  printf("uint8[]: not NULL %d, back through Object %d\n", bytes != NULL,
+         (Bytes ^)bytes_object == bytes);
+
+  /* Exceptions cast to their base class. */
+  EntryPointNotFoundException ^not_found = new_not_found("not found");
+  Exception ^e = (Exception ^)not_found;
+  printf("EntryPointNotFoundException as Exception: HResult 0x%08x\n",
+         (unsigned)exception_hresult(e));
+  printf("ExternalException as Exception: HResult %d\n",
+         exception_hresult((Exception ^)new_external("external", 77)));
+  printf("the same object after the cast: %d\n", (Object ^)e == not_found);
+
+  /* A cast whose value is unused runs, and changes nothing here. */
+  (void)(Encoding ^)o;
+  (void)(String ^)so;
+  printf("unused casts ran\n");
+  return 0;
+}

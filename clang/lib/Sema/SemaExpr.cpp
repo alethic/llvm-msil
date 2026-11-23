@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CheckExprLifetime.h"
+#include "SemaMSILReference.h"
 #include "TreeTransform.h"
 #include "UsedDeclVisitor.h"
 #include "clang/AST/ASTConsumer.h"
@@ -989,6 +990,10 @@ VarArgKind Sema::isValidVarArgType(const QualType &Ty) {
       Ty.isWebAssemblyReferenceType()) {
     return VarArgKind::Invalid;
   }
+
+  // MSIL: a .NET reference is never a variadic argument.
+  if (Ty->isCLIReferenceType())
+    return VarArgKind::Invalid;
 
   if (Ty.isCXX98PODType(Context))
     return VarArgKind::Valid;
@@ -4693,6 +4698,7 @@ static void captureVariablyModifiedType(ASTContext &Context, QualType T,
     case Type::Pipe:
     case Type::BitInt:
     case Type::HLSLInlineSpirv:
+    case Type::CLIReference:
       llvm_unreachable("type class is never variably-modified!");
     case Type::Adjusted:
       T = cast<AdjustedType>(Ty)->getOriginalType();
@@ -7558,6 +7564,9 @@ ExprResult Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
         Arg = ArgE.getAs<Expr>();
 
       } else {
+        // MSIL: no .NET reference argument without a parameter type.
+        if (msil::diagnoseCLIReferenceUnprototypedArg(*this, Arg))
+          return ExprError();
         ExprResult ArgE = DefaultArgumentPromotion(Arg);
 
         if (ArgE.isInvalid())
@@ -9152,6 +9161,9 @@ QualType Sema::CheckConditionalOperands(ExprResult &Cond, ExprResult &LHS,
   Cond = UsualUnaryConversions(Cond.get());
   if (Cond.isInvalid())
     return QualType();
+  // MSIL: a .NET reference condition is tested against NULL.
+  if (Cond.get()->getType()->isCLIReferenceType())
+    Cond = msil::buildCLIReferenceTruthTest(*this, Cond.get());
   if (checkCondition(*this, Cond.get(), QuestionLoc))
     return QualType();
 
@@ -9278,6 +9290,12 @@ QualType Sema::CheckConditionalOperands(ExprResult &Cond, ExprResult &LHS,
   if (checkPointerIntegerMismatch(*this, RHS, LHS.get(), QuestionLoc,
       /*IsIntFirstExpr=*/false))
     return LHSTy;
+
+  // MSIL: .NET references of the same class, with NULL or with the Object
+  // reference.
+  if (std::optional<QualType> Ty = msil::checkCLIReferenceConditionalOperands(
+          *this, LHS, RHS, QuestionLoc))
+    return *Ty;
 
   // Emit a better diagnostic if one of the expressions is a null pointer
   // constant and the other is not a pointer type. In this case, the user most
@@ -9943,6 +9961,11 @@ AssignConvertType Sema::CheckAssignmentConstraints(QualType LHSType,
     }
   }
 
+  // MSIL: a .NET reference converts by itself only to the Object reference.
+  if (std::optional<AssignConvertType> Result =
+          msil::checkCLIReferenceAssignment(*this, LHSType, RHSType, Kind))
+    return *Result;
+
   auto OBTResult = Context.checkOBTAssignmentCompatibility(LHSType, RHSType);
   switch (OBTResult) {
   case ASTContext::OBTAssignResult::IncompatibleKinds:
@@ -10583,6 +10606,10 @@ AssignConvertType Sema::CheckSingleAssignmentConstraints(QualType LHSType,
     RHS = ImpCastExprToType(RHS.get(), LHSType, CK_NullToPointer);
     return AssignConvertType::Compatible;
   }
+
+  // MSIL: a null pointer constant to a .NET reference.
+  if (msil::convertNullToCLIReference(*this, LHSType, RHS))
+    return AssignConvertType::Compatible;
 
   CastKind Kind;
   AssignConvertType result =
@@ -13256,6 +13283,11 @@ QualType Sema::CheckCompareOperands(ExprResult &LHS, ExprResult &RHS,
        RHSType->getPointeeType().isWebAssemblyReferenceType()))
     return InvalidOperands(Loc, LHS, RHS);
 
+  // MSIL: '==' and '!=' of .NET references are identity.
+  if (std::optional<QualType> ResultTy =
+          msil::checkCLIReferenceComparison(*this, LHS, RHS, Loc, Opc))
+    return *ResultTy;
+
   const Expr::NullPointerConstantKind LHSNullKind =
       LHS.get()->isNullPointerConstant(Context, Expr::NPC_ValueDependentIsNull);
   const Expr::NullPointerConstantKind RHSNullKind =
@@ -14314,6 +14346,11 @@ inline QualType Sema::CheckLogicalOperands(ExprResult &LHS, ExprResult &RHS,
       LHS = AMDGPU().ExpandAMDGPUPredicateBuiltIn(LHS.get());
     if (RHS.get()->getType() == Context.AMDGPUFeaturePredicateTy)
       RHS = AMDGPU().ExpandAMDGPUPredicateBuiltIn(RHS.get());
+    // MSIL: a .NET reference operand is tested against NULL.
+    if (LHS.get()->getType()->isCLIReferenceType())
+      LHS = msil::buildCLIReferenceTruthTest(*this, LHS.get());
+    if (RHS.get()->getType()->isCLIReferenceType())
+      RHS = msil::buildCLIReferenceTruthTest(*this, RHS.get());
 
     if (!LHS.get()->getType()->isScalarType() ||
         !RHS.get()->getType()->isScalarType())
@@ -15516,6 +15553,10 @@ QualType Sema::CheckAddressOfOperand(ExprResult &OrigOp, SourceLocation OpLoc) {
       return QualType();
     }
   }
+
+  // Cannot take the address of an MSIL .NET reference.
+  if (msil::diagnoseCLIReferenceAddressOf(*this, op, OpLoc))
+    return QualType();
 
   CheckAddressOfPackedMember(op);
 
@@ -16756,6 +16797,11 @@ ExprResult Sema::CreateBuiltinUnaryOp(SourceLocation OpLoc,
         resultType = Context.getLogicalOperationType();
         Input = AMDGPU().ExpandAMDGPUPredicateBuiltIn(InputExpr);
         break;
+      } else if (resultType->isCLIReferenceType()) {
+        // MSIL: '!r' tests the .NET reference r against NULL.
+        resultType = Context.getLogicalOperationType();
+        Input = msil::buildCLIReferenceTruthTest(*this, Input.get());
+        break;
       } else {
         return ExprError(Diag(OpLoc, diag::err_typecheck_unary_expr)
                          << resultType << Input.get()->getSourceRange());
@@ -17446,6 +17492,9 @@ ExprResult Sema::ActOnBlockStmtExpr(SourceLocation CaretLoc,
   }
 
   DiagnoseUnusedParameters(BD->parameters());
+  // MSIL: a block type cannot have a .NET reference.
+  msil::diagnoseCLIReferenceFunctionType(*this, BlockTy, BD->getCaretLocation(),
+                                         msil::CLIRefFunctionTypeForm::Block);
   BlockTy = Context.getBlockPointerType(BlockTy);
 
   // If needed, diagnose invalid gotos and switches in the block.
@@ -17674,6 +17723,11 @@ ExprResult Sema::BuildVAArgExpr(SourceLocation BuiltinLoc,
         << OrigExpr->getType() << E->getSourceRange());
 
   if (!TInfo->getType()->isDependentType()) {
+    // MSIL: no 'va_arg' of a .NET reference.
+    if (msil::diagnoseCLIReferenceVAArg(*this, TInfo->getType(),
+                                        TInfo->getTypeLoc().getBeginLoc()))
+      return ExprError();
+
     if (RequireCompleteType(TInfo->getTypeLoc().getBeginLoc(), TInfo->getType(),
                             diag::err_second_parameter_to_va_arg_incomplete,
                             TInfo->getTypeLoc()))
@@ -19839,6 +19893,9 @@ static bool isVariableCapturable(CapturingScopeInfo *CSI, ValueDecl *Var,
       S.Diag(Loc, diag::err_opencl_block_ref_block);
     return false;
   }
+  // MSIL: a .NET reference is never captured.
+  if (msil::diagnoseCLIReferenceCapture(S, CSI, Var, Loc, Diagnose))
+    return false;
 
   if (auto *BD = dyn_cast<BindingDecl>(Var)) {
     if (auto *RSI = dyn_cast<CapturedRegionScopeInfo>(CSI)) {
@@ -21722,6 +21779,10 @@ ExprResult Sema::CheckBooleanCondition(SourceLocation Loc, Expr *E,
   if (!E->isTypeDependent()) {
     if (E->getType() == Context.AMDGPUFeaturePredicateTy)
       return AMDGPU().ExpandAMDGPUPredicateBuiltIn(E);
+
+    // MSIL: a .NET reference condition is tested against NULL.
+    if (E->getType()->isCLIReferenceType())
+      return msil::buildCLIReferenceTruthTest(*this, E);
 
     if (getLangOpts().CPlusPlus)
       return CheckCXXBooleanCondition(E, IsConstexpr); // C++ 6.4p4

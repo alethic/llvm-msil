@@ -1,0 +1,6 @@
+after a compacting collection: identity 1 1 1, text 1 1 1
+loop: 8 collections, the previous string intact 199 times
+recursion: 41 of 41 frames intact
+through ten calls and a collection: the same object 1, text 1
+a reference local declared after a collection is NULL: 1
+[exit 0]

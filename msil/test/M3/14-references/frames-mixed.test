@@ -1,0 +1,135 @@
+# References beside the C frame: functions whose locals include address-taken arrays, an over-aligned array and a VLA (the static frame that one localloc makes at entry, and a dynamic allocation) also hold reference locals, parameters and results; at every level the C data in the frame and the references stay intact across the managed calls that use both, a reference local declared among the frame's data is NULL until set, String::.ctor(char*) copies its units out of a frame buffer that the program then overwrites, and a recursion keeps a frame buffer, a reference local and a reference parameter intact in every level.
+# Plan 5.21.11 (object locals beside the localloc frame are a shape that
+# zinit.il did not measure: this test, frames-mixed, decides it with both
+# msil-verify.py passes, jitall and PEVerify on every runtime of the leg,
+# with the existing allow-list; Design.md 4.2 and D13: .locals is never
+# init), 5.21.7 RB10 (P15 promotes the static single-element slots of
+# exactly the reference type and no other, so at -O0, where every local is
+# an alloca, the reference slots become IL locals while the C arrays stay
+# in the frame; RB13: FrameLowering and LowerDynamicAlloca are unchanged),
+# 5.21.4 RS1 and RS2 (reference locals at every level, NULL at the
+# declaration), D13 (the frame is one localloc at entry; an alignment
+# above 8 over-allocates and aligns up), 5.17.13's capability table (VLAs
+# outside loops from M26). Every member is a built-in table entry
+# (String::.ctor(char*), Marshal::StringToHGlobalUni(string)), so no
+# reference assemblies are needed. String(char*) copies the units up to
+# the 0 into the new string (measured on the .NET Framework 4.8.1, .NET 10
+# and WSL .NET 10). The members have no C library equivalent, so the
+# expected file is hand-written for both OSes (plan 5.20.11 MT3 and 5.17.4
+# as amended for MC-1, under MC-1's reason; 5.21.14 RV28). Plan 5.17.13
+# (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static volatile int three = 3;
+
+/* Whether a String reference holds exactly the units of 'want'. */
+static int same_units(String ^s, const char16_t *want) {
+  char16_t *u = string_units(s);
+  size_t i = 0;
+  if (!u)
+    return 0;
+  for (; want[i]; ++i)
+    if (u[i] != want[i])
+      return 0;
+  return u[i] == 0;
+}
+
+/* Writes 'count' letters from 'first' and a 0. */
+static void letters(char16_t *out, int first, int count) {
+  for (int i = 0; i < count; ++i)
+    out[i] = (char16_t)('a' + (first + i) % 26);
+  out[count] = 0;
+}
+
+/* A frame with an address-taken buffer and an over-aligned array beside
+   reference locals; the result is a reference too. */
+static String ^from_frame(int seed, int *checks) {
+  char16_t buffer[12];
+  _Alignas(16) int aligned[4];
+  String ^made;
+  int *slot = &aligned[1];
+  *checks += made == NULL;
+  aligned[0] = seed;
+  *slot = seed * 7;
+  letters(buffer, seed, 8);
+  made = new_string(buffer);
+  char16_t copy[12];
+  letters(copy, seed, 8);
+  for (int i = 0; i < 8; ++i)
+    buffer[i] = 'X';
+  *checks += same_units(made, copy);
+  *checks += aligned[0] == seed && *slot == seed * 7;
+  *checks += ((uintptr_t)aligned & 15) == 0;
+  String ^again = new_string(buffer);
+  *checks += same_units(again, (const char16_t[]){'X', 'X', 'X', 'X', 'X', 'X',
+                                                  'X', 'X', 0});
+  *checks += again != made;
+  return made;
+}
+
+/* A VLA beside reference parameters and locals. */
+static int with_vla(int n, String ^first, String ^second) {
+  char16_t vla[n + 1];
+  String ^joined = NULL;
+  int checks = 0;
+  letters(vla, 0, n);
+  joined = new_string(vla);
+  checks += same_units(joined, vla);
+  checks += first != second && first != joined;
+  char16_t again[16];
+  letters(again, 0, n);
+  checks += same_units(joined, again) && vla[n] == 0;
+  return checks;
+}
+
+/* Every level holds a frame buffer, a reference local and a reference
+   parameter; each checks all three after the levels below it ran. */
+static int nest(int depth, String ^outer, const char16_t *outer_units) {
+  char16_t mine_units[8];
+  letters(mine_units, depth, 5);
+  String ^mine = new_string(mine_units);
+  int good = depth > 0 ? nest(depth - 1, mine, mine_units) : 0;
+  char16_t want[8];
+  letters(want, depth, 5);
+  good += same_units(mine, want) && same_units(outer, outer_units) &&
+          mine_units[0] == want[0] && mine != outer;
+  return good;
+}
+
+int main(void) {
+  int checks = 0;
+  String ^a = from_frame(1, &checks);
+  String ^b = from_frame(2, &checks);
+  printf("from_frame: %d of 12 checks\n", checks);
+  char16_t want_a[12], want_b[12];
+  letters(want_a, 1, 8);
+  letters(want_b, 2, 8);
+  printf("the results after the frames are gone: %d %d, two objects %d\n",
+         same_units(a, want_a), same_units(b, want_b), a != b);
+
+  printf("with_vla: %d of 3 checks\n", with_vla(three + 4, a, b));
+
+  static const char16_t root_units[] = {'r', 'o', 'o', 't', 0};
+  String ^root = new_string(root_units);
+  printf("nest: %d of 9 levels intact\n", nest(8, root, root_units));
+  return 0;
+}

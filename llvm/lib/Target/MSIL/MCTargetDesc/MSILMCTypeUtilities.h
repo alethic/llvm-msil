@@ -37,6 +37,8 @@ enum class ValType : uint8_t {
   I64,       ///< int64: 64-bit integers on 32-bit triples (not in Phase 1)
   F32,       ///< float32
   F64,       ///< float64
+  Object,    ///< object: a .NET reference, IR target("msil.ref") (plan 5.21.7
+             ///< RB1); ELEMENT_TYPE_OBJECT in signatures and '.locals'
 };
 
 /// The calling convention of a call site signature ('calli').
@@ -85,11 +87,11 @@ struct Signature {
 
 /// Map a legal value type to its CIL type: i32 is int32, i64 is native int
 /// when pointers are 64 bits wide (decision D2) and int64 otherwise, f32 and
-/// f64 are float32 and float64.
+/// f64 are float32 and float64, and externref (a .NET reference) is object.
 ValType toValType(MVT VT, unsigned PointerSizeInBits);
 
-/// The ILAsm spelling of \p T: "int32", "native int", "int64", "float32" or
-/// "float64".
+/// The ILAsm spelling of \p T: "int32", "native int", "int64", "float32",
+/// "float64" or "object".
 StringRef getValTypeName(ValType T);
 
 /// Print the ILAsm spelling of \p T.

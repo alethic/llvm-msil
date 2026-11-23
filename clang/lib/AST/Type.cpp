@@ -1414,6 +1414,7 @@ public:
   SUGARED_TYPE_CLASS(UnaryTransform)
   TRIVIAL_TYPE_CLASS(Record)
   TRIVIAL_TYPE_CLASS(Enum)
+  TRIVIAL_TYPE_CLASS(CLIReference)
 
   QualType VisitAttributedType(const AttributedType *T) {
     QualType modifiedType = recurse(T->getModifiedType());
@@ -2786,7 +2787,9 @@ bool Type::isWebAssemblyTableType() const {
   return false;
 }
 
-bool Type::isSizelessType() const { return isSizelessBuiltinType(); }
+bool Type::isSizelessType() const {
+  return isSizelessBuiltinType() || isCLIReferenceType();
+}
 
 bool Type::isSizelessVectorType() const {
   return isSVESizelessBuiltinType() || isRVVSizelessBuiltinType();
@@ -5190,6 +5193,7 @@ static CachedProperties computeCachedProperties(const Type *T) {
   case Type::HLSLAttributedResource:
     return Cache::get(cast<HLSLAttributedResourceType>(T)->getWrappedType());
   case Type::HLSLInlineSpirv:
+  case Type::CLIReference:
     return CachedProperties(Linkage::External, false);
   case Type::OverflowBehavior:
     return Cache::get(cast<OverflowBehaviorType>(T)->getUnderlyingType());
@@ -5295,6 +5299,7 @@ LinkageInfo LinkageComputer::computeTypeLinkageInfo(const Type *T) {
     return computeTypeLinkageInfo(
         cast<HLSLAttributedResourceType>(T)->getWrappedType());
   case Type::HLSLInlineSpirv:
+  case Type::CLIReference:
     return LinkageInfo::external();
   }
 
@@ -5490,6 +5495,7 @@ bool Type::canHaveNullability(bool ResultIfUnknown) const {
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
   case Type::OverflowBehavior:
+  case Type::CLIReference:
     return false;
   }
   llvm_unreachable("bad type kind!");

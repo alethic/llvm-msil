@@ -1,0 +1,505 @@
+# D21 for R-a's object shapes that recon references.md section 7 (zinit.il)
+# did not measure (plan 5.21.11; 5.21.14 RV28): object locals beside the
+# localloc frame, a filter clause in a method with object locals, ceq and
+# select on objects, and castclass on entry. objlocals.il has each in the
+# shape the backend writes for references (5.21.7 RB1-RB7, 5.21.9 RM7, RM8,
+# RM12), in the whole-program text form (the kind-checking 'castclass class
+# [s]T' of 5.20.6 MW2 as amended beside a plain 'castclass [s]T'):
+#   - 'frame': the static frame of D13 (localloc at entry into a native int
+#     local, data stored through it) beside two object locals, which get
+#     NULL first, as 5.21.4 RS2's store at a declaration does, and one of
+#     them an object; every 1000th call collects garbage before the checks;
+#   - 'catch_ref': a managed-call stub with msil_catch and a reference
+#     result (5.20.8 MX2, 5.21.9 RM7 and RM12): one .try with a filter that
+#     tests isinst and stores the code, and a handler that returns ldnull
+#     through the object result local;
+#   - 'same' (ldarg; ldarg; ceq: RB4's REF_EQ), 'is_null' (ldnull; ceq:
+#     REF_IS_NULL as a value), 'branches' (beq, bne.un, brtrue and brfalse on
+#     objects: RB3's BEQ_OBJ, BNE_UN_OBJ, BR_IF_OBJ and BR_UNLESS_OBJ), and
+#     'choose' and 'choose_local' (RB2's SELECT_OBJ as the brtrue triangle
+#     that emitSelect makes, the chosen value in an argument or in a local);
+#   - three cast stubs (RM8, castclass on entry: ldarg.0; castclass <TYPE>;
+#     ret, for a class through a kind-checking TypeSpec, for System.String
+#     through its TypeRef and for string[] through the SZARRAY TypeSpec).
+# No method reads an object local before it writes it: R-a's IL never does
+# (5.21.11: stubs and ISel write every object local first; an undef or
+# poison reference, which valid C also reaches from -O1 on, is ldnull at
+# every level, as section 12's row '5.21.7 RB7 and 5.21.6 RI5 as built
+# after review round 1' of 2026-11-21 records), so the test does not depend
+# on the runtime zeroing such a read (Design.md 4.2 and D13: .locals is
+# never init).
+# (1) msil-verify.py passes both passes, ILVerify and PEVerify with the
+#     existing allow-list (the D13 frame's localloc and stind, and
+#     InitLocals in pass 1; nothing in the neutralized copy, whose .locals
+#     are init), with no new message: plan 5.21.11 adds no part to 5.17.16,
+#     and any other message is a defect or a D21 question for the user;
+# (2) jitall compiles every method;
+# (3) the module runs on the default runtime, with
+#     DOTNET_TieredCompilation=0 and on the .NET Framework 4.8, and exits
+#     with 42 only when every check holds: the frame's object locals hold
+#     what was stored in them across 20000 calls and 20 collections, the
+#     frame data stays intact, and each shape gives its results.
+# REQUIRES: msil-ilverify, msil-peverify, msil-ildasm
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/out
+
+# (1)
+# RUN: %ilasm -exe -output=%t/out/objlocals.exe %t/objlocals.il
+# RUN: %msil_verify -v %t/out/objlocals.exe > %t/verify.log 2>&1
+# RUN: %{harness_check} contains %t/verify.log "^msil-verify: OK$"
+# RUN: %{harness_check} lacks %t/verify.log "disallowed"
+
+# (2)
+# RUN: %if msil-jitall %{ %msil_jitall %t/out/objlocals.exe > %t/jitall.log 2>&1 %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t/jitall.log "^jitall: \d+ ok, 0 failed$" %}
+
+# (3)
+# RUN: %msil_exec --out %t/run.out %t/out/objlocals.exe
+# RUN: %{harness_check} equals %t/run.out "[exit 42]"
+# RUN: %msil_exec --env DOTNET_TieredCompilation=0 --out %t/tc0.out %t/out/objlocals.exe
+# RUN: %{harness_check} equals %t/tc0.out "[exit 42]"
+# RUN: %if msil-netfx && !msil-wsl %{ %msil_exec --netfx --out %t/netfx.out %t/out/objlocals.exe %}
+# RUN: %if msil-netfx && !msil-wsl %{ %{harness_check} equals %t/netfx.out "[exit 42]" %}
+
+#--- objlocals.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'objlocals' { .ver 0:0:0:0 }
+.module 'objlocals.exe'
+
+// Fills a frame with live references just before each 'frame' call, so
+// that its object locals start out over stale references.
+.method assembly static void 'dirty'() cil managed noinlining
+{
+  .maxstack 2
+  .locals init (object, object, object, object)
+  newobj instance void [mscorlib]System.Object::.ctor()
+  dup
+  stloc.0
+  dup
+  stloc.1
+  dup
+  stloc.2
+  stloc.3
+  ldloc.0
+  call void [mscorlib]System.GC::KeepAlive(object)
+  ldloc.1
+  call void [mscorlib]System.GC::KeepAlive(object)
+  ldloc.2
+  call void [mscorlib]System.GC::KeepAlive(object)
+  ldloc.3
+  call void [mscorlib]System.GC::KeepAlive(object)
+  ret
+} // end of method 'dirty'
+
+// The D13 frame beside object locals: 0 when the object locals hold what
+// was stored in them and the frame data survives, 1 otherwise.
+.method assembly static int32 'frame'(int32) cil managed noinlining
+{
+  .maxstack 3
+  .locals (native int, object, object, int32)
+  ldc.i4.s 24
+  localloc
+  stloc.0
+  ldnull
+  stloc.1
+  ldnull
+  stloc.2
+  ldloc.0
+  ldc.i4.s 8
+  conv.i
+  add
+  ldc.i4 4660
+  stind.i4
+  newobj instance void [mscorlib]System.Object::.ctor()
+  stloc.2
+  ldarg.0
+  brfalse.s @BB1_1
+  call void [mscorlib]System.GC::Collect()
+@BB1_1:
+  ldloc.1
+  brtrue.s @BB1_3
+  ldloc.2
+  brfalse.s @BB1_3
+  ldloc.2
+  ldloc.1
+  beq.s @BB1_3
+  ldloc.2
+  call void [mscorlib]System.GC::KeepAlive(object)
+  ldloc.0
+  ldc.i4.s 8
+  conv.i
+  add
+  ldind.i4
+  ldc.i4 4660
+  bne.un.s @BB1_3
+  ldc.i4.0
+  ret
+@BB1_3:
+  ldc.i4.1
+  ret
+} // end of method 'frame'
+
+// A managed-call stub with msil_catch and a reference result: Substring of
+// a string, ArgumentOutOfRangeException mapped to 7, the result ldnull then.
+.method assembly static object 'catch_ref'(object, int32, int32, native int) cil managed
+{
+  .maxstack 3
+  .locals (int32, object)
+  .try {
+@MC0_0:
+  ldarg.0
+  castclass [mscorlib]System.String
+  ldarg.1
+  ldarg.2
+  callvirt instance string [mscorlib]System.String::Substring(int32, int32)
+  stloc.1
+  leave.s @MC0_3
+  } filter {
+@MC0_1:
+  dup
+  isinst [mscorlib]System.ArgumentOutOfRangeException
+  brtrue.s @MC0_5
+  pop
+  ldc.i4.0
+  br.s @MC0_4
+@MC0_5:
+  pop
+  ldc.i4.7
+  stloc.0
+  ldc.i4.1
+@MC0_4:
+  endfilter
+  } {
+@MC0_2:
+  pop
+  ldarg.3
+  ldloc.0
+  stind.i4
+  ldnull
+  stloc.1
+  leave.s @MC0_3
+  }
+@MC0_3:
+  ldloc.1
+  ret
+} // end of method 'catch_ref'
+
+.method assembly static int32 'same'(object, object) cil managed
+{
+  .maxstack 2
+  ldarg.0
+  ldarg.1
+  ceq
+  ret
+} // end of method 'same'
+
+.method assembly static int32 'is_null'(object) cil managed
+{
+  .maxstack 2
+  ldarg.0
+  ldnull
+  ceq
+  ret
+} // end of method 'is_null'
+
+// 1 when the two are one object, 2 when the first is not null, 3 when it
+// is null; then 4 more when the second is null, through brtrue.
+.method assembly static int32 'branches'(object, object) cil managed
+{
+  .maxstack 2
+  .locals (int32)
+  ldarg.0
+  ldarg.1
+  bne.un.s @BB3_1
+  ldc.i4.1
+  stloc.0
+  br.s @BB3_3
+@BB3_1:
+  ldarg.0
+  brfalse.s @BB3_2
+  ldc.i4.2
+  stloc.0
+  br.s @BB3_3
+@BB3_2:
+  ldc.i4.3
+  stloc.0
+@BB3_3:
+  ldarg.1
+  brtrue.s @BB3_4
+  ldloc.0
+  ldc.i4.4
+  add
+  stloc.0
+@BB3_4:
+  ldarg.0
+  ldarg.1
+  beq.s @BB3_5
+  ldloc.0
+  ret
+@BB3_5:
+  ldloc.0
+  ldc.i4.s 16
+  add
+  ret
+} // end of method 'branches'
+
+// c ? a : b as the brtrue triangle, the result in the argument b.
+.method assembly static object 'choose'(object, object, int32) cil managed
+{
+  .maxstack 2
+  ldarg.2
+  ldc.i4.0
+  ceq
+  brtrue.s @BB4_2
+  ldarg.0
+  starg.s 1
+@BB4_2:
+  ldarg.1
+  ret
+} // end of method 'choose'
+
+// c ? a : b with the result in a local, written on both paths.
+.method assembly static object 'choose_local'(object, object, int32) cil managed
+{
+  .maxstack 1
+  .locals (object)
+  ldarg.1
+  stloc.0
+  ldarg.2
+  brfalse.s @BB5_2
+  ldarg.0
+  stloc.0
+@BB5_2:
+  ldloc.0
+  ret
+} // end of method 'choose_local'
+
+// Cast stubs: castclass on entry.
+.method assembly static object '__msil_mc.<castclass>.__uniq.1'(object) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  castclass class [mscorlib]System.Text.StringBuilder
+  ret
+} // end of method '__msil_mc.<castclass>.__uniq.1'
+
+.method assembly static object '__msil_mc.<castclass>.__uniq.2'(object) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  castclass [mscorlib]System.String
+  ret
+} // end of method '__msil_mc.<castclass>.__uniq.2'
+
+.method assembly static object '__msil_mc.<castclass>.__uniq.3'(object) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  castclass string[]
+  ret
+} // end of method '__msil_mc.<castclass>.__uniq.3'
+
+// Each check that fails adds its bit; 42 when none did. Local 0 is a
+// frame cell (D13's localloc at entry), 1 the loop counter, 2 the frame
+// probe's failures, 3-5 the objects, 6 the failed checks' bits.
+.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed
+{
+  .entrypoint
+  .maxstack 5
+  .locals (native int, int32, int32, object, object, object, int32)
+  ldc.i4.8
+  localloc
+  stloc.0
+  ldc.i4.0
+  stloc.1
+  ldc.i4.0
+  stloc.2
+  // The frame probe, 20000 times after a dirty frame, collecting every
+  // 1000th time.
+@L_loop:
+  ldloc.1
+  ldc.i4 20000
+  bge.s @L_done
+  call void 'dirty'()
+  ldloc.2
+  ldloc.1
+  ldc.i4 1000
+  rem
+  ldc.i4.0
+  ceq
+  call int32 'frame'(int32)
+  add
+  stloc.2
+  ldloc.1
+  ldc.i4.1
+  add
+  stloc.1
+  br.s @L_loop
+@L_done:
+  ldloc.2
+  ldc.i4.0
+  cgt.un
+  stloc.s 6
+  // Objects: a string, a second string of the same text, a builder.
+  ldstr "a string"
+  stloc.3
+  ldstr "a "
+  ldstr "string"
+  call string [mscorlib]System.String::Concat(string, string)
+  stloc.s 4
+  newobj instance void [mscorlib]System.Text.StringBuilder::.ctor()
+  stloc.s 5
+  // ceq: one object 1, two objects 0; is_null: null 1, a string 0.
+  ldloc.3
+  ldloc.3
+  call int32 'same'(object, object)
+  ldc.i4.1
+  bne.un @L_bad1
+  ldloc.3
+  ldloc.s 4
+  call int32 'same'(object, object)
+  brtrue @L_bad1
+  ldnull
+  call int32 'is_null'(object)
+  ldc.i4.1
+  bne.un @L_bad1
+  ldloc.3
+  call int32 'is_null'(object)
+  brtrue @L_bad1
+  br.s @L_ok1
+@L_bad1:
+  ldloc.s 6
+  ldc.i4.2
+  or
+  stloc.s 6
+@L_ok1:
+  // branches: (s, s) 1 + 16, (s, t) 2, (null, s) 3, (s, null) 2 + 4.
+  ldloc.3
+  ldloc.3
+  call int32 'branches'(object, object)
+  ldc.i4.s 17
+  bne.un @L_bad2
+  ldloc.3
+  ldloc.s 4
+  call int32 'branches'(object, object)
+  ldc.i4.2
+  bne.un @L_bad2
+  ldnull
+  ldloc.3
+  call int32 'branches'(object, object)
+  ldc.i4.3
+  bne.un @L_bad2
+  ldloc.3
+  ldnull
+  call int32 'branches'(object, object)
+  ldc.i4.6
+  bne.un @L_bad2
+  br.s @L_ok2
+@L_bad2:
+  ldloc.s 6
+  ldc.i4.4
+  or
+  stloc.s 6
+@L_ok2:
+  // select: both forms give a for 1 and b for 0.
+  ldloc.3
+  ldloc.s 4
+  ldc.i4.1
+  call object 'choose'(object, object, int32)
+  ldloc.3
+  bne.un @L_bad3
+  ldloc.3
+  ldloc.s 4
+  ldc.i4.0
+  call object 'choose'(object, object, int32)
+  ldloc.s 4
+  bne.un @L_bad3
+  ldloc.3
+  ldloc.s 4
+  ldc.i4.1
+  call object 'choose_local'(object, object, int32)
+  ldloc.3
+  bne.un @L_bad3
+  ldloc.3
+  ldloc.s 4
+  ldc.i4.0
+  call object 'choose_local'(object, object, int32)
+  ldloc.s 4
+  bne.un @L_bad3
+  br.s @L_ok3
+@L_bad3:
+  ldloc.s 6
+  ldc.i4.8
+  or
+  stloc.s 6
+@L_ok3:
+  // casts: each returns its argument; null passes.
+  ldloc.s 5
+  call object '__msil_mc.<castclass>.__uniq.1'(object)
+  ldloc.s 5
+  bne.un @L_bad4
+  ldloc.3
+  call object '__msil_mc.<castclass>.__uniq.2'(object)
+  ldloc.3
+  bne.un @L_bad4
+  ldnull
+  call object '__msil_mc.<castclass>.__uniq.2'(object)
+  brtrue @L_bad4
+  ldarg.0
+  call object '__msil_mc.<castclass>.__uniq.3'(object)
+  ldarg.0
+  bne.un @L_bad4
+  br.s @L_ok4
+@L_bad4:
+  ldloc.s 6
+  ldc.i4.s 16
+  or
+  stloc.s 6
+@L_ok4:
+  // catch_ref: "a string".Substring(2, 3) is "str" and leaves the code
+  // cell alone; Substring(6, 9) gives null and stores 7.
+  ldloc.0
+  ldc.i4.m1
+  stind.i4
+  ldloc.3
+  ldc.i4.2
+  ldc.i4.3
+  ldloc.0
+  call object 'catch_ref'(object, int32, int32, native int)
+  dup
+  brfalse.s @L_bad5_pop
+  castclass [mscorlib]System.String
+  ldstr "str"
+  call bool [mscorlib]System.String::op_Equality(string, string)
+  brfalse.s @L_bad5
+  ldloc.0
+  ldind.i4
+  ldc.i4.m1
+  bne.un.s @L_bad5
+  ldloc.3
+  ldc.i4.6
+  ldc.i4.s 9
+  ldloc.0
+  call object 'catch_ref'(object, int32, int32, native int)
+  brtrue.s @L_bad5
+  ldloc.0
+  ldind.i4
+  ldc.i4.7
+  bne.un.s @L_bad5
+  br.s @L_ok5
+@L_bad5_pop:
+  pop
+@L_bad5:
+  ldloc.s 6
+  ldc.i4.s 32
+  or
+  stloc.s 6
+@L_ok5:
+  ldloc.s 6
+  brtrue.s @L_fail
+  ldc.i4.s 42
+  ret
+@L_fail:
+  ldloc.s 6
+  ret
+} // end of method '<msil>Main'

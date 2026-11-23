@@ -1,0 +1,199 @@
+# msil_catch with references: a call whose result is a reference returns NULL when a listed exception is caught and stores that entry's code, and returns the reference with the code untouched when it succeeds; mapped: a DecoderFallbackException from Encoding::GetString (built-in table members), ArgumentOutOfRangeException from String::Substring and a NullReferenceException from a NULL 'this' reference, FormatException and ArgumentNullException from Convert::FromBase64String (an array result; a NULL String argument), FormatException, ArgumentException and OverflowException from the System.Version::.ctor(string) (a .ctor result), a NullReferenceException from StringBuilder::Append on a NULL builder, and FormatException from Int32::Parse, whose String argument gives an integer result.
+# Plan 5.21.9 RM7 (with msil_catch the stub's result local is 'object' and
+# the handler's zero value is ldnull), RM12 (MX2's zero for a reference
+# result is ldnull), 5.20.8 MX2 (with msil_catch the whole stub body is one
+# .try whose filter tests the entries in the order written, stores the
+# first match's code and returns the zero value of the C return type; on
+# success *err is not written) and MX4 (an exception of the conversions,
+# here a NULL 'this' that callvirt dereferences, is mapped like one from
+# the member), 5.20.2 MA5, 5.21.9 RM2 and RM7 (a 'ref' argument or 'this'
+# is ldarg plus castclass, with no null test, so a NULL reference reaches
+# the member or the callvirt as null), 5.21.11 (filter clauses in methods
+# with object locals: the composite's msil-verify.py passes, jitall and
+# PEVerify decide them on every runtime). The program links against the
+# .NET Framework 4.8 implementation assemblies (%{msil_refs_netfx}),
+# because String::Substring, Convert, Version, StringBuilder, Int32::Parse
+# and the exception types other than DecoderFallbackException are no
+# built-in table entries; the image runs on the Framework, .NET 10 and WSL
+# .NET 10. .NET's rules give the values: a throwing UTF8Encoding throws
+# DecoderFallbackException on 0xff; Substring past the end throws
+# ArgumentOutOfRangeException; FromBase64String throws FormatException on
+# characters outside base64 and ArgumentNullException on null; the Version
+# string constructor throws ArgumentException for one component,
+# FormatException for a component that is not a number and
+# OverflowException for one above Int32.MaxValue; Int32.Parse throws
+# FormatException on "12x" (measured on the .NET Framework 4.8.1, .NET 10
+# and WSL .NET 10). Every call is made on its own line before its results
+# are printed. The members have no C library equivalent, so the expected
+# file is hand-written for both OSes (plan 5.20.11 MT3 and 5.17.4 as
+# amended for MC-1, under MC-1's reason; 5.21.14 RV28). Plan 5.17.13 (R-a,
+# M3/14-references).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.Encoding") Encoding Encoding;
+typedef struct CLI_TYPE("System.Text.UTF8Encoding") UTF8Encoding UTF8Encoding;
+typedef struct CLI_TYPE("System.Text.StringBuilder")
+    StringBuilder StringBuilder;
+typedef struct CLI_TYPE("System.Version") Version Version;
+typedef struct CLI_TYPE("System.Array") Array Array;
+typedef struct CLI_TYPE("uint8[]") Bytes Bytes;
+
+/* Codes of this test (any values from 1 to INT32_MAX). */
+enum {
+  CODE_FORMAT = 1,
+  CODE_ARGUMENT = 2,
+  CODE_OVERFLOW = 3,
+  CODE_RANGE = 7,
+  CODE_NULL_REFERENCE = 9,
+  CODE_BASE64 = 11,
+  CODE_ARGUMENT_NULL = 12,
+  CODE_PARSE = 21,
+  CODE_DECODER = 22
+};
+
+__attribute__((msil_method("System.Text.UTF8Encoding", ".ctor",
+                           "instance void(bool, bool)")))
+UTF8Encoding ^new_utf8(_Bool emit_bom, _Bool throw_on_invalid);
+
+__attribute__((msil_method("System.Text.Encoding", "GetString",
+                           "instance string(uint8*, int32)"),
+               msil_catch("System.Text.DecoderFallbackException",
+                          CODE_DECODER)))
+String ^decode(Encoding ^encoding, const unsigned char *bytes, int count,
+               int *err);
+
+__attribute__((msil_method("System.String", "Substring",
+                           "instance string(int32, int32)"),
+               msil_catch("System.ArgumentOutOfRangeException", CODE_RANGE),
+               msil_catch("System.NullReferenceException",
+                          CODE_NULL_REFERENCE)))
+String ^substring(String ^s, int start, int length, int *err);
+
+__attribute__((msil_method("System.Convert", "FromBase64String",
+                           "uint8[](string)"),
+               msil_catch("System.FormatException", CODE_BASE64),
+               msil_catch("System.ArgumentNullException", CODE_ARGUMENT_NULL)))
+Bytes ^from_base64(String ^s, int *err);
+
+__attribute__((msil_method("System.Version", ".ctor", "instance void(string)"),
+               msil_catch("System.FormatException", CODE_FORMAT),
+               msil_catch("System.ArgumentException", CODE_ARGUMENT),
+               msil_catch("System.OverflowException", CODE_OVERFLOW)))
+Version ^new_version(String ^text, int *err);
+
+__attribute__((msil_method("System.Text.StringBuilder", "Append",
+                           "instance class System.Text.StringBuilder(string)"),
+               msil_catch("System.NullReferenceException",
+                          CODE_NULL_REFERENCE)))
+StringBuilder ^append(StringBuilder ^sb, String ^s, int *err);
+
+__attribute__((msil_method("valuetype System.Int32", "Parse", "int32(string)"),
+               msil_catch("System.FormatException", CODE_PARSE)))
+int parse_int(String ^s, int *err);
+
+__attribute__((msil_method("System.Array", "get_Length", "instance int32()")))
+int array_length(Array ^a);
+
+__attribute__((msil_method("System.Object", "ToString", "instance string()")))
+String ^to_string(Object ^o);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static String ^text(Encoding ^encoding, const char *s) {
+  int err = -1;
+  int n = 0;
+  while (s[n])
+    ++n;
+  return decode(encoding, (const unsigned char *)s, n, &err);
+}
+
+/* Prints a String reference or NULL, then the code. */
+static void put_value(String ^s, int err) {
+  if (!s) {
+    printf("NULL, code %d\n", err);
+    return;
+  }
+  putchar('"');
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\", code %d\n", err);
+}
+
+static void put_result(const char *what, String ^s, int err) {
+  printf("%s: ", what);
+  put_value(s, err);
+}
+
+int main(void) {
+  Encoding ^encoding = (Encoding ^)new_utf8(0, 1);
+
+  /* Built-in table members alone. */
+  int err = -1;
+  String ^valid = decode(encoding, (const unsigned char *)"valid", 5, &err);
+  put_result("GetString of valid UTF-8", valid, err);
+  err = -1;
+  String ^invalid =
+      decode(encoding, (const unsigned char *)"in\xffvalid", 8, &err);
+  put_result("GetString of invalid UTF-8", invalid, err);
+
+  /* A 'this' reference, and a NULL one. */
+  err = -1;
+  String ^part = substring(valid, 1, 3, &err);
+  put_result("Substring(1, 3)", part, err);
+  err = -1;
+  part = substring(valid, 4, 9, &err);
+  put_result("Substring(4, 9)", part, err);
+  err = -1;
+  part = substring(NULL, 0, 1, &err);
+  put_result("Substring of a NULL 'this'", part, err);
+
+  /* An array result, and a NULL String argument. */
+  err = -1;
+  Bytes ^bytes = from_base64(text(encoding, "AQID"), &err);
+  printf("FromBase64String(\"AQID\"): not NULL %d, length %d, code %d\n",
+         bytes != NULL, bytes ? array_length((Array ^)bytes) : -1, err);
+  err = -1;
+  bytes = from_base64(text(encoding, "!!"), &err);
+  printf("FromBase64String(\"!!\"): NULL %d, code %d\n", bytes == NULL, err);
+  err = -1;
+  bytes = from_base64(NULL, &err);
+  printf("FromBase64String(NULL): NULL %d, code %d\n", bytes == NULL, err);
+
+  /* A .ctor result: entries in the order written. */
+  static const char *const versions[] = {"1.2", "1", "1.x", "1.99999999999"};
+  for (int i = 0; i < 4; ++i) {
+    err = -1;
+    Version ^v = new_version(text(encoding, versions[i]), &err);
+    printf("Version(\"%s\"): ", versions[i]);
+    put_value(v ? to_string(v) : NULL, err);
+  }
+
+  /* A NULL builder as 'this'. */
+  StringBuilder ^none = NULL;
+  err = -1;
+  StringBuilder ^appended = append(none, text(encoding, "lost"), &err);
+  printf("Append to a NULL builder: NULL %d, code %d\n", appended == NULL, err);
+
+  /* A String argument with an integer result. */
+  err = -1;
+  int number = parse_int(text(encoding, "123"), &err);
+  printf("Int32.Parse(\"123\"): %d, code %d\n", number, err);
+  err = -1;
+  number = parse_int(text(encoding, "12x"), &err);
+  printf("Int32.Parse(\"12x\"): %d, code %d\n", number, err);
+  return 0;
+}

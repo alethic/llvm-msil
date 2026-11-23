@@ -390,6 +390,9 @@ public:
   void VisitBlockPointerType(const BlockPointerType *T) {
     Visit(T->getPointeeType());
   }
+  void VisitCLIReferenceType(const CLIReferenceType *T) {
+    Visit(T->getClassType());
+  }
   void VisitReferenceType(const ReferenceType *T) {
     Visit(T->getPointeeType());
   }

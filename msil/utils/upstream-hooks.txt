@@ -111,6 +111,24 @@
 #     fallback): at least as many covering labels (MSIL case labels, and in a switch-default
 #     file also 'default:' labels) as XCOFF labels that need cover. A problem names the file
 #     and the line of the uncovered XCOFF case.
+#   - Every switch over clang's type classes in a C or C++ file under clang/include, clang/lib
+#     or clang/tools (built or not, changed or not) handles the fork's class CLIReference (plan
+#     5.21.13 RH5, from R-a), so an upstream merge that brings a new such switch fails too. A
+#     type-class switch tests getTypeClass() or getTypeLocClass(): its condition calls one of
+#     them, or is a local variable initialized from one of them in a block around the switch
+#     (as 'switch (TC)' after 'Type::TypeClass TC = T->getTypeClass();'). Its own body (not a
+#     switch nested in it; comments and string literals do not count) needs a CLIReference
+#     case label ('case Type::CLIReference:', 'case TypeLoc::CLIReference:' or 'case
+#     CLIReference:') or a macro whose first argument is CLIReference (as
+#     'SUGAR_FREE_TYPE(CLIReference)', which expands to one), a 'default:' label, or a
+#     generated case for every class: an #include of TypeNodes.inc with TYPE, or of
+#     TypeLocNodes.def with UNQUAL_TYPELOC (TYPELOC when UNQUAL_TYPELOC is not defined),
+#     defined as a case label where the file is included. Where the braces of a file do not
+#     match, the check counts as for object-format switches: at least as many of those marks
+#     as type-class switches. A problem names the file and the line of the switch. There is
+#     no exemption line: the switch gets its case, and its file a hook block. lldb's
+#     TypeSystemClang.cpp is outside the scan, not built and not changed (the TypeNodes.td
+#     block).
 
 # M11 set 280 for its 301 inputs (288 PASS, 11 UNSUPPORTED and 2 XFAIL on the development
 # host); M13 adds 25 inputs that pass there (24 upstream tests and lld/test/MSIL/dispatch.test):
@@ -176,8 +194,23 @@
 # added with MC-1's commit) adds 3 inputs, none of them an input before, which passed on the
 # development host with the build before that hook: clang/test/Sema/warn-unused-function.c,
 # clang/test/SemaCXX/warn-unused-filescoped.cpp and warn-func-not-needed.cpp:
-# 383 = 380 + 3, for 426 inputs in all.
-min-pass 383
+# 383 = 380 + 3, for 426 inputs in all. R-a (plan 5.21.13's per-file table) adds 60 inputs,
+# none of them an input before, which passed on the development host with the build before
+# R-a's changes (R-a.0's run of the table's tests): for the 44 files that R-a hooks and for the
+# lit lines that SemaDecl.cpp and SemaDeclAttr.cpp gain, 46 tests of clang/test (19 of Sema, 6
+# of CodeGen, 5 of CodeGenCXX, 4 of CIR/CodeGen, 3 of PCH and one each of AST, ASTMerge,
+# CodeGenObjC, CodeGenOpenCL, DebugInfo, Misc, SemaCXX, SemaObjC and SemaOpenCL), and 14 of
+# llvm/test for LLVM core's Type.cpp (5) and ValueTypes.cpp (9): 443 = 383 + 60. The table's
+# 61st test, clang/test/AST/ast-dump-types-json.cpp, is not an input (the TypeNodes.td block
+# says why). The 44th file, clang/lib/CIR/CodeGen/CIRGenExprScalar.cpp (the section 12 row
+# '5.21.13 RH4 amended', review round 1), adds one input, clang/test/CIR/CodeGen/
+# nullptr-init.cpp, added in review round 2 and not counted in min-pass for that reason
+# (min-pass counts the inputs that passed with the build before R-a's changes, R-a.0's list,
+# and that build no longer exists); it passed by hand with R-a's build. Its other lit lines,
+# basic.c and vla.c, are inputs of CIRGenFunction.cpp's block, and the three pragma-weak tests
+# that the SemaDeclAttr.cpp block names for its DeclApplyPragmaWeak hook (review round 3) are
+# inputs of SemaDecl.cpp's block: 426 + 60 + 1 = 487 inputs in all.
+min-pass 443
 
 fork-only .github/workflows/msil-ci.yml
 fork-only clang/lib/Basic/Targets/MSIL.h
@@ -226,6 +259,35 @@ fork-only clang/lib/Sema/SemaMSILManagedCall.h
 fork-only clang/lib/Serialization/MSILManagedCallDecls.h
 fork-only clang/test/Sema/attr-msil-method.c
 fork-only clang/test/SemaCXX/attr-msil-method.cpp
+# .NET references in C (plan 5.21, R-a): the Sema rules of the cli_type attribute and of 'T ^'
+# (SemaMSILReference.cpp with its file-private header, which the one-line hooks of
+# SemaType.cpp, SemaExpr.cpp, SemaCast.cpp, SemaDecl.cpp, SemaDeclAttr.cpp, SemaOverload.cpp and
+# the fork's SemaMSILManagedCall.cpp include: RT4-RT7, RC2, RC5, RC6, RS1-RS28, RS30), their clang
+# CodeGen (CGMSILReferences.cpp with its file-private header, which CodeGenTypes.cpp,
+# CodeGenFunction.cpp, CGDecl.cpp, CGExprScalar.cpp, CGStmt.cpp and the fork's
+# CGMSILManagedCalls.cpp include, and which defines CGDebugInfo's CreateType for the type:
+# RG1-RG12, RS29), the resource header <cli/cli.h> (RT1: only CLI_TYPE, '#error' off MSIL
+# triples; the hook block of clang/lib/Headers/CMakeLists.txt installs it as include/cli/cli.h),
+# and the tests of plan 5.21.14 outside clang/test/CodeGen/MSIL, which pin the texts of 5.21.12
+# whole: msil-cli-type.c (RV1), msil-ref-type.c (RV3), msil-ref-ops.c (RV4), msil-ref-storage.c
+# (RV5), msil-ref-functions.c (RV6), msil-ref-jumps.c (RV7), msil-ref-managed-calls.c (RV8),
+# msil-ref-cxx.cpp (RV9) and the driver tests msil-cli-header.c and msil-ref-driver.c (RV17).
+# check-msil runs the ten tests (msil/test/CMakeLists.txt).
+fork-only clang/lib/CodeGen/CGMSILReferences.cpp
+fork-only clang/lib/CodeGen/CGMSILReferences.h
+fork-only clang/lib/Headers/cli/cli.h
+fork-only clang/lib/Sema/SemaMSILReference.cpp
+fork-only clang/lib/Sema/SemaMSILReference.h
+fork-only clang/test/Driver/msil-cli-header.c
+fork-only clang/test/Driver/msil-ref-driver.c
+fork-only clang/test/Sema/msil-cli-type.c
+fork-only clang/test/Sema/msil-ref-functions.c
+fork-only clang/test/Sema/msil-ref-jumps.c
+fork-only clang/test/Sema/msil-ref-managed-calls.c
+fork-only clang/test/Sema/msil-ref-ops.c
+fork-only clang/test/Sema/msil-ref-storage.c
+fork-only clang/test/Sema/msil-ref-type.c
+fork-only clang/test/SemaCXX/msil-ref-cxx.cpp
 # The portable C library (P-1b, plan 5.19.3, 5.19.14): llvm-libc's dotnet configuration (entry
 # points, headers, config.json with errno EXTERNAL), its OS layer (the dotnet_util library, the
 # errno provider __llvm_libc_errno, io.h's declaration of write_to_stderr) and the dotnet
@@ -262,6 +324,59 @@ switch-other llvm/lib/MC/StringTableBuilder.cpp its 'case XCOFF:' is StringTable
 # No allow lines: every lit input passes (or is UNSUPPORTED) with the build targets of plan
 # 5.6.11 (msil/utils/ci/build-targets.txt).
 
+# .NET references in C (plan 5.21, R-a): clang's type-system headers gain the type class
+# CLIReferenceType, a .NET object reference 'T ^' whose class is a 'cli_type' struct (MSIL
+# triples only). Each block's upstream tests are plan 5.21.13's per-file table's; they show
+# that the other types keep their behaviour, and its fork tests pin the new class.
+hook clang/include/clang/AST/ASTContext.h
+  # R-a (plan 5.21.3 RC3): the uniquing set CLIReferenceTypes, getCLIReferenceType (one
+  # canonical node per key, whose class is the key's implicit struct, and a sugared node per
+  # struct as written) and hasCLIReferenceTypes; declarations only. sizeless-1.c runs the
+  # sizeless rules that the reference type joins (Type.cpp's block).
+  lit clang/test/Sema/sizeless-1.c
+  fork clang/test/Sema/msil-cli-type.c
+
+hook clang/include/clang/AST/ASTNodeTraverser.h
+  # R-a (plan 5.21.3 RC8): VisitCLIReferenceType, which dumps the class as
+  # VisitBlockPointerType dumps the pointee; ast-dump-aarch64-sve-types.c keeps -ast-dump of
+  # the sizeless builtin types, and msil-ref-type.c pins the reference's.
+  lit clang/test/AST/ast-dump-aarch64-sve-types.c
+  fork clang/test/Sema/msil-ref-type.c
+
+hook clang/include/clang/AST/RecursiveASTVisitor.h
+  # R-a (plan 5.21.3 RC8): DEF_TRAVERSE_TYPE and DEF_TRAVERSE_TYPELOC for CLIReferenceType,
+  # which traverse the class and its TypeLoc as BlockPointerType's traverse the pointee's. Plan
+  # 5.21.13's table names clang/test/AST/ast-dump-types-json.cpp here, which is not a lit input
+  # (the TypeNodes.td block says why).
+  none the visitor's own tests, clang/unittests/Tooling/RecursiveASTVisitorTests (ToolingTests), are not built, and its table test AST/ast-dump-types-json.cpp fails on a checkout with CRLF line endings (the TypeNodes.td block)
+  fork clang/test/Sema/msil-ref-type.c
+
+hook clang/include/clang/AST/TypeBase.h
+  # R-a (plan 5.21.3 RC3): the class CLIReferenceType (its key, an interned IdentifierInfo,
+  # and its class: the 'cli_type' struct as written in a sugared node, the key's implicit
+  # struct in the canonical one; isSugared() and desugar()) and Type::isCLIReferenceType().
+  # sizeless-1.c and aarch64-sve-types.c keep the sizeless builtin types, which
+  # isSizelessType() shares with the reference type (Type.cpp's block) and
+  # isSizelessBuiltinType() does not.
+  lit clang/test/Sema/sizeless-1.c
+  lit clang/test/PCH/aarch64-sve-types.c
+  fork clang/test/Sema/msil-ref-type.c
+
+hook clang/include/clang/AST/TypeLoc.h
+  # R-a (plan 5.21.3 RC3, RC5): CLIReferenceTypeLoc, the caret's location with the class's
+  # TypeLoc as its inner TypeLoc (BlockPointerTypeLoc's form); block-misc.c keeps the block
+  # pointer, whose caret the parser shares.
+  lit clang/test/Sema/block-misc.c
+  fork clang/test/Sema/msil-ref-type.c
+
+hook clang/include/clang/AST/TypeProperties.td
+  # R-a (plan 5.21.3 RC8): the serialized properties of CLIReferenceType, the key and the
+  # struct as written (none for the canonical type, whose implicit struct the getter makes
+  # again), read back through getCLIReferenceType; types.c writes and reads a PCH of the other
+  # types, ref-pch.c one with references.
+  lit clang/test/PCH/types.c
+  fork clang/test/CodeGen/MSIL/ref-pch.c
+
 hook clang/include/clang/Basic/Attr.td
   # TargetWebAssemblyOrMSIL: WebAssembly's import_module and import_name also on MSIL triples
   # (plan 5.10.7); of the generated files only AttrHasAttributeImpl.inc and
@@ -289,16 +404,27 @@ hook clang/include/clang/Basic/Attr.td
   fork clang/test/Sema/attr-msil-method.c
   fork clang/test/SemaCXX/attr-msil-method.cpp
   fork clang/test/CodeGen/MSIL/msil-method.c
+  # R-a (plan 5.21.2 RT1): the record CLIType (Clang<"cli_type">, a struct's attribute with
+  # ErrorDiag on other subjects, TargetMSIL, no '#pragma clang attribute' support), whose fake
+  # Key argument (MC-1's StringArgument form) Sema writes. The same tests show that the pragma
+  # list does not change and that other targets do not know the attribute; msil-cli-type.c
+  # pins both spellings, __has_attribute and the keys on MSIL triples.
+  fork clang/test/Sema/msil-cli-type.c
 
 hook clang/include/clang/Basic/AttrDocs.td
-  none documentation only: an MSIL paragraph in the import_module and import_name documentation, and (MC-1, plan 5.20.2) the documentation of msil_method and msil_catch
+  none documentation only: an MSIL paragraph in the import_module and import_name documentation, (MC-1, plan 5.20.2) the documentation of msil_method and msil_catch, and (R-a, plan 5.21.2 RT1) the documentation of cli_type
   fork clang/test/CodeGen/MSIL/import-attributes.c
   fork clang/test/Sema/attr-msil-method.c
+  fork clang/test/Sema/msil-cli-type.c
 
 hook clang/include/clang/Basic/DiagnosticCommonKinds.td
-  none adds the error err_msil_asm_unsupported only; every clang build regenerates the diagnostic tables, and upstream's Misc/warning-flags.c needs diagtool (not built) and lists warnings only
+  # R-a (plan 5.21.4 RS29): err_msil_ref_asm_operand (T-R24), after err_msil_asm_unsupported,
+  # which clang CodeGen reports for a .NET reference as an inline assembly operand (the
+  # CGStmt.cpp block); ref-asm.c pins it.
+  none adds the errors err_msil_asm_unsupported and (R-a) err_msil_ref_asm_operand only; every clang build regenerates the diagnostic tables, and upstream's Misc/warning-flags.c needs diagtool (not built) and lists warnings only
   fork clang/test/CodeGen/MSIL/inline-asm.c
   fork clang/test/CodeGen/MSIL/ms-inline-asm.c
+  fork clang/test/CodeGen/MSIL/ref-asm.c
 
 hook clang/include/clang/Basic/DiagnosticDriverKinds.td
   none adds the errors err_drv_msil_no_object_output (reworded in M13; defined but unused from M19, its removal deferred to a later edit of this file: plan 5.10.5, M19.c), err_drv_msil_ilasm_input (first reported in M14) and err_drv_msil_portable_static (P-1a: -static on a portable triple, T-P9, plan 5.18.4 PV4) only, in no group (as DiagnosticCommonKinds.td)
@@ -325,12 +451,128 @@ hook clang/include/clang/Basic/DiagnosticSemaKinds.td
   # calls that share one IR name but differ, and a forwarder name that is already a variable
   # or a definition; the CodeGenModule.cpp block), pinned whole by msil-method-clash.c and
   # msil-method-forwarders-clash.c.
-  none adds two diagnostics (warn_msil_printf_long_double, and warn_msil_scanf_long_double with DefaultError) in the existing group Format, and MC-1's managed-call errors in no group; no new group, so Misc/warning-flags.c (which needs diagtool, not built; it lists warnings without a group, never errors) and the group tables are unchanged, and SemaChecking.cpp's block runs the format tests that report the group's other diagnostics
+  # R-a (plan 5.21.12): the errors and notes of .NET references in C, T-R1 to T-R23
+  # (err_msil_ref_* and note_msil_ref_*), in one block after MC-1's, also without InGroup, and
+  # a fourth %select choice in MC-1's err_msil_method_conversion, "the 'this' reference", for
+  # T-M3 and T-M4 of a managed call whose 'this' is a reference (5.21.9 RM4). R-a's Sema tests
+  # pin each text whole.
+  none adds two diagnostics (warn_msil_printf_long_double, and warn_msil_scanf_long_double with DefaultError) in the existing group Format, and MC-1's managed-call errors and R-a's .NET reference errors and notes in no group; no new group, so Misc/warning-flags.c (which needs diagtool, not built; it lists warnings without a group, never errors) and the group tables are unchanged, and SemaChecking.cpp's block runs the format tests that report the group's other diagnostics
   fork clang/test/Sema/msil-long-double-format.c
   fork clang/test/Sema/attr-msil-method.c
   fork clang/test/SemaCXX/attr-msil-method.cpp
   fork clang/test/CodeGen/MSIL/msil-method-clash.c
   fork clang/test/CodeGen/MSIL/msil-method-forwarders-clash.c
+  fork clang/test/Sema/msil-cli-type.c
+  fork clang/test/Sema/msil-ref-type.c
+  fork clang/test/Sema/msil-ref-ops.c
+  fork clang/test/Sema/msil-ref-storage.c
+  fork clang/test/Sema/msil-ref-functions.c
+  fork clang/test/Sema/msil-ref-jumps.c
+  fork clang/test/Sema/msil-ref-managed-calls.c
+  fork clang/test/SemaCXX/msil-ref-cxx.cpp
+
+hook clang/include/clang/Basic/TypeNodes.td
+  # R-a (plan 5.21.3 RC3, RC8): the type class CLIReferenceType, after BlockPointerType: every
+  # expansion of TypeNodes.inc and TypeLocNodes.def gains it, and every switch over type
+  # classes needs its case (the type-class switch scan of the header). blocks.c and types.c
+  # write and read PCHs of the other types, whose type codes stay (TypeBitCodes.def appends
+  # the new one); ref-pch.c reads references back.
+  # Plan 5.21.13's table also names clang/test/AST/ast-dump-types-json.cpp here and for
+  # RecursiveASTVisitor.h. It is not a lit input: it failed with the build before R-a's
+  # changes (R-a.0's run of the table's tests), because on a checkout with CRLF line endings,
+  # as the development host's (core.autocrlf=true), each byte offset in its JSON dump is one
+  # larger per line than the test expects ('"offset": 215' for 204 at its line 12). That is no
+  # missing tool or runtime, so no allow line takes it.
+  # Not built and not changed (plan 5.21.13 RH6): lldb's
+  # lldb/source/Plugins/TypeSystem/Clang/TypeSystemClang.cpp, outside the type-class switch
+  # scan, whose switches over type classes in TypeSystemClang::GetTypeClass, GetEncoding and
+  # GetFormat have neither a case for the new class nor 'default:' (a build of lldb would
+  # report them with -Wswitch). clang-tools-extra, also not built and outside the scan, has
+  # 'default:' in each of its type-class switches.
+  lit clang/test/PCH/blocks.c
+  lit clang/test/PCH/types.c
+  fork clang/test/CodeGen/MSIL/ref-pch.c
+
+hook clang/include/clang/Serialization/TypeBitCodes.def
+  # R-a (plan 5.21.3 RC8): TYPE_BIT_CODE(CLIReference, CLI_REFERENCE, 64), appended after the
+  # last code, so that every other type keeps its code; types.c writes and reads them.
+  lit clang/test/PCH/types.c
+  fork clang/test/CodeGen/MSIL/ref-pch.c
+
+# .NET references in C (plan 5.21, R-a): the AST library's cases for CLIReferenceType (5.21.3
+# RC3, RC8; RG10 in the manglers). Each switch case and visitor sits beside the block
+# pointer's, the WebAssembly reference types' or HLSL's, as the type behaves.
+hook clang/lib/AST/ASTContext.cpp
+  # ASTContext::getCLIReferenceType (one canonical node per key, profiled by the key, whose
+  # class is an implicit, never-completed struct named by the class's display name, outside
+  # name lookup; a sugared node per struct as written), and the class's cases: type info (a
+  # pointer's size and alignment), the function-pointer authentication encoding and the
+  # Objective-C encoding (unreachable), the variably modified decay, mergeTypes (equal
+  # canonical types only) and common sugar (the canonical node, never a merge of two
+  # structs). merge-decls.c merges the other types' redeclarations and diag-aka-types.cpp
+  # prints their aka text; msil-ref-ops.c pins the references' conversions and aka text.
+  lit clang/test/Sema/merge-decls.c
+  lit clang/test/Misc/diag-aka-types.cpp
+  fork clang/test/Sema/msil-ref-ops.c
+
+hook clang/lib/AST/ASTImporter.cpp
+  # ASTNodeImporter::VisitCLIReferenceType: the key, and for a sugared node the struct as
+  # written; the canonical node's implicit struct is the "to" context's own. struct/test.c
+  # merges the other types' declarations, ref-ast-merge.c references.
+  lit clang/test/ASTMerge/struct/test.c
+  fork clang/test/CodeGen/MSIL/ref-ast-merge.c
+
+hook clang/lib/AST/ASTStructuralEquivalence.cpp
+  # The CLIReference case of isEquivalent: equal keys, and under strict type spelling also
+  # equal structs as written.
+  lit clang/test/ASTMerge/struct/test.c
+  fork clang/test/CodeGen/MSIL/ref-ast-merge.c
+
+hook clang/lib/AST/ExprConstant.cpp
+  # EvaluateBuiltinClassifyType: a .NET reference classifies as the block pointer does (-1,
+  # no GCC class).
+  lit clang/test/Sema/builtin-classify-type.c
+  fork clang/test/Sema/msil-ref-ops.c
+
+hook clang/lib/AST/ItaniumMangle.cpp
+  # RG10: CXXNameMangler::mangleType(const CLIReferenceType *) reports err_ms_mangle_unsupported
+  # ('cannot mangle this .NET reference type yet') and then mangles the class, so that the
+  # overloads of two classes keep two names (R-a2 gives the mangling); the case in
+  # mangleUnresolvedTypeOrSimpleId.
+  lit clang/test/CodeGenCXX/mangle.cpp
+  lit clang/test/CodeGen/overloadable.c
+  fork clang/test/CodeGen/MSIL/ref-mangling.c
+
+hook clang/lib/AST/MicrosoftMangle.cpp
+  # RG10: MicrosoftCXXNameMangler::mangleType(const CLIReferenceType *, ...) reports the same
+  # error and mangles the class (R-a2 gives the mangling).
+  lit clang/test/CodeGenCXX/mangle-ms.cpp
+  fork clang/test/CodeGen/MSIL/ref-mangling.c
+
+hook clang/lib/AST/Type.cpp
+  # The class is sizeless (Type::isSizelessType(), RC3, not isSizelessBuiltinType()), with
+  # external linkage in computeCachedProperties and computeTypeLinkageInfo, never nullable
+  # (canHaveNullability), and left as it is by SimpleTransformVisitor (TRIVIAL_TYPE_CLASS).
+  # sizeless-1.c keeps the sizeless rules of the builtin types and wasm-refs-and-tables.c
+  # those of WebAssembly's reference types; msil-ref-storage.c pins the references' (plan
+  # 5.21.4 RS14).
+  lit clang/test/Sema/sizeless-1.c
+  lit clang/test/Sema/wasm-refs-and-tables.c
+  fork clang/test/Sema/msil-ref-storage.c
+
+hook clang/lib/AST/TypeLoc.cpp
+  # TypeLoc::getEndLoc: CLIReference joins BlockPointer's group of prefix declarators (the
+  # caret is prefix syntax); getBeginLoc's 'default:' takes it, as it takes BlockPointer.
+  lit clang/test/Sema/block-misc.c
+  fork clang/test/Sema/msil-ref-type.c
+
+hook clang/lib/AST/TypePrinter.cpp
+  # printCLIReferenceBefore and printCLIReferenceAfter ('String ^' as written, 'System.String
+  # ^' for the canonical node, whose implicit struct prints without a tag keyword) and the
+  # case of canPrefixQualifiers. diag-aka-types.cpp keeps the other types' aka text;
+  # msil-ref-type.c pins the references' printing with aka.
+  lit clang/test/Misc/diag-aka-types.cpp
+  fork clang/test/Sema/msil-ref-type.c
 
 hook clang/lib/Basic/Targets.cpp
   # init.c (112 s) and predefined-arch-macros.c (174 s) also pass, but are too slow for the
@@ -347,6 +589,42 @@ hook clang/lib/Basic/Targets.cpp
   fork clang/test/Preprocessor/init-msil-portable.c
   fork clang/test/Driver/msil-dotnet.c
 
+# ClangIR (plan 5.21.13 RH4, R-a, with the section 12 row '5.21.13 RH4 amended'): built (clang
+# links it) and reachable on MSIL triples with -fclangir, though MSIL does not use it. Its four
+# exhaustive switches over type classes get the new class, so a .NET reference reaches the
+# not-yet-implemented error of CIRGenTypes::convertType's default case (unchanged) instead of
+# an llvm_unreachable; and a null conversion to a reference (a null initializer or result, a
+# truth test, '!', '== NULL', a null argument) gives a zero of the converted type after that
+# error instead of an assertion (CIRGenExprScalar.cpp), so -fclangir ends with the error and
+# exit status 1. ref-clangir.c (REQUIRES: cir-support) pins that error, with those null
+# conversions and no assertion.
+hook clang/lib/CIR/CodeGen/CIRGenExprScalar.cpp
+  # ScalarExprEmitter::VisitCastExpr's CK_NullToPointer case: a null conversion to a .NET
+  # reference gives a zero of the converted type (the int that CIRGenTypes::convertType's
+  # default case returns after its not-yet-implemented error), where the cast of that type to
+  # cir::PointerType asserted (isa<To>(Val), Casting.h); -fclangir then ends with that error
+  # and exit status 1, not an assertion. Other types keep upstream's path. basic.c and vla.c
+  # run VisitCastExpr's other casts; nullptr-init.cpp runs its CK_NullToPointer case for
+  # ordinary pointers (upstream's cast to cir::PointerType and CIRGenModule::getNullPointer).
+  lit clang/test/CIR/CodeGen/basic.c
+  lit clang/test/CIR/CodeGen/vla.c
+  lit clang/test/CIR/CodeGen/nullptr-init.cpp
+  fork clang/test/CodeGen/MSIL/ref-clangir.c
+
+hook clang/lib/CIR/CodeGen/CIRGenFunction.cpp
+  # CIRGenFunction::getEvaluationKind (with the scalars) and
+  # CIRGenFunction::emitVariablyModifiedType (never variably modified).
+  lit clang/test/CIR/CodeGen/basic.c
+  lit clang/test/CIR/CodeGen/vla.c
+  fork clang/test/CodeGen/MSIL/ref-clangir.c
+
+hook clang/lib/CIR/CodeGen/CIRGenItaniumCXXABI.cpp
+  # vTableClassNameForType and CIRGenItaniumRTTIBuilder::buildTypeInfo, unreachable as in
+  # ItaniumCXXABI.cpp (a .NET reference has no C++ type information).
+  lit clang/test/CIR/CodeGen/rtti-qualfn.cpp
+  lit clang/test/CIR/CodeGen/vtable-emission.cpp
+  fork clang/test/CodeGen/MSIL/ref-clangir.c
+
 hook clang/lib/CodeGen/CMakeLists.txt
   # P-1a (plan 5.18.2 PC4, 5.18.13): the fork's Targets/MSIL.cpp in clangCodeGen, after
   # Targets/M68k.cpp. Plan 5.18.13 names a 'compile' line here, but the compile leg
@@ -354,10 +632,14 @@ hook clang/lib/CodeGen/CMakeLists.txt
   # check-upstream-hooks.py), so the block has a 'none' line instead. MC-1 (plan 5.20.4; the
   # section 12 row '5.20.4 MR1, MR2 and MR4 and 5.20.12 item 1 amended (CGMSILManagedCalls)'):
   # the fork's CGMSILManagedCalls.cpp in clangCodeGen, after CGLoopInfo.cpp: the managed-call
-  # logic that the hooks in CodeGenModule.cpp call, which msil-method.c runs.
-  none CMake list: the fork's Targets/MSIL.cpp (MSILPortableABIInfo) and CGMSILManagedCalls.cpp (managed calls, plan 5.20.4) in clangCodeGen; every build of clang compiles them
+  # logic that the hooks in CodeGenModule.cpp call, which msil-method.c runs. R-a (plan 5.21.5
+  # RG11): the fork's CGMSILReferences.cpp after it, the logic of .NET references that the
+  # hooks of CodeGenTypes.cpp, CodeGenFunction.cpp, CGDecl.cpp, CGExprScalar.cpp,
+  # CGDebugInfo.cpp and CGStmt.cpp call, which ref-ir.c runs.
+  none CMake list: the fork's Targets/MSIL.cpp (MSILPortableABIInfo), CGMSILManagedCalls.cpp (managed calls, plan 5.20.4) and CGMSILReferences.cpp (.NET references, plan 5.21.5) in clangCodeGen; every build of clang compiles them
   fork clang/test/CodeGen/MSIL/portable-abi.c
   fork clang/test/CodeGen/MSIL/msil-method.c
+  fork clang/test/CodeGen/MSIL/ref-ir.c
 
 hook clang/lib/CodeGen/TargetInfo.h
   # P-1a (plan 5.18.2 PC4, 5.18.13): the declaration of createMSILPortableTargetCodeGenInfo next
@@ -391,6 +673,45 @@ hook clang/lib/CodeGen/CGCall.cpp
   lit clang/test/CodeGen/no-prototype.c
   fork clang/test/CodeGen/MSIL/no-proto-call.c
 
+# .NET references in clang CodeGen (plan 5.21.5, R-a): one-line hooks beside the WebAssembly
+# reference types' or the block pointer's code, the logic in the fork's CGMSILReferences.cpp.
+hook clang/lib/CodeGen/CGDebugInfo.cpp
+  # RG7: CreateTypeNode's CLIReference case calls CreateType(const CLIReferenceType *), which
+  # CGMSILReferences.cpp defines (a forward-declared structure named by the display name);
+  # block.c keeps the block pointer's debug info.
+  lit clang/test/DebugInfo/Generic/block.c
+  fork clang/test/CodeGen/MSIL/ref-debug-info.c
+
+hook clang/lib/CodeGen/CGDebugInfo.h
+  # RG7: the declaration of CGDebugInfo::CreateType(const CLIReferenceType *, llvm::DIFile *).
+  lit clang/test/DebugInfo/Generic/block.c
+  fork clang/test/CodeGen/MSIL/ref-debug-info.c
+
+hook clang/lib/CodeGen/CGDecl.cpp
+  # RG3: CodeGenFunction::getAutoVarInitKind answers Uninitialized for a reference, which is
+  # never filled with a pattern or zeros (also where a computed goto bypasses its declaration);
+  # the declaration stores NULL (plan 5.21.4 RS2). CodeGenFunction::EmitAutoVarInit stores
+  # that NULL (getMSILNullReference) for a reference declared with an initializer written in
+  # the source, before its initializer runs, so a jump out of the initializer and 's = s' read
+  # NULL (the section 12 row '5.21.4 RS2 and 5.21.5 RG3 amended'); one declared without an
+  # initializer gets it from Sema's zero-initialization step (SemaInit.cpp's block).
+  # auto-var-init.cpp and trivial-auto-var-init-bypass.c keep -ftrivial-auto-var-init for the
+  # other types, and run EmitAutoVarInit for their declarations with an initializer.
+  lit clang/test/CodeGenCXX/auto-var-init.cpp
+  lit clang/test/CodeGen/trivial-auto-var-init-bypass.c
+  fork clang/test/CodeGen/MSIL/ref-auto-var-init.c
+  fork clang/test/CodeGen/MSIL/ref-ir.c
+
+hook clang/lib/CodeGen/CGExprScalar.cpp
+  # ScalarExprEmitter: RG5's cast between classes (CK_BitCast to a reference: a call of the
+  # managed cast declaration unless the classes are equal or the target is Object), RG2's
+  # null reference (CK_NullToPointer to a reference: zeroinitializer, as OpenCL's
+  # CK_ZeroToOCLOpaqueType) and RG4's identity compare in EmitCompare (a call of
+  # __msil_ref.eq). null_queue.cl and nullptr.c keep the null conversions of the other types.
+  lit clang/test/CodeGenOpenCL/null_queue.cl
+  lit clang/test/CodeGen/nullptr.c
+  fork clang/test/CodeGen/MSIL/ref-ir.c
+
 hook clang/lib/CodeGen/CGObjCMac.cpp
   lit clang/test/CodeGenObjC/section-name.m
   lit clang/test/CodeGenObjC/sections.m
@@ -405,6 +726,20 @@ hook clang/lib/CodeGen/CGStmt.cpp
   lit clang/test/CodeGen/X86/inline-asm-constraints.c
   fork clang/test/CodeGen/MSIL/asm-barrier.c
   fork clang/test/CodeGen/MSIL/inline-asm.c
+  # R-a (plan 5.21.4 RS29): emitMSILAsmStmt first reports a .NET reference operand (T-R24,
+  # through diagnoseMSILReferenceAsmOperands of CGMSILReferences.cpp), whatever the statement;
+  # ref-asm.c pins it.
+  fork clang/test/CodeGen/MSIL/ref-asm.c
+  # R-a (plan 5.21.5 RG12; the section 12 row '5.21.5 RG12 amended, with RG11's hook form'):
+  # CodeGenFunction::EmitReturnStmt's branch for a 'return;' without a value calls
+  # emitMSILMissingReturnTrap of CGMSILReferences.cpp with CurCodeDecl, so in a C function
+  # whose result is a .NET reference that statement traps (llvm.trap and unreachable) at every
+  # level; ref-ir.c pins it. return.cpp runs EmitReturnStmt for other types (returns with a
+  # value). A return without a value in a function with a result is an error by default
+  # (-Wreturn-mismatch); statements.c, the upstream CodeGen test that turns the error off for
+  # one, needs LP64 (UNSUPPORTED on the Windows gate) and checks no output.
+  lit clang/test/CodeGenCXX/return.cpp
+  fork clang/test/CodeGen/MSIL/ref-ir.c
 
 hook clang/lib/CodeGen/CodeGenAction.cpp
   # thinlto-inline-asm.c needs llvm-lto2, a build target from M13.
@@ -415,6 +750,19 @@ hook clang/lib/CodeGen/CodeGenAction.cpp
   lit clang/test/CodeGen/thinlto-inline-asm.c
   fork clang/test/CodeGen/MSIL/triples.c
   fork clang/test/CodeGen/MSIL/inline-asm.c
+
+hook clang/lib/CodeGen/CodeGenFunction.cpp
+  # R-a (plan 5.21.5): getEvaluationKind's CLIReference case (TEK_Scalar, RG1),
+  # EmitVariablyModifiedType's (never variably modified, RG8), and in GenerateCode RG12's trap:
+  # a C function whose result is a reference gets llvm.trap and unreachable where control
+  # reaches its closing brace, at every level (emitMSILMissingReturnTrap of
+  # CGMSILReferences.cpp, called in one line after the body; the section 12 row
+  # '5.21.5 RG12 amended, with RG11's hook form'). wasm-externref.c and blocks.c keep the other
+  # types' evaluation kinds, return.cpp the missing-return path of C++.
+  lit clang/test/CodeGen/WebAssembly/wasm-externref.c
+  lit clang/test/CodeGen/blocks.c
+  lit clang/test/CodeGenCXX/return.cpp
+  fork clang/test/CodeGen/MSIL/ref-ir.c
 
 hook clang/lib/CodeGen/CodeGenModule.cpp
   lit clang/test/CodeGen/exception-model-flag.c
@@ -493,6 +841,35 @@ hook clang/lib/CodeGen/CodeGenModule.cpp
   fork clang/test/CodeGen/MSIL/msil-method-clash.c
   fork clang/test/CodeGen/MSIL/msil-method-forwarders-clash.c
 
+hook clang/lib/CodeGen/CodeGenTypes.cpp
+  # R-a (plan 5.21.5 RG1): ConvertType's CLIReference case, the IR type target("msil.ref")
+  # whatever the class (getMSILReferenceType), beside the WebAssembly reference types'.
+  # isZeroInitializable needs no case (a reference reaches its final 'return true': NULL is
+  # zeroinitializer). wasm-externref.c and blocks.c keep the other types' IR types; ref-abi.c
+  # pins the signature on every MSIL triple.
+  lit clang/test/CodeGen/WebAssembly/wasm-externref.c
+  lit clang/test/CodeGen/blocks.c
+  fork clang/test/CodeGen/MSIL/ref-abi.c
+
+hook clang/lib/CodeGen/ItaniumCXXABI.cpp
+  # R-a (plan 5.21.3 RC8): the CLIReference cases of ItaniumRTTIBuilder::BuildVTablePointer
+  # and BuildTypeInfo, unreachable (a .NET reference has no C++ type information; C++ refuses
+  # the caret, plan 5.21.3 RC6, until R-a2).
+  lit clang/test/CodeGenCXX/rtti-layout.cpp
+  fork clang/test/SemaCXX/msil-ref-cxx.cpp
+
+hook clang/lib/CodeGen/QualTypeMapper.cpp
+  # R-a (plan 5.21.3 RC8): QualTypeMapper::convertTypeImpl's CLIReference case. The LLVM ABI
+  # library's lowering, which clang uses only under -fexperimental-abi-lowering, does not
+  # support a .NET reference, as it does not support HLSL's types, but the reference's own case
+  # reports a usage error, llvm::reportFatalUsageError("Type not supported in ABI lowering"),
+  # not the internal error of HLSL's group: clang prints 'fatal error: error in backend: Type
+  # not supported in ABI lowering' and exits 1, and the driver writes no crash reproducer
+  # (LLVM's bug-report banner can still print, as for any usage error).
+  # abi-classify-arg-types.c keeps the mapping of the others.
+  lit clang/test/CodeGen/AArch64/abi-classify-arg-types.c
+  fork clang/test/CodeGen/MSIL/ref-abi.c
+
 hook clang/lib/CodeGen/TargetBuiltins/X86.cpp
   lit clang/test/CodeGen/ms-intrinsics-cpuid.c
   lit clang/test/CodeGen/ms-intrinsics.c
@@ -564,6 +941,18 @@ hook clang/lib/Driver/ToolChains/Clang.cpp
   fork clang/test/Driver/msil-toolchain.c
   fork clang/test/Driver/msil-object.c
 
+hook clang/lib/Headers/CMakeLists.txt
+  # R-a (plan 5.21.2 RT1): the fork's resource header <cli/cli.h> (CLI_TYPE, MSIL triples only)
+  # in a list of its own, msil_cli_files, named in the loop that copies the headers into the
+  # build and installed by its own install(FILES ... DESTINATION ${header_install_dir}/cli
+  # COMPONENT clang-resource-headers), as openmp_wrapper_files and llvm_libc_wrapper_files are:
+  # inside 'files' it would install as include/cli.h. One hook block, three places.
+  # msil-cli-header.c includes it from the build's resource directory; no build or CI job runs
+  # the install rule (R-a.0 checked it with 'cmake --install --component
+  # clang-resource-headers' into an empty folder).
+  none CMake list: the fork's cli/cli.h in clang's resource headers, copied by every build of clang (the clang target depends on clang-resource-headers) and installed into include/cli
+  fork clang/test/Driver/msil-cli-header.c
+
 hook clang/lib/Parse/ParsePragma.cpp
   # #pragma comment for MSIL triples (plan 5.10.6): the handler is installed and removed as for
   # ELF, and non-Windows MSIL triples accept only 'lib'.
@@ -581,10 +970,27 @@ hook clang/lib/Parse/ParseStmtAsm.cpp
   fork clang/test/CodeGen/MSIL/ms-inline-asm.c
 
 hook clang/lib/Sema/CMakeLists.txt
-  # MC-1 (plan 5.20.3): the fork's SemaMSILManagedCall.cpp in clangSema.
-  none CMake list: the fork's SemaMSILManagedCall.cpp (the msil_method and msil_catch checks) in clangSema; every build of clang compiles it
+  # MC-1 (plan 5.20.3): the fork's SemaMSILManagedCall.cpp in clangSema. R-a (plan 5.21.2 RT8):
+  # the fork's SemaMSILReference.cpp after it.
+  none CMake list: the fork's SemaMSILManagedCall.cpp (the msil_method and msil_catch checks) and SemaMSILReference.cpp (the .NET reference rules, plan 5.21.4) in clangSema; every build of clang compiles them
   fork clang/test/Sema/attr-msil-method.c
   fork clang/test/SemaCXX/attr-msil-method.cpp
+  fork clang/test/Sema/msil-cli-type.c
+
+# .NET references in clang Sema (plan 5.21.3, 5.21.4, R-a): one-line hooks, each acting only
+# on a reference type (which exists only on MSIL triples), the logic in the fork's
+# SemaMSILReference.cpp.
+hook clang/lib/Sema/JumpDiagnostics.cpp
+  # RS28: GetDiagForGotoScopeDecl gives a local reference the scope note T-R23
+  # (note_msil_ref_jump_bypass), so a jump into its scope, which would skip its store of
+  # NULL, gets clang's jump error with that note (a jump out does not); GotoScope keeps the
+  # declaration that introduced the scope (a member Var and a defaulted constructor
+  # argument), which BuildScopeInformation passes and the two places that emit a scope's note
+  # give as the note's argument. scope-check.c and arc-jump-block.m keep the jump diagnostics
+  # of the other protected scopes.
+  lit clang/test/Sema/scope-check.c
+  lit clang/test/SemaObjC/arc-jump-block.m
+  fork clang/test/Sema/msil-ref-jumps.c
 
 hook clang/lib/Sema/Sema.cpp
   # MC-1 (plan 5.20.3; the section 12 row '5.20.3 amended (... internal linkage ...)'):
@@ -599,6 +1005,13 @@ hook clang/lib/Sema/Sema.cpp
   lit clang/test/Sema/undefined-internal-typeof-c23.c
   fork clang/test/Sema/attr-msil-method.c
   fork clang/test/SemaCXX/attr-msil-method.cpp
+
+hook clang/lib/Sema/SemaCast.cpp
+  # RS8, RS27: CastOperation::CheckCStyleCast calls msil::checkCLIReferenceCast before its
+  # scalar-type test (a reference to a reference, a null constant to a reference, a reference
+  # to void; T-R22 for the other casts to a reference); cast.c keeps C's casts.
+  lit clang/test/Sema/cast.c
+  fork clang/test/Sema/msil-ref-ops.c
 
 hook clang/lib/Sema/SemaChecking.cpp
   # M26 (plan 5.13.5, R15): the format checker's 'L' length modifier on MSIL triples (printf
@@ -671,6 +1084,35 @@ hook clang/lib/Sema/SemaDecl.cpp
   lit clang/test/SemaCXX/warn-func-not-needed.cpp
   fork clang/test/Sema/attr-msil-method.c
   fork clang/test/SemaCXX/attr-msil-method.cpp
+  # R-a (plan 5.21.2, 5.21.4): hooks into the fork's SemaMSILReference.cpp, each acting only
+  # on a 'cli_type' struct or a .NET reference type (MSIL triples only):
+  # CheckVariableDeclarationType refuses a class struct by value (T-R7, RS11) and marks
+  # a local reference's scope as protected, so that a jump past its store of NULL is checked
+  # (RS28); ActOnFunctionDeclarator calls checkCLIReferenceFunctionDecl beside MC-1's hook
+  # (T-R7, T-R10, T-R13, T-R15: RS11, RS15, RS18, RS20); ActOnUninitializedDecl gives a const
+  # reference without an initializer no warn_default_init_const_unsafe, since it starts as
+  # NULL (RS2); CheckParameter refuses a parameter whose adjusted type is a function pointer
+  # with a reference (T-R12, RS17); ActOnFinishFunctionBody calls
+  # checkCLIReferenceSetjmpCaller (T-R17, RS22); and ActOnTagFinishDefinition refuses a body
+  # for a class struct (T-R3, RT5). CheckVariableDeclarationType also calls
+  # checkCLIReferenceVarAttrs, which reports T-R20 (RS25) at 'cleanup', 'annotate',
+  # 'uninitialized' and '__block' on a variable whose type, deduced from its initializer
+  # ('__auto_type', C23 'auto'), is a reference, and drops those attributes:
+  # ProcessDeclAttribute's hook (the SemaDeclAttr.cpp block) sees such a variable before its
+  # type is known (the section 12 row '5.21.4 RS25 and 5.21.13's
+  # `clang/lib/Sema/SemaDecl.cpp` row amended'). mergeDeclAttribute has no case for cli_type:
+  # a redeclaration that writes none inherits it through that function's default branch (the
+  # section 12 row '5.21.2 RT4 as built'). function-redecl.c, builtin-setjmp.c and
+  # scope-check.c keep the redeclarations, setjmp callers and jump scopes of other code. They
+  # run CheckVariableDeclarationType for every variable they declare, so RS25's hook, which
+  # acts only on a reference, adds no lit input (scope-check.c's test3 still reports the goto
+  # past a 'cleanup' variable).
+  lit clang/test/Sema/function-redecl.c
+  lit clang/test/Sema/builtin-setjmp.c
+  lit clang/test/Sema/scope-check.c
+  fork clang/test/Sema/msil-ref-functions.c
+  fork clang/test/Sema/msil-ref-jumps.c
+  fork clang/test/Sema/msil-ref-storage.c
 
 hook clang/lib/Sema/SemaDeclAttr.cpp
   lit clang/test/Sema/MicrosoftCompatibility.c
@@ -682,6 +1124,126 @@ hook clang/lib/Sema/SemaDeclAttr.cpp
   lit clang/test/Sema/attr-wasm.c
   fork clang/test/Sema/attr-msil-method.c
   fork clang/test/SemaCXX/attr-msil-method.cpp
+  # R-a (plan 5.21.2 RT8, 5.21.4 RS21, RS25): ProcessDeclAttribute calls
+  # msil::diagnoseCLIReferenceDeclAttr before its switch (the attributes that a function or a
+  # variable with a .NET reference cannot have: T-R16, T-R20), and its case
+  # ParsedAttr::AT_CLIType calls msil::handleCLITypeAttr (the grammar and the key of RT2 and
+  # RT3, T-R1; the first declaration's rule of RT4, T-R2). Sema::DeclApplyPragmaWeak calls
+  # msil::diagnoseCLIReferencePragmaWeakAlias before it copies the declaration (the section 12
+  # row '5.21.4 RS21 as built for `#pragma weak <alias> = <f>`'), a hook that both the pragma
+  # after <f>'s declaration and Sema::ProcessPragmaWeak for a later external declaration reach:
+  # when <f> is a function whose type has a .NET reference, it reports T-R16 for 'weak' on the
+  # alias that '#pragma weak <alias> = <f>' declares, and the pragma then declares no alias; on
+  # other targets, and in a unit that formed no reference, nothing changes, and the one-name
+  # form '#pragma weak <f>' is unchanged. attr-cleanup.c and attr-uninitialized.c keep cleanup
+  # and uninitialized on other variables, and the three pragma-weak tests keep '#pragma weak'
+  # and its aliases working on other targets (they are inputs of SemaDecl.cpp's block already,
+  # so they add no lit input).
+  lit clang/test/Sema/attr-cleanup.c
+  lit clang/test/Sema/attr-uninitialized.c
+  lit clang/test/Sema/pragma-weak.c
+  lit clang/test/CodeGen/pragma-weak.c
+  lit clang/test/SemaCXX/pragma-weak.cpp
+  fork clang/test/Sema/msil-cli-type.c
+  fork clang/test/Sema/msil-ref-functions.c
+  fork clang/test/Sema/msil-ref-storage.c
+
+hook clang/lib/Sema/SemaExpr.cpp
+  # R-a (plan 5.21.4): isValidVarArgType answers VarArgKind::Invalid for a reference, as for
+  # WebAssembly's reference types, so err_cannot_pass_to_vararg applies (RS19);
+  # captureVariablyModifiedType's case (never variably modified); BuildResolvedCallExpr
+  # refuses a reference argument without a parameter type (T-R14); CheckConditionalOperands
+  # tests a reference condition against NULL (RS6) and takes RS7's operand pairs;
+  # CheckAssignmentConstraints and CheckSingleAssignmentConstraints, beside OpenCL queue_t's
+  # null rule, take RS4's conversions (the same class, a null constant, any reference to the
+  # Object reference); CheckCompareOperands takes RS5's '==' and '!=' (identity);
+  # CheckLogicalOperands, CreateBuiltinUnaryOp ('!') and CheckBooleanCondition test a
+  # reference against NULL (RS6); CheckAddressOfOperand refuses '&r' (T-R9, RS13), beside
+  # WebAssembly's refusal; ActOnBlockStmtExpr refuses a block type with a reference (T-R12,
+  # RS17); BuildVAArgExpr refuses va_arg of one (T-R14); and isVariableCapturable refuses its
+  # capture (T-R21, RS26). compare.c, conditional-expr.c, varargs.c and null_queue.cl keep the
+  # comparisons, conditional operands, variadic arguments and null conversions of the other
+  # types.
+  lit clang/test/Sema/compare.c
+  lit clang/test/Sema/conditional-expr.c
+  lit clang/test/Sema/varargs.c
+  lit clang/test/SemaOpenCL/null_queue.cl
+  fork clang/test/Sema/msil-ref-ops.c
+
+hook clang/lib/Sema/SemaInit.cpp
+  # R-a (plan 5.21.4 RS2): TryDefaultInitialization adds a zero-initialization step for a
+  # reference, as for an ARC lifetime, so that CodeGen stores NULL at the declaration at every
+  # level. init.c and arc.m keep the default initialization of the other types.
+  lit clang/test/Sema/init.c
+  lit clang/test/CodeGenObjC/arc.m
+  fork clang/test/CodeGen/MSIL/ref-ir.c
+
+hook clang/lib/Sema/SemaLookup.cpp
+  # R-a (plan 5.21.3 RC8): addAssociatedClassesAndNamespaces treats a reference as a
+  # fundamental type (no associated class or namespace; R-a2 decides C++'s lookup).
+  lit clang/test/SemaCXX/sizeless-1.cpp
+  fork clang/test/SemaCXX/msil-ref-cxx.cpp
+
+hook clang/lib/Sema/SemaOverload.cpp
+  # R-a (plan 5.21.4 RS16): checkAddressOfFunctionIsAvailable calls
+  # msil::diagnoseCLIReferenceFunctionAddress first: a function whose type has a reference has
+  # no address (T-R11), whatever decays it. pass-object-size.c and enable_if.c keep the other
+  # reasons why a function's address is not available (R-a2 adds C++'s overload rules).
+  lit clang/test/Sema/pass-object-size.c
+  lit clang/test/Sema/enable_if.c
+  fork clang/test/Sema/msil-ref-functions.c
+
+hook clang/lib/Sema/SemaTemplate.cpp
+  # R-a (plan 5.21.3 RC8): UnnamedLocalNoLinkageFinder::VisitCLIReferenceType (a reference has
+  # external linkage), which the visitor needs to link.
+  lit clang/test/SemaCXX/sizeless-1.cpp
+  fork clang/test/SemaCXX/msil-ref-cxx.cpp
+
+hook clang/lib/Sema/SemaTemplateDeduction.cpp
+  # R-a (plan 5.21.3 RC8): the CLIReference cases of DeduceTemplateArgumentsByTypeMatch (as a
+  # non-dependent type) and MarkUsedTemplateParameters; R-a2 adds C++'s deduction.
+  lit clang/test/SemaCXX/sizeless-1.cpp
+  fork clang/test/SemaCXX/msil-ref-cxx.cpp
+
+hook clang/lib/Sema/SemaType.cpp
+  # R-a (plan 5.21.3, 5.21.4): GetFullTypeForDeclarator's BlockPointer chunk, before the
+  # -fblocks check, makes a reference of an unqualified 'cli_type' struct on MSIL triples
+  # (RC2: msil::buildCLIReferenceType; T-R4, T-R5, T-R19) and refuses a block type with a
+  # reference (T-R12); the other BlockPointer chunk sites that the hunks touch treat a chunk
+  # that built a reference as no pointer (RC5: msil::isCLIReferenceChunk), and
+  # DeclaratorLocFiller::VisitCLIReferenceTypeLoc sets the caret; BuildPointerType refuses a
+  # pointer to a class, to a reference or to a function type with a reference (T-R6, T-R8,
+  # T-R12: RS10, RS12, RS17); BuildQualifiedType and BuildAddressSpaceAttr refuse 'volatile',
+  # '__unaligned' and address spaces on a reference (T-R18, RS23); and
+  # RequireCompleteTypeImpl's sizeless test reads isSizelessType(), which takes references.
+  # block-misc.c, nullability.c and wasm-refs-and-tables.c keep the block pointer, nullability
+  # and WebAssembly's reference types.
+  lit clang/test/Sema/block-misc.c
+  lit clang/test/Sema/nullability.c
+  lit clang/test/Sema/wasm-refs-and-tables.c
+  fork clang/test/Sema/msil-ref-type.c
+
+hook clang/lib/Sema/TreeTransform.h
+  # R-a (plan 5.21.3 RC8): TransformCLIReferenceType (the canonical node is copied as it is;
+  # a sugared node transforms its struct as written) and RebuildCLIReferenceType, which calls
+  # ASTContext::getCLIReferenceType. vla.c keeps the transforms of variably modified types,
+  # and ref-ir.c transforms a VLA bound over two spellings of one reference type.
+  lit clang/test/Sema/vla.c
+  fork clang/test/CodeGen/MSIL/ref-ir.c
+
+# .NET references through a PCH (plan 5.21.3 RC8, R-a): the TypeLoc reader and writer of
+# CLIReferenceTypeLoc, the caret's location (the type's own record is TypeProperties.td's).
+# blocks.c writes and reads a PCH with block pointers, whose TypeLoc is read and written
+# beside; ref-pch.c reads references back.
+hook clang/lib/Serialization/ASTReader.cpp
+  # TypeLocReader::VisitCLIReferenceTypeLoc.
+  lit clang/test/PCH/blocks.c
+  fork clang/test/CodeGen/MSIL/ref-pch.c
+
+hook clang/lib/Serialization/ASTWriter.cpp
+  # TypeLocWriter::VisitCLIReferenceTypeLoc.
+  lit clang/test/PCH/blocks.c
+  fork clang/test/CodeGen/MSIL/ref-pch.c
 
 # Managed calls through a PCH or a module (plan 5.20.4; the section 12 rows '5.20.3's hook
 # list, 5.13.5's MC-1 exemption text and MC-1's review focus 'Hooks only (L2)' amended again
@@ -772,6 +1334,15 @@ hook clang/lib/Serialization/ASTWriterDecl.cpp
   lit clang/test/Modules/static-initializer.cppm
   lit clang/test/Modules/compile-pcm-with-pic.cppm
   fork clang/test/CodeGen/MSIL/msil-method-forwarders-pch.c
+
+hook clang/tools/libclang/CIndex.cpp
+  # R-a (plan 5.21.13 RH4): CursorVisitor::VisitCLIReferenceTypeLoc, which visits the class's
+  # TypeLoc as VisitBlockPointerTypeLoc visits the pointee's, so the cursor walk still reaches
+  # the struct's name. CursorVisitor.h declares a Visit<Class>TypeLoc for every TypeLoc class
+  # (TypeLocNodes.def), so libclang does not link without it. libclang is configured, so the
+  # file has a compile command for syntax checks, but it is no build target: lit-legs.sh's
+  # --full 'upstream' leg (ninja check-clang, which builds c-index-test) links and tests it.
+  none the shared build has no c-index-test (libclang is not a build target of msil/utils/ci/build-targets.txt); lit-legs.sh's --full 'upstream' leg builds and tests libclang
 
 hook compiler-rt/lib/builtins/int_lib.h
   # P-1a (plan 5.18.8 PH2, 5.18.13): '|| defined(__dotnet__)' on the first COMPILER_RT_ALIAS
@@ -955,6 +1526,30 @@ hook llvm/lib/Bitcode/Writer/BitcodeWriter.cpp
 
 hook llvm/lib/CMakeLists.txt
   none build wiring of the fork's llvm/lib/CLI; built and run by the CLITests gate step
+
+# .NET references in LLVM's core (plan 5.21.6 RI1, RI2, R-a): the IR type target("msil.ref").
+hook llvm/lib/CodeGen/ValueTypes.cpp
+  # RI2: MVT::getVT maps target("msil.ref") to the existing MVT::externref, beside
+  # wasm.externref (ValueTypes.td unchanged). The WebAssembly tests keep externref's globals,
+  # tables and refusals (loads, stores, inttoptr, ptrtoint) and the select of reference types.
+  lit llvm/test/CodeGen/WebAssembly/externref-*.ll
+  lit llvm/test/CodeGen/WebAssembly/select-reftype.ll
+  fork llvm/test/CodeGen/MSIL/reference-values.ll
+
+hook llvm/lib/IR/Type.cpp
+  # RI1: TargetExtType::checkParams refuses msil.ref with type or integer parameters, and
+  # getTargetTypeInfo gives it a ptr layout, HasZeroInit and CanBeLocal only (not
+  # CanBeGlobal), beside the WebAssembly reference types. The Assembler, Verifier and SROA
+  # tests keep the other target types' parameters, properties and promotion. Of the five
+  # llvm/test/Assembler/target-type*.ll tests the block names two: target-types.ll,
+  # target-type-mangled.ll and target-type-params.ll pipe llvm-as into llvm-dis, which
+  # msil/utils/ci/build-targets.txt does not build, so they fail on the shared build, before
+  # R-a and after it.
+  lit llvm/test/Assembler/target-type-param-errors.ll
+  lit llvm/test/Assembler/target-type-properties.ll
+  lit llvm/test/Verifier/target-ext-vector*.ll
+  lit llvm/test/Transforms/SROA/sroa-target.ll
+  fork llvm/test/CodeGen/MSIL/reference-ir.ll
 
 hook llvm/lib/MC/CMakeLists.txt
   none CMake list: the fork's MCMSILObjectWriter.cpp and MCMSILStreamer.cpp in LLVMMC

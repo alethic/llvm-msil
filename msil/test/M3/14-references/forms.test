@@ -1,0 +1,114 @@
+# C forms that take references (C23 for nullptr and auto): a typedef of a reference type, typeof, typeof_unqual (which drops the reference's own const), __auto_type and C23 auto locals, a second cli_type struct naming System.String (one type, no cast), _Generic choosing by reference type, __builtin_types_compatible_p, a statement expression, the comma operator, 'const' after the caret, 'register' locals and C23 nullptr as a null pointer constant; then the same program at -O1 and -O2 with -fextend-variable-liveness=all, the driver's -Og default, which gives every reference local an llvm.fake.use.
+# Plan 5.21.4 RS9 (typedef, typeof, typeof_unqual, _Generic,
+# __builtin_types_compatible_p, __auto_type, C23 auto, comma, statement
+# expressions and 'const' after the caret are allowed), RS1 ('register'
+# locals), RS4 (C23 nullptr is a null pointer constant, so it converts to
+# a NULL reference), RS5, 5.21.3 RC1 (no parser change: 'String ^const s'
+# and 'typedef String ^R;' parse), RC3 (equal keys are one type, so two
+# 'cli_type' structs that name System.String make one reference type;
+# sugared types desugar to it), 5.21.1 RA6 (one type per .NET class, keyed
+# by the folded name), 5.21.6 RI4 (the back end accepts llvm.fake.use, which
+# clang emits for every local under -fextend-variable-liveness=all, the
+# driver's default at -Og). The test compiles with -std=gnu23 through
+# %{msil_copts}. Every member is a built-in table entry
+# (String::.ctor(char*), Marshal::StringToHGlobalUni(string)), so no
+# reference assemblies are needed. The members have no C library
+# equivalent, so the expected file is hand-written for both OSes (plan
+# 5.20.11 MT3 and 5.17.4 as amended for MC-1, under MC-1's reason; 5.21.14
+# RV28). Plan 5.17.13 (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_copts} = -std=gnu23
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# REDEFINE: %{msil_copts} = -std=gnu23 -fextend-variable-liveness=all
+# RUN: %{msil_prog_O1}
+# RUN: %{msil_prog_O2}
+#--- main.c
+#include <cli/cli.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+/* A second struct for the same class: the same reference type. */
+typedef struct CLI_TYPE("System.String") Text Text;
+/* A typedef of the reference type itself. */
+typedef String ^StringRef;
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static int counter;
+
+static int kind(Object ^o) {
+  return _Generic(o, String ^: 1, Object ^: 2, default: 3);
+}
+
+static Text ^echo(Text ^t) { return t; }
+
+static void put_string(const char *what, StringRef s) {
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+int main(void) {
+  static const char16_t first_units[] = {'f', 'o', 'r', 'm', 's', 0};
+  static const char16_t second_units[] = {'t', 'w', 'o', 0};
+  StringRef s = new_string(first_units);
+  StringRef other = new_string(second_units);
+
+  /* typeof, typeof_unqual, __auto_type, auto. */
+  typeof(s) by_typeof = s;
+  String ^const fixed = s;
+  typeof_unqual(fixed) unqualified = fixed;
+  unqualified = other;
+  __auto_type by_auto_type = s;
+  auto by_auto = other;
+  printf("typeof %d, typeof_unqual assignable %d, __auto_type %d, auto %d\n",
+         by_typeof == s, unqualified == other, by_auto_type == s,
+         by_auto == other);
+  printf("const after the caret: %d\n", fixed == s);
+
+  /* Two structs, one class: one type, no cast. */
+  Text ^as_text = s;
+  String ^from_text = echo(as_text);
+  printf("Text is String: %d %d, compatible %d\n", as_text == s,
+         from_text == s, __builtin_types_compatible_p(Text ^, String ^));
+
+  /* _Generic and __builtin_types_compatible_p. */
+  printf("_Generic: String %d, Object %d, through a function %d\n",
+         _Generic(s, String ^: 1, Object ^: 2, default: 3),
+         _Generic((Object ^)s, String ^: 1, Object ^: 2, default: 3),
+         kind(s));
+  printf("compatible: StringRef and String ^ %d, String ^ and Object ^ %d\n",
+         __builtin_types_compatible_p(StringRef, String ^),
+         __builtin_types_compatible_p(String ^, Object ^));
+
+  /* Statement expressions and the comma operator. */
+  String ^from_statement = ({
+    String ^inner = other;
+    ++counter;
+    inner;
+  });
+  String ^from_comma = (++counter, s);
+  printf("statement expression %d, comma %d, counter %d\n",
+         from_statement == other, from_comma == s, counter);
+
+  /* register and nullptr. */
+  register String ^in_register = s;
+  String ^none = nullptr;
+  printf("register %d, nullptr %d %d, the null forms agree %d\n",
+         in_register == s, none == nullptr, !none, none == NULL);
+  in_register = nullptr;
+  printf("register assigned nullptr: %d\n", in_register == NULL);
+  put_string("s", s);
+  put_string("other", other);
+  return 0;
+}

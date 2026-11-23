@@ -1,0 +1,158 @@
+# Tickets: C memory keeps an object only as a raw GCHandle number in an intptr_t. GCHandle::Alloc declared as 'intptr_t f(Object ^)' (ref;gch) makes a ticket from a reference, GCHandle::get_Target declared as 'Object ^f(intptr_t)' (this-gch;ref) gives the same reference back however often it is asked (identity), a checked cast restores the class, and GCHandle::Free releases the ticket; tickets live in a static array, in a struct and in malloc'd memory while the references that made them are gone, two tickets of one object are two numbers for one object, and a ticket of a NULL reference gives NULL back.
+# Plan 5.21.1 RA3 (C memory keeps an object only as a raw GCHandle number
+# in an intptr_t, through .NET's GCHandle members and MC-1's 'gch' rows;
+# the user, 2026-11-19: "That's just a raw GCHandle integer.", section 12's
+# row "'*' is a real pointer into C memory"), 5.21.9 RM9 (Alloc as
+# 'intptr_t f(Object ^)' is ref;gch, get_Target as 'Object ^f(intptr_t)' is
+# this-gch;ref, all in the built-in table), RM2 (an object parameter or
+# result takes an Object reference), 5.20.3 MS5's 'gch' and 'this-gch'
+# rows (the C value is the GCHandle's IntPtr: GCHandle::ToIntPtr after
+# Alloc, GCHandle::FromIntPtr before get_Target and Free), 5.21.4 RS4
+# (a String reference converts to Object by itself at the call) and RS8.
+# .NET's rules give the values: GCHandle.Alloc(object) makes a new Normal
+# handle each time, so two tickets of one object differ while their
+# targets are the same object; Alloc(null) is a handle whose target is
+# null; a Normal handle keeps its object alive until Free. Every member is
+# a built-in table entry (GCHandle::Alloc, get_Target and Free,
+# String::.ctor(char*), Marshal::StringToHGlobalUni(string)), so no
+# reference assemblies are needed. The members have no C library
+# equivalent, so the expected file is hand-written for both OSes (plan
+# 5.20.11 MT3 and 5.17.4 as amended for MC-1, under MC-1's reason; 5.21.14
+# RV28). Plan 5.17.13 (R-a, M3/14-references).
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.Object") Object Object;
+typedef struct CLI_TYPE("System.String") String String;
+
+#define GCHANDLE "valuetype System.Runtime.InteropServices.GCHandle"
+
+__attribute__((msil_method(GCHANDLE, "Alloc", GCHANDLE "(object)")))
+intptr_t ticket_new(Object ^o);
+
+__attribute__((msil_method(GCHANDLE, "get_Target", "instance object()")))
+Object ^ticket_target(intptr_t ticket);
+
+__attribute__((msil_method(GCHANDLE, "Free", "instance void()")))
+void ticket_free(intptr_t ticket);
+
+__attribute__((msil_method("System.String", ".ctor", "instance void(char*)")))
+String ^new_string(const char16_t *units);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+/* C memory: tickets only. */
+static intptr_t kept[3];
+struct record {
+  int id;
+  intptr_t ticket;
+};
+static struct record records[2];
+
+static int frees;
+static void release(intptr_t ticket) {
+  ticket_free(ticket);
+  ++frees;
+}
+
+/* A new string from ASCII text. */
+static String ^make(const char *text) {
+  char16_t units[32];
+  size_t i = 0;
+  for (; text[i] && i < 31; ++i)
+    units[i] = (char16_t)text[i];
+  units[i] = 0;
+  return new_string(units);
+}
+
+static void put_ticket(const char *what, intptr_t ticket) {
+  String ^s = (String ^)ticket_target(ticket);
+  printf("%s: \"", what);
+  for (char16_t *u = string_units(s); u && *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+/* Makes a string, keeps only its ticket, and checks that the ticket gives
+   the same object back while the reference is still in hand. */
+static intptr_t keep(const char *text, int *same) {
+  String ^s = make(text);
+  intptr_t ticket = ticket_new(s);
+  *same = ticket_target(ticket) == s;
+  return ticket;
+}
+
+int main(void) {
+  /* A static array of tickets. */
+  int same[3];
+  kept[0] = keep("first", &same[0]);
+  kept[1] = keep("second", &same[1]);
+  kept[2] = keep("third", &same[2]);
+  printf("each ticket gave its own object back: %d %d %d\n", same[0], same[1],
+         same[2]);
+  printf("tickets are not 0: %d\n",
+         kept[0] != 0 && kept[1] != 0 && kept[2] != 0);
+  put_ticket("kept[0]", kept[0]);
+  put_ticket("kept[1]", kept[1]);
+  put_ticket("kept[2]", kept[2]);
+  printf("distinct objects: %d\n",
+         ticket_target(kept[0]) != ticket_target(kept[1]) &&
+             ticket_target(kept[1]) != ticket_target(kept[2]));
+
+  /* get_Target gives the same object every time. */
+  Object ^t1 = ticket_target(kept[1]);
+  Object ^t2 = ticket_target(kept[1]);
+  printf("two get_Target calls, one object: %d\n", t1 == t2);
+
+  /* Two tickets of one object: two numbers, one target. */
+  String ^shared = make("shared");
+  intptr_t ta = ticket_new(shared);
+  intptr_t tb = ticket_new(shared);
+  printf("two tickets of one object: different numbers %d, same target %d %d\n",
+         ta != tb, ticket_target(ta) == shared, ticket_target(tb) == shared);
+
+  /* Tickets in a struct and in the heap. */
+  records[0].id = 10;
+  records[0].ticket = ticket_new(make("in a struct"));
+  records[1].id = 11;
+  records[1].ticket = ta;
+  intptr_t *heap = malloc(2 * sizeof *heap);
+  if (!heap)
+    return 1;
+  heap[0] = ticket_new(ticket_target(kept[2]));
+  heap[1] = tb;
+  put_ticket("records[0]", records[0].ticket);
+  printf("records[1] holds the shared object: %d\n",
+         ticket_target(records[1].ticket) == shared);
+  put_ticket("heap[0]", heap[0]);
+  printf("heap[0] and kept[2], one object: %d\n",
+         ticket_target(heap[0]) == ticket_target(kept[2]));
+
+  /* A ticket of NULL. */
+  intptr_t none = ticket_new(NULL);
+  printf("a ticket of NULL: not 0 %d, target NULL %d\n", none != 0,
+         ticket_target(none) == NULL);
+
+  /* Every ticket is freed exactly once. */
+  release(none);
+  release(heap[0]);
+  release(records[0].ticket);
+  release(tb);
+  release(ta);
+  release(kept[2]);
+  release(kept[1]);
+  release(kept[0]);
+  free(heap);
+  printf("tickets freed: %d\n", frees);
+  return 0;
+}

@@ -15,10 +15,12 @@
 //   operand that follows the entry's OperandKind, and the control-flow flags
 //   of its FlowControl. Every MI-level record that carries a CIL value names
 //   the opcode of its CIL text (recon mc-streamer E1: 175 records; 176 with
-//   M26's LOCALLOC_I64), and the records that MSILMCInstLower expands into
-//   several CIL_ instructions carry none. The shortest forms that
-//   MSIL::buildLdcI4 and MSIL::buildVarInst choose are cli::ILBuilder's (Q26,
-//   5.7.5).
+//   M26's LOCALLOC_I64; 187 with R-a's CONST_NULL, CEQ_OBJ, BEQ_OBJ,
+//   BNE_UN_OBJ, BR_IF_OBJ, BR_UNLESS_OBJ, ARG_GET_OBJ, ARG_SET_OBJ,
+//   LOCAL_GET_OBJ, LOCAL_SET_OBJ and DROP_OBJ), and the records that
+//   MSILMCInstLower expands into several CIL_ instructions carry none. The
+//   shortest forms that MSIL::buildLdcI4 and MSIL::buildVarInst choose are
+//   cli::ILBuilder's (Q26, 5.7.5).
 // - MSILBCLMembers: the BCLMembers.def X-macro, the cli:: table built from it,
 //   and printBCLMemberRef, which prints Phase 1's [mscorlib] text and the
 //   object form's [msil.bcl] text (5.11.7, 5.8.4).
@@ -365,7 +367,8 @@ TEST_F(MSILCILRecords, FlagsFollowTheFlowControl) {
 // derived from the record's name: CONST_<RC> by its class, then the register
 // class suffix dropped, the catalogue's structural names mapped to their CIL
 // text, and every other name lower-cased with '_' as '.' ("CONV_R_UN_I32" ->
-// "conv.r.un", "BNE_UN_F64" -> "bne.un", "LDIND_I1" -> "ldind.i1").
+// "conv.r.un", "BNE_UN_F64" -> "bne.un", "LDIND_I1" -> "ldind.i1"). R-a's
+// CONST_NULL is ldnull (5.21.7 RB3).
 std::string catalogueMnemonic(StringRef Name) {
   if (Name == "CONST_I32")
     return "ldc.i4";
@@ -375,7 +378,9 @@ std::string catalogueMnemonic(StringRef Name) {
     return "ldc.r4";
   if (Name == "CONST_F64")
     return "ldc.r8";
-  for (StringRef Suffix : {"_I32", "_I64", "_F32", "_F64"})
+  if (Name == "CONST_NULL")
+    return "ldnull";
+  for (StringRef Suffix : {"_I32", "_I64", "_F32", "_F64", "_OBJ"})
     if (Name.ends_with(Suffix)) {
       Name = Name.drop_back(Suffix.size());
       break;
@@ -437,7 +442,7 @@ TEST_F(MSILCILRecords, MILevelRecordsNameTheirOpcode) {
     EXPECT_EQ(Value,
               MSIL::getCILOpcodeValue(MII->get(MSIL::getMCOpcodeForCIL(*Op))));
   }
-  EXPECT_EQ(176u, WithValue);
+  EXPECT_EQ(187u, WithValue);
 }
 
 // The records that MSILMCInstLower expands into several CIL_ instructions
@@ -454,6 +459,8 @@ TEST_F(MSILCILRecords, MultiOpcodeRecordsCarryNoValue) {
       MSIL::COPY_F64,       MSIL::TEE_I32,       MSIL::TEE_F64,
       MSIL::CALL_PARAMS,    MSIL::CALL_RESULTS,  MSIL::ADJCALLSTACKDOWN,
       MSIL::ADJCALLSTACKUP, MSIL::SELECT_I32,    MSIL::SELECT_F64,
+      MSIL::ARG_TEE_OBJ,    MSIL::LOCAL_TEE_OBJ, MSIL::ARGUMENT_OBJ,
+      MSIL::COPY_OBJ,       MSIL::TEE_OBJ,       MSIL::SELECT_OBJ,
   };
   for (unsigned Opc : Records) {
     SCOPED_TRACE(nameOf(Opc));

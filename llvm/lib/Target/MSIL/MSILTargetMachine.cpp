@@ -63,6 +63,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTarget() {
   initializeMSILLowerSjLjLegacyPass(PR);
   initializeMSILLowerDynamicAllocaLegacyPass(PR);
   initializeMSILOptimizeReturnedLegacyPass(PR);
+  initializeMSILPromoteReferencesLegacyPass(PR);
   initializeMSILDAGToDAGISelLegacyPass(PR);
   initializeMSILArgumentMoveLegacyPass(PR);
   initializeMSILSetMemFlagsLegacyPass(PR);
@@ -302,7 +303,8 @@ void MSILPassConfig::addIRPasses() {
   //   P12 MSILOptimizeReturned (-O1 and above)
   //   P13 IndirectBrExpand
   //   P14 TargetPassConfig::addIRPasses
-  // The passes of P6-P11 run at every optimization level.
+  //   P15 MSILPromoteReferences, which addISelPrepare adds after AtomicExpand
+  // The passes of P6-P11 and P15 run at every optimization level.
 
   // P1: diagnose the IR that MSIL cannot compile, and neutralize it so that no
   // later pass meets it. This runs first.
@@ -370,6 +372,11 @@ void MSILPassConfig::addPassesToHandleExceptions() {
 void MSILPassConfig::addISelPrepare() {
   // This is a no-op if atomics are not used in the module.
   addPass(createAtomicExpandLegacyPass());
+
+  // P15 (plan 5.21.7 RB10): turn the stack slots of .NET references into
+  // values, which IL holds in locals, after CodeGenPrepare and after the
+  // passes of an exception model, which may demote PHI nodes into slots.
+  addPass(createMSILPromoteReferencesLegacyPass());
 
   TargetPassConfig::addISelPrepare();
 }

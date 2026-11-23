@@ -68,7 +68,29 @@ contains this script). The manifest format is documented in the manifest's heade
                  file) as XCOFF ones that need cover. A problem names the file and the line of
                  the uncovered XCOFF case. A switch-default line is stale when its file has no
                  XCOFF case label (git grep finds none), a switch-other line when its file has
-                 no unqualified XCOFF case label in code.
+                 no unqualified XCOFF case label in code;
+               - every switch over clang's type classes in a C or C++ file under clang/include,
+                 clang/lib or clang/tools (TYPE_SWITCH_DIRS; built or not, changed or not)
+                 handles the fork's class CLIReference (plan 5.21.13 RH5, from R-a), so that an
+                 upstream merge that brings a new such switch fails too. 'git grep' finds the
+                 files that call getTypeClass() or getTypeLocClass(). A switch is a type-class
+                 switch when its condition calls one of them, or is a local variable
+                 initialized from one of them in a block that encloses the switch (as
+                 'switch (TC)' after 'Type::TypeClass TC = T->getTypeClass();'). Its own body
+                 (not a switch nested in it), comments and string literals blanked, needs one
+                 of: a CLIReference case label ('case Type::CLIReference:', 'case
+                 TypeLoc::CLIReference:' or 'case CLIReference:') or a macro whose first
+                 argument is CLIReference (as 'SUGAR_FREE_TYPE(CLIReference)', which expands to
+                 one); a 'default:' label; or a generated case for every class: an #include of
+                 TypeNodes.inc with TYPE, or of TypeLocNodes.def with UNQUAL_TYPELOC (TYPELOC
+                 when UNQUAL_TYPELOC is not defined), defined as a case label where the file
+                 is included (the last #define of the macro before the #include, unless an
+                 #undef or an #include of either file, which both undefine it, comes between).
+                 When the braces of a file do not match, its type-class switches are counted
+                 instead, as the object-format check counts: there must be at least as many of
+                 those covering marks in code as type-class switches. A problem names the file
+                 and the line of the switch. Outside the scan, and unchanged: lldb's
+                 TypeSystemClang.cpp (lldb is not built) and clang-tools-extra.
 --list-lit     The lit inputs: every lit line's files, without duplicates, sorted, one per line
                (repository-relative). Exit 1, after printing the files it found, if a pattern
                matches no file.
@@ -150,6 +172,29 @@ MSIL_LABEL_RE = re.compile(r"\bcase\s+(?:(?:llvm::)?Triple::MSIL|(?:llvm::)?MCCo
 # A 'default:' label in code: it covers the XCOFF case labels of its own switch in a file with a
 # switch-default line.
 DEFAULT_LABEL_RE = re.compile(r"\bdefault\s*:(?!:)")
+# The type-class switch scan (plan 5.21.13 RH5, from R-a): the C and C++ files under these
+# directories whose switches over clang's type classes must handle FORK_TYPE_CLASS. git grep
+# takes the pathspecs (a '*' in a pathspec also matches '/') and the getter pattern (POSIX ERE).
+TYPE_SWITCH_DIRS = ("clang/include", "clang/lib", "clang/tools")
+TYPE_SWITCH_EXTS = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".def")
+TYPE_SWITCH_PATHSPECS = tuple(f"{d}/*{e}" for d in TYPE_SWITCH_DIRS for e in TYPE_SWITCH_EXTS)
+TYPE_CLASS_GREP = r"getType(Loc)?Class[[:space:]]*\("
+FORK_TYPE_CLASS = "CLIReference"
+# A call of a getter of a type class in code (getTypeClassName() is not one).
+TYPE_CLASS_CALL_RE = re.compile(r"\bget(?:Type|TypeLoc)Class\s*\(\s*\)")
+# The marks that handle the fork's class in a switch: a case label naming it, qualified or not,
+# or a macro whose first argument it is ('SUGAR_FREE_TYPE(CLIReference)' expands to a case).
+FORK_CASE_RE = re.compile(r"\bcase\s+(?:(?:::\s*)?[A-Za-z_]\w*\s*::\s*)*" + FORK_TYPE_CLASS
+                          + r"\s*:(?!:)")
+FORK_MACRO_CASE_RE = re.compile(r"\b[A-Z_][A-Z0-9_]*\s*\(\s*" + FORK_TYPE_CLASS + r"\s*[,)]")
+# The files that generate a case per type class, the macros that they expand (each file
+# undefines its own at its end; TypeLocNodes.def includes TypeNodes.inc, which undefines TYPE),
+# and the #define and #undef directives of those macros in code.
+NODES_INCLUDE_RE = re.compile(r'^[ \t]*(#)[ \t]*include[ \t]*[<"](?:[^">\n]*/)?'
+                              r'(TypeNodes\.inc|TypeLocNodes\.def)[">]', re.M)
+NODE_MACRO_RE = re.compile(r"^[ \t]*#[ \t]*(define|undef)[ \t]+(TYPE|TYPELOC|UNQUAL_TYPELOC)\b"
+                           r"((?:[^\n]*\\\n)*[^\n]*)", re.M)
+CASE_WORD_RE = re.compile(r"\bcase\b")
 # The binaries the gtest leg of upstream-hooks.ps1 runs. --check compares them with the
 # "Exe = '<binary>'" entries of that script (GTEST_LEG_SCRIPT), so the two lists stay equal.
 GTEST_BINARIES = ("unittests/TargetParser/TargetParserTests.exe", "unittests/MC/MCTests.exe",
@@ -446,6 +491,13 @@ def switch_files(repo: str, env: Mapping[str, str]) -> List[str]:
     return sorted(set(p for p in out.split("\0") if p)) if rc == 0 else []
 
 
+def type_switch_files(repo: str, env: Mapping[str, str]) -> List[str]:
+    """The C and C++ files under TYPE_SWITCH_DIRS that call a getter of a type class."""
+    args = ["grep", "-l", "-z", "-E", "--untracked", "-e", TYPE_CLASS_GREP, "--"]
+    rc, out = git(repo, args + list(TYPE_SWITCH_PATHSPECS), env, (0, 1))
+    return sorted(set(p for p in out.split("\0") if p)) if rc == 0 else []
+
+
 def _read_text(repo: str, path: str) -> Optional[str]:
     try:
         with open(os.path.join(repo, path), encoding="utf-8", errors="replace") as f:
@@ -585,38 +637,77 @@ def strip_code(text: str) -> str:
     return "".join(out)
 
 
-def _switch_bodies(code: str) -> Optional[List[Tuple[int, int]]]:
-    """The (open, close) brace offsets of every 'switch (...) {' body of stripped code, or None
-    when the braces do not match."""
+def _brace_pairs(code: str) -> Optional[List[Tuple[int, int]]]:
+    """The (open, close) offsets of every matching pair of braces of stripped code, in the order
+    they close, or None when the braces do not match."""
     stack: List[int] = []
-    bodies: List[Tuple[int, int]] = []
+    pairs: List[Tuple[int, int]] = []
     for m in re.finditer(r"[{}]", code):
         if m.group(0) == "{":
             stack.append(m.start())
-            continue
-        if not stack:
+        elif not stack:
             return None
-        o = stack.pop()
-        k = o - 1
-        while k >= 0 and code[k].isspace():
-            k -= 1
-        if k < 0 or code[k] != ")":
-            continue
-        depth = 0
-        while k >= 0:
-            depth += {")": 1, "(": -1}.get(code[k], 0)
-            if depth == 0:
-                break
-            k -= 1
-        if k <= 0:
-            continue
+        else:
+            pairs.append((stack.pop(), m.start()))
+    return None if stack else pairs
+
+
+class SwitchStmt(NamedTuple):
+    keyword: int               # the offset of 'switch'
+    lparen: int                # of the '(' and the ')' around its condition
+    rparen: int
+    open: int                  # of the '{' and the '}' of its body
+    close: int
+
+
+def _switch_head(code: str, o: int) -> Optional[Tuple[int, int, int]]:
+    """When the brace at offset o of stripped code opens a 'switch (...) {' body: the offsets of
+    'switch' and of the '(' and ')' of its condition; else None."""
+    k = o - 1
+    while k >= 0 and code[k].isspace():
         k -= 1
-        while k >= 0 and code[k].isspace():
-            k -= 1
-        if code[max(k - 5, 0):k + 1] == "switch" and (k < 6 or not (code[k - 6].isalnum()
-                                                                   or code[k - 6] == "_")):
-            bodies.append((o, m.start()))
-    return None if stack else bodies
+    if k < 0 or code[k] != ")":
+        return None
+    rparen = k
+    depth = 0
+    while k >= 0:
+        depth += {")": 1, "(": -1}.get(code[k], 0)
+        if depth == 0:
+            break
+        k -= 1
+    if k <= 0:
+        return None
+    lparen = k
+    k -= 1
+    while k >= 0 and code[k].isspace():
+        k -= 1
+    if code[max(k - 5, 0):k + 1] == "switch" and (k < 6 or not (code[k - 6].isalnum()
+                                                               or code[k - 6] == "_")):
+        return k - 5, lparen, rparen
+    return None
+
+
+def _switch_statements(code: str,
+                       pairs: Optional[List[Tuple[int, int]]] = None) -> Optional[List[SwitchStmt]]:
+    """Every 'switch (...) {' statement of stripped code (pairs: its _brace_pairs, when the
+    caller has them), or None when the braces do not match."""
+    if pairs is None:
+        pairs = _brace_pairs(code)
+    if pairs is None:
+        return None
+    out: List[SwitchStmt] = []
+    for o, c in pairs:
+        head = _switch_head(code, o)
+        if head is not None:
+            out.append(SwitchStmt(head[0], head[1], head[2], o, c))
+    return out
+
+
+def _switch_bodies(code: str) -> Optional[List[Tuple[int, int]]]:
+    """The (open, close) brace offsets of every 'switch (...) {' body of stripped code, or None
+    when the braces do not match."""
+    stmts = _switch_statements(code)
+    return None if stmts is None else [(s.open, s.close) for s in stmts]
 
 
 class SwitchResult(NamedTuple):
@@ -683,6 +774,131 @@ def switch_problems(path: str, text: str, default_covers: bool = False,
     return SwitchResult(problems, len(found), unqualified)
 
 
+def _generated_case_includes(code: str, text: str) -> List[int]:
+    """The offsets of the #include directives of TypeNodes.inc or TypeLocNodes.def in code that
+    generate a case for every type class, the fork's included: TypeNodes.inc with TYPE, or
+    TypeLocNodes.def with UNQUAL_TYPELOC (TYPELOC when UNQUAL_TYPELOC is not defined), defined
+    as a case label where the file is included."""
+    events: List[Tuple[int, str, str, str]] = []
+    for m in NODE_MACRO_RE.finditer(code):
+        events.append((m.start(), m.group(1), m.group(2), m.group(3)))
+    for m in NODES_INCLUDE_RE.finditer(text):
+        if code[m.start(1)] == "#":                     # not in a comment
+            events.append((m.start(1), "include", m.group(2), ""))
+    events.sort()
+    defined: Dict[str, Optional[str]] = {}               # macro -> its replacement text
+    covering = []
+    for pos, kind, name, rest in events:
+        if kind == "define":
+            defined[name] = rest
+        elif kind == "undef":
+            defined[name] = None
+        else:
+            if name == "TypeNodes.inc":
+                body = defined.get("TYPE")
+            else:
+                body = defined.get("UNQUAL_TYPELOC")
+                if body is None:
+                    body = defined.get("TYPELOC")
+            if body is not None and CASE_WORD_RE.search(body):
+                covering.append(pos)
+            defined["TYPE"] = None
+            if name == "TypeLocNodes.def":
+                defined["TYPELOC"] = defined["UNQUAL_TYPELOC"] = None
+    return covering
+
+
+def _is_type_class_condition(code: str, keyword: int, cond: str,
+                             pairs: Optional[List[Tuple[int, int]]]) -> bool:
+    """Whether the switch at offset keyword, whose condition is cond, switches over clang's type
+    classes: cond calls a getter of a type class, or is a variable initialized (or assigned)
+    from one before the switch in a block that encloses it (anywhere before it when pairs is
+    None: the braces do not match)."""
+    if TYPE_CLASS_CALL_RE.search(cond):
+        return True
+    m = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*", cond)
+    if not m:
+        return False
+    init = re.compile(r"\b" + re.escape(m.group(1)) + r"\s*(?:=(?!=)|\(|\{)[^;{}]*?"
+                      + TYPE_CLASS_CALL_RE.pattern)
+    enclosing = {o for o, c in pairs or () if o < keyword < c}
+    for d in init.finditer(code, 0, keyword):
+        if pairs is None:
+            return True
+        inner = [o for o, c in pairs if o < d.start() < c]
+        if inner and max(inner) in enclosing:
+            return True
+    return False
+
+
+class TypeSwitchResult(NamedTuple):
+    problems: List[str]
+    switches: int              # type-class switches in code
+
+
+def type_switch_problems(path: str, text: str) -> TypeSwitchResult:
+    """The type-class switches of one file that do not handle FORK_TYPE_CLASS (see --check)."""
+    code = strip_code(text)
+    marks = ([m.start() for m in FORK_CASE_RE.finditer(code)]
+             + [m.start() for m in FORK_MACRO_CASE_RE.finditer(code)]
+             + [m.start() for m in DEFAULT_LABEL_RE.finditer(code)]
+             + _generated_case_includes(code, text))
+    what = (f"no {FORK_TYPE_CLASS} case, no 'default:' of its own and no generated case for "
+            "every class (TypeNodes.inc or TypeLocNodes.def included with TYPE, TYPELOC or "
+            "UNQUAL_TYPELOC defined as a case label)")
+    fix = (f"add 'case Type::{FORK_TYPE_CLASS}:' ('case TypeLoc::{FORK_TYPE_CLASS}:' in a "
+           "TypeLoc switch) to that switch")
+
+    def line(p: int) -> int:
+        return code.count("\n", 0, p) + 1
+
+    def shown(cond: str) -> str:
+        cond = " ".join(cond.split())
+        return cond if len(cond) <= 60 else cond[:57] + "..."
+
+    pairs = _brace_pairs(code)
+    problems: List[str] = []
+    if pairs is None:
+        # The conservative fallback of the object-format check: count.
+        found = []
+        for m in re.finditer(r"\bswitch\s*\(", code):
+            lparen = m.end() - 1
+            depth, k = 0, lparen
+            while k < len(code):
+                depth += {"(": 1, ")": -1}.get(code[k], 0)
+                if depth == 0:
+                    break
+                k += 1
+            if k < len(code) and _is_type_class_condition(code, m.start(),
+                                                          code[lparen + 1:k], None):
+                found.append(m.start())
+        if len(marks) < len(found):
+            problems.append(f"type-class switch: {path}:{line(found[0])}: {len(found)} "
+                            f"type-class switch(es) (line(s) "
+                            f"{', '.join(str(line(p)) for p in found)}; the braces of the file "
+                            f"do not match, so counted) but {len(marks)} {FORK_TYPE_CLASS} "
+                            "case(s), 'default:' label(s) and generated #include(s); add the "
+                            f"missing {FORK_TYPE_CLASS} cases")
+        return TypeSwitchResult(problems, len(found))
+    stmts = _switch_statements(code, pairs) or []
+
+    def owner(p: int) -> Optional[int]:
+        inner = [s.open for s in stmts if s.open < p < s.close]
+        return max(inner) if inner else None
+
+    covered = {owner(p) for p in marks}
+    n = 0
+    for s in sorted(stmts):
+        cond = code[s.lparen + 1:s.rparen]
+        if not _is_type_class_condition(code, s.keyword, cond, pairs):
+            continue
+        n += 1
+        if s.open not in covered:
+            problems.append(f"type-class switch: {path}:{line(s.keyword)}: "
+                            f"'switch ({shown(cond)})' has {what}; {fix}")
+    return TypeSwitchResult(problems, n)
+
+
 def direct_includes(text: str) -> List[str]:
     """The paths of the #include directives of a C/C++ file, outside comments."""
     code = strip_code(text)
@@ -736,6 +952,7 @@ def check(m: Manifest, repo: str, env: Mapping[str, str],
     try:
         changed = changed_paths(repo, base, env)
         switches = switch_files(repo, env)
+        type_switches = type_switch_files(repo, env)
         changed_set = set(changed)
         hooked = [p for p in changed
                   if not p.startswith(FORK_PREFIXES) and p not in m.fork_only]
@@ -821,9 +1038,21 @@ def check(m: Manifest, repo: str, env: Mapping[str, str],
         if not reason:
             problems.append(f"switch-other {p} (line {n}): no reason")
 
+    # Switches over clang's type classes (plan 5.21.13 RH5).
+    n_type_switches = 0
+    for f in type_switches:
+        text = _read_text(repo, f)
+        if text is None:
+            problems.append(f"type-class switch: cannot read {f}")
+            continue
+        tr = type_switch_problems(f, text)
+        problems += tr.problems
+        n_type_switches += tr.switches
+
     summary = (f"base {base[:12]} ({why}); {len(changed)} changed path(s), {len(hooked)} hooked, "
                f"{len(m.hooks)} hook block(s), {len(inputs)} lit input(s), "
-               f"{len(switches)} switch file(s)")
+               f"{len(switches)} switch file(s), {n_type_switches} type-class switch(es) in "
+               f"{len(type_switches)} file(s)")
     return CheckResult(problems, summary)
 
 
@@ -1146,6 +1375,212 @@ SELF_TEST_EXEMPT_DEFECTS = {
         "switch-other lld/OtherQualified.cpp its unqualified case belongs to Kind", (10,),
         (3, 16)),
 }
+# Type-class switches that pass (plan 5.21.13 RH5), in a file of the upstream base: a
+# CLIReference case on the getter's call and, unqualified, on a local variable initialized from
+# it; a 'default:'; generated cases from TypeNodes.inc (TYPE defined in the switch) and from
+# TypeLocNodes.def (TYPELOC defined before the function, over two lines); a macro that expands to
+# the case; an inner type-class switch with a 'default:' of its own in an outer one with a case
+# of its own; and a switch on getTypeClassName(), which is no getter of a type class. Eight
+# type-class switches.
+SELF_TEST_TYPE_COVERED = """\
+int a(const Type *T) {
+  switch (T->getTypeClass()) {
+  case Type::Builtin: return 1;
+  case Type::CLIReference: return 2;
+  }
+  return 0;
+}
+int b(const Type *T) {
+  Type::TypeClass TC = T->getTypeClass();
+  switch (TC) {
+  case CLIReference: return 1;
+  }
+  return 0;
+}
+int c(TypeLoc TL) {
+  switch (TL.getTypeLocClass()) {
+  case TypeLoc::Pointer: return 1;
+  default: return 0;
+  }
+}
+int d(const Type *T) {
+  switch (T->getTypeClass()) {
+#define ABSTRACT_TYPE(Class, Base)
+#define TYPE(Class, Base) case Type::Class: return 1;
+#include "clang/AST/TypeNodes.inc"
+  }
+  return 0;
+}
+#define TYPELOC(Class, Base) \\
+  case TypeLoc::Class: return 2;
+int e(TypeLoc TL) {
+  switch (TL.getTypeLocClass()) {
+#include <clang/AST/TypeLocNodes.def>
+  }
+  return 0;
+}
+int f(const Type *T) {
+  switch (T->getCanonicalTypeInternal()->getTypeClass()) {
+#define SUGAR_FREE_TYPE(Class) case Type::Class: return 3;
+  SUGAR_FREE_TYPE(Builtin)
+  SUGAR_FREE_TYPE(CLIReference)
+#undef SUGAR_FREE_TYPE
+  case Type::Pointer: return 4;
+  }
+  return 0;
+}
+int g(const Type *T, TypeLoc TL) {
+  switch (T->getTypeClass()) {
+  case ::clang::Type::CLIReference: return 1;
+  case Type::Builtin:
+    switch (TL.getTypeLocClass()) {
+    case TypeLoc::Builtin: return 2;
+    default: return 3;
+    }
+  }
+  return 0;
+}
+int h(const Type *T) {
+  switch (T->getTypeClassName()[0]) {
+  case 'B': return 1;
+  }
+  return 0;
+}
+"""
+# An uncovered type-class switch where the scan never looks: outside TYPE_SWITCH_DIRS (lldb,
+# which is not built, and clang's unit tests), and in a file of a scanned directory that is not
+# a C or C++ file.
+_UNCOVERED_TYPE_SWITCH = ("int t(const Type *T) {\n  switch (T->getTypeClass()) {\n"
+                          "  case Type::Builtin: return 1;\n  }\n  return 0;\n}\n")
+SELF_TEST_TYPE_OUTSIDE = ("lldb/source/TypeSystemSwitch.cpp", "clang/unittests/AST/TypeSwitch.cpp",
+                          "clang/lib/AST/TypeSwitch.txt")
+SELF_TEST_UPSTREAM.update({"clang/lib/AST/TypeCovered.cpp": SELF_TEST_TYPE_COVERED})
+SELF_TEST_UPSTREAM.update({f: _UNCOVERED_TYPE_SWITCH for f in SELF_TEST_TYPE_OUTSIDE})
+# Planted type-class switches. file -> (text, the lines of the switches that must be reported,
+# the lines of type-class switches that must not be).
+SELF_TEST_TYPE_DEFECTS = {
+    # A switch on the getter's call.
+    "clang/lib/Sema/TypeCall.cpp": (
+        "int f(const Type *T) {\n"                                     # 1
+        "  switch (T->getTypeClass()) {\n"                             # 2
+        "  case Type::Builtin: return 1;\n"                            # 3
+        "  case Type::Pointer: return 2;\n"                            # 4
+        "  }\n"                                                        # 5
+        "  return 0;\n"                                                # 6
+        "}\n",                                                         # 7
+        (2,), ()),
+    # Switches on a local variable initialized from the getter (with '=' and with braces, the
+    # switch in an inner block); a variable of the same name that another function initializes,
+    # and one that is only compared with the getter's result, are not such variables.
+    "clang/tools/libclang/TypeVar.cpp": (
+        "int f(const Type *X) {\n"                                     # 1
+        "  Type::TypeClass TC = X->getTypeClass();\n"                  # 2
+        "  switch (TC) {\n"                                            # 3
+        "  case Type::Builtin: return 1;\n"                            # 4
+        "  }\n"                                                        # 5
+        "  return 0;\n"                                                # 6
+        "}\n"                                                          # 7
+        "int g(int TC) {\n"                                            # 8
+        "  switch (TC) {\n"                                            # 9
+        "  case 1: return 1;\n"                                        # 10
+        "  }\n"                                                        # 11
+        "  return 0;\n"                                                # 12
+        "}\n"                                                          # 13
+        "int h(TypeLoc TL) {\n"                                        # 14
+        "  auto K{TL.getTypeLocClass()};\n"                            # 15
+        "  if (K) {\n"                                                 # 16
+        "    switch (K) {\n"                                           # 17
+        "    case TypeLoc::Pointer: return 2;\n"                       # 18
+        "    }\n"                                                      # 19
+        "  }\n"                                                        # 20
+        "  return 0;\n"                                                # 21
+        "}\n"                                                          # 22
+        "int i(const Type *T) {\n"                                     # 23
+        "  int N = 0;\n"                                               # 24
+        "  if (N == T->getTypeClass())\n"                              # 25
+        "    N = 1;\n"                                                 # 26
+        "  switch (N) {\n"                                             # 27
+        "  case 1: return 1;\n"                                        # 28
+        "  }\n"                                                        # 29
+        "  return 0;\n"                                                # 30
+        "}\n",                                                         # 31
+        (3, 17), (9, 27)),
+    # In a header: generated cases that miss the class (TYPE empty; UNQUAL_TYPELOC empty; TYPE
+    # undefined by '#undef' or by an earlier #include of TypeNodes.inc); the class only in a
+    # comment and a string literal; a case and a 'default:' that belong to a nested switch.
+    "clang/include/clang/AST/TypeGen.h": (
+        "inline int a(const Type *T) {\n"                              # 1
+        "  switch (T->getTypeClass()) {\n"                             # 2
+        "#define TYPE(Class, Base)\n"                                  # 3
+        "#define NON_CANONICAL_TYPE(Class, Base) case Type::Class:\n"  # 4
+        "#include \"clang/AST/TypeNodes.inc\"\n"                       # 5
+        "    return 1;\n"                                              # 6
+        "  }\n"                                                        # 7
+        "  return 0;\n"                                                # 8
+        "}\n"                                                          # 9
+        "inline int b(const Type *T) {\n"                              # 10
+        "  // case Type::CLIReference: only in a comment\n"            # 11
+        "  switch (T->getTypeClass()) {\n"                             # 12
+        "  case Type::Builtin: return \"case Type::CLIReference:\"[0];\n"  # 13
+        "  }\n"                                                        # 14
+        "  return 0;\n"                                                # 15
+        "}\n"                                                          # 16
+        "inline int c(const Type *T, TypeLoc TL) {\n"                  # 17
+        "  switch (T->getTypeClass()) {\n"                             # 18
+        "  case Type::Builtin:\n"                                      # 19
+        "    switch (TL.getTypeLocClass()) {\n"                        # 20
+        "    case TypeLoc::CLIReference: return 1;\n"                  # 21
+        "    default: return 2;\n"                                     # 22
+        "    }\n"                                                      # 23
+        "  }\n"                                                        # 24
+        "  return 0;\n"                                                # 25
+        "}\n"                                                          # 26
+        "#define TYPELOC(Class, Base) case TypeLoc::Class: return 3;\n"  # 27
+        "#define UNQUAL_TYPELOC(Class, Base)\n"                        # 28
+        "inline int d(TypeLoc TL) {\n"                                 # 29
+        "  switch (TL.getTypeLocClass()) {\n"                          # 30
+        "#include \"clang/AST/TypeLocNodes.def\"\n"                    # 31
+        "  }\n"                                                        # 32
+        "  return 0;\n"                                                # 33
+        "}\n"                                                          # 34
+        "#define TYPE(Class, Base) case Type::Class: return 4;\n"      # 35
+        "#undef TYPE\n"                                                # 36
+        "inline int e(const Type *T) {\n"                              # 37
+        "  switch (T->getTypeClass()) {\n"                             # 38
+        "#include \"clang/AST/TypeNodes.inc\"\n"                       # 39
+        "  }\n"                                                        # 40
+        "  return 0;\n"                                                # 41
+        "}\n"                                                          # 42
+        "// #include \"clang/AST/TypeNodes.inc\" (commented out)\n"     # 43
+        "#define TYPE(Class, Base) case Type::Class: return 5;\n"      # 44
+        "inline int f(const Type *T) {\n"                              # 45
+        "  switch (T->getTypeClass()) {\n"                             # 46
+        "#include \"clang/AST/TypeNodes.inc\"\n"                       # 47
+        "  }\n"                                                        # 48
+        "  return 0;\n"                                                # 49
+        "}\n"                                                          # 50
+        "inline int g(const Type *T) {\n"                              # 51
+        "  switch (T->getTypeClass()) {\n"                             # 52
+        "#include \"clang/AST/TypeNodes.inc\"\n"                       # 53
+        "  }\n"                                                        # 54
+        "  return 0;\n"                                                # 55
+        "}\n",                                                         # 56
+        (2, 12, 18, 30, 38, 52), (20, 46)),
+    # Braces that do not match (preprocessor conditionals): the two type-class switches are
+    # counted, and the file has no covering mark.
+    "clang/lib/CodeGen/TypeUnbalanced.cpp": (
+        "int f(const Type *T, int A) {\n"                              # 1
+        "#if A\n"                                                      # 2
+        "  switch (T->getTypeClass()) {\n"                             # 3
+        "#else\n"                                                      # 4
+        "  switch (T->getTypeClass()) {\n"                             # 5
+        "#endif\n"                                                     # 6
+        "  case Type::Builtin: return 1;\n"                            # 7
+        "  }\n"                                                        # 8
+        "  return 0;\n"                                                # 9
+        "}\n",                                                         # 10
+        (3,), ()),
+}
 
 
 def self_test() -> int:
@@ -1230,6 +1665,14 @@ def self_test() -> int:
                and not unmatched, f"lit inputs expanded and sorted {inputs}")
         expect(direct_includes(SELF_TEST_FORK["llvm/lib/CompileLeg.cpp"])
                == ["llvm/Inc/Included.h"], "an #include inside a comment does not count")
+        # The type-class switch scan (plan 5.21.13 RH5) reads only clang/lib/AST/TypeCovered.cpp,
+        # whose eight type-class switches all pass, and never the files outside its directories
+        # or of another type, whose uncovered switch would fail.
+        expect(r.summary.endswith(", 8 type-class switch(es) in 1 file(s)"),
+               "type-class switches: a CLIReference case (on the getter's call, on a local "
+               "variable, qualified, unqualified, through a macro), 'default:' and generated "
+               "cases pass; lldb/, clang/unittests/ and a .txt file are not scanned "
+               f"({r.summary})")
 
         # 1a. 'compile' only on a compile-leg file or a header one of them #includes directly.
         # A lone 'compile' on a .cpp file the leg never compiles (as llvm/lib/MC/MCContext.cpp
@@ -1332,10 +1775,12 @@ def self_test() -> int:
         })
         _write(repo, {f: text for f, (text, _) in SELF_TEST_SWITCH_DEFECTS.items()})
         _write(repo, {f: v[0] for f, v in SELF_TEST_EXEMPT_DEFECTS.items()})
+        _write(repo, {f: v[0] for f, v in SELF_TEST_TYPE_DEFECTS.items()})
         defects = SELF_TEST_MANIFEST.replace("allow clang/test/X/c.c needs llvm-foo, which the "
                                              "build lacks\n", "") + "".join(
             f"hook {f}\n  none planted\n"
-            for f in list(SELF_TEST_SWITCH_DEFECTS) + list(SELF_TEST_EXEMPT_DEFECTS)) + "".join(
+            for f in list(SELF_TEST_SWITCH_DEFECTS) + list(SELF_TEST_EXEMPT_DEFECTS)
+            + list(SELF_TEST_TYPE_DEFECTS)) + "".join(
             v[1] + "\n" for v in SELF_TEST_EXEMPT_DEFECTS.values()) + """\
 hook llvm/include/llvm/Inc/NotIncluded.h
   compile
@@ -1442,6 +1887,30 @@ switch-other lld/OtherComment.cpp its label is in a comment
         expect(has(r.problems, "allow 'llvm/test/T/a.ll'", "no reason"), "allow without a reason")
         expect(has(r.problems, "allow 'clang/test/X/notinput.c'", "not one of the lit inputs"),
                "allow of a test that is not a lit input")
+        # Type-class switches (plan 5.21.13 RH5): a switch on the getter's call and one on a
+        # local variable initialized from it, among the others planted, are reported at the
+        # line of the switch; the switches that handle the class, and those that are no
+        # type-class switches, are not.
+        for f, (_, bad_lines, good_lines) in SELF_TEST_TYPE_DEFECTS.items():
+            for line in bad_lines:
+                expect(has(r.problems, f"type-class switch: {f}:{line}: "),
+                       f"type-class switch in {f} reported at line {line}")
+            expect(not any(has(r.problems, f"type-class switch: {f}:{line}: ")
+                           for line in good_lines),
+                   f"{f}: the switches at lines {good_lines} pass")
+        expect(has(r.problems, "type-class switch: clang/lib/Sema/TypeCall.cpp:2: 'switch "
+                   "(T->getTypeClass())' has no CLIReference case, no 'default:' of its own and "
+                   "no generated case for every class")
+               and has(r.problems, "type-class switch: clang/tools/libclang/TypeVar.cpp:3: "
+                       "'switch (TC)' has no CLIReference case"),
+               "type-class switches: the switch on the getter's call and the switch on a local "
+               "variable initialized from it are each reported, with the condition")
+        expect(has(r.problems, "type-class switch: clang/lib/CodeGen/TypeUnbalanced.cpp:3: 2 "
+                   "type-class switch(es) (line(s) 3, 5; the braces of the file do not match, so "
+                   "counted) but 0 "), "type-class switches counted where the braces do not match")
+        expect(not any(has(r.problems, f) for f in SELF_TEST_TYPE_OUTSIDE)
+               and not has(r.problems, "clang/lib/AST/TypeCovered.cpp"),
+               "type-class switches: no file outside the scan and no covered switch reported")
 
         # 5. No merge commit at all (as in a shallow clone): a failure that names the reason.
         lone = os.path.join(tmp, "lone")
@@ -1577,6 +2046,40 @@ switch-other lld/OtherComment.cpp its label is in a comment
         expect(has(switch_problems("m.h", f"#define CASES case Triple::{_X}:\n").problems,
                    "switch coverage: m.h:1: ", "outside every switch body"),
                "an XCOFF label outside a switch body without an MSIL one")
+
+        # 9. The type-class scan's counting fallback (braces that do not match) and the
+        # generated cases of one file.
+        unbal = SELF_TEST_TYPE_DEFECTS["clang/lib/CodeGen/TypeUnbalanced.cpp"][0]
+        tr = type_switch_problems("t.cpp", unbal)
+        expect(tr.switches == 2 and len(tr.problems) == 1
+               and has(tr.problems, "type-class switch: t.cpp:3: 2 type-class switch(es)",
+                       "braces of the file do not match"),
+               f"unmatched braces: two type-class switches counted, no mark {tr}")
+        tr = type_switch_problems("t.cpp", unbal.replace(
+            "return 1;", "return 1;\n  default: return 0;"))
+        expect(has(tr.problems, "type-class switch: t.cpp:3: ", "but 1 CLIReference case(s)"),
+               f"unmatched braces: one 'default:' for two type-class switches {tr.problems}")
+        tr = type_switch_problems("t.cpp", unbal.replace(
+            "case Type::Builtin: return 1;",
+            "case Type::CLIReference: return 1;\n  default: return 0;"))
+        expect(tr.problems == [] and tr.switches == 2,
+               f"unmatched braces: a CLIReference case and a 'default:' cover both {tr}")
+        tr = type_switch_problems("t.cpp", "int f(int K) {\n#if A\n  switch (K) {\n#endif\n"
+                                           "  case 1: return 1;\n  }\n}\n}\n")
+        expect(tr.problems == [] and tr.switches == 0,
+               f"unmatched braces: a switch on an int is no type-class switch {tr}")
+        covered = SELF_TEST_TYPE_COVERED
+        tr = type_switch_problems("c.cpp", covered)
+        expect(tr.problems == [] and tr.switches == 8,
+               f"TypeCovered.cpp: eight type-class switches, all handled {tr}")
+        expect(len(_generated_case_includes(strip_code(covered), covered)) == 2,
+               "TypeCovered.cpp: the #include of TypeNodes.inc (TYPE in the switch) and of "
+               "TypeLocNodes.def (TYPELOC before the function, over two lines) generate cases")
+        tr = type_switch_problems("c.cpp", covered.replace("  case Type::CLIReference: return 2;\n",
+                                                           ""))
+        expect(has(tr.problems, "type-class switch: c.cpp:2: 'switch (T->getTypeClass())'")
+               and len(tr.problems) == 1,
+               f"TypeCovered.cpp without a()'s CLIReference case: a() reported {tr.problems}")
     except GitError as e:
         expect(False, f"git: {e}")
     finally:

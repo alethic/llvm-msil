@@ -1,0 +1,3 @@
+returned a new String: not NULL 1
+the String: "made"
+[unhandled exception: System.NullReferenceException]

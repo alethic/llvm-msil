@@ -248,6 +248,8 @@ cli::TypeSig MSIL::toTypeSig(MSIL::ValType T) {
     return cli::TypeSig::get(cli::ELEMENT_TYPE_R4);
   case MSIL::ValType::F64:
     return cli::TypeSig::get(cli::ELEMENT_TYPE_R8);
+  case MSIL::ValType::Object:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_OBJECT);
   }
   llvm_unreachable("MSIL: unknown value type");
 }

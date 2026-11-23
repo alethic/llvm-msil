@@ -41,6 +41,7 @@ def I32_0 : MSILReg<"%i32.0">;
 def I64_0 : MSILReg<"%i64.0">;
 def F32_0 : MSILReg<"%f32.0">;
 def F64_0 : MSILReg<"%f64.0">;
+def OBJ_0 : MSILReg<"%obj.0">;
 
 // The value stack "register". This is an opaque entity which serves to order
 // uses and defs that must remain in LIFO order.
@@ -60,3 +61,6 @@ def I32 : MSILRegClass<[i32], 32, (add I32_0)>;
 def I64 : MSILRegClass<[i64], 64, (add FP, I64_0)>;
 def F32 : MSILRegClass<[f32], 32, (add F32_0)>;
 def F64 : MSILRegClass<[f64], 64, (add F64_0)>;
+// OBJ holds .NET references, IR target("msil.ref") (MVT::externref): CIL
+// object, never in memory (plan 5.21.7 RB2).
+def OBJ : MSILRegClass<[externref], 0, (add OBJ_0)>;

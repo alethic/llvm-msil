@@ -995,6 +995,21 @@ bool ASTStructuralEquivalence::isEquivalent(
       return false;
     break;
 
+  case Type::CLIReference: {
+    // A .NET reference (MSIL) is identified by its key; under strict type
+    // spelling, the structs as written must match too.
+    const auto *Ref1 = cast<CLIReferenceType>(T1);
+    const auto *Ref2 = cast<CLIReferenceType>(T2);
+    if (Ref1->getKey()->getName() != Ref2->getKey()->getName() ||
+        Ref1->isSugared() != Ref2->isSugared())
+      return false;
+    if (Ref1->isSugared() &&
+        !IsStructurallyEquivalent(Context, Ref1->getClassType(),
+                                  Ref2->getClassType()))
+      return false;
+    break;
+  }
+
   case Type::LValueReference:
   case Type::RValueReference: {
     const auto *Ref1 = cast<ReferenceType>(T1);

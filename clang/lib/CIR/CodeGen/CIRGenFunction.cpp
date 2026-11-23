@@ -111,6 +111,7 @@ cir::TypeEvaluationKind CIRGenFunction::getEvaluationKind(QualType type) {
     case Type::OverflowBehavior:
     case Type::HLSLAttributedResource:
     case Type::HLSLInlineSpirv:
+    case Type::CLIReference:
       return cir::TEK_Scalar;
 
     // Complexes.
@@ -1741,6 +1742,7 @@ void CIRGenFunction::emitVariablyModifiedType(QualType type) {
     case Type::ObjCObjectPointer:
     case Type::BitInt:
     case Type::OverflowBehavior:
+    case Type::CLIReference:
       llvm_unreachable("type class is never variably-modified!");
 
     case Type::Adjusted:

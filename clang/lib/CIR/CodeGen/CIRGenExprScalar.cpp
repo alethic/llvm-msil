@@ -2778,6 +2778,11 @@ mlir::Value ScalarExprEmitter::VisitCastExpr(CastExpr *ce) {
     if (mustVisitNullValue(subExpr))
       cgf.emitIgnoredExpr(subExpr);
 
+    // MSIL (plan 5.21.13 RH4): convertType reported a .NET reference as NYI.
+    if (destTy->isCLIReferenceType())
+      return builder.getNullValue(cgf.convertType(destTy),
+                                  cgf.getLoc(subExpr->getExprLoc()));
+
     // Note that DestTy is used as the MLIR type instead of a custom
     // nullptr type.
     auto ty = mlir::cast<cir::PointerType>(cgf.convertType(destTy));

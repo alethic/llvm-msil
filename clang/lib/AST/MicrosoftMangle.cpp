@@ -3880,6 +3880,14 @@ void MicrosoftCXXNameMangler::mangleType(const BlockPointerType *T,
   mangleFunctionType(PointeeType->castAs<FunctionProtoType>());
 }
 
+void MicrosoftCXXNameMangler::mangleType(const CLIReferenceType *T, Qualifiers,
+                                         SourceRange Range) {
+  // A .NET reference (MSIL) has no mangling yet. The name of its class
+  // follows the error, so that overloads on two classes keep two names.
+  Error(Range.getBegin(), ".NET reference type") << Range;
+  mangleType(T->getClassType(), Range, QMM_Drop);
+}
+
 void MicrosoftCXXNameMangler::mangleType(const InjectedClassNameType *,
                                          Qualifiers, SourceRange) {
   llvm_unreachable("Cannot mangle injected class name type.");

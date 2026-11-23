@@ -17,7 +17,10 @@
 //                    parameter (a boxed handle beside a C integer); a
 //                    static void() method (Reset()), for the exported and
 //                    startup managed calls; a uint8 parameter and result
-//                    (Octet(uint8)), for a C _Bool (i1)
+//                    (Octet(uint8)), for a C _Bool (i1); an instance field
+//                    of another class (Part, a Contoso.Outer/Inner) and a
+//                    static field of its own class (Last), for the 'ref'
+//                    results of fields (5.21.9 RM7; references.test)
 //   Contoso.Point    a value type (struct): a constructor, an instance
 //                    method, an instance field, a static method
 //                    (Twice(int32)) and a static field (Total), for MK3's
@@ -60,6 +63,8 @@
   .field public int64 Serial
   .field public static valuetype Contoso.WideMode Default
   .field public static literal int32 Max = int32(7)
+  .field public class Contoso.Outer/Inner Part
+  .field public static class Contoso.Widget Last
   .method public hidebysig specialname rtspecialname instance void .ctor(string name, int32 size) cil managed { ldnull throw }
   .method public hidebysig static void Prims(bool a, char b, int8 c, uint8 d, int16 e, uint16 f, int32 g, uint32 h,
                                              int64 i, uint64 j, float32 k, float64 l, native int m,

@@ -10881,8 +10881,8 @@ def err_msil_attr_invalid_arg : Error<
   "%select{'msil_method' type|'msil_method' member|'msil_method' signature|"
   "'msil_catch' type|'msil_method' assembly}0 '%1' is not valid: %2">;
 def err_msil_method_conversion : Error<
-  "%select{parameter %1|the 'this' handle|the result}0 of %2 has C type %3, "
-  "which cannot carry CIL type '%4'">;
+  "%select{parameter %1|the 'this' handle|the result|the 'this' reference}0 "
+  "of %2 has C type %3, which cannot carry CIL type '%4'">;
 def err_msil_method_arity : Error<
   "%0 has %1 parameter%s1; 'msil_method' needs %2 (%3)">;
 def err_msil_catch_without_method : Error<
@@ -10931,6 +10931,83 @@ def err_msil_method_forwarder_clash : Error<
   "'%select{dllexport|constructor|destructor}0' on managed call %1 needs the "
   "forwarder symbol '%2', which another declaration in this translation unit "
   "already uses">;
+// .NET references in C: the cli_type attribute and 'T ^'. Arguments printed in
+// quotes that the text writes itself ('%0') are strings: a .NET type text, a C
+// type as written, an attribute or a qualifier; the others are declarations or
+// types.
+def err_msil_ref_cli_type_invalid : Error<
+  "'cli_type' type '%0' is not valid: %1">;
+def err_msil_ref_cli_type_not_first_decl : Error<
+  "'cli_type' must appear on the first declaration of %0">;
+def err_msil_ref_cli_type_differs : Error<
+  "'cli_type' on this declaration of %0 differs from its first declaration">;
+def note_msil_ref_first_declared : Note<"first declared here">;
+def err_msil_ref_class_body : Error<
+  "'cli_type' struct %0 names the .NET class '%1', which has no layout in C "
+  "memory; a class struct has no body">;
+def err_msil_ref_caret_not_class : Error<
+  "'^' needs a struct with the 'cli_type' attribute of a .NET class; %0 is not "
+  "one">;
+def err_msil_ref_language : Error<
+  "%select{.NET references in C++ are not supported for MSIL yet|"
+  ".NET references in Objective-C are not supported for MSIL|"
+  ".NET references in OpenCL are not supported for MSIL|"
+  ".NET references in CUDA are not supported for MSIL}0">;
+def err_msil_ref_class_pointer : Error<
+  "'%0 *' points into C memory, which cannot hold the .NET class '%0'; a "
+  "reference to it is written '%0 ^'">;
+def err_msil_ref_class_value : Error<
+  "the .NET class '%0' has no value in C; a reference to it is written "
+  "'%0 ^'">;
+def err_msil_ref_pointer : Error<
+  "a pointer to the .NET reference type %0 is not supported for MSIL: C memory "
+  "never holds a .NET reference">;
+def err_msil_ref_address : Error<
+  "taking the address of the .NET reference %0 is not supported for MSIL: C "
+  "memory never holds a .NET reference">;
+def err_msil_ref_external : Error<
+  "%0 has external linkage; a .NET reference as "
+  "%select{parameter %2|its result}1 is not supported for MSIL yet (declare %0 "
+  "'static')">;
+def err_msil_ref_function_address : Error<
+  "taking the address of %0, whose type has a .NET reference, is not supported "
+  "for MSIL yet">;
+def err_msil_ref_function_type : Error<
+  "a %select{function pointer|block pointer|block}0 type with a .NET reference "
+  "is not supported for MSIL yet">;
+def err_msil_ref_unprototyped_function : Error<
+  "a function without a prototype that takes or returns a .NET reference is "
+  "not supported for MSIL">;
+def err_msil_ref_unprototyped_arg : Error<
+  "passing the .NET reference type %0 to a function without a prototype is "
+  "not supported for MSIL">;
+def err_msil_ref_va_arg : Error<
+  "'va_arg' of the .NET reference type %0 is not supported for MSIL">;
+def err_msil_ref_variadic_function : Error<
+  "a variadic function that takes or returns a .NET reference is not supported "
+  "for MSIL yet">;
+def err_msil_ref_function_attr : Error<
+  "'%0' on %1, whose type has a .NET reference, is not supported for MSIL "
+  "yet">;
+def err_msil_ref_setjmp : Error<
+  "a .NET reference in a function that calls %0 is not supported for MSIL "
+  "yet">;
+def note_msil_ref_used_here : Note<"a .NET reference is used here">;
+def err_msil_ref_qualifier : Error<
+  "'%0' on the .NET reference type %1 is not supported for MSIL">;
+def err_msil_ref_class_qualifier : Error<
+  "'%0' on the .NET class '%1' is not supported for MSIL; a reference's own "
+  "qualifiers follow '^', as in '%1 ^const'">;
+def err_msil_ref_var_attr : Error<
+  "'%0' on the .NET reference %1 is not supported for MSIL">;
+def err_msil_ref_capture : Error<
+  "capturing the .NET reference %0 in %select{a block|a captured statement|"
+  "an OpenMP region}1 is not supported for MSIL">;
+def err_msil_ref_conversion : Error<
+  "converting %0 to the .NET reference type %1 is not supported for MSIL; only "
+  "a .NET reference or a null pointer constant converts to it">;
+def note_msil_ref_jump_bypass : Note<
+  "jump bypasses the initialization of the .NET reference %0">;
 def warn_format_bool_as_character : Warning<
   "using '%0' format specifier, but argument has boolean value">,
   InGroup<Format>;

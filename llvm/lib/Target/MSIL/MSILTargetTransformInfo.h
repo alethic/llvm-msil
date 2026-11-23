@@ -18,9 +18,12 @@
 /// The IR optimizer queries it long before the code it describes can be
 /// generated, so every hook here is final (it is never a stub). It turns off
 /// what CIL code cannot use or should not get: vector types, lookup tables of
-/// constants (they need loads and globals instead of a CIL switch), partial
-/// or runtime unrolling (large methods slow down the JIT) and half or bfloat
-/// parameters created by ArgumentPromotion (they need phase-3 helpers).
+/// constants (they need loads and globals instead of a CIL switch) and partial
+/// or runtime unrolling (large methods slow down the JIT). It also keeps the
+/// inliners off the setjmp fence of .NET references, so that they make no
+/// function that calls setjmp and holds a reference, which P1 refuses
+/// (ImplementationPlan.md 5.21.7 RB11 rule 8, T-RB3);
+/// MSILTargetTransformInfo.cpp says which setjmp calls the fence sees.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -58,6 +61,8 @@ public:
                                TTI::UnrollingPreferences &UP,
                                OptimizationRemarkEmitter *ORE) const override;
 
+  bool areInlineCompatible(const Function *Caller,
+                           const Function *Callee) const override;
   bool areTypesABICompatible(const Function *Caller, const Function *Callee,
                              ArrayRef<Type *> Types) const override;
 

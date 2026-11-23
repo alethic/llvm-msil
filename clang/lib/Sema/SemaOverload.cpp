@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CheckExprLifetime.h"
+#include "SemaMSILReference.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/CXXInheritance.h"
@@ -11950,6 +11951,11 @@ static bool checkAddressOfFunctionIsAvailable(Sema &S, const FunctionDecl *FD,
                                               bool Complain,
                                               bool InOverloadResolution,
                                               SourceLocation Loc) {
+  // MSIL: a function whose type has a .NET reference has no address.
+  if (msil::diagnoseCLIReferenceFunctionAddress(
+          S, FD, Loc, Complain && !InOverloadResolution))
+    return false;
+
   if (!isFunctionAlwaysEnabled(S.Context, FD)) {
     if (Complain) {
       if (InOverloadResolution)

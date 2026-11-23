@@ -29,9 +29,18 @@
 // - MK7 (T-M18): a field member must not be a literal (const) field, which
 //   has no storage to read.
 //
+// The .NET references of C (plan 5.21.9, 5.21.10) pass through the stubs as
+// 'object' values: a 'ref' argument and a 'this-ref' 'this' get a castclass
+// to their class (none for System.Object), and a C cast from one class to
+// another calls a cast stub, a managed call whose body is 'ldarg.0; castclass
+// <TYPE>; ret' and makes no member access (RM8). MK3 checks the class that
+// each castclass names as a reference type, in a stub's body (RL3) as in the
+// attributes (RL2).
+//
 // The units that declare a managed call are checked here too (section 12 row
 // '5.20.7 MK6 amended'), from one call each in ObjFile::parse and
-// BitcodeFile::parse (T-M23: a definition of a reserved stub name) and
+// BitcodeFile::parse (T-M23: a definition of a reserved stub name, and
+// T-RL1: one of a reference helper's, plan 5.21.10 RL4) and
 // SymbolTable::recordReferences (T-M17 for the names that no bitcode input
 // declares, then T-M21), from three in the BitcodeCompiler's constructor
 // (T-M17 for the names that CIL objects and bitcode inputs both declare, then
@@ -142,18 +151,32 @@ void checkManagedCallStubs(BCLBinder &binder);
 /// internal forwarder of a 'static' managed call) is never reported. An LTO
 /// object's names are its bitcode inputs', which are checked before the IR
 /// merge. A dllexport forwarder is named <s> itself, which is no toolchain
-/// name (T-M21 checks it). ObjFile::parse calls it once the record is
-/// validated.
+/// name (T-M21 checks it).
+///
+/// T-RL1 (plan 5.21.10 RL4): the reference helpers '__msil_ref.<...>' (plan
+/// 5.21.6 RI6; '__msil_ref.eq', the comparison of two .NET references) are
+/// toolchain names that nothing defines: the backend makes each call of
+/// '__msil_ref.eq' a ceq or a branch and refuses a definition of such a name
+/// (T-RB7). A definition elsewhere (an asm label, hand-written IR, an object
+/// of another toolchain) would replace the helper under LTO, so each GLOBAL,
+/// WEAK or COMMON definition, function or data, is "<file>: defines '<name>',
+/// which is reserved for the MSIL toolchain (a reference helper)". A LOCAL one,
+/// which neither replaces the helper nor reaches another input, is not
+/// reported, as the bitcode form cannot see one either.
+///
+/// ObjFile::parse calls it once the record is validated.
 void checkReservedManagedCallNames(const ObjFile &f);
 
-/// T-M23 for each definition of the bitcode input \p f, before the IR merge:
-/// irsymtab lists no local symbol, so an internal stub of hand-written IR
-/// (msil-managed-stub) is not one, and neither is the internal forwarder of
-/// a 'static' managed call. clang's forwarder '__msil_mc_ctor.<s>' or
-/// '__msil_mc_dtor.<s>' is a WEAK, HIDDEN function in the COMDAT group of its
-/// own name, in an input that declares <s> (an undefined '__msil_mc.<s>');
-/// irsymtab does not say which of llvm.global_ctors and llvm.global_dtors
-/// lists it. BitcodeFile::parse calls it first.
+/// T-M23 and T-RL1 for each definition of the bitcode input \p f, before the
+/// IR merge: irsymtab lists no local symbol, so an internal stub of
+/// hand-written IR (msil-managed-stub) is not one, and neither is the
+/// internal forwarder of a 'static' managed call or an internal definition of
+/// a reference helper name (which code generation refuses, T-RB7). clang's
+/// forwarder '__msil_mc_ctor.<s>' or '__msil_mc_dtor.<s>' is a WEAK, HIDDEN
+/// function in the COMDAT group of its own name, in an input that declares
+/// <s> (an undefined '__msil_mc.<s>'); irsymtab does not say which of
+/// llvm.global_ctors and llvm.global_dtors lists it. BitcodeFile::parse calls
+/// it first.
 void checkReservedManagedCallNames(const BitcodeFile &f);
 
 /// T-M17 in links with CIL objects (plan 5.20.4 MR4 as amended). For each
@@ -432,7 +455,8 @@ void applyManagedCallAccessRewrites(ArrayRef<ManagedAccessRewrite> rewrites,
 /// backend's standalone final form ('constrained. V' and 'callvirt
 /// [mscorlib]System.Object::M' for System.Object's four public instance
 /// methods, else 'call V::M'), and an object-producing link has the access
-/// that the writer rewrites after binding. Thread-safe (ThinLTO and
+/// that the writer rewrites after binding. A cast stub (plan 5.21.9 RM8),
+/// which accesses no member, never gets it. Thread-safe (ThinLTO and
 /// --lto-partitions run code generation on several threads).
 void annotateManagedCallDeclaringTypes(llvm::Module &m);
 } // namespace lld::msil

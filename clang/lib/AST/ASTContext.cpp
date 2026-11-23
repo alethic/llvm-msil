@@ -81,6 +81,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CLI/ManagedSignature.h"
 #include "llvm/Frontend/OpenMP/OMPIRBuilder.h"
 #include "llvm/Support/Capacity.h"
 #include "llvm/Support/Casting.h"
@@ -2461,6 +2462,12 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
     Width = Target->getPointerWidth(AS);
     Align = Target->getPointerAlign(AS);
     break;
+  case Type::CLIReference:
+    // A .NET reference (MSIL) is sizeless and never in memory; its IR type has
+    // a pointer's layout.
+    Width = Target->getPointerWidth(LangAS::Default);
+    Align = Target->getPointerAlign(LangAS::Default);
+    break;
   case Type::LValueReference:
   case Type::RValueReference:
     // alignof and sizeof should never enter this code path here, so we go
@@ -3653,6 +3660,7 @@ static void encodeTypeForFunctionPointerAuth(const ASTContext &Ctx,
   }
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
+  case Type::CLIReference:
     llvm_unreachable("should never get here");
     break;
   case Type::OverflowBehavior:
@@ -4166,6 +4174,51 @@ QualType ASTContext::getBlockPointerType(QualType T) const {
   return QualType(New, 0);
 }
 
+/// getCLIReferenceType - Return the uniqued reference to the type of a .NET
+/// reference 'T ^' (MSIL) whose class has the key \p Key: the canonical type
+/// of the key for a null \p ClassType or the key's implicit struct, else the
+/// sugared type that holds \p ClassType, the 'cli_type' struct as written.
+QualType ASTContext::getCLIReferenceType(const IdentifierInfo *Key,
+                                         QualType ClassType) const {
+  assert(Key && "a .NET reference type needs its key");
+  assert((ClassType.isNull() ||
+          (!ClassType.hasLocalQualifiers() && ClassType->isRecordType())) &&
+         "the class of a .NET reference is an unqualified struct");
+
+  // The canonical type of a key is profiled by the key alone. Its class is the
+  // key's implicit struct: named by the class's display name, never completed,
+  // never added to a declaration context (so name lookup does not find it)
+  // and never serialized, since an AST reader makes it again.
+  llvm::FoldingSetNodeID ID;
+  CLIReferenceType::Profile(ID, Key, QualType());
+  llvm::FoldingSetInsertToken Token;
+  CLIReferenceType *Canon = CLIReferenceTypes.lookup(ID, Token);
+  if (!Canon) {
+    std::string Name = llvm::cli::getCLITypeDisplayName(Key->getName());
+    RecordDecl *Class = buildImplicitRecord(Name);
+    Class->addAttr(CLITypeAttr::CreateImplicit(const_cast<ASTContext &>(*this),
+                                               Name, Key->getName()));
+    Canon = new (*this, alignof(CLIReferenceType))
+        CLIReferenceType(Key, getCanonicalTagType(Class), QualType());
+    Types.push_back(Canon);
+    CLIReferenceTypes.insert(Canon, Token);
+  }
+  if (ClassType.isNull() || ClassType == Canon->getClassType())
+    return QualType(Canon, 0);
+
+  // A sugared type keeps the struct as written and desugars to the canonical
+  // type of its key.
+  ID.clear();
+  CLIReferenceType::Profile(ID, Key, ClassType);
+  if (CLIReferenceType *Sugar = CLIReferenceTypes.lookup(ID, Token))
+    return QualType(Sugar, 0);
+  auto *New = new (*this, alignof(CLIReferenceType))
+      CLIReferenceType(Key, ClassType, QualType(Canon, 0));
+  Types.push_back(New);
+  CLIReferenceTypes.insert(New, Token);
+  return QualType(New, 0);
+}
+
 /// getLValueReferenceType - Return the uniqued reference to the type for an
 /// lvalue reference to the specified type.
 QualType
@@ -4384,6 +4437,7 @@ QualType ASTContext::getVariableArrayDecayedType(QualType type) const {
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
   case Type::OverflowBehavior:
+  case Type::CLIReference:
     llvm_unreachable("type should never be variably-modified");
 
   // These types can be variably-modified but should never need to
@@ -9791,6 +9845,7 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string &S,
   case Type::HLSLAttributedResource:
   case Type::HLSLInlineSpirv:
   case Type::OverflowBehavior:
+  case Type::CLIReference:
     llvm_unreachable("unexpected type");
 
   case Type::ArrayParameter:
@@ -12241,6 +12296,10 @@ QualType ASTContext::mergeTypes(QualType LHS, QualType RHS, bool OfBlockPointer,
   case Type::Builtin:
     // Only exactly equal builtin types are compatible, which is tested above.
     return {};
+  case Type::CLIReference:
+    // A .NET reference type (MSIL) is compatible only with itself: one key is
+    // one canonical type, which is tested above.
+    return {};
   case Type::Complex:
     // Distinct complex types are incompatible.
     return {};
@@ -14487,6 +14546,7 @@ static QualType getCommonNonSugarTypeNode(const ASTContext &Ctx, const Type *X,
     SUGAR_FREE_TYPE(UnresolvedUsing)
     SUGAR_FREE_TYPE(HLSLAttributedResource)
     SUGAR_FREE_TYPE(HLSLInlineSpirv)
+    SUGAR_FREE_TYPE(CLIReference)
 #undef SUGAR_FREE_TYPE
 #define NON_UNIQUE_TYPE(Class) UNEXPECTED_TYPE(Class, "non-unique")
     NON_UNIQUE_TYPE(TypeOfExpr)
@@ -15052,6 +15112,11 @@ static QualType getCommonSugarTypeNode(const ASTContext &Ctx, const Type *X,
   case Type::PredefinedSugar:
     assert(cast<PredefinedSugarType>(X)->getKind() !=
            cast<PredefinedSugarType>(Y)->getKind());
+    return QualType();
+
+  case Type::CLIReference:
+    // Two .NET references (MSIL) whose classes are written as different
+    // structs: the canonical type of their key, never a merge of two structs.
     return QualType();
   }
   llvm_unreachable("Unhandled Type Class");

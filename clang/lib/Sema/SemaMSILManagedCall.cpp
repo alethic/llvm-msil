@@ -19,11 +19,17 @@
 // with the '__msil_mc.' prefix of its IR name. An asm label with that prefix,
 // or with '__msil_mc_ctor.' or '__msil_mc_dtor.', which start the names of
 // the forwarders that clang's CodeGen defines for a constructor or destructor
-// managed call, is reserved for the toolchain (T-M22, checkMSILAsmLabel).
+// managed call, or with '<castclass>', the symbol of the cast stubs, is
+// reserved for the toolchain (T-M22, checkMSILAsmLabel).
+//
+// A .NET reference ('T ^' of a struct with cli_type, plan 5.21) takes the
+// 'ref' and 'this-ref' conversions when its class is exactly the CIL type
+// (5.21.9 RM2); a pointer to such a struct is no handle (RM10).
 //
 //===----------------------------------------------------------------------===//
 
 #include "SemaMSILManagedCall.h"
+#include "SemaMSILReference.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/Attr.h"
@@ -133,16 +139,31 @@ static bool isNativeIntType(const ASTContext &Ctx, QualType T) {
 /// MS5's handle type: void *, intptr_t, uintptr_t, or a pointer to a struct
 /// (or union or class) type that is incomplete at the declaration. (A struct
 /// completed later in the translation unit does not change the decision:
-/// CodeGen copies the conversions Sema recorded.)
+/// CodeGen copies the conversions Sema recorded.) A struct with cli_type
+/// stands for a .NET class, which C holds only as a reference (plan 5.21.9
+/// RM10), so a pointer to it is no handle.
 static bool isHandleType(const ASTContext &Ctx, QualType T) {
   QualType C = canonicalUnqualified(Ctx, T);
   if (const auto *PT = C->getAs<PointerType>()) {
     QualType P = PT->getPointeeType();
     if (P->isVoidType())
       return true;
-    return P->isRecordType() && P->isIncompleteType();
+    return P->isRecordType() && P->isIncompleteType() &&
+           !msil::getCLITypeAttr(P);
   }
   return isIntPtrType(Ctx, C);
+}
+
+/// RM2: the 'ref' conversion of the .NET reference type \p T (canonical) for
+/// the CIL type \p CIL: a string, object, class or array whose folded key is
+/// the reference's own (exact classes, the user's pick "I think A is
+/// correct."); std::nullopt for any other pair, which is T-M3.
+static std::optional<cli::ManagedConv>
+classifyManagedReference(const CLIReferenceType &T,
+                         const cli::ManagedType &CIL) {
+  if (CIL.isReferenceType() && T.getKey()->getName() == cli::getCLITypeKey(CIL))
+    return cli::ManagedConv::Ref;
+  return std::nullopt;
 }
 
 /// The C character type of a C string, by the CIL conversion it gets
@@ -274,6 +295,8 @@ classifyManagedParam(const ASTContext &Ctx, QualType T,
   using cli::ManagedConv;
   using TK = cli::ManagedType::TypeKind;
   QualType C = canonicalUnqualified(Ctx, T);
+  if (const auto *Ref = C->getAs<CLIReferenceType>())
+    return classifyManagedReference(*Ref, CIL);
   bool Handle = isHandleType(Ctx, C);
   switch (CIL.Kind) {
   case TK::String:
@@ -315,6 +338,8 @@ classifyManagedResult(const ASTContext &Ctx, QualType T,
     return C->isVoidType() ? std::optional(ManagedConv::Void) : std::nullopt;
   if (C->isVoidType())
     return std::nullopt;
+  if (const auto *Ref = C->getAs<CLIReferenceType>())
+    return classifyManagedReference(*Ref, CIL);
   bool Handle = isHandleType(Ctx, C);
   switch (CIL.Kind) {
   case TK::String:
@@ -340,12 +365,19 @@ classifyManagedResult(const ASTContext &Ctx, QualType T,
 /// The conversion of the C 'this' handle of type \p T for the declaring
 /// type \p Type (MS5): 'this-obj' for a reference type, 'this-gch' for
 /// GCHandle and 'this-val' for another value type; the C type must be a
-/// handle type.
+/// handle type. A .NET reference takes 'this-ref' for a class, interface,
+/// System.String or System.Object TYPE whose folded key is its own (plan
+/// 5.21.9 RM2; an array TYPE has only '.ctor').
 static std::optional<cli::ManagedConv>
 classifyManagedThis(const ASTContext &Ctx, QualType T,
                     const cli::ManagedType &Type) {
   using cli::ManagedConv;
   using TK = cli::ManagedType::TypeKind;
+  if (const auto *Ref = canonicalUnqualified(Ctx, T)->getAs<CLIReferenceType>())
+    return Type.Kind == TK::Class &&
+                   Ref->getKey()->getName() == cli::getCLITypeKey(Type)
+               ? std::optional(ManagedConv::ThisRef)
+               : std::nullopt;
   if (!isHandleType(Ctx, T))
     return std::nullopt;
   switch (Type.Kind) {
@@ -384,9 +416,13 @@ struct ManagedCallClass {
   bool HasThis = false;
   unsigned NumCIL = 0;
   bool HasErr = false;
+  /// For Arity and Conversion: the C 'this' is a .NET reference; T-M3 calls it
+  /// "the 'this' reference" and T-M4 "a 'this' reference" (plan 5.21.9 RM4).
+  bool ThisIsReference = false;
   /// For Conversion: 0 for a parameter, 1 for the 'this' handle, 2 for the
-  /// result (T-M3's %select); the 1-based C parameter position for a
-  /// parameter (and for 'this', 1); the CIL type of the pair.
+  /// result, 3 for the 'this' reference (T-M3's %select); the 1-based C
+  /// parameter position for a parameter (and for 'this', 1); the CIL type of
+  /// the pair.
   unsigned Position = 0;
   unsigned CParam = 0;
   cli::ManagedType CILType;
@@ -407,6 +443,8 @@ static ManagedCallClass classifyManagedCall(const ASTContext &Ctx,
   R.HasThis = Spec.hasThis();
   R.NumCIL = Spec.Sig.Params.size();
   R.HasErr = HasCatch;
+  R.ThisIsReference = R.HasThis && FD.getNumParams() != 0 &&
+                      FD.getParamDecl(0)->getType()->isCLIReferenceType();
   R.Expected = unsigned(R.HasThis) + R.NumCIL + unsigned(R.HasErr);
   if (FD.getNumParams() != R.Expected) {
     R.Problem = ManagedCallClass::Arity;
@@ -423,7 +461,7 @@ static ManagedCallClass classifyManagedCall(const ASTContext &Ctx,
         classifyManagedThis(Ctx, FD.getParamDecl(0)->getType(), Spec.Type);
     if (!C) {
       R.Problem = ManagedCallClass::Conversion;
-      R.Position = 1;
+      R.Position = R.ThisIsReference ? 3 : 1;
       R.CParam = 1;
       R.CILType = Spec.Type;
       return R;
@@ -556,11 +594,13 @@ static SourceLocation paramLoc(const FunctionDecl *FD, unsigned I) {
 }
 
 /// T-M4's breakdown: "a 'this' handle, 2 CIL parameters and the 'msil_catch'
-/// error code".
+/// error code", or "a 'this' reference" when the C 'this' is a .NET
+/// reference (plan 5.21.9 RM4).
 static std::string arityBreakdown(const ManagedCallClass &R) {
   SmallVector<std::string, 3> Parts;
   if (R.HasThis)
-    Parts.push_back("a 'this' handle");
+    Parts.push_back(R.ThisIsReference ? "a 'this' reference"
+                                      : "a 'this' handle");
   if (R.NumCIL == 0)
     Parts.push_back("no CIL parameters");
   else if (R.NumCIL == 1)
@@ -1094,7 +1134,11 @@ void clang::msil::checkMSILAsmLabel(Sema &S, StringRef Label,
   // A leading '\01' (no user label prefix) names the same symbol.
   StringRef Name = Label;
   Name.consume_front("\01");
-  bool Stub = cli::isManagedCallName(Name);
+  // A label that starts with '<castclass>' would give a managed call the IR
+  // name of a cast stub, '__msil_mc.<castclass>.__uniq.<n>' (plan 5.21.9
+  // RM8), which is a managed-call stub too.
+  bool Stub =
+      cli::isManagedCallName(Name) || Name.starts_with(cli::ManagedCastSymbol);
   if (Stub || cli::isManagedForwarderName(Name))
     S.Diag(Loc, diag::err_msil_reserved_asm_label)
         << Name << unsigned(Stub ? ReservedStub : ReservedForwarder);

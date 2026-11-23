@@ -10,7 +10,8 @@
 // ML1 as amended) that slot P0 applies when it makes the stubs
 // (MSIL::createManagedCallStubs, plan 5.20.5 ML2):
 //   - which IR type fits a parameter's or the result's conversion code
-//     (plan 5.20.3 MS5);
+//     (plan 5.20.3 MS5), the IR type of a .NET reference and the type of the
+//     reference comparison helper (plan 5.21.6 RI1, RI6);
 //   - when two !msil.managed.calls entries of one IR name agree (MR4, T-M17);
 //   - which use of a managed-call declaration is a direct call with its own
 //     function type, the one use that a stub keeps (T-M10, T-M17);
@@ -94,6 +95,24 @@ inline bool isManagedHandleType(const Type *T, const DataLayout &DL) {
           T->getIntegerBitWidth() == DL.getPointerSizeInBits());
 }
 
+/// Whether \p T is the IR type of a .NET reference, target("msil.ref")
+/// (ReferenceTypeName, plan 5.21.6 RI1), which has no parameters.
+inline bool isManagedReferenceType(const Type *T) {
+  const auto *TT = dyn_cast<TargetExtType>(T);
+  return TT && TT->getName() == ReferenceTypeName &&
+         TT->getNumTypeParameters() == 0 && TT->getNumIntParameters() == 0;
+}
+
+/// Whether \p FTy is the type of the reference comparison helper
+/// (ReferenceEqName, plan 5.21.6 RI6): i1 (target("msil.ref"),
+/// target("msil.ref")), not variadic.
+inline bool isManagedReferenceEqType(const FunctionType *FTy) {
+  return !FTy->isVarArg() && FTy->getReturnType()->isIntegerTy(1) &&
+         FTy->getNumParams() == 2 &&
+         isManagedReferenceType(FTy->getParamType(0)) &&
+         isManagedReferenceType(FTy->getParamType(1));
+}
+
 /// Whether \p T is an IR integer of one of the widths \p Widths.
 inline bool isIntegerTypeOfWidth(const Type *T, ArrayRef<unsigned> Widths) {
   return T->isIntegerTy() && is_contained(Widths, T->getIntegerBitWidth());
@@ -105,8 +124,13 @@ inline bool isIntegerTypeOfWidth(const Type *T, ArrayRef<unsigned> Widths) {
 /// with an integer type takes an integer of exactly that width, or an i1 (a
 /// C _Bool) for an 8-bit type; char an i16; native int and native uint a
 /// pointer or a pointer-wide integer; T* a pointer; 'enum' an i1, i8, i16,
-/// i32 or i64; 'bool' an i1, i8, i16 or i32. The 'this' and 'err' codes are
-/// checked by their positions, and 'void' only for the result.
+/// i32 or i64; 'bool' an i1, i8, i16 or i32; 'ref' a reference type (string,
+/// object, a class or an array) with the IR reference type
+/// (isManagedReferenceType, plan 5.21.9 RM6). 'this-ref' fits TYPE, given as
+/// \p CIL, when it is a class, an interface, System.String or System.Object
+/// (TYPE's Class, the kind that parseManagedTypeName gives them all, or
+/// String or Object), with the IR reference type. The other 'this' codes and
+/// 'err' are checked by their positions, and 'void' only for the result.
 inline bool fitsManagedConversion(ManagedConv C, const ManagedType &CIL,
                                   const Type *IRTy, const DataLayout &DL) {
   using TK = ManagedType::TypeKind;
@@ -156,6 +180,12 @@ inline bool fitsManagedConversion(ManagedConv C, const ManagedType &CIL,
     return CIL.isGCHandle() && isManagedHandleType(IRTy, DL);
   case ManagedConv::Void:
     return IRTy->isVoidTy();
+  case ManagedConv::Ref:
+    return CIL.isReferenceType() && isManagedReferenceType(IRTy);
+  case ManagedConv::ThisRef:
+    return (CIL.Kind == TK::Class || CIL.Kind == TK::String ||
+            CIL.Kind == TK::Object) &&
+           isManagedReferenceType(IRTy);
   case ManagedConv::ThisObj:
   case ManagedConv::ThisVal:
   case ManagedConv::ThisGCH:

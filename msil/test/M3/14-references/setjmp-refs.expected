@@ -1,0 +1,18 @@
+(1) run1(1) = 511, no longjmp
+(1) run1(6) = 1006, after the longjmp out of hold
+  main's references: a holds "main" 1 (length 4), b holds "second" 1, o == a 1, o == b 0
+(2) run2(2) = 511, no longjmp
+(2) run2(8) = 2008, after the longjmp out of hold
+  main's references: a holds "main" 1 (length 4), b holds "second" 1, o == a 1, o == b 0
+(3) round3(1) = 1, no longjmp
+  run3's references: a holds "kept" 1 (length 4), b holds "spare" 1, o == a 1, o == b 0
+(3) round3(7) = 73, after the longjmp back into it
+  run3's references: a holds "kept" 1 (length 4), b holds "spare" 1, o == a 1, o == b 0
+  main's references: a holds "main" 1 (length 4), b holds "second" 1, o == a 1, o == b 0
+(4) round4(2) = 2, no longjmp
+  run4's references: a holds "held" 1 (length 4), b holds "other" 1, o == a 1, o == b 0
+(4) round4(9) = 94, after the longjmp back into it
+  run4's references: a holds "held" 1 (length 4), b holds "other" 1, o == a 1, o == b 0
+  main's references: a holds "main" 1 (length 4), b holds "second" 1, o == a 1, o == b 0
+longjmps: 4
+[exit 0]

@@ -43,6 +43,7 @@ bool MSILInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   case MSIL::CONST_F64:
   case MSIL::GLOBAL_ADDR:
   case MSIL::FUNC_ADDR:
+  case MSIL::CONST_NULL:
     // TargetInstrInfo::isReMaterializableImpl misses these
     // because of the ARGUMENTS implicit def, so we manually override it here.
     return true;
@@ -86,8 +87,9 @@ MachineInstr *MSILInstrInfo::commuteInstructionImpl(MachineInstr &MI,
 
 /// Returns the conditional branch that is taken exactly when \p Opc is not
 /// taken, or 0 if \p Opc is not a conditional branch. Every conditional
-/// branch has one: brtrue and brfalse invert each other, and so do the
-/// integer compare-and-branches of each signedness. A floating-point
+/// branch has one: brtrue and brfalse invert each other, also on a .NET
+/// reference (plan 5.21.7 RB3: brtrue on an object, brfalse on null), and so
+/// do the integer compare-and-branches of each signedness. A floating-point
 /// compare-and-branch is inverted by the one of the other ordering, because
 /// the inverse must be true when an operand is a NaN exactly when the branch
 /// is false then (isel.md 11.7): blt (OLT) inverts to bge.un (UGE), not bge.
@@ -99,8 +101,16 @@ static unsigned getInvertedBranch(unsigned Opc) {
     return MSIL::BR_UNLESS;
   case MSIL::BR_UNLESS:
     return MSIL::BR_IF;
+  case MSIL::BR_IF_OBJ:
+    return MSIL::BR_UNLESS_OBJ;
+  case MSIL::BR_UNLESS_OBJ:
+    return MSIL::BR_IF_OBJ;
   // Equality inverts the same way for every class: beq is OEQ and bne.un
-  // UNE on floating-point values.
+  // UNE on floating-point values; on two references they test identity.
+  case MSIL::BEQ_OBJ:
+    return MSIL::BNE_UN_OBJ;
+  case MSIL::BNE_UN_OBJ:
+    return MSIL::BEQ_OBJ;
   case MSIL::BEQ_I32:
     return MSIL::BNE_UN_I32;
   case MSIL::BNE_UN_I32:

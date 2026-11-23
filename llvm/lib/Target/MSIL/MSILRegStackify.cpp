@@ -100,6 +100,8 @@ static void imposeStackOrdering(MachineInstr *MI) {
 
 // Convert an IMPLICIT_DEF instruction into an instruction which defines
 // a constant zero value.
+// For a .NET reference that is the null reference, 'ldnull' (plan 5.21.6 RI5,
+// 5.21.7 RB7).
 static void convertImplicitDefToConstZero(MachineInstr *MI,
                                           MachineRegisterInfo &MRI,
                                           const TargetInstrInfo *TII,
@@ -123,6 +125,8 @@ static void convertImplicitDefToConstZero(MachineInstr *MI,
     auto *Val = cast<ConstantFP>(Constant::getNullValue(
         Type::getDoubleTy(MF.getFunction().getContext())));
     MI->addOperand(MachineOperand::CreateFPImm(Val));
+  } else if (RegClass == &MSIL::OBJRegClass) {
+    MI->setDesc(TII->get(MSIL::CONST_NULL));
   } else {
     llvm_unreachable("Unexpected reg class");
   }
@@ -478,6 +482,8 @@ static unsigned getTeeOpcode(const TargetRegisterClass *RC) {
     return MSIL::TEE_F32;
   if (RC == &MSIL::F64RegClass)
     return MSIL::TEE_F64;
+  if (RC == &MSIL::OBJRegClass)
+    return MSIL::TEE_OBJ;
   llvm_unreachable("Unexpected register class");
 }
 

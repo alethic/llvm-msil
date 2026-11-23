@@ -25,9 +25,14 @@
 #             file of the base, every 'compile' line names a compile-leg file or a header one
 #             of them #includes directly, every utc name is on the utc leg's list (equal in
 #             lit-legs.ps1 and lit-legs.sh), every gtest line names a binary of the gtest leg
-#             below (whose list must equal GTEST_BINARIES), and every exhaustive
-#             object-format switch of the monorepo has an MSIL case in that same switch
-#             (switch-default and switch-other exempt per switch) (about 11-20 s)
+#             below (whose list must equal GTEST_BINARIES), every exhaustive object-format
+#             switch of the monorepo has an MSIL case in that same switch (switch-default and
+#             switch-other exempt per switch), and, from R-a (plan 5.21.13 RH5), every switch
+#             over clang's type classes in a C or C++ file under clang/include, clang/lib and
+#             clang/tools (on getTypeClass() or getTypeLocClass(), or on a local variable
+#             initialized from one) has a CLIReference case, a 'default:' of its own or a
+#             generated case for every class (about 11-20 s before R-a's type-class scan, which
+#             adds about 2 s on the current development host)
 #   pins      check-action-pins.py: the msil-*.yml workflows pin each action as upstream's
 #             workflows do, every uses: line of theirs is a pin it can read or a local or
 #             docker:// one, and msil-ci.yml's windows job runs this script's CI command after
@@ -84,7 +89,9 @@
 # -SelfTest runs only the self-tests (rows of step 'upstream-hooks-self-test'):
 # check-upstream-hooks.py --self-test (planted manifest, fork-only, fork-prefix, per-switch
 # coverage and exemption, utc-list, gtest-list, compile-line, allow-list, MERGE_HEAD and
-# lit-verdict defects, the lld suite's test names among them),
+# lit-verdict defects, the lld suite's test names among them, and from R-a type-class switches
+# without a CLIReference case: on the getter's call, on a local variable initialized from it,
+# with generated cases that miss the class, and counted where the braces do not match),
 # check-action-pins.py --self-test (planted .github trees: stale unquoted, quoted and
 # comment-less pins, an unparsable uses: line, and a misspelled or missing step id or a missing
 # upstream-hooks step in msil-ci.yml fail, the clean tree passes), the MCTests filter for the

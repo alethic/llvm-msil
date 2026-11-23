@@ -2537,6 +2537,7 @@ bool CXXNameMangler::mangleUnresolvedTypeOrSimpleId(QualType Ty,
   case Type::ArrayParameter:
   case Type::Pointer:
   case Type::BlockPointer:
+  case Type::CLIReference:
   case Type::LValueReference:
   case Type::RValueReference:
   case Type::MemberPointer:
@@ -4589,6 +4590,16 @@ void CXXNameMangler::mangleType(const ObjCObjectType *T) {
 void CXXNameMangler::mangleType(const BlockPointerType *T) {
   Out << "U13block_pointer";
   mangleType(T->getPointeeType());
+}
+
+void CXXNameMangler::mangleType(const CLIReferenceType *T) {
+  // A .NET reference (MSIL) has no mangling yet. The name of its class
+  // follows the error, so that overloads on two classes keep two names.
+  DiagnosticsEngine &Diags = Context.getDiags();
+  Diags.Report(Structor ? Structor->getLocation() : SourceLocation(),
+               diag::err_ms_mangle_unsupported)
+      << ".NET reference type";
+  mangleType(T->getClassType());
 }
 
 void CXXNameMangler::mangleType(const InjectedClassNameType *T) {

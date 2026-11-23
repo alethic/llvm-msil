@@ -64,9 +64,14 @@ class JumpScopeChecker {
     /// Loc - Location to emit the diagnostic.
     SourceLocation Loc;
 
+    /// Var - The declaration that introduced the scope, if any: the argument
+    /// of the notes that name it (MSIL's .NET references).
+    const NamedDecl *Var;
+
     GotoScope(unsigned parentScope, unsigned InDiag, unsigned OutDiag,
-              SourceLocation L)
-      : ParentScope(parentScope), InDiag(InDiag), OutDiag(OutDiag), Loc(L) {}
+              SourceLocation L, const NamedDecl *Var = nullptr)
+        : ParentScope(parentScope), InDiag(InDiag), OutDiag(OutDiag), Loc(L),
+          Var(Var) {}
   };
 
   SmallVector<GotoScope, 48> Scopes;
@@ -157,6 +162,11 @@ static ScopePair GetDiagForGotoScopeDecl(Sema &S, const Decl *D) {
       return ScopePair(diag::note_protected_by_cleanup,
                        diag::note_exits_cleanup);
 
+    // MSIL: a jump into the scope of a .NET reference would skip the store
+    // of NULL at its declaration; jumps out are fine.
+    if (VD->hasLocalStorage() && VD->getType()->isCLIReferenceType())
+      return ScopePair(diag::note_msil_ref_jump_bypass, 0);
+
     if (VD->hasLocalStorage()) {
       switch (VD->getType().isDestructedType()) {
       case QualType::DK_objc_strong_lifetime:
@@ -237,7 +247,7 @@ void JumpScopeChecker::BuildScopeInformation(Decl *D, unsigned &ParentScope) {
   std::pair<unsigned,unsigned> Diags = GetDiagForGotoScopeDecl(S, D);
   if (Diags.first || Diags.second) {
     Scopes.push_back(GotoScope(ParentScope, Diags.first, Diags.second,
-                               D->getLocation()));
+                               D->getLocation(), dyn_cast<NamedDecl>(D)));
     ParentScope = Scopes.size()-1;
   }
 
@@ -934,7 +944,8 @@ void JumpScopeChecker::NoteJumpIntoScopes(ArrayRef<unsigned> ToScopes) {
     return;
   for (unsigned I = 0, E = ToScopes.size(); I != E; ++I)
     if (Scopes[ToScopes[I]].InDiag)
-      S.Diag(Scopes[ToScopes[I]].Loc, Scopes[ToScopes[I]].InDiag);
+      S.Diag(Scopes[ToScopes[I]].Loc, Scopes[ToScopes[I]].InDiag)
+          << Scopes[ToScopes[I]].Var;
 }
 
 /// Diagnose an indirect jump which is known to cross scopes.
@@ -964,7 +975,7 @@ void JumpScopeChecker::DiagnoseIndirectOrAsmJump(Stmt *Jump, unsigned JumpScope,
       ToScopesCppCompat.push_back(I);
     else if (Scopes[I].InDiag) {
       DiagnoseIndirectOrAsmJumpStmt(S, Jump, Target, Diagnosed);
-      S.Diag(Scopes[I].Loc, Scopes[I].InDiag);
+      S.Diag(Scopes[I].Loc, Scopes[I].InDiag) << Scopes[I].Var;
     }
 
   // Diagnose this jump if it would be ill-formed in C++[98].

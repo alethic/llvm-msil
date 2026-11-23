@@ -6342,6 +6342,13 @@ bool UnnamedLocalNoLinkageFinder::VisitBlockPointerType(
   return Visit(T->getPointeeType());
 }
 
+bool UnnamedLocalNoLinkageFinder::VisitCLIReferenceType(
+    const CLIReferenceType *) {
+  // A .NET reference (MSIL) is identified by its class's name, whatever C
+  // struct spells it, and has external linkage.
+  return false;
+}
+
 bool UnnamedLocalNoLinkageFinder::VisitLValueReferenceType(
                                                 const LValueReferenceType* T) {
   return Visit(T->getPointeeType());

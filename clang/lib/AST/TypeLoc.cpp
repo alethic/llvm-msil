@@ -256,6 +256,7 @@ SourceLocation TypeLoc::getEndLoc() const {
       [[fallthrough]];
     case Pointer:
     case BlockPointer:
+    case CLIReference:
     case MemberPointer:
     case LValueReference:
     case RValueReference:

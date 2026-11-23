@@ -145,6 +145,8 @@ unsigned MSIL::getCopyOpcodeForRegClass(const TargetRegisterClass *RC) {
     return MSIL::COPY_F32;
   case MSIL::F64RegClassID:
     return MSIL::COPY_F64;
+  case MSIL::OBJRegClassID:
+    return MSIL::COPY_OBJ;
   default:
     llvm_unreachable("Unexpected register class");
   }

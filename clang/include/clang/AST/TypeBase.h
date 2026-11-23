@@ -2673,6 +2673,7 @@ public:
   bool isCFIUncheckedCalleeFunctionType() const;
   bool hasPointeeToCFIUncheckedCalleeFunctionType() const;
   bool isBlockPointerType() const;
+  bool isCLIReferenceType() const;
   bool isVoidPointerType() const;
   bool isReferenceType() const;
   bool isLValueReferenceType() const;
@@ -3671,6 +3672,64 @@ public:
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == BlockPointer;
+  }
+};
+
+/// A .NET object reference, written 'T ^' with T a struct that has the
+/// 'cli_type' attribute (the MSIL object-format triples only). It is a type of
+/// its own, never a block pointer: one type per .NET class, identified by its
+/// key, the class's folded canonical listing text (llvm::cli::CLITypeName), so
+/// that two C structs naming one class give one type. A reference lives only
+/// in IL locals, arguments, results and the evaluation stack, never in C
+/// memory: the type is sizeless and not scalar.
+///
+/// The canonical type of a key holds, as its class, one implicit struct that
+/// ASTContext::getCLIReferenceType makes for the key: named by the class's
+/// display name ("System.String", "string[]"), never completed, outside name
+/// lookup and never serialized as a declaration. A type built from a struct as
+/// written ('String ^' after 'typedef struct CLI_TYPE("System.String") String
+/// String;') holds that struct, is sugar, and desugars to the canonical type of
+/// its key, so diagnostics print 'String ^' (aka 'System.String ^').
+class CLIReferenceType : public Type, public llvm::FoldingSetNode {
+  friend class ASTContext; // ASTContext creates these.
+
+  /// The 'cli_type' struct as written, or the key's implicit struct.
+  QualType ClassType;
+  /// The key, interned.
+  const IdentifierInfo *Key;
+
+  CLIReferenceType(const IdentifierInfo *Key, QualType ClassType,
+                   QualType Canonical)
+      : Type(CLIReference, Canonical, ClassType->getDependence()),
+        ClassType(ClassType), Key(Key) {}
+
+public:
+  /// The class: the 'cli_type' struct as written in a sugared type, the key's
+  /// implicit struct in the canonical type.
+  QualType getClassType() const { return ClassType; }
+
+  /// The key: the class's folded canonical listing text ("string", "object",
+  /// "class System.IO.Stream", "string[]").
+  const IdentifierInfo *getKey() const { return Key; }
+
+  bool isSugared() const { return !isCanonicalUnqualified(); }
+  QualType desugar() const {
+    return isSugared() ? getCanonicalTypeInternal() : QualType(this, 0);
+  }
+
+  void Profile(llvm::FoldingSetNodeID &ID) const {
+    Profile(ID, Key, isSugared() ? ClassType : QualType());
+  }
+  /// The canonical type of a key is profiled by the key alone (a null
+  /// \p ClassType), a sugared type by the key and the struct as written.
+  static void Profile(llvm::FoldingSetNodeID &ID, const IdentifierInfo *Key,
+                      QualType ClassType) {
+    ID.AddPointer(Key);
+    ID.AddPointer(ClassType.getAsOpaquePtr());
+  }
+
+  static bool classof(const Type *T) {
+    return T->getTypeClass() == CLIReference;
   }
 };
 
@@ -8702,6 +8761,10 @@ inline bool Type::isSignablePointerType() const {
 
 inline bool Type::isBlockPointerType() const {
   return isa<BlockPointerType>(CanonicalType);
+}
+
+inline bool Type::isCLIReferenceType() const {
+  return isa<CLIReferenceType>(CanonicalType);
 }
 
 inline bool Type::isReferenceType() const {

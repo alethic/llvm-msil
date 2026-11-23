@@ -3305,6 +3305,10 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result, QualType Ty) {
     // Inline SPIR-V types are treated as fundamental types.
     case Type::HLSLInlineSpirv:
       break;
+
+    // .NET references (MSIL) are treated as fundamental types.
+    case Type::CLIReference:
+      break;
     case Type::OverflowBehavior:
       T = cast<OverflowBehaviorType>(T)->getUnderlyingType().getTypePtr();
     }

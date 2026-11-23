@@ -1,0 +1,12 @@
+up 1, down 1, to Object 1, own class 1
+Object to Encoding 1, through a function 1, in an expression 1
+the UTF-32 encoder: Encoding 1, not the UTF-8 one 1
+String through Object and back: 1, still not the encoder 1
+casts of NULL: 1 1 1 1
+string[]: not NULL 1, back through Object 1, the other spelling 1
+uint8[]: not NULL 1, back through Object 1
+EntryPointNotFoundException as Exception: HResult 0x80131523
+ExternalException as Exception: HResult 77
+the same object after the cast: 1
+unused casts ran
+[exit 0]

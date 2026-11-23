@@ -132,13 +132,28 @@
 /// never sees a call inside one object (section 12). A TU compiled at -O0,
 /// a mismatch that cannot be folded and every mismatch across TUs reach it.
 ///
+/// MSIL only (plan 5.21.7 RB12): of the calls above that would get a wrapper,
+/// one whose type or whose callee's type has a .NET reference
+/// (target("msil.ref"), MSIL::containsReferenceType) gets none that converts,
+/// drops or makes up a value: a reference cannot be converted, so the call is
+/// an error (T-RB5) and calls the trapping '_bitcast_invalid' wrapper, so that
+/// the module stays well formed. This holds in both modes, and in "msil-lto"
+/// and before LTO optimization it comes before the table, whose adapters
+/// (convertValue) cannot convert a reference and whose errors would otherwise
+/// trap. MSILPrepareIR already refuses such calls in code generation (plan
+/// 5.21.7 RB11 rules 4 and 5), so there it is a backstop; before LTO
+/// optimization, where slot P1 has not run, it is the check. A call in an
+/// available_externally function is a copy, reported in its own module.
+///
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
 #include "MSILAsmPrinter.h"
+#include "MSILReferences.h"
 #include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CLI/CallAdapter.h"
@@ -709,6 +724,56 @@ static Function *createLTOWrapper(Function *F, FunctionType *Ty,
   return Wrapper;
 }
 
+/// .NET references (plan 5.21.7 RB12): whether a call with the function type
+/// \p Ty of a function of the type \p FTy is mismatched and has the reference
+/// type on either side.
+static bool isReferenceMismatch(FunctionType *Ty, FunctionType *FTy) {
+  return Ty != FTy &&
+         (MSIL::containsReferenceType(Ty) || MSIL::containsReferenceType(FTy));
+}
+
+/// T-RB5's text (plan 5.21.12) for a call of \p F with the function type
+/// \p Ty (isReferenceMismatch), naming F as other diagnostics of this pass
+/// do (by its IL name, with \p TM). '<A>' and '<P>' are the first value whose
+/// type changes on the way and has the reference type: an argument as the
+/// call passes it and the parameter as F takes it ('void' for a value that
+/// one side does not have), then F's result as F passes it and as the call
+/// takes it. If every reference keeps its type and another value changes,
+/// they are the two function types.
+static std::string getReferenceMismatchText(const Function &F, FunctionType *Ty,
+                                            const TargetMachine *TM) {
+  FunctionType *FTy = F.getFunctionType();
+  Type *Void = Type::getVoidTy(F.getContext());
+  auto Changes = [](Type *From, Type *To) {
+    return From != To && (MSIL::containsReferenceType(From) ||
+                          MSIL::containsReferenceType(To));
+  };
+  Type *Passed = nullptr, *Taken = nullptr;
+  for (unsigned I = 0, E = std::max(Ty->getNumParams(), FTy->getNumParams());
+       I != E && !Passed; ++I) {
+    Type *Arg = I < Ty->getNumParams() ? Ty->getParamType(I) : Void;
+    Type *Param = I < FTy->getNumParams() ? FTy->getParamType(I) : Void;
+    if (Changes(Arg, Param)) {
+      Passed = Arg;
+      Taken = Param;
+    }
+  }
+  if (!Passed && Changes(FTy->getReturnType(), Ty->getReturnType())) {
+    Passed = FTy->getReturnType();
+    Taken = Ty->getReturnType();
+  }
+  if (!Passed) {
+    Passed = Ty;
+    Taken = FTy;
+  }
+  std::string Text;
+  raw_string_ostream OS(Text);
+  OS << "call of '" << (TM ? MSIL::getILName(F, *TM) : F.getName())
+     << "' passes '" << *Passed << "' where it takes '" << *Taken
+     << "': a .NET reference cannot be converted";
+  return Text;
+}
+
 /// Returns the type of a call with the variadic type \p Ty and the arguments
 /// of \p CB as a non-variadic call: \p Ty without the variadic flag, so that
 /// every argument is a fixed parameter (MSILAddMissingPrototypes'
@@ -854,6 +919,10 @@ static bool fixFunctionBitcasts(Module &M, bool ObjectMode,
   // reported (see the file comment).
   std::map<LTOWrapperKey, Function *> LTOWrappers;
   std::set<LTOReportKey> LTOReported;
+  // .NET references: the trapping wrappers of the mismatched calls, and the
+  // (callee, call type) pairs reported (see the file comment).
+  DenseMap<std::pair<Function *, FunctionType *>, Function *> RefTraps;
+  DenseSet<std::pair<Function *, FunctionType *>> RefReported;
 
   for (auto &UseFunc : Uses) {
     CallBase *CB = UseFunc.first;
@@ -884,6 +953,22 @@ static bool fixFunctionBitcasts(Module &M, bool ObjectMode,
     // with the call-site signature (see the file comment).
     if (ObjectMode && F->isDeclarationForLinker())
       continue;
+
+    // .NET references (plan 5.21.7 RB12, see the file comment): T-RB5 and
+    // the trapping wrapper, before the table, never a wrapper that converts.
+    if (isReferenceMismatch(Ty, F->getFunctionType())) {
+      auto Key = std::make_pair(F, Ty);
+      if (!CB->getFunction()->hasAvailableExternallyLinkage() &&
+          RefReported.insert(Key).second)
+        M.getContext().diagnose(DiagnosticInfoUnsupported(
+            *CB->getFunction(), getReferenceMismatchText(*F, Ty, TM),
+            CB->getDebugLoc()));
+      Function *&Trap = RefTraps[Key];
+      if (!Trap)
+        Trap = createTrapWrapper(F, Ty, CB->getAttributes());
+      CB->setCalledOperand(Trap);
+      continue;
+    }
 
     Function *Wrapper;
     if (!Table) {

@@ -15,6 +15,7 @@
 #include "CGCall.h"
 #include "CGDebugInfo.h"
 #include "CGHLSLRuntime.h"
+#include "CGMSILReferences.h"
 #include "CGOpenCLRuntime.h"
 #include "CGRecordLayout.h"
 #include "TargetInfo.h"
@@ -750,6 +751,10 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     ResultType = llvm::PointerType::get(getLLVMContext(), AS);
     break;
   }
+
+  case Type::CLIReference: // MSIL: a .NET reference, whatever its class.
+    ResultType = getMSILReferenceType(getLLVMContext());
+    break;
 
   case Type::MemberPointer: {
     auto *MPTy = cast<MemberPointerType>(Ty);

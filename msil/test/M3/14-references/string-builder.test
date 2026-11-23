@@ -1,0 +1,172 @@
+# System.Text.StringBuilder through references (the Framework references): .ctor() and .ctor(string) give StringBuilder references, Append(string), Append(int32), Insert(int32, string) and Clear() return the same object, so calls chain on one reference, get_Length and ToString() read it, and each ToString makes a new string; String members take and give String references: String::Concat(string, string), Substring(int32, int32), ToUpperInvariant(), get_Length, Equals(string), op_Equality and IsNullOrEmpty, with a NULL String reference passed as a null string; a String reference and MC-1's UTF-8 C string pass to the same parameter.
+# Plan 5.21.9 RM2 (exact matching: a class 'T' parameter, result or 'this'
+# takes only 'T ^', so StringBuilder's members take and give StringBuilder
+# references and String's take and give String references; 'this-ref'
+# for the 'this' of a class), RM3 (a CIL 'string' parameter takes 'String
+# ^'; MC-1's S1 UTF-8 C strings stay until R-a2), RM7 (a 'ref' argument is
+# ldarg plus castclass to the parameter's type, with no null test, so a
+# NULL reference reaches the member as null; 'this-ref' is ldarg.0,
+# castclass to TYPE, then callvirt; a 'ref' result is returned as it is),
+# RM11 (StringBuilder and these String members bind only with
+# --reference: the program links against the .NET Framework 4.8
+# implementation assemblies, %{msil_refs_netfx}, and the image runs on the
+# Framework, .NET 10 and WSL .NET 10, as MC-1's tests do), 5.21.4 RS5 (==
+# on two references of one class is identity). .NET's rules give the
+# values: StringBuilder's Append, Insert and Clear return the builder
+# itself; ToString makes a new string each time; Append(int32) appends the
+# decimal digits of a positive value; ToUpperInvariant maps ASCII letters;
+# String.Equals(string) and op_Equality compare the characters, and
+# op_Equality of two nulls is true; IsNullOrEmpty is true for null and "";
+# Concat treats a null string as empty (measured on the .NET Framework
+# 4.8.1, .NET 10 and WSL .NET 10). The members have no C library
+# equivalent, so the expected file is hand-written for both OSes (plan
+# 5.20.11 MT3 and 5.17.4 as amended for MC-1, under MC-1's reason; 5.21.14
+# RV28). Plan 5.17.13 (R-a, M3/14-references).
+# REQUIRES: msil-refs-netfx
+# REDEFINE: %{msil_expected_rule} = windows,linux: managed member, no native oracle
+# REDEFINE: %{msil_ref_flags} = %{msil_refs_netfx}
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include <cli/cli.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <uchar.h>
+
+typedef struct CLI_TYPE("System.String") String String;
+typedef struct CLI_TYPE("System.Text.StringBuilder")
+    StringBuilder StringBuilder;
+
+#define SB "System.Text.StringBuilder"
+#define SB_RESULT "instance class System.Text.StringBuilder"
+
+__attribute__((msil_method(SB, ".ctor", "instance void()")))
+StringBuilder ^sb_new(void);
+
+__attribute__((msil_method(SB, ".ctor", "instance void(string)")))
+StringBuilder ^sb_new_from(String ^initial);
+
+__attribute__((msil_method(SB, "Append", SB_RESULT "(string)")))
+StringBuilder ^sb_append(StringBuilder ^sb, String ^s);
+
+/* The same member with MC-1's UTF-8 form of the 'string' parameter. */
+__attribute__((msil_method(SB, "Append", SB_RESULT "(string)")))
+StringBuilder ^sb_append_text(StringBuilder ^sb, const char *text);
+
+__attribute__((msil_method(SB, "Append", SB_RESULT "(int32)")))
+StringBuilder ^sb_append_int(StringBuilder ^sb, int value);
+
+__attribute__((msil_method(SB, "Insert", SB_RESULT "(int32, string)")))
+StringBuilder ^sb_insert(StringBuilder ^sb, int index, String ^s);
+
+__attribute__((msil_method(SB, "Clear", SB_RESULT "()")))
+StringBuilder ^sb_clear(StringBuilder ^sb);
+
+__attribute__((msil_method(SB, "get_Length", "instance int32()")))
+int sb_length(StringBuilder ^sb);
+
+__attribute__((msil_method(SB, "ToString", "instance string()")))
+String ^sb_to_string(StringBuilder ^sb);
+
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+String ^concat(String ^a, String ^b);
+
+__attribute__((msil_method("System.String", "Concat",
+                           "string(string, string)")))
+String ^concat_text(const char *a, const char *b);
+
+__attribute__((msil_method("System.String", "Substring",
+                           "instance string(int32, int32)")))
+String ^substring(String ^s, int start, int length);
+
+__attribute__((msil_method("System.String", "ToUpperInvariant",
+                           "instance string()")))
+String ^to_upper(String ^s);
+
+__attribute__((msil_method("System.String", "get_Length", "instance int32()")))
+int string_length(String ^s);
+
+__attribute__((msil_method("System.String", "Equals", "instance bool(string)")))
+_Bool string_equals(String ^s, String ^other);
+
+__attribute__((msil_method("System.String", "op_Equality",
+                           "bool(string, string)")))
+_Bool string_op_equality(String ^a, String ^b);
+
+__attribute__((msil_method("System.String", "IsNullOrEmpty", "bool(string)")))
+_Bool is_null_or_empty(String ^s);
+
+__attribute__((msil_method("System.Runtime.InteropServices.Marshal",
+                           "StringToHGlobalUni", "native int(string)")))
+char16_t *string_units(String ^s);
+
+static void put_string(const char *what, String ^s) {
+  char16_t *u = string_units(s);
+  printf("%s: ", what);
+  if (!u) {
+    printf("(null)\n");
+    return;
+  }
+  putchar('"');
+  for (; *u; ++u)
+    putchar(*u < 0x80 ? (int)*u : '?');
+  printf("\"\n");
+}
+
+/* A String reference from C text. */
+static String ^text(const char *s) { return concat_text(s, ""); }
+
+int main(void) {
+  /* Chained calls on one builder: each returns the builder itself. */
+  StringBuilder ^sb = sb_new();
+  StringBuilder ^r1 = sb_append_text(sb, "refs");
+  StringBuilder ^r2 = sb_append(r1, text(", "));
+  StringBuilder ^r3 = sb_append_int(sb_append_int(r2, 42), 7);
+  printf("Append returns the builder: %d %d %d\n", r1 == sb, r2 == sb,
+         r3 == sb);
+  printf("length %d\n", sb_length(sb));
+  String ^s1 = sb_to_string(sb);
+  put_string("ToString", s1);
+
+  /* Insert at the front; ToString makes a new string each time. */
+  StringBuilder ^r4 = sb_insert(sb, 0, text("<"));
+  String ^s2 = sb_to_string(r4);
+  String ^s3 = sb_to_string(sb);
+  put_string("after Insert", s2);
+  printf("Insert returns the builder %d; two ToString calls: equal %d, two "
+         "objects %d\n",
+         r4 == sb, string_equals(s2, s3), s2 != s3);
+  printf("the first string is unchanged: %d\n",
+         string_op_equality(s1, text("refs, 427")));
+
+  /* A builder made from a String reference, then cleared. */
+  StringBuilder ^other = sb_new_from(s1);
+  printf("another builder: %d, its length %d\n", other != sb,
+         sb_length(other));
+  StringBuilder ^cleared = sb_clear(other);
+  printf("Clear returns the builder %d, length %d, text empty %d\n",
+         cleared == other, sb_length(other),
+         is_null_or_empty(sb_to_string(other)));
+
+  /* String members on references. */
+  String ^joined = concat(s1, text("!"));
+  put_string("Concat", joined);
+  String ^part = substring(joined, 6, 2);
+  put_string("Substring(6, 2)", part);
+  put_string("ToUpperInvariant", to_upper(joined));
+  printf("get_Length %d, Equals(\"42\") %d, Equals(\"43\") %d\n",
+         string_length(joined), string_equals(part, text("42")),
+         string_equals(part, text("43")));
+
+  /* A NULL String reference is a null string to the member. */
+  String ^none = NULL;
+  printf("IsNullOrEmpty: NULL %d, empty %d, text %d\n",
+         is_null_or_empty(none), is_null_or_empty(text("")),
+         is_null_or_empty(part));
+  printf("op_Equality(NULL, NULL) %d, op_Equality(text, NULL) %d\n",
+         string_op_equality(none, NULL), string_op_equality(part, none));
+  put_string("Concat(NULL, text)", concat(none, part));
+  return 0;
+}

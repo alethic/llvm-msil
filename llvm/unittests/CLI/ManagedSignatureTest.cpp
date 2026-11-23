@@ -86,11 +86,40 @@
 //   rules)'): printManagedCallAttributes(DLLExport, Constructor, Destructor)
 //   joins 'dllexport', 'constructor(<prio>)' and 'destructor(<prio>)' with
 //   ',' and no spaces, in that order, and gives "" when none is present.
+// - Real .NET references (5.21; milestone R-a; RV18's six cases):
+//   - parseCLITypeName (5.21.2 RT2-RT3, 5.21.3 RC4): the 'cli_type' names
+//     ('Ns.Name', 'Ns.Outer/Inner', '<elem>[]'), each folded at every level
+//     ('class System.String' is 'string', 'class System.Object' is 'object',
+//     also as an array element), keyed by the folded listing text with no
+//     scope and no quotes (two spellings of one class or array are one key),
+//     and named by the display name, which getCLITypeDisplayName computes
+//     from the key alone (System.String, System.Object, Ns.T, string[],
+//     class Ns.T[]);
+//   - its refusals, T-R1's reasons pinned whole where 5.21.2 RT2 and R-a.a's
+//     interface give them: 'valuetype' ('value types are not supported for
+//     MSIL yet'), a listing primitive alone (''<t>' is a signature type;
+//     name the type by its full name, for example 'System.String''), a
+//     resolution scope (also in an array), a pointer, and MC-1's own
+//     refusals (generics, byrefs, invalid names, arrays that its TYPE
+//     grammar does not have), 'class ' outside an array included;
+//   - the conversion codes of 5.21.9 RM1, spelled 'ref' and 'this-ref', and
+//     the names of RI6 and RM8 (the IR type 'msil.ref', the helper
+//     '__msil_ref.eq' and its prefix, the cast stub's symbol, member,
+//     signature and conversions);
+//   - their positions (RM1): 'ref' anywhere, 'this-ref' only as the first
+//     parameter, and neither 'this' form as the result;
+//   - isManagedCastShape (RM8): TYPE a 'cli_type' class name other than
+//     System.Object, MEMBER '.castclass', SIGNATURE 'object(object)' and
+//     conversions 'ref;ref', all four, and the cast stub's IR name
+//     '__msil_mc.<castclass>.__uniq.<n>';
+//   - '.castclass' stays refused as a MEMBER written in source
+//     (checkManagedMemberName), whatever the other arguments are.
 // Expected values come from the plan, never from the implementation.
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CLI/ManagedSignature.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -1322,6 +1351,440 @@ TEST(CLIManagedSignatureTest, PrintManagedCallAttributes) {
             "dllexport,constructor(300)");
   EXPECT_EQ(printManagedCallAttributes(true, 300, 500),
             "dllexport,constructor(300),destructor(500)");
+}
+
+//===----------------------------------------------------------------------===//
+// Real .NET references (5.21, R-a)
+//===----------------------------------------------------------------------===//
+
+struct CLIName {
+  const char *Text;
+  // describe() of the folded type.
+  const char *Type;
+  const char *Key;
+  const char *DisplayName;
+};
+
+TEST(CLIManagedSignatureTest, CLITypeNameFormsAndKeys) {
+  // 5.21.2 RT2's grammar (MC-1's TYPE grammar without 'valuetype'), RT3's
+  // fold at every level and key, and 5.21.3 RC4's display name.
+  const CLIName Names[] = {
+      // System.String and System.Object fold to the listing primitives.
+      {"System.String", "string", "string", "System.String"},
+      {"System.Object", "object", "object", "System.Object"},
+      // Classes and interfaces, nested ones included, by their full names.
+      {"System.IO.Stream", "class:System.IO.Stream", "class System.IO.Stream",
+       "System.IO.Stream"},
+      {"System.IO.FileStream", "class:System.IO.FileStream",
+       "class System.IO.FileStream", "System.IO.FileStream"},
+      {"System.IDisposable", "class:System.IDisposable",
+       "class System.IDisposable", "System.IDisposable"},
+      {"System.Text.StringBuilder", "class:System.Text.StringBuilder",
+       "class System.Text.StringBuilder", "System.Text.StringBuilder"},
+      {"Ns.Outer/Inner", "class:Ns.Outer/Inner", "class Ns.Outer/Inner",
+       "Ns.Outer/Inner"},
+      {"Ns.A/B/C", "class:Ns.A/B/C", "class Ns.A/B/C", "Ns.A/B/C"},
+      {"Widget", "class:Widget", "class Widget", "Widget"},
+      // Arrays: the key is the listing text, and so is the display name.
+      {"string[]", "arr(string)", "string[]", "string[]"},
+      {"object[]", "arr(object)", "object[]", "object[]"},
+      {"uint8[]", "arr(uint8)", "uint8[]", "uint8[]"},
+      {"int32[]", "arr(int32)", "int32[]", "int32[]"},
+      {"native int[]", "arr(native int)", "native int[]", "native int[]"},
+      {"float64[]", "arr(float64)", "float64[]", "float64[]"},
+      {"class System.IO.Stream[]", "arr(class:System.IO.Stream)",
+       "class System.IO.Stream[]", "class System.IO.Stream[]"},
+      {"class Ns.Outer/Inner[]", "arr(class:Ns.Outer/Inner)",
+       "class Ns.Outer/Inner[]", "class Ns.Outer/Inner[]"},
+      // The fold reaches array elements: one key for both spellings.
+      {"class System.String[]", "arr(string)", "string[]", "string[]"},
+      {"class System.Object[]", "arr(object)", "object[]", "object[]"},
+      // The key and the display name keep a name part bare that ILAsm text
+      // would quote ('value' is a reserved word of ilasm's lexer).
+      {"Ns.Outer/value", "class:Ns.Outer/value", "class Ns.Outer/value",
+       "Ns.Outer/value"},
+  };
+  for (const CLIName &N : Names) {
+    SCOPED_TRACE(N.Text);
+    Expected<CLITypeName> T = parseCLITypeName(N.Text);
+    ASSERT_THAT_EXPECTED(T, Succeeded());
+    EXPECT_EQ(describe(T->Type), N.Type);
+    EXPECT_EQ(T->Key, N.Key);
+    EXPECT_EQ(T->DisplayName, N.DisplayName);
+    // The display name follows from the key alone (the AST reader and the
+    // getter name the class's implicit struct from it), and the key from
+    // the folded type.
+    EXPECT_EQ(getCLITypeDisplayName(T->Key), N.DisplayName);
+    EXPECT_EQ(getCLITypeKey(T->Type), N.Key);
+    // Parsing the display name again gives the same key: the display name
+    // is itself a 'cli_type' name.
+    Expected<CLITypeName> Again = parseCLITypeName(T->DisplayName);
+    ASSERT_THAT_EXPECTED(Again, Succeeded());
+    EXPECT_EQ(Again->Key, N.Key);
+  }
+  // Two spellings of one class or array are one key; different classes and
+  // arrays have different keys.
+  auto KeyOf = [](StringRef Text) -> std::string {
+    Expected<CLITypeName> T = parseCLITypeName(Text);
+    if (!T) {
+      consumeError(T.takeError());
+      return "<error>";
+    }
+    return T->Key;
+  };
+  EXPECT_EQ(KeyOf("class System.String[]"), KeyOf("string[]"));
+  EXPECT_EQ(KeyOf("class System.Object[]"), KeyOf("object[]"));
+  EXPECT_NE(KeyOf("System.String"), KeyOf("System.Object"));
+  EXPECT_NE(KeyOf("System.String"), KeyOf("string[]"));
+  EXPECT_NE(KeyOf("System.IO.Stream"), KeyOf("System.IO.FileStream"));
+  EXPECT_NE(KeyOf("Ns.Outer/Inner"), KeyOf("Ns.Outer.Inner"));
+  EXPECT_NE(KeyOf("object[]"), KeyOf("System.Object"));
+  // foldCLIType folds the types of the managed-call grammar at every level:
+  // 'class System.String' and 'class System.Object' become 'string' and
+  // 'object', through arrays and pointers; other types stay as they are.
+  const std::pair<const char *, const char *> Folds[] = {
+      {"class System.String", "string"},
+      {"class System.Object", "object"},
+      {"class System.String[]", "arr(string)"},
+      {"class System.Object[]", "arr(object)"},
+      {"class System.String[][]", "arr(arr(string))"},
+      {"string", "string"},
+      {"object[]", "arr(object)"},
+      {"class System.IO.Stream", "class:System.IO.Stream"},
+      {"class System.IO.Stream[]", "arr(class:System.IO.Stream)"},
+      {"class System.Strings", "class:System.Strings"},
+      {"class Ns.System.String", "class:Ns.System.String"},
+      {"int32[]", "arr(int32)"},
+  };
+  for (const auto &[Text, Want] : Folds) {
+    SCOPED_TRACE(Text);
+    Expected<ManagedType> T = parseManagedSigType(Text);
+    ASSERT_THAT_EXPECTED(T, Succeeded());
+    EXPECT_EQ(describe(foldCLIType(*T)), Want);
+  }
+}
+
+TEST(CLIManagedSignatureTest, CLITypeNameRefusals) {
+  // T-R1's reasons (5.21.12: ''cli_type' type '<text>' is not valid:
+  // <reason>'), pinned whole: RT2 gives the first two; R-a.a's interface
+  // the scope and pointer reasons; the others are MC-1's (TypeNameMA1).
+  const char *ValueTypes = "value types are not supported for MSIL yet";
+  const char *Scope = "a type is named without a resolution scope";
+  const char *Pointer = "a pointer type is not a .NET reference type";
+  auto Primitive = [](StringRef T) {
+    return (Twine("'") + T +
+            "' is a signature type; name the type by its full name, for "
+            "example 'System.String'")
+        .str();
+  };
+  const std::pair<const char *, std::string> Pinned[] = {
+      {"valuetype System.DateTime", ValueTypes},
+      {"valuetype System.Runtime.InteropServices.GCHandle", ValueTypes},
+      {"valuetype Ns.Outer/Inner", ValueTypes},
+      {"string", Primitive("string")},
+      {"object", Primitive("object")},
+      {"int32", Primitive("int32")},
+      {"uint8", Primitive("uint8")},
+      {"bool", Primitive("bool")},
+      {"native int", Primitive("native int")},
+      {"float64", Primitive("float64")},
+      // A resolution scope gets its own reason: a leading '[', also in an
+      // array's text and with no type after the scope, and a scope after an
+      // array element's 'class' or 'valuetype'. 'valuetype' followed by a
+      // space is refused first, with RT2's reason, so the 'valuetype' rows
+      // write the scope right after it or after a tab. Outside an array,
+      // 'class ' is refused first, with MC-1's reason.
+      {"[mscorlib]System.String", Scope},
+      {"[System.Runtime]System.IO.Stream", Scope},
+      {"[mscorlib]System.String[]", Scope},
+      {"[mscorlib]", Scope},
+      {"class [x]Ns.T[]", Scope},
+      {"valuetype[x]Ns.V[]", Scope},
+      {"valuetype\t[x]Ns.V[]", Scope},
+      {"class [x]Ns.T", "a reference type is named without 'class'"},
+      {"System.IO.Stream*", Pointer},
+      {"uint8*", Pointer},
+      {"System.Int32&", "byref types are not supported for MSIL yet"},
+      {"System.Collections.Generic.List`1",
+       "generic types are not supported for MSIL yet"},
+      {"System.Collections.Generic.List`1<int32>",
+       "generic instantiations are not supported for MSIL yet"},
+      {"<Module>", "'<Module>' is not a valid type name"},
+      {"Ns.<Module>", "'Ns.<Module>' is not a valid type name"},
+      // Arrays that MC-1's TYPE grammar does not have, with MC-1's reasons.
+      // Multi-dimensional arrays are a form of the fuller goal.
+      {"int32[,]", "multi-dimensional arrays are not supported for MSIL yet"},
+      {"uint8[][]", "an array type's element is a primitive type, 'string', "
+                    "'object' or 'class <type>'"},
+      {"void[]", "'void' is not a valid array element type"},
+  };
+  for (const auto &[Text, Reason] : Pinned) {
+    SCOPED_TRACE(Text);
+    EXPECT_THAT_EXPECTED(parseCLITypeName(Text), FailedWithMessage(Reason));
+  }
+  // Refused, not pinned here: 'class ' outside an array (a class is named
+  // without it, even System.String), arrays of a class named without
+  // 'class' and malformed names, with MC-1's reasons, and an array of a
+  // value type, with RT2's.
+  const char *Refused[] = {
+      "",
+      "class System.IO.Stream",
+      "class System.String",
+      "class System.Object",
+      "System.IO.Stream[]",
+      "System.String[]",
+      "valuetype System.DateTime[]",
+      "Ns.Outer+Inner",
+      "System..IO",
+      "System.IO.",
+      ".System",
+      "1Ns.T",
+  };
+  for (const char *Text : Refused) {
+    SCOPED_TRACE(Text);
+    EXPECT_THAT_EXPECTED(parseCLITypeName(Text), Failed());
+  }
+}
+
+TEST(CLIManagedSignatureTest, ReferenceCodeNames) {
+  // RM1's codes are spelled 'ref' and 'this-ref' in "msil-managed-conv", and
+  // print(parse(x)) gives x back.
+  const char *Texts[] = {
+      "ref;ref",          ";ref",
+      "ref;void",         "ref;val",
+      "val;ref",          "this-ref;void",
+      "this-ref;val",     "this-ref;ref",
+      "this-ref,ref;ref", "this-ref,ref,val,ref;void",
+      "ref,err;ref",      "this-ref,err;ref",
+      "ref;gch",          "this-gch;ref",
+      "ref,obj;obj",
+  };
+  for (const char *Text : Texts) {
+    SCOPED_TRACE(Text);
+    Expected<ManagedConvList> L = parseManagedConvList(Text);
+    ASSERT_THAT_EXPECTED(L, Succeeded());
+    EXPECT_EQ(printManagedConvList(L->Params, L->Result), Text);
+  }
+  Expected<ManagedConvList> L = parseManagedConvList("this-ref,ref,val;ref");
+  ASSERT_THAT_EXPECTED(L, Succeeded());
+  const ManagedConv Want[] = {ManagedConv::ThisRef, ManagedConv::Ref,
+                              ManagedConv::Val};
+  EXPECT_EQ(ArrayRef<ManagedConv>(L->Params), ArrayRef<ManagedConv>(Want));
+  EXPECT_EQ(L->Result, ManagedConv::Ref);
+  // The new codes are new values: neither is spelled like a handle code.
+  EXPECT_EQ(printManagedConvList({ManagedConv::ThisRef, ManagedConv::Ref},
+                                 ManagedConv::Ref),
+            "this-ref,ref;ref");
+  EXPECT_NE(ManagedConv::Ref, ManagedConv::Obj);
+  EXPECT_NE(ManagedConv::ThisRef, ManagedConv::ThisObj);
+  EXPECT_NE(ManagedConv::Ref, ManagedConv::ThisRef);
+
+  // RI1 and RI6: the IR type's name and the comparison helper, an N3 name
+  // whose prefix is reserved for the toolchain's reference helpers.
+  EXPECT_EQ(StringRef(ReferenceTypeName), "msil.ref");
+  EXPECT_EQ(StringRef(ReferenceEqName), "__msil_ref.eq");
+  EXPECT_EQ(StringRef(ReferenceHelperPrefix), "__msil_ref.");
+  EXPECT_TRUE(StringRef(ReferenceEqName).starts_with(ReferenceHelperPrefix));
+  EXPECT_TRUE(isReferenceHelperName("__msil_ref.eq"));
+  EXPECT_TRUE(isReferenceHelperName("__msil_ref.ne"));
+  EXPECT_TRUE(isReferenceHelperName("__msil_ref.isnull"));
+  EXPECT_FALSE(isReferenceHelperName("__msil_ref"));
+  EXPECT_FALSE(isReferenceHelperName("__msil_refeq"));
+  EXPECT_FALSE(isReferenceHelperName("msil_ref.eq"));
+  EXPECT_FALSE(isReferenceHelperName("__msil_mc.eq"));
+  EXPECT_FALSE(isReferenceHelperName("eq"));
+  // RM8: the cast stub's symbol, member, signature and conversions.
+  EXPECT_EQ(StringRef(ManagedCastSymbol), "<castclass>");
+  EXPECT_EQ(StringRef(ManagedCastMember), ".castclass");
+  EXPECT_EQ(StringRef(ManagedCastSignature), "object(object)");
+  EXPECT_EQ(StringRef(ManagedCastConversions), "ref;ref");
+  // The cast's conversions and signature are well-formed texts of their
+  // own grammars: one 'ref' parameter and a 'ref' result; a static method
+  // taking and returning object.
+  Expected<ManagedConvList> Cast = parseManagedConvList(ManagedCastConversions);
+  ASSERT_THAT_EXPECTED(Cast, Succeeded());
+  ASSERT_EQ(Cast->Params.size(), 1u);
+  EXPECT_EQ(Cast->Params[0], ManagedConv::Ref);
+  EXPECT_EQ(Cast->Result, ManagedConv::Ref);
+  const std::string CastSig = StringRef(ManagedCastSignature).str();
+  expectFields({CastSig.c_str(), false, false, "object", {"object"}});
+}
+
+TEST(CLIManagedSignatureTest, ReferenceCodePositions) {
+  // RM1: 'ref' is a parameter or the result at any position; 'this-ref' is
+  // only the first parameter (as MC-1's 'this' handles are) and, like them,
+  // never the result.
+  const char *Accepted[] = {
+      "ref;void",
+      "val,ref;void",
+      "val,val,ref;ref",
+      "ref,ref,ref;ref",
+      "this-ref;void",
+      "this-ref,ref;ref",
+      "this-ref,val,ref,err;val",
+      "ref,err;ref",
+  };
+  for (const char *Text : Accepted) {
+    SCOPED_TRACE(Text);
+    EXPECT_THAT_EXPECTED(parseManagedConvList(Text), Succeeded());
+  }
+  const char *Refused[] = {
+      // 'this-ref' after the first parameter.
+      "ref,this-ref;void",
+      "val,this-ref;val",
+      "this-ref,this-ref;void",
+      "this-obj,this-ref;void",
+      "this-ref,this-obj;void",
+      // Neither 'this' form is a result.
+      "val;this-ref",
+      "this-ref;this-ref",
+      ";this-ref",
+      ";this-obj",
+      // 'err' stays the last parameter.
+      "err,ref;ref",
+      "this-ref,err,ref;void",
+      // Spelling is exact.
+      "Ref;ref",
+      "ref;REF",
+      "thisref;void",
+      "this_ref;void",
+      "this-ref ;void",
+      "ref ;ref",
+  };
+  for (const char *Text : Refused) {
+    SCOPED_TRACE(Text);
+    EXPECT_THAT_EXPECTED(parseManagedConvList(Text), Failed());
+  }
+}
+
+TEST(CLIManagedSignatureTest, ManagedCastShape) {
+  // RM8: a cast stub is a declaration whose TYPE is a 'cli_type' class name
+  // other than System.Object (a cast to Object is free and makes no stub),
+  // whose MEMBER is '.castclass', SIGNATURE 'object(object)' and
+  // conversions 'ref;ref': CodeGen writes exactly these four.
+  const char *Types[] = {
+      "System.String",
+      "System.IO.Stream",
+      "System.IO.FileStream",
+      "System.IDisposable",
+      "Ns.Outer/Inner",
+      "string[]",
+      "object[]",
+      "uint8[]",
+      "class System.IO.Stream[]",
+      "class System.String[]",
+  };
+  for (const char *Type : Types) {
+    SCOPED_TRACE(Type);
+    EXPECT_TRUE(
+        isManagedCastShape(Type, ".castclass", "object(object)", "ref;ref"));
+    EXPECT_TRUE(isManagedCastShape(
+        Type, ManagedCastMember, ManagedCastSignature, ManagedCastConversions));
+    // Every other MEMBER, SIGNATURE or conversion list is no cast.
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".ctor", "object(object)", "ref;ref"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, "castclass", "object(object)", "ref;ref"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, "CastClass", "object(object)", "ref;ref"));
+    EXPECT_FALSE(isManagedCastShape(Type, "", "object(object)", "ref;ref"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "string(object)", "ref;ref"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "object(string)", "ref;ref"));
+    EXPECT_FALSE(isManagedCastShape(Type, ".castclass",
+                                    "instance object(object)", "ref;ref"));
+    EXPECT_FALSE(isManagedCastShape(Type, ".castclass",
+                                    "object(object, object)", "ref,ref;ref"));
+    EXPECT_FALSE(isManagedCastShape(Type, ".castclass", "object()", ";ref"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "void(object)", "ref;void"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "object(object)", "obj;obj"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "object(object)", "ref;obj"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "object(object)", "obj;ref"));
+    EXPECT_FALSE(isManagedCastShape(Type, ".castclass", "object(object)",
+                                    "this-ref;ref"));
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "object(object)", "ref;val"));
+    EXPECT_FALSE(isManagedCastShape(Type, ".castclass", "object(object)", ""));
+  }
+  // TYPE must be a 'cli_type' name, and not System.Object.
+  const char *NotCastTypes[] = {
+      "System.Object",
+      "",
+      "string",
+      "object",
+      "int32",
+      "class System.IO.Stream",
+      "class System.Object",
+      "valuetype System.DateTime",
+      "valuetype System.Runtime.InteropServices.GCHandle",
+      "System.IO.Stream*",
+      "[mscorlib]System.String",
+      "System.Collections.Generic.List`1",
+      "<Module>",
+  };
+  for (const char *Type : NotCastTypes) {
+    SCOPED_TRACE(Type);
+    EXPECT_FALSE(
+        isManagedCastShape(Type, ".castclass", "object(object)", "ref;ref"));
+  }
+  // The stub's IR name is '__msil_mc.<castclass>.__uniq.<n>' (RM8: n hashes
+  // its MR4 operands and function type, as an internal managed call's
+  // does), a managed-call name whose symbol is '<castclass>'.
+  const std::string Postfix = getManagedCallUniqPostfix(
+      {"System.String", ManagedCastMember, ManagedCastSignature, "",
+       ManagedCastConversions, "", "String ^(Object ^)"});
+  EXPECT_TRUE(isUniqPostfix(Postfix)) << Postfix;
+  const std::string Name =
+      (Twine("__msil_mc.") + ManagedCastSymbol + Postfix).str();
+  EXPECT_TRUE(isManagedCallName(Name));
+  EXPECT_EQ(getManagedCallSymbol(Name), "<castclass>");
+  EXPECT_EQ(getManagedCallSymbol("__msil_mc.<castclass>.__uniq.42"),
+            "<castclass>");
+  // Each class has its own stub: the postfixes of two classes differ.
+  EXPECT_NE(getManagedCallUniqPostfix({"System.String", ".castclass",
+                                       "object(object)", "", "ref;ref", ""}),
+            getManagedCallUniqPostfix({"System.IO.Stream", ".castclass",
+                                       "object(object)", "", "ref;ref", ""}));
+}
+
+TEST(CLIManagedSignatureTest, CastMemberRefusedInSource) {
+  // RM8: '.castclass' names no member a declaration can write: it is not a
+  // valid MEMBER (checkManagedMemberName, which Sema and the back end apply
+  // to every declaration that is not a cast stub), whatever TYPE,
+  // SIGNATURE and conversions come with it. MC-1's members stay accepted.
+  EXPECT_THAT_ERROR(
+      checkManagedMemberName(".castclass"),
+      FailedWithMessage("'.castclass' is not a valid member name"));
+  EXPECT_THAT_ERROR(
+      checkManagedMemberName(ManagedCastMember),
+      FailedWithMessage("'.castclass' is not a valid member name"));
+  EXPECT_THAT_ERROR(checkManagedMemberName(".castclass2"), Failed());
+  EXPECT_THAT_ERROR(checkManagedMemberName(".isinst"), Failed());
+  EXPECT_THAT_ERROR(checkManagedMemberName("<castclass>"), Failed());
+  for (const char *Member :
+       {".ctor", "castclass", "CastClass", "ToString", "get_Length"}) {
+    SCOPED_TRACE(Member);
+    EXPECT_THAT_ERROR(checkManagedMemberName(Member), Succeeded());
+  }
+  // The shapes that are no cast (a TYPE of System.Object, another
+  // signature or other conversions) still carry the refused MEMBER, so the
+  // back end and msil-ld refuse such a declaration by its MEMBER.
+  const char *const NotCasts[][3] = {
+      {"System.Object", "object(object)", "ref;ref"},
+      {"System.String", "string(object)", "ref;ref"},
+      {"System.String", "object(object)", "obj;obj"},
+      {"valuetype System.DateTime", "object(object)", "ref;ref"},
+  };
+  for (const auto &C : NotCasts) {
+    SCOPED_TRACE(std::string(C[0]) + " | " + C[1] + " | " + C[2]);
+    EXPECT_FALSE(isManagedCastShape(C[0], ".castclass", C[1], C[2]));
+    EXPECT_THAT_ERROR(checkManagedMemberName(".castclass"), Failed());
+  }
 }
 
 } // namespace
