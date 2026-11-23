@@ -516,8 +516,9 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -BuildDir ..
 `llvm/docs/MSIL/ImplementationPlan.md`: `ownership` (owned files disjoint inside every
 milestone), `reads <id>` (every input a work package reads exists), `scope <id>` (every staged
 path belongs to the milestone; run `git add -A` first) and `--self-test`, where `<id>` is a
-milestone id: `M<n>`, `P-<n>[a-z]` (the portable steps), `MC-<n>` (the managed-calls steps) or
-`R-<letter>[<digits>]` (real .NET references: R-a, R-a2). A plan it cannot
+milestone id: `M<n>`, `P-<n>[a-z]` (the portable steps), `MC-<n>` (the managed-calls steps),
+`R-<letter>[<digits>]` (real .NET references: R-a, R-a2), `FX-<n>` (the fix steps, FX-1 to
+FX-4) or `EH-<n>` (the exception-model steps, EH-0 to EH-4). A plan it cannot
 parse completely (a malformed milestone or work-package heading, a work package without its
 one-line `- Owned files:` list, a wrapped list, a malformed fix-loop row) fails every command
 with exit status 2 instead of dropping the work package from the checks.

@@ -15,8 +15,9 @@
                                                belongs to <id> (run 'git add -A' first)
   python msil/utils/plan-check.py --self-test  parser and checks on an embedded sample plan
 
-A milestone <id> is M<n> (M24), P-<n> with an optional letter (P-1a, P-2), MC-<n> (MC-1) or
-R-<letter> with optional digits (R-a, R-a2, R-b).
+A milestone <id> is M<n> (M24), P-<n> with an optional letter (P-1a, P-2), MC-<n> (MC-1),
+R-<letter> with optional digits (R-a, R-a2, R-b), FX-<n> (the fix steps, FX-1 to FX-4) or
+EH-<n> (the exception-model steps, EH-0 to EH-4).
 
 Options: --plan <file> checks another copy of the plan (for example a deliberately
 conflicting one); --repo <dir> is the root that relative paths and git use (default: the
@@ -25,10 +26,10 @@ repository that contains this script).
 What is parsed (plan section 1 and section 12):
   - '### <id>. <title>' milestone headings and '#### <id>.<x> <title>' work-package
     headings below them (fenced code blocks are skipped); a '### M<digit>', '### P-<digit>',
-    '### MC-<digit>' or '### R-<letter>' heading of another form, or a '#### M', '#### P-' or
-    '#### R-' heading inside a milestone that is not a WP heading, is an error, so a WP never
-    silently drops out of the checks; other '### ' headings, such as section 7's '### P2-A.',
-    are not milestones;
+    '### MC-<digit>', '### R-<letter>', '### FX-<digit>' or '### EH-<digit>' heading of another
+    form, or a '#### M', '#### P-', '#### R-', '#### FX-' or '#### EH-' heading inside a
+    milestone that is not a WP heading, is an error, so a WP never silently drops out of the
+    checks; other '### ' headings, such as section 7's '### P2-A.', are not milestones;
   - each WP's '- Owned files:' line, exactly one per WP and on one line (a missing line, a
     line ending in ',' or a list wrapped onto the next line is an error): the backquoted
     paths; a trailing '/' owns the whole directory; '(none; ...)' owns nothing;
@@ -74,16 +75,17 @@ ALLOW_LIST = ("llvm/docs/MSIL/ImplementationPlan.md", "llvm/docs/MSIL/recon/")
 PATH_PREFIXES = ("llvm/", "clang/", "lld/", "msil/", ".github/")
 DRIVE_RE = re.compile(r"^[A-Za-z]:/")
 
-# Milestone ids: M<n> (Phases 1-3), P-<n>[a-z] (the portable steps), MC-<n> (managed calls)
-# and R-<letter>[<digits>] (real .NET references: R-a, R-a2).
-MILESTONE_ID = r"(?:M\d+|P-\d+[a-z]?|MC-\d+|R-[a-z]\d*)"
+# Milestone ids: M<n> (Phases 1-3), P-<n>[a-z] (the portable steps), MC-<n> (managed calls),
+# R-<letter>[<digits>] (real .NET references: R-a, R-a2), FX-<n> (the fix steps) and EH-<n>
+# (the exception-model steps).
+MILESTONE_ID = r"(?:M\d+|P-\d+[a-z]?|MC-\d+|R-[a-z]\d*|FX-\d+|EH-\d+)"
 MILESTONE_ID_RE = re.compile(MILESTONE_ID)
 MILESTONE_RE = re.compile(r"^### (" + MILESTONE_ID + r")\. +(.*)$")
 WP_RE = re.compile(r"^#### (" + MILESTONE_ID + r")\.([0-9A-Za-z]+) +(.*)$")
 # A '### ' or '#### ' heading that starts like a milestone or WP id but fails the patterns
 # above is malformed; section 7's '### P2-A.' and '### P3-A.' do not start like one.
-MALFORMED_MILESTONE_RE = re.compile(r"^### (M\d|P-\d|MC-\d|R-[a-z])")
-MALFORMED_WP_RE = re.compile(r"^#### (M|P-|MC-|R-)")
+MALFORMED_MILESTONE_RE = re.compile(r"^### (M\d|P-\d|MC-\d|R-[a-z]|FX-\d|EH-\d)")
+MALFORMED_WP_RE = re.compile(r"^#### (M|P-|MC-|R-|FX-|EH-)")
 OWNED_RE = re.compile(r"^- Owned files:(.*)$")
 READS_RE = re.compile(r"^- Reads:(.*)$")
 BACKQUOTED_RE = re.compile(r"`([^`]+)`")
@@ -198,8 +200,8 @@ def parse_plan(text: str) -> Plan:
                 if MALFORMED_MILESTONE_RE.match(line):
                     plan.errors.append(
                         f"line {lineno}: malformed milestone heading (expected "
-                        f"'### <id>. <title>', <id> M<n>, P-<n>[a-z], MC-<n> or "
-                        f"R-<letter>[<digits>]): {line}"
+                        f"'### <id>. <title>', <id> M<n>, P-<n>[a-z], MC-<n>, "
+                        f"R-<letter>[<digits>], FX-<n> or EH-<n>): {line}"
                     )
                 ms = None
             continue
@@ -207,9 +209,9 @@ def parse_plan(text: str) -> Plan:
             wp = None
             m = WP_RE.match(line)
             if not m:
-                # Inside a milestone every '#### M...', '#### P-...' or '#### R-...' heading is a
-                # work package; a malformed one must not make the WP (and its owned files) vanish
-                # from the checks.
+                # Inside a milestone every '#### M...', '#### P-...', '#### R-...', '#### FX-...'
+                # or '#### EH-...' heading is a work package; a malformed one must not make the WP
+                # (and its owned files) vanish from the checks.
                 if ms is not None and MALFORMED_WP_RE.match(line):
                     plan.errors.append(
                         f"line {lineno}: malformed work package heading in {ms.ms_id} (expected "
@@ -626,6 +628,66 @@ REFERENCES_PLAN = """\
 | 2026-11-20 | R-a, R-a2 | A row of two milestones | text |
 | 2026-11-20 | R-a | fix-loop ownership: `r/c.cpp` -> R-a.c | a grant |
 | 2026-11-20 | MC-1 | fix-loop ownership: `m/b.cpp` -> fix-1 | a finding |
+"""
+
+# Milestones in the fix steps' form (FX-<n>) and the exception-model steps' form (EH-<n>) beside
+# R-a: an implement package, a '.0' build step that owns nothing, a test package and grant rows;
+# FX-1's outline is a bold paragraph.
+FIX_STEPS_PLAN = """\
+## 6. Milestones
+
+### R-a. A references sample milestone
+
+#### R-a.a Declarations (implement, ~10 lines)
+
+- Owned files: `r/a.h`
+
+### FX-2. A fix-step sample milestone
+
+#### FX-2.a Lowering (implement, ~10 lines)
+
+- Owned files: `f/a.cpp`, `f/a.td`
+- Reads: this plan section 5.4; msil/keep; llvm/x/r.txt (a description; with a semicolon)
+
+#### FX-2.0 Build after the implement package (build agent) (infra, no source changes)
+
+- Owned files: (none; build agent, writes only the build tree and scratch folders)
+- Depends on: FX-2.a
+- Reads: msil/keep; llvm/x/dir/
+
+#### FX-2.b Tests (test, ~10 lines)
+
+- Owned files: `f/test/`
+- Depends on: FX-2.a, FX-2.0
+- Reads: llvm/x/r.txt; llvm/x/fx-added-later.md (the plan commit adds it)
+
+### EH-0. An exception-model sample milestone
+
+#### EH-0.a Check (implement, ~10 lines)
+
+- Owned files: `e/check.cpp`, `e/sub/`
+- Reads: FX-2.a's Provides line; llvm/docs/plan.md
+
+#### EH-0.b Tests (test, ~10 lines)
+
+- Owned files: `e/test/`
+- Depends on: EH-0.a
+
+**FX-1. An outline without a heading** is not a milestone.
+
+## 7. Future milestones
+
+### P2-A. Not a milestone of this plan
+
+## 12. Amendment log
+
+| Date | Milestone | Change | Reason |
+|---|---|---|---|
+| 2026-11-23 | - | Fix-step ids FX-<n>, mentions fix-loop ownership in passing | text |
+| 2026-11-23 | FX-2 | A row of FX-2 that is not a grant | text |
+| 2026-11-23 | M28, M33, M34 | A row of three milestones | text |
+| 2026-11-23 | FX-2 | fix-loop ownership: `f/c.cpp` -> FX-2.b | a grant |
+| 2026-11-23 | EH-0 | fix-loop ownership: `e/d.cpp` -> fix-1 | a finding |
 """
 
 
@@ -1119,6 +1181,186 @@ def self_test() -> int:
             + ("" if reports else f" {outputs}"),
         )
 
+        # Milestones in the fix steps' and exception-model steps' forms, checked by ownership,
+        # reads and scope.
+        fx = parse_plan(FIX_STEPS_PLAN)
+        expect(fx.errors == [], f"FX-2/EH-0 sample parses without errors {fx.errors}")
+        expect(
+            list(fx.milestones) == ["R-a", "FX-2", "EH-0"],
+            f"milestones R-a, FX-2, EH-0 (P2-A and the FX-1 paragraph skipped) "
+            f"{list(fx.milestones)}",
+        )
+        fx_wps = fx.milestones["FX-2"].wps
+        expect(
+            [w.wp_id for w in fx_wps] == ["FX-2.a", "FX-2.0", "FX-2.b"]
+            and [w.wp_id for w in fx.milestones["EH-0"].wps] == ["EH-0.a", "EH-0.b"],
+            "FX-2 WPs, the .0 build step among them, and EH-0 WPs",
+        )
+        expect(
+            fx_wps[1].has_owned_line and fx_wps[1].owned == [],
+            "FX-2.0's '(none; ...)' owns nothing",
+        )
+        expect(
+            [(a.milestone, a.path, a.agent) for a in fx.amendments]
+            == [("FX-2", "f/c.cpp", "FX-2.b"), ("EH-0", "e/d.cpp", "fix-1")],
+            "FX-2's grant row and EH-0's fix-loop row (the other rows are not grants)",
+        )
+        expect(ownership_conflicts(fx) == [], "ownership: no conflict in the FX-2/EH-0 sample")
+        fx_conflicting = FIX_STEPS_PLAN.replace(
+            "- Owned files: `e/test/`", "- Owned files: `e/test/`, `e/sub/x.cpp`"
+        )
+        expect(
+            ownership_conflicts(parse_plan(fx_conflicting))
+            == ["EH-0: `e/sub/x.cpp` (EH-0.b) is inside directory `e/sub/` (EH-0.a)"],
+            "ownership: a file of EH-0.b inside EH-0.a's directory is a conflict",
+        )
+        checked, missing = missing_reads(fx, "FX-2", repo)
+        expect(
+            checked == 6
+            and [m.split("(Reads")[0].strip() for m in missing]
+            == ["FX-2.b: llvm/x/fx-added-later.md"],
+            f"reads FX-2 checks 6 paths, FX-2.0's among them, and reports the one missing path "
+            f"({checked}, {missing})",
+        )
+        expect(
+            missing_reads(fx, "EH-0", repo) == (1, []),
+            "reads EH-0 checks its one path",
+        )
+        off = scope_offenders(
+            fx,
+            "FX-2",
+            [
+                "e/check.cpp",
+                "e/d.cpp",
+                "f/a.cpp",
+                "f/c.cpp",
+                "f/test/t.c",
+                "f/z.cpp",
+                "llvm/docs/MSIL/recon/p3/new.md",
+                "r/a.h",
+            ],
+        )
+        expect(
+            off
+            == [
+                "e/check.cpp (owned by EH-0.a in other milestones)",
+                "e/d.cpp",
+                "f/z.cpp",
+                "r/a.h (owned by R-a.a in other milestones)",
+            ],
+            f"scope FX-2: its WPs, its grant row and the allow-list only {off}",
+        )
+        expect(
+            scope_offenders(fx, "EH-0", ["e/check.cpp", "e/d.cpp", "e/sub/y.cpp", "f/c.cpp"])
+            == ["f/c.cpp"],
+            "scope EH-0: its WPs and its own fix-loop row; FX-2's grant row counts only for FX-2",
+        )
+        expect(
+            all(
+                MILESTONE_ID_RE.fullmatch(i)
+                for i in ("FX-1", "FX-2", "FX-4", "FX-10", "EH-0", "EH-4", "EH-12")
+            )
+            and not any(
+                MILESTONE_ID_RE.fullmatch(i)
+                for i in (
+                    "FX-",
+                    "FX-a",
+                    "fx-1",
+                    "FX1",
+                    "FX-1a",
+                    "FX-2.0",
+                    "EH-",
+                    "EH-a",
+                    "eh-0",
+                    "EH0",
+                    "EH-0b",
+                    "EH-0.a",
+                )
+            ),
+            "milestone ids FX-<n> and EH-<n>",
+        )
+        badfx = parse_plan(
+            "### FX-1 Missing dot\n#### FX-1.a Lost\n- Owned files: `a`\n"
+            "### EH-0: Colon\n### FX-2. X\n#### EH-0.a Wrong parent\n- Owned files: `a`\n"
+            "#### FX-2.b: Colon\n- Owned files: `b`\n#### FX-20 No dot\n- Owned files: `c`\n"
+        )
+        expect(
+            sum("malformed milestone heading" in e for e in badfx.errors) == 2
+            and any("work package heading outside a milestone" in e for e in badfx.errors)
+            and any("EH-0.a is under milestone FX-2" in e for e in badfx.errors)
+            and sum("malformed work package heading in FX-2" in e for e in badfx.errors) == 2
+            and len(badfx.errors) == 6,
+            f"malformed FX- and EH- headings are errors {badfx.errors}",
+        )
+        badfxrow = parse_plan(
+            FIX_STEPS_PLAN
+            + "| 2026-11-23 | FX-A | fix-loop ownership: `f/e.cpp` -> fix-2 | bad id |\n"
+        )
+        expect(
+            len(badfxrow.errors) == 1 and "malformed fix-loop row" in badfxrow.errors[0],
+            "a fix-loop row with an FX- id of another form is an error",
+        )
+        # ownership, 'reads FX-2', 'scope FX-2' and 'scope EH-0' through main(), with the staged
+        # paths faked.
+        fx_file = os.path.join(tmp, "fix-steps-plan.md")
+        fx_conflict_file = os.path.join(tmp, "fix-steps-conflict-plan.md")
+        for path, body in ((fx_file, FIX_STEPS_PLAN), (fx_conflict_file, fx_conflicting)):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(body)
+        results, outputs = {}, {}
+        try:
+            for name, plan_path, staged, argv in (
+                ("ownership", fx_file, [], ["ownership"]),
+                ("ownership conflict", fx_conflict_file, [], ["ownership"]),
+                ("reads FX-2", fx_file, [], ["reads", "FX-2"]),
+                ("scope FX-2 ok", fx_file, ["f/a.cpp", "f/test/t.c", "f/c.cpp"], ["scope", "FX-2"]),
+                ("scope FX-2 offender", fx_file, ["f/a.cpp", "r/a.h"], ["scope", "FX-2"]),
+                ("scope EH-0 ok", fx_file, ["e/sub/y.cpp", "e/d.cpp"], ["scope", "EH-0"]),
+                ("scope FX-1", fx_file, [], ["scope", "FX-1"]),
+                ("scope FX-A", fx_file, [], ["scope", "FX-A"]),
+            ):
+                globals()["staged_paths"] = lambda _repo, s=staged: list(s)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(
+                    io.StringIO()
+                ):
+                    try:
+                        results[name] = main(argv + ["--plan", plan_path, "--repo", repo])
+                    except SystemExit as e:
+                        results[name] = f"usage {e.code}"
+                outputs[name] = out.getvalue()
+        finally:
+            globals()["staged_paths"] = real_staged
+        expect(
+            results
+            == {
+                "ownership": 0,
+                "ownership conflict": 1,
+                "reads FX-2": 1,
+                "scope FX-2 ok": 0,
+                "scope FX-2 offender": 1,
+                "scope EH-0 ok": 0,
+                "scope FX-1": 2,
+                "scope FX-A": "usage 2",
+            },
+            f"main() runs ownership, 'reads FX-2', 'scope FX-2' and 'scope EH-0', finds no FX-1 "
+            f"and refuses 'scope FX-A' {results}",
+        )
+        reports = (
+            "ownership: 3 milestones, 6 work packages, 2 fix-loop rows: OK"
+            in outputs["ownership"]
+            and "MISSING FX-2.b: llvm/x/fx-added-later.md" in outputs["reads FX-2"]
+            and "reads FX-2: 6 path(s) checked: 1 missing" in outputs["reads FX-2"]
+            and "OUT OF SCOPE r/a.h (owned by R-a.a in other milestones)"
+            in outputs["scope FX-2 offender"]
+            and "FX-1 is not a milestone of the plan" in outputs["scope FX-1"]
+        )
+        expect(
+            reports,
+            "main() reports FX-2's counts, its missing Reads path and its offender's owner"
+            + ("" if reports else f" {outputs}"),
+        )
+
     print(
         f"plan-check self-test: {'PASS' if not failures else 'FAIL'} "
         f"({len(failures)} failure(s))"
@@ -1144,7 +1386,8 @@ def main(argv: Sequence[str]) -> int:
     ap.add_argument(
         "milestone",
         nargs="?",
-        help="M<n>, P-<n>[a-z], MC-<n> or R-<letter>[<digits>] for 'reads' and 'scope'",
+        help="M<n>, P-<n>[a-z], MC-<n>, R-<letter>[<digits>], FX-<n> or EH-<n> for 'reads' and "
+        "'scope'",
     )
     ap.add_argument(
         "--self-test", action="store_true", help="run the embedded self-test"
@@ -1167,7 +1410,9 @@ def main(argv: Sequence[str]) -> int:
         ap.error("'ownership' takes no milestone (it checks every milestone)")
     if args.command in ("reads", "scope"):
         if not args.milestone or not MILESTONE_ID_RE.fullmatch(args.milestone):
-            ap.error(f"'{args.command}' needs a milestone such as M0, P-1a, MC-1 or R-a")
+            ap.error(
+                f"'{args.command}' needs a milestone such as M0, P-1a, MC-1, R-a, FX-2 or EH-0"
+            )
 
     repo = os.path.abspath(args.repo)
     plan_path = args.plan or os.path.join(repo, PLAN_RELPATH)
