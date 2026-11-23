@@ -7860,7 +7860,12 @@ single-threaded OS layer over the BCL), M28, M29, M30, **P-3** (threads, per-thr
 state), M31-M35, **P-4** (msil32). P-1a, P-1b, MC-1, P-2, P-3 and P-4 are milestones with the Phase 3 protocol
 (section 1, 5.13's rules, 5.17.7's gate) outside Phase 3's numbering and exit gate. P-1r is not a farm milestone: it
 is a read-only orchestration pass after P-1b whose product is one `[MSIL] Plan:` commit of section 12 rows (the rows
-R1-R21 this contract cites as "P-1r row R<n>"), because the plan must not change during a farm run.
+R1-R21 this contract cites as "P-1r row R<n>"), because the plan must not change during a farm run. Portable I/O (the
+section 12 row 'Program order amended (portable I/O)', read with this paragraph) adds **MC-4** (the caught exception
+as a ticket in managed calls) after EH-0 with FX-1 to FX-3 and before R-a2, and, after P-4, **MC-5** (`ref`
+parameters of class types and `Nullable` of an enum in managed calls), **P-5a** (POSIX files) and **P-5b** (network
+and processes); the four follow the same protocol outside any phase's numbering and exit gate (5.19.18, 5.20.17,
+5.20.18).
 
 Decisions this contract applies: the user's decisions of 2026-11-01 (portable triples, msil64 first, msil32 in P-4,
 no `__ELF__`, a dotnet link-rule family, managed function pointers, one shared C state) and the decision brief answers
@@ -8419,6 +8424,11 @@ through the program's own prototype is an undefined-symbol link error with PL3's
 | User `thread_local` | M31: Phase 2's error (`.tdata`/`.tbss` are not T-P8, LR7) | M31's per-output block, applied under the Dotnet rule set by P-1r row R19 (`allowsTLSTemplate`; M31.f/M31.g add one msil64 case each; M31's `__msil_thread_exit`/`__msil_thread_adopt` calls are not emitted on dotnet). `c.dll` itself never contains a `thread_local`, before or after M31 (5.19.12) |
 | Threads (`pthread_*`, `thrd_*`), C function pointer to delegate | P-3: absent | P-3 |
 | `-static` | P-3: T-P9 (driver), T-P11 (msil-ld, PL10), no `libc.a` in the sysroot (PV4) | mode 3 with the shared C state |
+| `environ` and `envp` | P-3: absent before P-2; from P-2 `unistd.h` declares the object `environ`, and a use is a plain undefined symbol at link (5.19.10) | P-3: `environ` as an accessor macro over an exported function, and `envp` as `main`'s third argument (5.19.10) |
+| POSIX files: descriptors (`open`, `read`, `write`, `lseek`, `close`, the `dup` family, `fcntl` without locks, `fileno`, `fdopen`), the `stat` family, directories, paths, links, permission bits, file times, `libgen.h`, the `unistd.h` basics with the user and group ids, `getentropy`, `mmap` without `MAP_SHARED` (5.19.4 lists them) | P-5a: absent; P-2's descriptor core, under the standard `FILE`s, has no public function | P-5a's layer over `FileStream`, `FileSystemInfo`, `Directory`, `Path` and `MemoryMappedFile` views (5.19.18); a feature that the running runtime or OS lacks (links on .NET Framework, for example) gives POSIX's own error for that gap where POSIX names one, else what 5.19.18 lists for it |
+| Network and processes: sockets, name lookup, `poll`, `select`, `pipe`, `eventfd`, `socketpair`, `posix_spawn`, `popen`, `system`, `waitpid`, `fcntl`, `lockf` and `flock` locks, `MAP_SHARED` (5.19.4 lists them) | P-5b: absent | P-5b's layer over `Socket`, `Dns`, the libc's own pipes, eventfds and socketpairs, `System.Diagnostics.Process`, `FileStream.Lock` and `MemoryMappedFile` (5.19.18), with P-5a's rule for a missing feature (`EAFNOSUPPORT` for `AF_UNIX` where the runtime has none) |
+| `fork`, `vfork`, the `exec*` family, `mprotect`, `MAP_FIXED`, `PROT_NONE` and guard pages, `PROT_EXEC`, descriptor passing (`SCM_RIGHTS`) | permanent: the functions undeclared, the flags undefined, because no .NET member replaces or copies the process image, sets page protection or a map's address, or passes a descriptor, and no native code runs (Claude's reading under the row 'Project end goal') | |
+| `mkfifo`, `mknod`, the `chown` family; terminals and pseudo-terminals, `O_NOFOLLOW`, `F_GETLK` and `lockf`'s `F_TEST`, `epoll`, `inotify`, `mremap`, `link`, `linkat`, raw sockets, `SOCK_SEQPACKET`, `MSG_DONTWAIT`, `sockatmark`, `gethostbyname`, `gethostbyaddr`, `shm_open`, `shm_unlink`, `mlock`, `munlock`, `dlopen`; `ppoll`, `pselect`, `kill`, the spawn attributes' signal flags | absent (`mkfifo`, `mknod` and the `chown` family "not supported yet": no .NET member was found) | no step plans them yet (5.19.18); the last four come with the signal design |
 | Variadic definitions and calls | none from P-1a (PC5; M26's rules; PB1's `va_arg` test) | |
 | setjmp/longjmp | M27 (MSJ1 is "any triple") | M27. 5.15.4 saves the signal mask only "on a Linux triple", so on dotnet M27 would skip it silently; P-1r row R1 extends 5.15.4's condition to `*-unknown-dotnet` (one condition in `MSILLowerSjLj`; the saved mask at offset 72 is `sizeof(sigset_t)` of 5.19's portable ABI, inside 5.15.4's 128 bytes and P-1b's 200-byte `jmp_buf`). A `sigsetjmp(buf, nonzero)` site then references `sigprocmask`, absent until the signal design: a link error with N6's line. M27's gate stays host-only; MC-1.h adds the first portable setjmp/longjmp self-check and the `sigsetjmp` mask case in `msil/test/Portable/03-sjlj` |
 | Native-callable function pointers, thunks, `--uco-thunks` (M28) | never on portable: function pointers are managed (`ldftn`/`calli`); P-1r row R2 gates M28's dispatch, thunks and callback rules off on `*-unknown-dotnet` through a `ThunkKind::Managed` entry kind (Phase 2's `ldftn Method; stsfld Field` bytes, set for every entry when `!cli::bindsNatively(TT)`) | |
@@ -8430,6 +8440,7 @@ through the program's own prototype is an undefined-symbol link error with PL3's
 | `__float128`, `-mlong-double-*`, `-fshort-wchar` | permanent error | |
 | fenv (`fe*`), `math_errhandling`'s `MATH_ERREXCEPT` | absent: llvm-libc's dummy `FEnvImpl` would silently succeed; `math_errhandling` is `MATH_ERRNO` only (brief Q20 (a)) | no step plans them; a software fenv only on the user's request |
 | Managed calls from C | MC-1 | MC-1's attribute (5.20) |
+| Exception tickets (MC-4); class byrefs and `Nullable` enums (MC-5) in managed calls | MC-4: T-M4; MC-5: T-M2 (as on the host triples, 5.15.11) | 5.20.17, 5.20.18 |
 | Running in a 32-bit or big-endian process | permanent: the guard's `PlatformNotSupportedException` (T-P10, 5.18.7) | |
 | `msil32-unknown-dotnet` code generation and links | P-4: backend, msil-ld and PE writer errors (T-P1, 5.18.11) | P-4 |
 
@@ -8507,7 +8518,8 @@ portable triples, which bind no native code; P-1r row R12 adds a sentence saying
   .NET 10 with TC=0, `$wslRuntime`), the `-wsl` name following lit-legs' rule (`Test-WslLeg`: tag `Wsl` or a name like
   `*-wsl`) so that `run-m1-gate.ps1 -NoWsl` leaves the WSL run out, as for `gc-churn`/`gc-churn-wsl`. Paths:
   `msil/test/Portable` (P-1a's `00-freestanding`, then P-1b's `01-libc` and `90-loud`, MC-1's `02-managed-calls` and
-  `03-sjlj`, and P-2's directories as they appear). Setup, stamped, before the Windows run: `build-builtins.py
+  `03-sjlj`, P-2's directories as they appear, and P-5a's `09-files` and P-5b's `10-network`, with MC-4's and MC-5's
+  portable copies in `02-managed-calls`). Setup, stamped, before the Windows run: `build-builtins.py
   --triple msil64-unknown-dotnet`, and from P-1b `build-libc.py`; neither is a row of `msil/utils/ci/build.ps1` or
   `build.sh`, so the CI build of every push and of `run-m1-gate.ps1` never builds the portable archive or `c.dll`.
   - **Tag `Portable`** (a new 5.17.6 tag), run by `lit-legs.ps1 -Portable` (with `-Wsl` for the WSL half) and
@@ -8524,12 +8536,13 @@ portable triples, which bind no native code; P-1r row R12 adds a sentence saying
     M27-M35 gate), `net8`, `lto`, `p3-full` and `wsl-p3`, which take `msil/test` whole, neither run nor count them.
   - **When they run.** The portable smoke legs run in post-commit runs only (user decision); the M27-M35 gates stay
     as written. A portable failure found by a post-commit run becomes a fix WP of the next milestone or P-step through
-    a section 12 row, as 5.17.11 says for any post-commit failure. Each P-step's own gate (P-1a, P-1b, P-2, P-3, P-4)
-    also runs that step's own portable directories as exit checks, by calling `msil/utils/build/msil-lit.ps1` on them
-    with the portable parameters (P-1a: `00-freestanding`, including `guard-x86`), never `lit-legs.ps1 -Leg
-    portable-smoke` (brief Q11 (a)). MC-1's gate runs no portable step: MC-1 is proved on the host triples and by its
-    llc and lld tests' msil64 cases, and its `02-managed-calls` and `03-sjlj` directories run only in the post-commit
-    legs.
+    a section 12 row, as 5.17.11 says for any post-commit failure. Each P-step's own gate (P-1a, P-1b, P-2, P-3, P-4,
+    P-5a, P-5b) also runs that step's own portable directories as exit checks, by calling
+    `msil/utils/build/msil-lit.ps1` on them with the portable parameters (P-1a: `00-freestanding`, including
+    `guard-x86`), never `lit-legs.ps1 -Leg portable-smoke` (brief Q11 (a)). MC-1's gate runs no portable step: MC-1 is
+    proved on the host triples and by its llc and lld tests' msil64 cases, and its `02-managed-calls` and `03-sjlj`
+    directories run only in the post-commit legs. MC-4's and MC-5's gates follow MC-1's rule unless their milestone
+    texts say otherwise.
   - **Objects only until P-3.** The legs run `msil_pipeline=obj`; no portable LTO run exists before P-3, which adds
     LTO to the portable legs (brief Q13 (a)); the host LTO legs cover the shared code meanwhile. There is no separate
     32-bit leg (`guard-x86` is a test of the Windows run).
@@ -8566,8 +8579,11 @@ portable triples, which bind no native code; P-1r row R12 adds a sentence saying
 | P-1r | the re-pins named here: R1 (5.15.4's mask condition on dotnet), R2 (M28 off portable through `ThunkKind::Managed`), R3 (5.15.3's `<Module>::.cctor` wording, PE5), R4 and R5 (M29 reuses P-2's LR8 `__dso_handle` and LR11 exit field; R4 also carries M29's host-only `sources.txt` glob), R6, R7, R8 (M30-M32's host-only `sources.txt` globs, PH3), R9 (M33's switches on every MSIL triple), R11 (the `Portable` tag outside M35's gate, PX4), R12 (5.15.11's portable column, 5.18.9), R15 (no repeated type row, PE8), R16 (5.13.6's slot P0b, LR6), R18 (M33.a's `BitConverter` type row, PE8), R19 (M31's TLS template and `MSILLowerThreadLocal` under the Dotnet rule set, LR7; M32's H1 on dotnet), R20 (M28-M35's rule decisions on LR1's predicates and `cli::bindsNatively`, with the G6 grep rerun by their reviewers, LR3), R21 (the `mscorlib-safe.test` count chain from P-1a's 24, PE8) |
 | MC-1 | none of this contract (5.20); PL4 stays (managed calls are not P/Invokes); MC-1.h adds the first portable setjmp/longjmp self-check and the `sigsetjmp` mask case (5.18.9), after M27 |
 | P-2 | LR6 (`LowerGlobalDtorsPass` at slot P0b), LR8 (`__dso_handle`), LR11's P-2 shape (the `__llvm_libc_set_c_main` call, `exit(main())` and the dotnet `EntryPoint` exit field), PC6's TLI re-audit; `hcreate`/`hsearch` (5.18.9) |
-| P-3 | PV4's mode 3 (`libc.a` in the sysroot, the driver option, PL10 lifted), the lock path (5.18.9), `rand`/`srand`, LTO in the portable legs (PX4) |
+| P-3 | PV4's mode 3 (`libc.a` in the sysroot, the driver option, PL10 lifted), the lock path (5.18.9), `rand`/`srand`, LTO in the portable legs (PX4); LR11's third `main` argument `envp`, with `environ` (5.19.10) |
 | P-4 | 5.18.11 P4-3, PT10's msil32 freeze |
+| MC-4, MC-5 | none of this contract (5.20.17, 5.20.18); PL4 stays (managed calls are not P/Invokes) |
+| P-5a | 5.18.9's P-5a row; PC6's TLI re-audit and PL3's N6 name list for its names (5.19.4); `09-files` in its gate and in the portable legs (PX4) |
+| P-5b | 5.18.9's P-5b row; the same audit and list for its names; `10-network` (PX4) |
 
 #### 5.18.13 Upstream files the portable steps change (additions to 5.13.5)
 
@@ -8656,6 +8672,9 @@ from them. Code anchors name files and functions, never a line number alone.
    shows up in practice. No stub that traps, returns an error code or answers in UTC stands in for a missing OS layer.
    An entry point whose freestanding implementation gives a silently wrong answer (the `localtime` family without a
    time-zone layer, `fenv` without floating-point status) counts as OS-dependent.
+   A shipped function that meets a runtime or OS which cannot do it is no such stub (5.19.18): it returns the error
+   POSIX names for exactly that gap, else it does what 5.19.18's **Loud failures** lists for it, by default 5.15.1
+   rule 1's run-time form (a thrown `PlatformNotSupportedException`).
 3. **A C library the user links, not a runtime.** `c.dll` and `libc.a` are C libraries in Design.md section 6's sense
    (its 'No runtime support assembly' bullet names the portable libc's assembly). The toolchain's own private state
    (thunk table, TLS block, shadow stack, MSJ1 status blocks) stays per output under 5.14.4 T9. Only the C library's
@@ -8682,9 +8701,11 @@ from them. Code anchors name files and functions, never a line number alone.
 | Stage | Program position | What the libc gains | Modes available on portable |
 | --- | --- | --- | --- |
 | P-1b | after P-1a (after M26) | Freestanding entry points only (5.19.4); errno over one exported cell (kept through P-2); `c.dll` and an empty `libm.a` in the sysroot; headers for the shipped set | mode 2 |
-| P-2 | after MC-1 (after M27) | The single-threaded OS layer over the BCL: heap, stdio over `System.IO.Stream`, `exit`/`atexit`/`abort`, environment, clocks and time zone; global destructors through `__cxa_atexit`; `__llvm_libc_set_c_main`; the process root at layout major 0 (no per-thread state) | mode 2 |
-| P-3 | after M28-M30 | Threads (C11 `thrd_*`, POSIX `pthread_*`), `LIBC_THREAD_MODE_PLATFORM`, per-thread state (the per-thread C block, errno moves into it, its holder), `rand`/`srand`, the libc's wait buckets, the `AppDomain.ProcessExit` subscription, the shared layouts frozen as major 1, `-static` enabled | modes 2 and 3 |
+| P-2 | after R-a2 (row 'Program order amended (real .NET references)') | The single-threaded OS layer over the BCL: heap, stdio over open file descriptions that hold `System.IO.Stream`s (the descriptor core: the FD sub-block at major 0 with the descriptions of descriptors 0-2 and of every `FILE`, and no public descriptor function, 5.19.10), `exit`/`atexit`/`abort`, environment, clocks and time zone; global destructors through `__cxa_atexit`; `__llvm_libc_set_c_main`; exact errno codes through MC-4's ticket (5.19.5); the process root at layout major 0 (no per-thread state) | mode 2 |
+| P-3 | after M28-M30 | Threads (C11 `thrd_*`, POSIX `pthread_*`), `LIBC_THREAD_MODE_PLATFORM`, per-thread state (the per-thread C block, errno moves into it, its holder), `rand`/`srand`, the libc's wait buckets, the `AppDomain.ProcessExit` subscription, `environ` as an accessor macro with `envp` (5.19.10), the shared layouts frozen as major 1 (the FD sub-block with its lock words among them), `-static` enabled | modes 2 and 3 |
 | P-4 | after M35 | The same contract at 4-byte pointers for `msil32-unknown-dotnet` (its sizes in 5.19.6) | modes 2 and 3 |
+| P-5a | after MC-5 (after P-4) | POSIX files over the BCL, at both widths: the public descriptor layer over the FD sub-block (one offset per open file description), the `stat` family, directories, paths, links, permission bits and file times, `libgen.h`, the `unistd.h` basics with the user and group ids, `getentropy`, `clearenv` and `putenv`, private file maps over `MemoryMappedFile` views clamped to the file's length and anonymous maps over heap blocks; references to `System.Core` and to .NET 8's reference assemblies (5.19.7); 5.19.18 | modes 2 and 3 |
+| P-5b | after P-5a | Network and processes, at both widths: IPv4 and IPv6 sockets, name lookup, `poll` and `select` over sockets, files and the libc's own pipes, eventfds and socketpairs, `posix_spawn`, `popen`, `system` and `waitpid` over `System.Diagnostics.Process`, `fcntl`, `lockf` and `flock` locks, `MAP_SHARED` file maps over views clamped to the file's length; 5.19.18 | modes 2 and 3 |
 
 Mode 1 (host triple, platform libc through P/Invoke) is Phase 1-3's model and is unchanged by every stage.
 
@@ -8699,17 +8720,28 @@ under `msil/`, a fork prefix, and need no manifest line.
 | Path | Stage | Contents |
 | --- | --- | --- |
 | `libc/config/dotnet/config.json` | P-1b | Options (below) |
-| `libc/config/dotnet/msil64/entrypoints.txt`, `headers.txt` | P-1b, appended by P-2, P-3 | The shipped set (5.19.4) and the headers that declare exactly it |
-| `libc/config/dotnet/msil32/` | P-4 | The msil32 lists (same names) |
-| `msil/lib/libc/msil64-unknown-dotnet.exports` | P-1b, append-only | `c.dll`'s export list, generated from `entrypoints.txt` plus the named extras (5.19.7); `msil32-unknown-dotnet.exports` at P-4 |
-| `libc/src/__support/OSUtil/dotnet/` | P-1b: `io.h` (declares `write_to_stderr`, defines nothing), `errno.cpp`, `CMakeLists.txt` (the `dotnet_util` library); P-2: `io.cpp`, `exit.cpp`, `shared_state.{h,cpp}`, the MC-1 declarations of the BCL members the layer calls; P-3: `threads/` | The OS layer |
+| `libc/config/dotnet/msil64/entrypoints.txt`, `headers.txt` | P-1b, appended by P-2, P-3, P-5a, P-5b | The shipped set (5.19.4) and the headers that declare exactly it |
+| `libc/config/dotnet/msil32/` | P-4, appended by P-5a, P-5b | The msil32 lists (same names) |
+| `msil/lib/libc/msil64-unknown-dotnet.exports` | P-1b, append-only | `c.dll`'s export list, generated from `entrypoints.txt` plus the named extras (5.19.7); `msil32-unknown-dotnet.exports` at P-4; P-5a and P-5b append to both |
+| `libc/src/__support/OSUtil/dotnet/` | P-1b: `io.h` (declares `write_to_stderr`, defines nothing), `errno.cpp`, `CMakeLists.txt` (the `dotnet_util` library); P-2: `io.cpp`, `exit.cpp`, `shared_state.{h,cpp}`, the MC-1 declarations of the BCL members the layer calls, the descriptor core (5.19.10); P-3: `threads/`; P-5a, P-5b: the BCL calls of their layers (5.19.18) | The OS layer |
 | `libc/src/__support/StringUtil/tables/dotnet_platform_errors.h` | P-1b | The `strerror` table of 5.19.5 |
-| `libc/src/__support/File/dotnet/` | P-2 | `DotnetFile` (5.19.9) |
-| `libc/src/stdio/dotnet/` | P-2 | The standard-stream accessors of 5.19.9, `remove`, `rename`, `tmpfile`, `tmpnam` (upstream's are Linux-only) |
-| `libc/src/stdlib/dotnet/` | P-2 | `malloc` family (5.19.10), `getenv` |
-| `libc/src/time/dotnet/` | P-2 | clocks and the time-zone layer |
+| `libc/src/__support/File/dotnet/` | P-2; P-5a | `DotnetFile` over the descriptor core (5.19.9, 5.19.10); P-5a: `dir.cpp` with `Dir`'s five platform hooks |
+| `libc/src/stdio/dotnet/` | P-2; P-5a; P-5b | The standard-stream accessors of 5.19.9, `remove`, `rename`, `tmpfile`, `tmpnam` (upstream's are Linux-only); P-5a: `fdopen`; P-5b: `popen`, `pclose` |
+| `libc/src/stdlib/dotnet/` | P-2; P-5a; P-5b | `malloc` family (5.19.10), `getenv`; P-5a: `clearenv`, `putenv`, `mkstemp`, `mkostemp`, `mkdtemp`, `realpath`; P-5b: `system` |
+| `libc/src/time/dotnet/` | P-2; P-5a | clocks and the time-zone layer; P-5a: `nanosleep` |
 | `libc/include/llvm-libc-macros/dotnet/time-macros.h`, `libc/include/llvm-libc-macros/dotnet/CMakeLists.txt` | P-2 | The dotnet `CLOCK_*` values; the CMake file that `libc/include/llvm-libc-macros/CMakeLists.txt` picks up through `add_subdirectory(${LIBC_TARGET_OS})` when the directory exists |
 | `libc/src/__support/threads/dotnet/` | P-3 | The dotnet `Mutex` and the wait buckets (5.19.12) |
+| `libc/src/unistd/dotnet/` | P-3: `environ.cpp` (the accessor of 5.19.10); P-5a, P-5b: the `unistd.h` entry points they add | 5.19.4's `unistd.h` names that have no generic source |
+| `libc/src/fcntl/dotnet/`, `libc/src/sys/uio/dotnet/`, `libc/src/sys/stat/dotnet/`, `libc/src/sys/statvfs/dotnet/`, `libc/src/sys/time/dotnet/`, `libc/src/sys/random/dotnet/`, `libc/src/sys/mman/dotnet/`, `libc/src/sys/utsname/dotnet/`, `libc/src/sys/resource/dotnet/`, and the user-database folders 5.19.18 names | P-5a | P-5a's entry points of 5.19.4 that have no generic source |
+| `libc/src/sys/socket/dotnet/`, `libc/src/netdb/dotnet/`, `libc/src/poll/dotnet/`, `libc/src/sys/select/dotnet/`, `libc/src/sys/eventfd/dotnet/`, `libc/src/sys/ioctl/dotnet/`, `libc/src/spawn/dotnet/`, `libc/src/sys/wait/dotnet/`, `libc/src/sys/file/dotnet/` | P-5b | P-5b's entry points of 5.19.4 that have no generic source |
+| further files in `libc/include/llvm-libc-macros/dotnet/` | P-5a, P-5b | Linux's values for the POSIX macro families of 5.19.6: P-5a `fcntl-macros.h`, `unistd-macros.h`, `sys-stat-macros.h`, `dirent-macros.h`, `sys-mman-macros.h`; P-5b `sys-socket-macros.h`, `poll-macros.h`, `netdb-macros.h`, `sys-eventfd-macros.h`, `sys-wait-macros.h` |
+
+**Headers by stage** (`headers.txt`; both widths from P-5a). `unistd.h` comes with P-2 (`getopt`, 5.19.4); its
+`environ` is a declared object that `c.dll` does not define until P-3 makes it the accessor macro (5.19.10). P-5a
+adds `fcntl.h`, `sys/types.h`, `sys/stat.h`, `sys/statvfs.h`, `dirent.h`, `sys/time.h`, `sys/uio.h`, `sys/random.h`,
+`sys/mman.h`, `sys/utsname.h`, `sys/resource.h`, `pwd.h`, `grp.h` and `libgen.h`; P-5b adds `sys/socket.h`,
+`sys/un.h`, `netinet/in.h`, `netinet/tcp.h`, `arpa/inet.h`, `netdb.h`, `poll.h`, `sys/select.h`, `sys/eventfd.h`,
+`sys/ioctl.h`, `sys/file.h`, `sys/wait.h` and `spawn.h`.
 
 No `libc/include/llvm-libc-macros/dotnet/` errno family exists: the errno numbers extend upstream's generic set
 (5.19.5).
@@ -8745,8 +8777,10 @@ under `<build>/runtimes/` and the sysroot. It links `c.dll` from the libc build'
 msil64 helper archive from the resource directory (5.18.8, brief Q9 (a)), which relies on 5.18 PL7's two
 `--export-list` rules (a forced export extracts the archive member that defines it, as `-u` does, and wins over
 `--exclude-libs`). From P-2 the link adds `--reference` to the Framework 4.8 implementation assemblies `mscorlib.dll`
-and `System.dll` of the build host (5.19.13); on a host without them the script stops with a message naming the
-missing file and never falls back to the built-in table or another reference set. It installs the headers and `c.dll`
+and `System.dll` of the build host (5.19.13), and from P-5a also its `System.Core.dll` and the newest installed .NET 8
+reference pack (5.11.10's `refs-net8`) for the members behind 5.19.13's version guard (5.19.7); on a host without them
+the script stops with a message naming the missing file and never falls back to the built-in table or another
+reference set. It installs the headers and `c.dll`
 into the portable sysroot that 5.18 PV2 searches (`<sysroot>/include/` and `<sysroot>/lib/msil64-unknown-dotnet/`;
 in the build tree `<build>/lib/clang-runtimes/msil64-unknown-dotnet/`), together with an empty `libm.a` (an archive
 with no members) in the same library directory, so that build systems passing `-lm` link (brief Q14 (a); the math
@@ -8811,13 +8845,32 @@ test).
 | `rand`, `srand` | `cpp::Atomic<unsigned long>` (`src/stdlib/rand_util.cpp`) compiles to `__atomic_*_8` calls, undefined on portable until M30's inline atomics; M30 does not touch the libc | P-3, the first libc stage after M30: it adds both to `entrypoints.txt` and the append-only export list, with the shared MISC cell |
 | `strsignal`, `signal.h`, `raise`, `signal`, `sigprocmask` | a signal design | the signal design, not before P-3 (brief Q21 (a)) |
 | `thrd_*`, `mtx_*`, `cnd_*`, `tss_*`, `call_once`, `pthread_*`, `__cxa_thread_atexit_impl` | threads | P-3 |
-| `environ`, `open`/`read`/`write`, `fileno`, `fdopen`, `fcntl.h`, `popen` | a design for `environ` and for POSIX descriptors | not through P-3 (5.19.10) |
+| `environ` (an accessor macro over an exported function), `envp` as `main`'s third argument | the `environ` design of 5.19.10 and its sub-block of the shared state (5.19.11) | P-3 |
+| POSIX descriptors: `open`, `openat`, `creat`, `close`, `read`, `write`, `pread`, `pwrite`, `readv`, `writev`, `lseek`, `dup`, `dup2`, `dup3`, `fcntl` without its lock commands, `ftruncate`, `truncate`, `fsync`, `fdatasync`, `isatty`, `fileno`, `fdopen`, `mkstemp`, `mkostemp`; file-system calls: the `stat` family, `mkdir`, `rmdir`, `unlink`, `access`, `chmod`, `fchmod`, `umask`, `getcwd`, `chdir`, `realpath`, `symlink`, `readlink`, `opendir` ... `closedir`, `rewinddir`, `telldir`, `seekdir`, `scandir`, `alphasort`, `utimes`, `futimens`, `utimensat`, `mkdtemp`, `pathconf`, `fpathconf`, `statvfs`, `dirname`, `basename`; `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `getegid`, `sleep`, `usleep`, `nanosleep`, `getpagesize`, `sysconf`, `gethostname`, `uname`, `getrlimit`, `setrlimit`, the `pwd.h` and `grp.h` lookups, `getentropy`, `clearenv`, `putenv`; `mmap`, `munmap`, `msync`, `madvise`, `posix_madvise` (no `MAP_SHARED`) | the public layer over P-2's descriptor core; `System.Core`'s `MemoryMappedFile`, .NET 8's members behind 5.19.13's guard and MC-5's `Nullable` enums (the create mode) (5.19.18) | P-5a |
+| sockets (`socket` ... `getpeername`, `accept4`, `sendmsg` and `recvmsg` without control data, `ioctl` with `FIONREAD` and `FIONBIO`), `inet_pton` ... `inet_ntoa` and the `htons` family, `getaddrinfo`, `freeaddrinfo`, `gai_strerror`, `getnameinfo`, `getservbyname`, `getservbyport`; `poll`, `select`, `pipe`, `pipe2`, `eventfd`, `socketpair`; `posix_spawn`, `posix_spawnp`, the `posix_spawn_file_actions_*` functions, `posix_spawnattr_init`, `posix_spawnattr_destroy`, `posix_spawnattr_getflags` and `posix_spawnattr_setflags` (no signal flags), `popen`, `pclose`, `system`, `waitpid`, `wait`; `fcntl`'s lock commands, `lockf`, `flock`; `MAP_SHARED` | P-3's threads and delegates (pump and waiter threads, the wake socket's waits), the libc's lock table and MC-5's `ref` parameters (`recvfrom`'s address) (5.19.18) | P-5b |
 
 **P-2 adds** the heap, stdio, exit, environment and time rows above, with `hcreate`/`hsearch` (`randomness.h` moved
 to `LIBC_THREAD_LOCAL`, empty in SINGLE mode; per thread under P-3's thread-local rule, 5.19.12). **P-3 adds** the
-thread rows and `rand`/`srand` with their shared cell. Every stage's export-list test (5.19.15) proves that the list
-only grew. P-2 also re-audits `TargetLibraryInfo` on OS `dotnet`, which treats every C function as available, for
-folds into functions `c.dll` lacks at that stage (for example `printf` to `puts`).
+thread rows, `rand`/`srand` with their shared cell and the `environ` row. **P-5a** and **P-5b** add their rows to the
+msil64 and msil32 lists at once; a name whose design carries a silent difference ships only with the user's OK of
+that difference (5.15.1 rule 1; 5.19.18 lists them), else in 5.19.18's loud form. Every stage's export-list test
+(5.19.15) proves that the list only grew. P-2 also re-audits `TargetLibraryInfo` on OS `dotnet`, which treats every C
+function as available, for folds into functions `c.dll` lacks at that stage (for example `printf` to `puts`); P-5a
+and P-5b repeat the audit for their names and regenerate N6's list `lld/MSIL/CLibraryNames.def` (5.18 PL3) for the
+names their YAML additions bring (`rewinddir`, `telldir` and `seekdir` at P-5a; `getnameinfo`, `getservbyname`,
+`getservbyport`, `posix_spawnp` and the `posix_spawnattr_*` functions at P-5b).
+
+**Never shipped** (impossible on CIL and the runtime: no .NET member replaces or copies the process image, sets page
+protection or a map's address, or passes a descriptor, and no native code runs; Claude's reading under the row
+'Project end goal', 5.19.18): `fork`, `vfork`, `execve` and the other `exec*` functions, and `mprotect`; `MAP_FIXED`,
+`PROT_NONE` and `PROT_EXEC` stay undefined, and `sendmsg` and `recvmsg` pass no descriptor (`SCM_RIGHTS`; they take
+no control data at all).
+
+**No stage plans** these yet (5.19.18): `mkfifo`, `mknod` and the `chown` family (no .NET member found; "not supported
+yet"), terminals and pseudo-terminals, `O_NOFOLLOW`, `F_GETLK` and `lockf`'s `F_TEST`, `epoll`, `inotify`, `mremap`,
+`link` and `linkat`, raw sockets and `SOCK_SEQPACKET`, `MSG_DONTWAIT`, `sockatmark`, `gethostbyname`, `gethostbyaddr`,
+`shm_open`, `shm_unlink`, `mlock`, `munlock` and `dlopen`; `ppoll`, `pselect`, `kill` and the spawn attributes' signal
+flags wait for the signal design.
 
 #### 5.19.5 errno
 
@@ -8864,12 +8917,18 @@ folds into functions `c.dll` lacks at that stage (for example `printf` to `puts`
   generic name in neither), with the matching errno-name tables, so `strerror`, `strerror_r` and printf `%m`/`%#m`
   name every number. Upstream's `tables/linux_platform_errors.h` is not used: its Linux extension table names codes
   the generic set does not define.
-- **MC-1 mapping (P-2).** The OS layer maps BCL exceptions to these codes through 5.20's `msil_catch` entries, tested
+- **Mapping (from P-2).** The OS layer maps BCL exceptions to these codes through 5.20's `msil_catch` entries, tested
   by type in the order written (5.20 MA5), so a derived type precedes its base: `FileNotFoundException` and
   `DirectoryNotFoundException` to `ENOENT`, `UnauthorizedAccessException` to `EACCES`, `PathTooLongException` to
-  `ENAMETOOLONG`, `DecoderFallbackException` to `EILSEQ`, then any other `IOException` to `EIO`. `msil_catch` cannot
-  test an HResult, so no `IOException` is told apart by one. Each P-2 primitive lists its own entries; unlisted
-  exceptions escape loudly (5.20.8).
+  `ENAMETOOLONG`, `DecoderFallbackException` to `EILSEQ`, then any other `IOException` to `EIO`. Filters test the type
+  only; each entry's handler also stores a ticket of the caught exception (MC-4, 5.20.17), from which the primitive
+  takes the exact code before it frees the ticket: the Win32 error in a Windows `HResult`, the raw errno in a Linux
+  `IOException`'s `HResult` (decoded with this set's swap of 35 and 75), `InnerException`, `SocketErrorCode` and
+  `NativeErrorCode`, as 5.19.18 decodes them. Exceptions that ordinary C input raises and that are no `IOException`
+  have entries too (`ArgumentException`, `ArgumentOutOfRangeException`, `OperationCanceledException`), and an empty
+  path is refused with `ENOENT` before the call (5.19.18). Each primitive lists its own entries; unlisted exceptions
+  escape loudly (5.20.8), .NET Framework's exception for a device path among them (5.19.18's **Paths**) until
+  5.19.18's answer. The I/O stages add no number to the set above.
 
 #### 5.19.6 The portable C ABI, item by item
 
@@ -8902,10 +8961,39 @@ triples, as the user decided. The libc frozen items:
 | `stdin`, `stdout`, `stderr` spelling | lvalue macros over exported accessors (5.19.9) | same | P-2 |
 | signal numbers, `NSIG`, `sigset_t`, `SIG_DFL`/`SIG_IGN`/`SIG_ERR` | Linux numbering 1-64, `NSIG` 65, `__NSIGSET_WORDS` = 64/(8*`sizeof(unsigned long)`) (1 word), 0/1/-1 | 2 words, 4-aligned | the signal design (brief Q21 (a)) |
 | `once_flag`, `mtx_t`, `cnd_t`, `thrd_t`, `tss_t`, `pthread_*_t`, `pthread_key_t` | llvm-libc's types with 32-bit keys (brief Q34) | same, 4-byte pointers | P-3 |
+| `environ` spelling | `#define environ (*__llvm_libc_environ())` over `char ***__llvm_libc_environ(void)`, exported (5.19.10) | same | P-3 |
+| `ssize_t` | `long`, 8 bytes | 4 bytes | P-5a |
+| `mode_t`, `pid_t`, `uid_t`, `gid_t`, `useconds_t` | `unsigned int`, `int32_t`, `uint32_t`, `uint32_t`, `uint32_t`; 4 bytes each | same | P-5a |
+| `dev_t` | `uint64_t`, 8 bytes | 8 bytes | P-5a |
+| `ino_t`, `nlink_t`, `blksize_t`, `blkcnt_t` | pointer-sized (`unsigned long`, `unsigned long`, `long`, `long`), 8 bytes each | 4 bytes each | P-5a |
+| `off64_t`, `struct flock64` (large-file names) | `int64_t`, as `off_t`; `struct flock`'s layout | same | P-5a |
+| `struct stat` | llvm-libc's fields `st_dev`, `st_ino`, `st_mode`, `st_nlink`, `st_uid`, `st_gid`, `st_rdev`, `st_size`, `st_atim`, `st_mtim`, `st_ctim`, `st_blksize`, `st_blocks`; 120 bytes | 104 bytes | P-5a |
+| `struct dirent`, `DIR` | `{ino_t d_ino; unsigned char d_type; char d_name[766];}` (llvm-libc's fields off Linux, `d_name` sized for `NAME_MAX` 765), 776 bytes; `DIR` incomplete | 772 bytes | P-5a |
+| `struct iovec` | `{void *iov_base; size_t iov_len}`, 16 bytes | 8 bytes | P-5a |
+| `struct timeval`, `suseconds_t` | `{time_t tv_sec; suseconds_t tv_usec}`, `suseconds_t` `int64_t`; 16 bytes | 16 bytes | P-5a |
+| `struct flock` | `{int16_t l_type; int16_t l_whence; off_t l_start; off_t l_len; pid_t l_pid}`, 32 bytes; `fcntl.h` declares it from P-5a, and its lock commands work from P-5b | 32 bytes | P-5a |
+| `struct statvfs`, `fsblkcnt_t`, `fsfilcnt_t` | llvm-libc's fields with `uint64_t` counts, 88 bytes | 72 bytes | P-5a |
+| `struct utsname` | five fields of 1024 bytes (llvm-libc's length off Linux and Apple), 5120 bytes | same | P-5a |
+| `struct rlimit`, `rlim_t` | `{rlim_t rlim_cur; rlim_t rlim_max}`, `rlim_t` `uint64_t`; 16 bytes | 16 bytes | P-5a |
+| `struct passwd`, `struct group` | llvm-libc's fields, 48 and 32 bytes | 28 and 16 bytes | P-5a |
+| `nfds_t`, `struct pollfd` | `unsigned int`, 4 bytes; `{int fd; short events; short revents}`, 8 bytes | same | P-5b |
+| `fd_set` | `FD_SETSIZE` 1024 bits in `unsigned long` words, 128 bytes | 128 bytes | P-5b |
+| `socklen_t` | `unsigned int`, 4 bytes, through a `__dotnet__` branch of `socklen_t.h` (llvm-libc's `unsigned long` would be 8) | 4 bytes | P-5b |
+| `sa_family_t`, `in_port_t`, `in_addr_t`, `struct in_addr`, `struct in6_addr` | `unsigned short` and `uint16_t` (2 bytes each), `uint32_t` (4); the structs 4 and 16 bytes | same | P-5b |
+| the `sockaddr` family | llvm-libc's: `sockaddr` 4 bytes (`{sa_family_t sa_family; char sa_data[1]}`), `sockaddr_in` 16, `sockaddr_in6` 28, `sockaddr_un` 110 (`sun_path[108]`), `sockaddr_storage` 128 aligned to 8 | the same sizes; `sockaddr_storage` aligned to 4 | P-5b |
+| `struct linger` | `{int l_onoff; int l_linger}`, 8 bytes | 8 bytes | P-5b |
+| `struct msghdr`, `struct addrinfo` | llvm-libc's fields with the 32-bit `socklen_t`; 56 and 48 bytes | 28 and 32 bytes | P-5b |
+| `posix_spawn_file_actions_t`, `posix_spawnattr_t` | `{void *__front; void *__back}`, 16 bytes; a `__dotnet__` layout with reserved space in place of upstream's empty struct, sized by P-5b's text | 8 bytes; the same rule | P-5b |
+| POSIX macro values and limits | Linux's values, only for names that ship (`O_*`, `AT_*`, `F_*`, `FD_CLOEXEC`, `S_*`, `DT_*`, `UTIME_*`, `SEEK_DATA`, `SEEK_HOLE`, `MAP_*`, `PROT_*`, `MS_*`, `MADV_*`, `R_OK` and its kin, `_SC_*`, `RLIMIT_*` at P-5a; `AF_*`, `SOCK_*`, `MSG_*`, `SOL_*`, `SO_*`, `SHUT_*`, `POLL*`, `AI_*`, `EAI_*`, `NI_*`, `EFD_*`, `LOCK_*`, `W*` at P-5b); `_POSIX_VERSION` 202405L with only the `_POSIX_*` options that ship; `limits.h` through a `__dotnet__` branch of `limits-macros.h`: `PATH_MAX` 4096, `NAME_MAX` 765, `HOST_NAME_MAX` 255, `PIPE_BUF` 4096 and `GETENTROPY_MAX` 256 at P-5a; `FD_SETSIZE` 1024 | same | each name at the stage that ships it |
 
 `once_flag.h`, `__jmp_buf.h` and `callonce.h` end in `#error` off their supported platforms, and `signal-macros.h`,
 `sigset_t.h` and `time-macros.h` have no portable branch today; each gets a `LIBC_TARGET_ARCH_IS_MSIL` or
-`__dotnet__` branch in the stage that freezes it. No `fenv_t` or `fcntl.h` branch is made (5.19.4, 5.19.10).
+`__dotnet__` branch in the stage that freezes it. So do the headers of P-5a and P-5b that give no value off Linux:
+`sys-mman-macros.h` ends in `#error` without the kernel's `<linux/mman.h>`, the other macro dispatchers include a
+`linux/` file only under `__linux__` (5.19.3's dotnet files take their place), and `socklen_t.h`, `struct_dirent.h`,
+`posix_spawnattr_t.h` and `limits-macros.h` take the dotnet definitions above (5.19.14, 5.19.18). Items frozen at P-5a
+or P-5b freeze for both widths at once, since both stages follow P-4, and each stage's header test checks their sizes
+with `_Static_assert`, as P-1b's does (5.19.15).
 
 #### 5.19.7 `c.dll`: the shared assembly and its export ABI
 
@@ -8915,15 +9003,17 @@ triples, as the user decided. The libc frozen items:
   because the .NET host can resolve the wrong file, and any output named `c` that is not `--shared` (`c.c` linked to
   `c.exe`: T-P14) (5.18 PL8; portable-loader R5).
 - **Version.** The assembly version is `<abi-major>.<abi-minor>.0.0` (msil-ld `--assembly-version`): `1.0` at P-1b,
-  the minor raised by each stage commit that appends to the export list. Modern .NET loads a newer `c.dll` for an older
-  program and refuses an older one loudly; .NET Framework does not check versions of a non-strong-named assembly, and a
-  missing export is then a `MissingMethodException` at JIT time. `c.dll` is not strong-named; strong naming would come
-  with its own section 12 row.
+  the minor raised by each stage commit that appends to the export list (P-3's, P-5a's and P-5b's among them, the last
+  two for the `c.dll` of both widths). Modern .NET loads a newer `c.dll` for an older program and refuses an older one
+  loudly; .NET Framework does not check versions of a non-strong-named assembly, and a missing export is then a
+  `MissingMethodException` at JIT time. `c.dll` is not strong-named; strong naming would come with its own section 12
+  row.
 - **Exports.** Exactly the names in `msil/lib/libc/msil64-unknown-dotnet.exports`: every `entrypoints.txt` name that
   is a C function or object, plus the named extras that are no entry point: `__llvm_libc_errno` from P-1b; from P-2
   `__cxa_atexit` and `__cxa_finalize` (defined beside `atexit` in `src/stdlib/atexit.cpp`), the stdio accessors
   `__llvm_libc_stdin`, `__llvm_libc_stdout`, `__llvm_libc_stderr` (5.19.9) and `__llvm_libc_set_c_main` (5.19.9;
-  brief Q28 (b)). `__assert_fail` is an entry point (`libc.src.assert.__assert_fail`). Not exported:
+  brief Q28 (b)); from P-3 `__llvm_libc_environ`, the function under the `environ` macro (5.19.10). `__assert_fail`
+  is an entry point (`libc.src.assert.__assert_fail`). Not exported:
   `__stack_chk_fail` (MSIL has no stack protector), support symbols, the compiler-rt builtins. The list is
   append-only from P-1b; a name is never removed or retyped. msil-ld's `--export-list` (5.18 PL7: forced export even
   of hidden symbols, an error for a name not defined) is the mechanism, so llvm-libc's hidden visibility
@@ -8933,10 +9023,13 @@ triples, as the user decided. The libc frozen items:
 - **Contents rules.** 0 `pinvokeimpl` and 0 `moduleref` at every stage (5.18 PL4; CodeGenModule's
   `addMSILImportAttributes` would otherwise turn an `import_module` in libc code into a P/Invoke, a route to a native
   OS layer). References: `mscorlib` only at P-1b; from P-2, `mscorlib` and `System`, bound through `--reference`
-  (5.19.13); a reference beyond them only with a stage that states it, reached only on modern .NET (5.19.13's one
-  possible case). Release `c.dll` neither defines nor references `write_to_stderr` or `internal::exit` before P-2.
-  Checked with `llvm-cil-dump --stats-only`, which omits empty tables: no `# table ImplMap` or `# table ModuleRef`
-  line, and `# table AssemblyRef rows=1` at P-1b (`rows=2` from P-2).
+  (5.19.13); from P-5a also `System.Core` (on .NET Framework the home of `MemoryMappedFile`; on modern .NET a facade
+  that forwards it: Claude's probe, 2026-11-22, .NET members run from C#, on .NET 8 to 11) and the .NET 8 reference
+  assemblies that the modern members name, reached only behind 5.19.13's version guard; a reference beyond these only
+  with a stage that states it (5.19.13). Release `c.dll` neither defines nor references `write_to_stderr` or
+  `internal::exit` before P-2. Checked with `llvm-cil-dump --stats-only`, which omits empty tables: no `# table
+  ImplMap` or `# table ModuleRef` line, and `# table AssemblyRef rows=1` at P-1b (`rows=2` from P-2; from P-5a the
+  count that P-5a's text derives from its members).
 - **Function identity.** `&f` of an exported function compares equal in the program and in `c.dll` on every runtime
   (measured on 4.8 and .NET 10 for `strlen`; Design.md 4.5's address fields), and a test pins it.
 - **Deployment** (brief Q22 (a)). The driver links `c.dll` from the sysroot; running the program needs `c.dll` in the
@@ -8973,13 +9066,25 @@ triples, as the user decided. The libc frozen items:
 #### 5.19.9 The stdio model (P-2; shared from P-3)
 
 - **The generic `File` class** in `libc/src/__support/File/file.h` with a dotnet platform half
-  `libc/src/__support/File/dotnet/{file.h,file.cpp}`: `DotnetFile : File` holds a GCHandle (5.20.9) to a
-  `System.IO.Stream`, and `dotnet_file_write`, `_read`, `_seek`, `_close` and `openfile` call `Stream` and
-  `FileStream` members through MC-1, with errno from 5.19.5's mapping. The standard streams wrap
-  `Console.OpenStandardInput/Output/Error()` (unbuffered `Stream`s, so the only buffer is the libc's). Not the
-  baremetal cookie stdio, which has no `fopen` and only three unbuffered streams.
+  `libc/src/__support/File/dotnet/{file.h,file.cpp}` on descriptors, as upstream's `LinuxFile` holds an `int fd`
+  (5.19.18): `DotnetFile : File` holds a descriptor of the libc's descriptor core (5.19.10), and `dotnet_file_write`,
+  `_read`, `_seek`, `_close` and `openfile` go through the core: `openfile` is the core's `open` plus a `File`, a
+  `FILE`'s seek moves its open file description's offset, `fclose` closes the descriptor, and `get_fileno` returns it
+  (for P-5a's public `fileno`). The descriptions hold tickets (5.21 RA3) of `FileStream`s and of the console `Stream`s
+  and call their members through MC-1, with errno from 5.19.5's mapping. Every `FileStream` the libc opens follows
+  5.19.18's open rules: it shares `ReadWrite | Delete`, and its buffer size of 1 bypasses `FileStream`'s own buffer on
+  both runtimes, so the only buffer is the libc's. Not the baremetal cookie stdio, which has no `fopen` and only three
+  unbuffered streams.
+- **The standard streams** are descriptors 0, 1 and 2, whose open file descriptions wrap
+  `Console.OpenStandardInput/Output/Error()` (unbuffered `Stream`s; on Linux a stream that is not a terminal also gets
+  a `FileStream` over its descriptor for seeks and sizes, 5.19.18), with the standard `FILE`s on them. 5.19.18 says
+  what a standard stream that .NET opens as `Stream.Null` does (a closed descriptor, so the standard `FILE` over it
+  fails with `EBADF` from P-2 on), what a seek of a redirected one does, and what `dup2` onto 0-2 does from P-5a.
 - **File names** are converted from UTF-8 by MC-1's throwing decoder (5.20.10 S1: `new UTF8Encoding(false, true)`);
   invalid bytes are an error return with `EILSEQ` (5.19.5), never a replacement character.
+- **No text mode** (P-2). The libc's stdio passes bytes unchanged on every OS, as POSIX I/O does: no CRLF translation
+  (a `b` in a mode string changes nothing), and the libc never changes the console's code page, so on Windows piped
+  input keeps its CRLF and console bytes follow the console's code page (Status.md).
 - **Spelling of the standard streams (frozen at P-2).** `stdio.h` defines `#define stdout (*__llvm_libc_stdout())`
   (and `stdin`, `stderr`), with `FILE **__llvm_libc_stdout(void)` exported from `c.dll`. Assignment to `stdout`
   reaches every copy, and no constructor or msil-ld process-data binding is needed. Upstream's per-copy `FILE *stdout`
@@ -8995,10 +9100,14 @@ triples, as the user decided. The libc frozen items:
   streams in every host (5.19.10), C's rules apply in every host; `__llvm_libc_set_c_main` keeps its export and its
   call (the list is append-only) and no longer changes buffering.
 - **P-3 changes.** The open-file list and its lock move into the root's STDIO sub-block, the standard `FILE`s live on
-  the shared heap, and `File`'s non-recursive mutex becomes a recursive owner/count lock word over the wait buckets (the
-  upstream defect: a `FILE` locked by `flockfile` deadlocks its own `fputc`). Whether a shared `FILE` keeps `File`'s
-  platform function pointers (valid process-wide unless a collectible copy unloads) or a kind enum (diverging from
-  upstream `File`) is fixed by P-3's milestone text before the major-1 freeze.
+  the shared heap beside the open file descriptions (5.19.10), and `File`'s non-recursive mutex becomes a recursive
+  owner/count lock word over the wait buckets (the upstream defect: a `FILE` locked by `flockfile` deadlocks its own
+  `fputc`); the descriptor table and the descriptions take lock words (5.19.12) and freeze with FD (5.19.11). Whether
+  a shared `FILE` and a shared open file description keep their creator's platform function pointers (valid
+  process-wide unless a collectible copy unloads), a kind enum (diverging from upstream `File`), or a kind enum for
+  the kinds P-3 ships and their creator's pointers for kinds added later, is fixed by P-3's milestone text before the
+  major-1 freeze, one answer for both, after the question of what a libc copy in a collectible `AssemblyLoadContext`
+  does (5.19.13).
 
 #### 5.19.10 The rest of the P-2 OS layer
 
@@ -9011,7 +9120,9 @@ triples, as the user decided. The libc frozen items:
   `-static` state any copy must be able to free any block. `malloc`'s blocks are 16-aligned on msil64 (C allows this
   above `max_align_t`'s 8, brief Q6 (a)); a base that would give a less aligned address is over-allocated like
   `aligned_alloc`'s. llvm-libc's `FreeListHeap` is not built (it needs `_end` and `__llvm_libc_heap_limit`). The
-  libc's own `operator new`/`delete` use the same heap.
+  libc's own `operator new`/`delete` use the same heap. The anonymous maps of `mmap` (P-5a, 5.19.18) are a second
+  allocation kind beside it, outside its frozen scheme: `munmap` never reaches `free`, and sub-block 12's scheme id 1
+  does not cover them.
 - **Exit.** `internal::exit` (`OSUtil/dotnet/exit.cpp`) calls `Environment.Exit`. `exit` runs the `atexit` and
   `__cxa_atexit` handlers in reverse order, flushes and closes every `FILE`, then calls `internal::exit`; `_Exit`
   skips handlers and flushing. `'<msil>Main'` is `exit(main(argc, argv))` whenever the link resolves `exit` (5.18
@@ -9032,14 +9143,23 @@ triples, as the user decided. The libc frozen items:
 - **Environment.** `getenv` reads `Environment.GetEnvironmentVariable`; results are kept in the ENV sub-block so the
   returned pointer stays valid until the next `setenv`/`unsetenv` of that name; `setenv`/`unsetenv` write through
   `Environment.SetEnvironmentVariable`. The process environment is .NET's own home, as Design.md section 6 asks.
-  `environ` and `envp` are not provided through P-3: the headers do not declare `environ`, so a use is an undeclared
-  identifier, and a program's own `extern char **environ` fails to link. A later stage that adds it brings a design
-  (a registry of each copy's `&environ`, or a macro spelling) and a new sub-block id, with its own section 12 row.
-- **No POSIX descriptor layer through P-3.** `open`, `read`, `write`, `fileno`, `fdopen` and `fcntl.h` stay absent;
-  stdio is the only file interface. Directory id 2 (FD) stays reserved. A later stage that adds descriptors keeps one
-  shared offset per open file description in the FD sub-block and applies it with `FileStream.Seek` on unbuffered
-  streams on every runtime (a .NET 6+ `FileStream` keeps its own position); `RandomAccess` (.NET 6+, absent on
-  Framework) is not used by default.
+  `environ` and `envp` come with P-3 (5.19.18 has the design and its limits): `unistd.h` defines
+  `#define environ (*__llvm_libc_environ())` over an accessor that `c.dll` exports (5.19.7), as `stdout` is spelled,
+  through a dotnet spelling in `include/unistd.yaml` or in the `unistd-macros.h` dispatcher, as P-3's text settles
+  (5.19.14); the array is one per process, in sub-block 13 ENVIRON (5.19.11); and `'<msil>Main'` passes it to `main`
+  as `envp` (5.19.17). At P-2, `unistd.h` (installed for `getopt`) declares the object `environ`, because llvm-libc's
+  header generator emits every YAML object (row 'Contract 5.19.1 rule 2, 5.19.4 and the P-1b Goal amended
+  (declared-but-absent names ...)'), and `c.dll` does not define it, so a use fails to link with a plain undefined
+  symbol (5.18 PL3). Upstream's `src/unistd/environ.cpp` (`char **environ = nullptr`) is not used.
+- **The descriptor core (P-2; no public descriptor function before P-5a).** P-2 builds the libc's descriptor table for
+  its own stdio (5.19.9; 5.19.18 holds its design): the table lives in the FD sub-block (directory id 2, 5.19.11), and
+  each open file description, on the heap, holds the ticket of its `Stream`, its status flags and one shared offset.
+  Before P-5a the only descriptors are 0, 1 and 2 and each `FILE`'s own: `open`, `read`, `write`, `dup`, `fileno`,
+  `fdopen` and the rest of `fcntl.h`'s and `unistd.h`'s descriptor functions stay absent (rule 2) until P-5a. The
+  offset is applied with `FileStream.Seek` before each transfer on unbuffered streams on every runtime (a .NET 6+
+  `FileStream` keeps its own position); `RandomAccess` (.NET 6+, absent on Framework) is not used by default. Through
+  P-2 the core is single-threaded, as all of P-2 is (5.19.5's stated exception); P-3 adds its lock words (5.19.12) and
+  freezes FD with the other sub-blocks (5.19.11).
 - **Clocks and time.** `time`, `clock_gettime(CLOCK_REALTIME)` and `timespec_get` from `DateTime.UtcNow` ticks (a
   boxed handle, 5.20); `CLOCK_MONOTONIC` and `clock` from `Stopwatch.GetTimestamp` and the field `Stopwatch.Frequency`
   (`System` on 4.8); `localtime`, `mktime`, `strftime %z/%Z` from `TimeZoneInfo.Local` (`GetUtcOffset`,
@@ -9057,8 +9177,8 @@ Q32 (a)).
 
 | Home | Pieces |
 | --- | --- |
-| Per-thread C block (P-3) | `errno`; the `uselocale` locale; tss values; the thread-exit list; the thread descriptor; the signal mask; through `ext`, the thread-local objects of 5.19.12's rule (`strerror`'s buffer, `l64a`'s buffer, the hash seed of `randomness.h`, `strsignal`'s buffer if signals ship), one field each |
-| Process root, sub-blocks | 1 STDIO (open-file list, lock word, the standard `FILE`s, the C-program flag of 5.19.9); 2 FD (reserved, 5.19.10); 3 EXIT (atexit, at_quick_exit and `__cxa_atexit` lists with owner `__dso_handle`, exit-state word); 4 ENV (getenv result cache); 5 LOCALE (the global locale); 6 MISC (`rand_next` at the pointer width, as upstream `rand.cpp` sizes it; `strtok`'s pointer, per process (brief Q34); the ten `internal_mbstate` cells by source; the `tmpnam` budget; the `hsearch` table); 7 SIGNAL (65 dispositions, with the signal design); 8 TSS (1024 32-bit keys, brief Q34); 9 THREAD; 10 TIME (time-zone cache); 11 STARTUP (argv0, `program_invocation_name` source); 12 HEAP (scheme id 1) |
+| Per-thread C block (P-3) | `errno`; the `uselocale` locale; tss values; the thread-exit list; the thread descriptor; the signal mask; through `ext`, the thread-local objects of 5.19.12's rule (`strerror`'s buffer, `l64a`'s buffer, the hash seed of `randomness.h`, `strsignal`'s buffer if signals ship), one field each; through the extension's last slot, the second extension for per-thread fields added after the freeze (rule (3) below; `inet_ntoa`'s buffer from P-5b) |
+| Process root, sub-blocks | 1 STDIO (open-file list, lock word, the standard `FILE`s, the C-program flag of 5.19.9); 2 FD (from P-2 at major 0: the descriptor table, its open file descriptions and the per-file append locks, 5.19.10; its frozen layout leaves room for a high hard limit, never a low cap, as P-2's milestone text lays it out, 5.19.18); 3 EXIT (atexit, at_quick_exit and `__cxa_atexit` lists with owner `__dso_handle`, exit-state word); 4 ENV (getenv result cache); 5 LOCALE (the global locale); 6 MISC (`rand_next` at the pointer width, as upstream `rand.cpp` sizes it; `strtok`'s pointer, per process (brief Q34); the ten `internal_mbstate` cells by source; the `tmpnam` budget; the `hsearch` table); 7 SIGNAL (65 dispositions, with the signal design); 8 TSS (1024 32-bit keys, brief Q34); 9 THREAD; 10 TIME (time-zone cache); 11 STARTUP (argv0, `program_invocation_name` source); 12 HEAP (scheme id 1); 13 ENVIRON (the `environ` array, from P-3, 5.19.10); assigned now and first laid out by a later stage under the rules below: 14 MAP (the mapping registry, P-5a), 15 WAKE (the wake socket's state, P-5b), 16 CHILD (the child-process table, P-5b), 17 LOCK (the lock table, P-5b) |
 | .NET's own homes | the environment (`System.Environment`), time-zone data (`TimeZoneInfo`), the console streams |
 | Interned-name Monitors | the libc's wait buckets; the atomics lock path's locks (5.18, T11) |
 | Per copy by design | the per-call result buffers that upstream keeps as plain statics (`asctime`, `ctime`, `gmtime`, `localtime`, `tmpnam(NULL)`, `setlocale`'s string, `localeconv`'s struct, pwd/grp line buffers); before P-3 also the `LIBC_THREAD_LOCAL` objects, which SINGLE mode makes plain statics; `__dso_handle`; constants; the `getopt` variables (brief Q35 (a)); `tzname`/`timezone`/`daylight` (computed from the shared TIME data); compiler-rt builtins; the toolchain's private state (rule 3) |
@@ -9090,17 +9210,33 @@ never freed, so recycling domains leaks one root each, documented in Status.md).
 check, ptr block}` (24 bytes on msil64, 20 on msil32); `block` is written last (a release store). Each sub-block
 starts with `{u32 magic, u16 major, u16 minor, u32 size}` and lives on the shared heap. Rules: a name never changes;
 after the freeze a sub-block never grows and a new field takes a new sub-block id (the directory has 64 slots, of
-which ids 1-12 are assigned: a stated limit); a field is never reinterpreted; an unknown major, a size smaller than
-expected or a `check` mismatch makes the copy write both versions and the id to stderr and call
-`Environment.FailFast` (brief Q33 (a)), never a private copy, silent or not (the user's decision of 2026-11-01: one
-shared state); `ptr_size` different from the reader's is the same failure (it cannot happen in a process whose width
-guard passed, 5.18.7). Major 0 is provisional from P-2; major 1 starts at P-3's commit. The contract version goes into
-each libc copy's symbol-table attribute. From the first release after the freeze a two-release compatibility test
-runs (5.19.15).
+which ids 1-17 are assigned: a stated limit); a field is never reinterpreted; a copy checks only the directory entries
+it uses and ignores the others; for an entry it uses, an unknown major, a size smaller than expected or a `check`
+mismatch makes the copy write both versions and the id to stderr and call `Environment.FailFast` (brief Q33 (a)),
+never a private copy, silent or not (the user's decision of 2026-11-01: one shared state); `ptr_size` different from
+the reader's is the same failure (it cannot happen in a process whose width guard passed, 5.18.7). Major 0 is
+provisional from P-2; major 1 starts at P-3's commit. The contract version goes into each libc copy's symbol-table
+attribute. From the first release after the freeze a two-release compatibility test runs (5.19.15).
+
+**State added after the freeze** (Claude's decision, forced by the user's "Yes, share it." of 2026-11-01 with its
+recorded price, "the layouts and names that the copies share become an append-only contract between C library
+releases" (row 'C library linking modes (user, 2026-10-31)'); the numbered details are Claude's design, amendable by a
+section 12 row until P-3's commit). (1) A stage after the freeze adds shared state only as the first layout of a new
+id or of an id still reserved at the freeze (7 SIGNAL until the signal design; 14-17 above), never by growing a
+shipped sub-block, and it never changes the root's header or major. (2) A first layout starts at its own major 1 and
+never grows after its first release; the `u16 minor` fields of the header, the directory entries and the sub-blocks
+stay 0 until a rule gives them a meaning. (3) Per-thread fields added after the freeze go into a second extension,
+reached through the pointer slot that P-3 reserves at the end of the thread-local extension (below; 5.19.12).
+(4) State that every copy must keep up, older copies included, lives in an object every copy already handles (an open
+file description) or is kept up through a hook that frozen copies already call; a lock record never points at an open
+file description. (5) Each later stage's text lists, per sub-block it adds, what an older copy's actions leave stale;
+each list ships only with the user's OK, as the user's pick on the review page (2026-11-04, item prov-10) asks
+("silent states only with my OK").
 
 **Per-thread C block v1 (P-3).** `{u32 magic 'MLCT', u16 major, u16 minor, u32 size, i32 errno (offset 12), ptr desc,
 ptr locale (0 = global), ptr tss_values, ptr exit_list, u32 flags, u32 reserved, u64 sigmask, ptr ext}`; `ext` points
-at the thread-local extension (5.19.12), whose fields P-3's root WP enumerates and which freezes with the block.
+at the thread-local extension (5.19.12), whose fields P-3's root WP enumerates and which freezes with the block; its
+last field is a pointer, 0 until a stage after the freeze hangs the second extension of rule (3) above there.
 `__llvm_libc_errno` returns `block + 12`. Only the owning thread creates and writes its block. The block is
 `Marshal.AllocHGlobal` memory, freed when the thread dies by a finalizable holder kept at slot [1]: a K3 trailer type
 `'<msil>CBlock'` whose finalizer calls the libc's free hook, created through a K2 trailer definition that the libc
@@ -9110,10 +9246,13 @@ row; M31.b may reuse the shape for `'<msil>Thread'` (a row then). If P-3's miles
 costly, the fallback is leaking the blocks of foreign threads until M31 with slot [1] reserved in the frozen layout;
 either way the step is P-3's, before the major-1 freeze. `GC.AllocateArray` (absent on 4.8) is not used.
 
-**Freeze list at P-3's commit:** the discovery names, the root header and directory, sub-blocks 1-12 as P-3 ships
-them, the C block and its thread-local extension, the heap scheme of 5.19.10, the wait-bucket count and hash, the
-lock-word encodings of `FILE` and of the C11/POSIX mutex types. These form an append-only ABI between libc releases:
-every `-static` copy and every `c.dll` of the same major interoperate in one process.
+**Freeze list at P-3's commit:** the discovery names, the root header and directory, sub-blocks 1-13 as P-3 ships them
+(2 FD with the layouts of its open file descriptions and append locks; 13 ENVIRON; an id still reserved, such as 7
+SIGNAL before the signal design, stays empty), the C block and its thread-local extension with the second-extension
+slot, the heap scheme of 5.19.10, the wait-bucket count and hash, the lock-word encodings of `FILE`, of the FD table,
+its descriptions and its per-file locks, and of the C11/POSIX mutex types. These form an append-only ABI between libc
+releases: every `-static` copy and every `c.dll` of the same major interoperate in one process, and later stages add
+state only under the rules above.
 
 #### 5.19.12 Threads and `-static` (P-3)
 
@@ -9124,7 +9263,20 @@ every `-static` copy and every `c.dll` of the same major interoperate in one pro
   address (`Monitor.Wait`/`PulseAll` on the interned bucket). `call_once` and condition variables use the same buckets;
   `callonce.h`'s `#error` and `mutex.h`'s PLATFORM branch (which includes a mutex only under `__linux__` or
   `__APPLE__`) get dotnet branches.
+- **Descriptor locks.** The FD table's lock word, each open file description's lock word and the lock word of each
+  entry among FD's per-file locks are such words, frozen with FD (5.19.11); 5.19.18 says which calls take them (the
+  table's for allocation, `close` and `dup2`; a description's across a seek and its transfer when
+  `FileStream.CanSeek` is true, and from P-5b also the file's while the descriptions of one file share a handle) and
+  that a blocking call holds none while it waits.
 - tss: llvm-libc's `TSSKeyMgr` table moves to the TSS sub-block (32-bit keys, brief Q34); values hang off the C block.
+- **`Thread.Interrupt`** (a P-3 input). A thread blocked in a wait bucket's `Monitor.Wait` gets
+  `ThreadInterruptedException`, and `Monitor.Wait` takes the bucket's monitor back before it throws (unverified), so
+  an escape through C frames could leave the monitor held. P-3's milestone text decides, before the major-1 freeze,
+  what the libc's own waits (mutex, condition, once, join) do with it, never `EINTR` where POSIX forbids it (it does
+  for `pthread_mutex_lock`, `pthread_cond_wait`, `pthread_join` and `pthread_once`); the I/O stages' waits follow
+  5.19.18. It bears on the user's pick eh-13 on the review page (2026-11-04), "Yes, after probe 9's cost
+  measurement", by which P-3 builds `c.dll`'s OS layer with `-fexceptions`, so that RAII guards release the Monitor
+  locks on any exception, if probe 9 passes.
 - **No `thread_local` in the libc, before or after M31.** In PLATFORM mode `libc/src/__support/macros/attributes.h`
   defines `LIBC_THREAD_LOCAL` as `thread_local` (it is empty only in SINGLE mode), which would need M31's TLS (after
   P-3; refused on dotnet until then, 5.18 LR7) and would give each `-static` copy its own object. So every
@@ -9136,12 +9288,14 @@ every `-static` copy and every `c.dll` of the same major interoperate in one pro
   `src/__support/threads/thread.cpp`'s `tss_values` and `atexit_callback_mgr` if that file is built (the dotnet thread
   layer keeps both in the C block already). `thread.cpp` has no other thread-local object. P-3's root WP enumerates the
   list with a grep of the shipped sources; P-3's gate checks that no object of `c.dll` or `libc.a` has a
-  `.tdata`/`.tbss` section or a TLS reference (P-1r R7).
+  `.tdata`/`.tbss` section or a TLS reference (P-1r R7). A thread-local object that a stage after the freeze ships
+  (for example `inet_ntoa`'s buffer, P-5b) goes into the second extension (5.19.11, rule (3)), one field each.
 - Thread exit: the thread-exit list runs when the C thread function returns or calls `thrd_exit`; foreign .NET
   threads that only call into C get their block freed by the holder's finalizer (5.19.11), without running C
   thread-exit handlers.
-- `rand`/`srand` ship with the MISC cell (5.19.4); the `atexit` lists, the open-file list and the locale move to the
-  root; `c.dll` subscribes `AppDomain.ProcessExit` over P-3's delegate piece (5.19.10).
+- `rand`/`srand` ship with the MISC cell (5.19.4), and `environ` and `envp` with sub-block 13 ENVIRON (5.19.10); the
+  `atexit` lists, the open-file list and the locale move to the root; `c.dll` subscribes `AppDomain.ProcessExit` over
+  P-3's delegate piece (5.19.10).
 - `-static` is enabled in the driver, T-P9 and T-P11 are lifted (5.19.8), `libc.a` is installed in
   `<sysroot>/lib/msil64-unknown-dotnet/`, and mode 3's tests run (5.19.15).
 
@@ -9153,33 +9307,53 @@ every `-static` copy and every `c.dll` of the same major interoperate in one pro
   (portable-libc 4.3).
 - **Binding of the OS layer's members (P-2; brief Q30 (a)).** `build-libc.py` links `c.dll` with `--reference` to the
   build host's Framework 4.8 implementation assemblies `mscorlib.dll` and `System.dll` (the set MC-1's harness role
-  finds for `%{msil_refs_netfx}`), so every `System.*` member binds to `mscorlib` or `System` (`Stopwatch` and
-  `Process` live in `System` on 4.8), never to `System.Runtime`, and the result loads on both runtimes (portable-mc1
-  3.3). With references present, msil-ld's managed-call checks, the enum-width check included, apply to every member
-  (5.20.7). Building `c.dll` therefore needs a Windows host with Framework 4.8 (5.19.3); the portable legs build it
-  there and run it under WSL as well. Every member the layer calls is public with the same signature on 4.8 and on
-  modern .NET; the portable legs' runs on both prove each one the layer reaches.
+  finds for `%{msil_refs_netfx}`), and from P-5a also `System.Core.dll` (the home of `MemoryMappedFile` on 4.8;
+  5.19.18), so every `System.*` member of the base path binds to `mscorlib`, `System` or `System.Core` (`Stopwatch`
+  and `Process` live in `System` on 4.8), never to `System.Runtime`, and the result loads on both runtimes
+  (portable-mc1 3.3; on modern .NET `System.Core` is a facade that forwards `MemoryMappedFile`: Claude's probe,
+  2026-11-22, .NET members run from C#, on .NET 8 to 11). With references present, msil-ld's managed-call checks, the
+  enum-width check included, apply to every member (5.20.7). Building `c.dll` therefore needs a Windows host with
+  Framework 4.8 (5.19.3), and from P-5a also .NET 8's reference assemblies for the modern path (below); the portable
+  legs build it there and run it under WSL as well. Every member the base path calls is public with the same signature
+  on 4.8 and on modern .NET; the portable legs' runs on both prove each one the layer reaches. `build-libc.py` finds
+  `System.Core.dll` beside `mscorlib.dll` itself; 5.20.11 MT3's `%{msil_refs_netfx}` keeps its two assemblies, since
+  the stages' tests reach `System.Core` only through `c.dll`, unless a stage's text adds a test that binds a
+  `System.Core` member itself.
 - **Members not used by default:** `NativeMemory`, `GC.AllocateArray`, `Environment.TickCount64`,
   `Environment.ProcessId`, `Marshal.PtrToStringUTF8`, `File.Move(string, string, bool)`, `RandomAccess`,
-  `AssemblyLoadContext`, `PosixSignalRegistration`. A modern-only member may be reached only from a method that .NET
-  Framework never JIT-compiles, behind `Environment.Version.Major >= 5`, and only where a pinned test runs both paths.
-  The one possible case, a clean-up on `AssemblyLoadContext.Unloading` for collectible copies, comes only if a later
-  delegate stage provides it (it subscribes an event, so it needs a delegate over a C function, and it adds a
-  reference beyond `mscorlib`/`System`, the exception 5.19.7 allows); it is not planned for P-3.
+  `AssemblyLoadContext`, `PosixSignalRegistration`. **The modern path** (from P-5a; Claude's decision, forced by the
+  user's end goal, "as many features as possible, as good as possible, using the most appropriate answer", row
+  'Project end goal, in the user's words'): a member newer than Framework 4.8 is reached only from a method that .NET
+  Framework never JIT-compiles, behind `Environment.Version.Major >= 8`, bound against .NET 8's reference assemblies
+  (`System.Runtime` 8.0.0.0), so .NET 8 and .NET 10 take the same path; a member that does not exist or throws on
+  Windows also tests the OS; and only where a pinned test runs both paths. 5.19.18 lists the members (permission bits,
+  links, the create mode, `AF_UNIX`, the handle forms of `fstat`, `futimens` and `fchmod`). No member newer than
+  .NET 8 is used; the floor and any .NET 11 tier are reviewed with the .NET 8 legs after Phase 3 (the user's pick
+  dl-d22 on the review page, 2026-11-04: "Keep the .NET 8 legs until Phase 3 ends, then review"). A clean-up on
+  `AssemblyLoadContext.Unloading` for collectible copies comes only if a later delegate stage provides it (it
+  subscribes an event, so it needs a delegate over a C function, and a reference that only the modern path may take,
+  5.19.7); it is not planned for P-3.
 - **Accessibility.** `msil/utils/check-mscorlib-safe.py` checked with `ldtoken` only and passed internal members
   (`Environment.get_TickCount64` on 4.8.1, measured). P-1a's harness WP fixes it before P-1a's guard rows are proved
   (the section 12 row amending 5.11.7); MC-1's rows are proved with the fixed tool.
-- **Framework specifics** documented in Status.md: GCHandles and the C state are per AppDomain; `FailFast` is silent
-  on the console (5.19.10's abort writes first); POSIX `rename` over an existing file uses `File.Replace` (no atomic
-  overwrite move on 4.8).
+- **Framework specifics** documented in Status.md: GCHandles and the C state are per AppDomain, and so, from P-5b, is
+  the lock table (the `fcntl` and `lockf` locks of C code in two AppDomains of one process then conflict as two
+  processes' locks do: a documented difference, asked with P-5b's text beside those of 5.19.18's **Locks**);
+  `FailFast` is silent on the console (5.19.10's abort writes first); POSIX `rename` over an existing file uses
+  `File.Replace` (no atomic overwrite move on 4.8); the path `FileStream` refuses Windows device paths (`CON`, `NUL`,
+  `COM1`, named pipes), which P-2's `fopen` and P-5a's `open` therefore refuse as 5.19.18 says (loudly until its
+  answer: P-2 leaves the .NET exception unlisted, 5.20.8 MX1); and from P-5a, Framework lacks the handle forms of
+  `fstat`, `futimens` and `fchmod` (5.19.18 says what those functions do there).
 
 #### 5.19.14 Changes to upstream `libc/` (conflict surfaces)
 
 Each file is a `hook` block in `msil/utils/upstream-hooks.txt`, added by the stage that first edits it, and a 5.13.5
 row. The fork does not build llvm-libc's own tests, so each libc block reads `none llvm-libc's tests are not built by
 the fork` plus `fork msil/test/Portable/<directory>/<test>.test` for the stage's test that pins the change (P-1b's in
-`01-libc`). Every change is an `#elif` or `||` branch keyed per rule 4, except the generic errno extension, which
-appends names; none changes another target's existing result.
+`01-libc`). Every change is an `#elif` or `||` branch keyed per rule 4, or a YAML change (P-3's dotnet spelling of
+`environ`; the functions and macros upstream lacks that P-5a and P-5b add to a header's YAML), except the generic
+errno extension, which appends names; each is a `hook` block, and none changes another target's existing result (a
+YAML function is declared only where a target ships it, rule 2).
 
 | File | Change | Stage | Upstream-able |
 | --- | --- | --- | --- |
@@ -9202,7 +9376,19 @@ appends names; none changes another target's existing result.
 | `libc/src/__support/File/file.h` | the recursive lock; the shared-`FILE` form | P-3 | the lock fix yes |
 | `libc/src/__support/StringUtil/error_to_string.cpp`, `libc/src/stdlib/l64a.cpp`, `libc/src/__support/HashTable/randomness.h` (again), `signal_to_string.cpp` and `threads/thread.cpp` if shipped | dotnet branch keeping the thread-local object in the C block (5.19.12) | P-3 | no |
 | the stateful upstream files of 5.19.11 | only if P-3 picks hooks | P-3 | no |
+| `libc/include/unistd.yaml`, or `libc/include/llvm-libc-macros/unistd-macros.h` if P-3's text puts the spelling there | the dotnet spelling of `environ`: the accessor macro of 5.19.10 | P-3 | no |
 | `libc/include/llvm-libc-types/clock_t.h` | `long long` under msil32 | P-4 | yes |
+| `libc/include/llvm-libc-macros/fcntl-macros.h`, `unistd-macros.h`, `sys-stat-macros.h`, `dirent-macros.h`, `sys-mman-macros.h` | dotnet branches to new `dotnet/` files with Linux's values (5.19.18); `sys-mman-macros.h` stops with `#error` without the kernel's `<linux/mman.h>` today | P-5a | yes |
+| `libc/include/llvm-libc-macros/limits-macros.h` | a `__dotnet__` branch for `PATH_MAX`, `NAME_MAX`, `HOST_NAME_MAX`, `PIPE_BUF` and `GETENTROPY_MAX` (5.19.18), which it defines only under `__linux__` today | P-5a | yes |
+| `libc/include/llvm-libc-types/struct_dirent.h` | a `__dotnet__` branch whose `d_name` is sized for `NAME_MAX` (5.19.6; off Linux upstream's `d_name` has one byte) | P-5a | yes |
+| `libc/include/dirent.yaml` | `rewinddir`, `telldir` and `seekdir`, which upstream lacks | P-5a | yes, with an upstream implementation |
+| `libc/include/llvm-libc-macros/sys-socket-macros.h`, `poll-macros.h`, `netdb-macros.h`, `sys-eventfd-macros.h`, `sys-wait-macros.h` | dotnet branches to new `dotnet/` files with Linux's values (5.19.18); Linux's `sys-wait-macros.h` includes the kernel's `<linux/wait.h>` | P-5b | yes |
+| `libc/include/llvm-libc-macros/fcntl-macros.h` (again) | the record-lock commands and types (5.19.18) | P-5b | yes |
+| `libc/include/llvm-libc-types/socklen_t.h` | a 32-bit unsigned `socklen_t` under `__dotnet__` (upstream's is `unsigned long`) | P-5b | yes |
+| `libc/include/llvm-libc-types/posix_spawnattr_t.h` | a dotnet layout with reserved space before it freezes (upstream's is an empty struct) | P-5b | yes |
+| `libc/include/spawn.yaml`, `libc/include/netdb.yaml` | `posix_spawnp` and the `posix_spawnattr_*` functions that P-5b ships; `getnameinfo`, `NI_*` and the other netdb names that P-5b adds and upstream lacks (5.19.18) | P-5b | yes, with upstream implementations |
+| `libc/src/netdb/CMakeLists.txt` | the dotnet `getaddrinfo` and `freeaddrinfo` in place of upstream's generic stubs | P-5b | no |
+| `libc/src/spawn/file_actions.h` | `posix_spawn_file_actions_addopen` keeps a copy of its path, as POSIX says ("shall be copied"; upstream keeps the caller's pointer), unless P-5b's text makes a fork-only copy of the function | P-5b | yes (a defect fix) |
 
 Not changed: `libc/hdr/errno_macros.h` and `libc/include/errno.h.def` (the generic family already reaches dotnet),
 `libc/src/__support/libc_errno.h` (brief Q17 (a)), `libc/src/errno/libc_errno.cpp`,
@@ -9211,7 +9397,8 @@ Not changed: `libc/hdr/errno_macros.h` and `libc/include/errno.h.def` (the gener
 is 5.18's (5.18.13). Fork-only and conflict-free: the files of 5.19.3 (one `fork-only` line each) and
 `msil/lib/builtins/sources.txt` (5.18's dotnet globs). Ten upstream libc files at P-1b, 15 by P-2 and about 21 by P-3
 (more if P-3 picks hooks) recur at every upstream merge; the merge workflow builds the portable libc and runs P-1b's
-tests after each merge.
+tests after each merge. The portable I/O work adds one more at P-3 (the file of `environ`'s spelling), eight at P-5a
+and eleven at P-5b (the rows above): about 20 more upstream libc files that recur at every merge.
 
 #### 5.19.15 Tests and the oracle
 
@@ -9254,7 +9441,14 @@ tests after each merge.
   through `__cxa_atexit`; `abort` and `assert` messages on both runtimes; `getenv`/`setenv`; clocks monotonic; a C#
   host writing through `c.dll` and never calling `exit` loses no output (unbuffered until `__llvm_libc_set_c_main`),
   while a C program's stdout is buffered by C's rules; the root created once (major 0) and a foreign value under the
-  key causing FailFast.
+  key causing FailFast. The descriptor core (5.19.10): the FD sub-block at major 0 with descriptions for 0-2 and for
+  each `FILE`; a standard stream that .NET opens as `Stream.Null` (a Windows process started without standard handles)
+  failing with `EBADF`; a seek of a redirected standard `FILE`, self-checking per OS (`ESPIPE` on Windows; on Linux,
+  through 5.19.18's arrangement for the standard streams, the file seeks and a pipe gives `ESPIPE`), on descriptors 0,
+  1 and 2 and with a write-side seek; output kept in order by two writers on one description (`prog > f 2>&1`, and a
+  writer after the program, as in `{ prog; echo x; } > f`); a second `fopen` of a file the program holds open (the
+  share mode); and on Linux an `fopen`, from `main` and from a constructor, of a file that another process holds with
+  `LOCK_EX` (the file-locking switch).
 - **P-3 tests** (in `msil/test/Portable/06-threads` and `07-static`). Threads and errno per thread; the thread-local
   objects of 5.19.12 per thread and shared by copies (`strerror` from two threads), and no `.tdata`/`.tbss` in any
   shipped object; two `-static` copies plus `c.dll` in one process sharing errno per thread, one `FILE *` passed
@@ -9262,38 +9456,97 @@ tests after each merge.
   `c.dll` and exiting without `exit`, its buffered output flushed by the `ProcessExit` handler; a major mismatch (a
   doctored root) failing with FailFast after both versions on stderr; two AssemblyLoadContexts sharing state; the
   frozen layouts checked against this contract's text (never against the code, as M30's lock-protocol test does for
-  T11). The portable legs gain LTO runs at P-3 (brief Q13 (a): objects only before). A collectible copy unloading its
-  exit entries is tested only if a later stage adds 5.19.13's ALC clean-up.
+  T11), FD and its open file descriptions included; a `FILE` and its descriptor used from two copies; `environ` and
+  `envp` against `getenv` and `setenv` in two copies, a C file that declares `environ` with and without `<unistd.h>`
+  (the link error without it), and a C++ file that declares it at global and at namespace scope (5.19.10's limits).
+  The portable legs gain LTO runs at P-3 (brief Q13 (a): objects only before). A collectible copy unloading its exit
+  entries is tested only if a later stage adds 5.19.13's ALC clean-up.
+- **P-5a tests** (in `msil/test/Portable/09-files`). Descriptors: round trips through `open`, `read`, `write`, `lseek`
+  and `close`; `O_CREAT | O_EXCL` on an existing file giving `EEXIST`; `dup` and `dup2` sharing one offset;
+  lowest-free numbering, and `close(1)` then `open` redirecting `stdout`; `fileno`, `fdopen` and `fclose` on one
+  descriptor; `pread` and `pwrite` keeping the offset; `ftruncate` growth reading zeros; `O_APPEND`; an empty path
+  giving `ENOENT`; on Linux, the create mode applied at creation (`mkstemp`'s file readable by its owner only).
+  File-system calls: the `stat` fields that have a source; `mkdir`, `rmdir`, `unlink` and `rename` errors; sorted
+  `readdir`; `getcwd` and `chdir`; `dirname` and `basename` on returned paths; per-OS files for permission bits and
+  paths. `mmap`: anonymous maps zero-filled, private file maps keeping their own copy and reading zeros past the
+  file's end in its last page, and the cases a heap block cannot honour and a map that runs whole pages past its
+  file's end failing loudly. `getpid`, `getentropy`, the sleeps and `sysconf`. In `90-loud`: `fork`, `execve` and
+  `mprotect` fail to link with N6's line. The gate also builds and runs zlib's gz layer and a small C driver over
+  `sqlite3.c` (`os_unix.c` in its `SQLITE_WASI` shape: dot-file locks, no `mmap`; from P-5b, whose lock macros make
+  `os_unix.c` need `F_GETLK`, with a recorded build flag or patch).
+- **P-5b tests** (in `msil/test/Portable/10-network`). Sockets: a TCP echo with non-blocking sockets and `poll` in one
+  process; UDP over connected sockets, and `recvfrom` with the sender's address; `ECONNREFUSED`; `EADDRINUSE` from a
+  second bind of the first socket's port without `SO_REUSEADDR`; `getsockname`; a refused non-blocking connect seen by
+  `poll`; IPv6 cases print the same "skipped" line in the oracle and the test where `::1` is missing. Name lookup:
+  numeric hosts, `localhost`, `AI_PASSIVE` and `gai_strerror`, never an external name. `poll` and `select`: timeouts,
+  readiness, and wake-ups through in-process pipes, eventfds and socketpairs across threads. Spawning: `popen` of a
+  shell command, `posix_spawn` of a small C program, `waitpid` statuses, and a child following `dup2` onto 1, with
+  per-OS files (`cmd.exe` against `/bin/sh`). Locks: a child process contending for a record lock and two descriptions
+  of one file contending for `flock`, with Windows' mandatory locks in a per-OS file. `MAP_SHARED`: writes through a
+  shared map seen by `read` after `msync`. In `90-loud`: `F_GETLK` fails to compile. The gate also runs curl over
+  plain HTTP against a loopback test server. Each new download for these gates, curl's and any test server's, needs
+  the user's approval (the user's pick on the review page, 2026-11-04, item prov-25: "Approve all three for the gate
+  and CI; ask me for each new entry").
+- **Rules for P-5a's and P-5b's tests.** The oracle stays P-2's: overlay mode takes llvm-libc's descriptor, `stat`,
+  socket, `poll` and `mmap` functions where it builds them, and glibc answers for the full-build-only ones (`opendir`,
+  `readdir`, `select`, `fdopen`, `fileno`, `popen`, `posix_spawn`) and for `getaddrinfo`; either way it is Linux's own
+  behaviour (Claude's reading; P-5a's harness WP first checks which functions overlay mode builds). Where Windows and
+  Linux differ in a file, sharing, path, permission or shell transcript, a hand-written per-OS expected file names the
+  difference: each stage extends 5.17.4's allowance to these by a section 12 row. A difference between Framework 4.8
+  and modern .NET on Windows takes a self-checking test or a per-runtime expected file (`<stem>.netfx.expected`, a
+  harness change of P-5a), and a function that refuses on one runtime gets a pinned test of both paths (5.19.13). WSL
+  runs, the oracle's included, get a temporary directory on the distribution's own file system through an environment
+  variable the harness sets, because `msil-run.py --runner wsl` puts Windows paths on drvfs (a harness change of
+  P-5a). Sockets bind loopback addresses and port 0 only: lit's workers run in parallel, and a wildcard bind may raise
+  a Windows Firewall prompt. msil32 runs are Windows-only (.NET 10 supports no x86 Linux).
+- **The two-release test** (5.19.11). Every libc stage after P-3 that changes `c.dll` for a width with an older
+  release (P-5a and P-5b on both widths) runs one process that holds the previous stage's `libc.a`, linked into a
+  `-shared` assembly, beside the new `c.dll`; the older copy comes from a source the stage's text names (a pinned
+  artifact or a build of the previous stage's commit). The two share errno per thread, one `FILE` with ordered output
+  and descriptors 0-2; the older copy ignores the directory entries it does not use; and each case of the stage's
+  stale-state list (5.19.11, rule (5)) behaves as listed.
 - **Gates.** M27-M35's gates stay as written, and the post-commit run gains the portable legs `portable-smoke` and
   `portable-smoke-wsl` (5.18 PX4), tagged `Portable`, never `Exit`, so M35's phase gate, `exit-report.py` and
   `check-matrix.py` never select them; `msil/test/Portable/lit.local.cfg` marks its tests UNSUPPORTED unless the
   feature `msil-triple-portable` is set, so host legs never run them. Each P-step's own gate (P-1a, P-1b, P-2, P-3,
-  P-4) also runs that step's own `msil/test/Portable/` directories (and `90-loud`) with
+  P-4, P-5a, P-5b) also runs that step's own `msil/test/Portable/` directories (and `90-loud`) with
   `msil/utils/build/msil-lit.ps1` under the portable parameters, on .NET 10, TC=0 and Framework 4.8 and under WSL
-  .NET 10, never through `lit-legs.ps1 -Leg` on the standing legs; MC-1's gate runs no portable step, since MC-1's exit
-  criteria are proved on the host triples (brief Q11 (a)).
+  .NET 10 (P-5a's and P-5b's msil32 runs on Windows only), never through `lit-legs.ps1 -Leg` on the standing legs;
+  MC-1's gate runs no portable step, since MC-1's exit criteria are proved on the host triples (brief Q11 (a)), and
+  MC-4's and MC-5's gates follow MC-1's rule unless their milestone texts say otherwise. The post-commit `Portable`
+  legs take `msil/test/Portable` whole (5.18 PX4), so `09-files` and `10-network` need no leg change.
 
 #### 5.19.16 What fails loudly, by stage
 
 'Absent' below means rule 2's two forms: undeclared through the libc's headers, and an undefined-symbol link error
-with N6's line through the program's own prototype.
+with N6's line through the program's own prototype. 'Loud' at run time means a `PlatformNotSupportedException` thrown
+from the call: a stack trace on every runtime, and an exception a C# host can catch (5.19.18). The I/O rows give
+groups; 5.19.18 gives each function's state.
 
-| Use | P-1b | P-2 | P-3 |
-| --- | --- | --- | --- |
-| stdio streams, `printf` | absent | works | works, shared |
-| `malloc` family | absent | works | shared heap rules |
-| `exit`, `atexit` | absent | works | shared lists |
-| global destructors | `__attribute__((destructor))`: today's `llvm.global_dtors` error; C++ static objects: undefined `__cxa_atexit` (N6) and `__dso_handle` at link | through `__cxa_atexit` | shared lists |
-| a host that is not a C program, at its exit | nothing to flush (no stdio) | handlers do not run; no output lost (streams unbuffered until `__llvm_libc_set_c_main`) | `ProcessExit` runs handlers and flushes |
-| `localtime`, `strftime`, `time` | absent | works | works |
-| `rand`, `srand` | absent | absent | shared cell |
-| `environ`, POSIX descriptors | absent | absent | absent |
-| threads, `thread_local` | M31's error / absent | same | threads work; the libc itself has no `thread_local`; user `thread_local` with M31 (P-1r R19) |
-| a multi-threaded host calling `c.dll` | races silently (documented exception, 5.19.5) | same | per-thread state |
-| `-static` | T-P9; no sysroot `libc.a`; T-P11 for the build directory's `libc.a` | same | works |
-| fenv | undeclared (brief Q20 (a)) | same | same |
-| signals | undeclared | undeclared | undeclared until the signal design |
-| a 32-bit or big-endian process | 5.18's guard (T-P10) | same | same |
+| Use | P-1b | P-2 | P-3 | P-5a | P-5b |
+| --- | --- | --- | --- | --- | --- |
+| stdio streams, `printf` | absent | works, on the internal descriptor core | works, shared | same | same |
+| `malloc` family | absent | works | shared heap rules | same; `mmap`'s anonymous maps are a second allocation kind | same |
+| `exit`, `atexit` | absent | works | shared lists | same | same |
+| global destructors | `__attribute__((destructor))`: today's `llvm.global_dtors` error; C++ static objects: undefined `__cxa_atexit` (N6) and `__dso_handle` at link | through `__cxa_atexit` | shared lists | same | same |
+| a host that is not a C program, at its exit | nothing to flush (no stdio) | handlers do not run; no output lost (streams unbuffered until `__llvm_libc_set_c_main`) | `ProcessExit` runs handlers and flushes | same | same |
+| `localtime`, `strftime`, `time` | absent | works | works | same | same |
+| `rand`, `srand` | absent | absent | shared cell | same | same |
+| `environ`, `envp` | absent | absent (`environ` declared, a plain undefined symbol at link, 5.19.10) | works, one array | same | same |
+| POSIX descriptors (`open`, `read`, `write`, `dup2`, `fileno`, `fdopen`, `fcntl.h`) | absent | absent (stdio's internal core only) | absent (the core frozen) | works | same |
+| file-system calls, `libgen.h`, `getentropy`, `unistd.h`'s process and system calls | absent | absent | absent | works | same |
+| `mmap` | absent | absent | absent | anonymous and private file maps, which may reach into the file's last page; the cases a heap block cannot honour and a map that runs whole pages past its file's end are loud | adds `MAP_SHARED`, likewise |
+| sockets, name lookup, `poll`, `select`, pipes, `eventfd`, `socketpair` | absent | absent | absent | absent | works |
+| `posix_spawn`, `popen`, `system`, `waitpid` | absent | absent | absent | absent | works |
+| record locks, `lockf`, `flock` | absent | absent | absent | absent | works; `F_GETLK` and `F_TEST` undefined |
+| a feature the running runtime or OS lacks | - | Windows device paths on Framework: loud, an unlisted .NET exception (5.19.13), until 5.19.18's answer | same | POSIX's own error where POSIX names one for that gap, else as 5.19.18 lists | same (`EAFNOSUPPORT` for `AF_UNIX` on Framework) |
+| `fork`, `vfork`, `exec*`, `mprotect`, `PROT_NONE`, descriptor passing | absent | same | same | absent: CIL and the runtime cannot do them (5.19.18) | same |
+| threads, `thread_local` | M31's error / absent | same | threads work; the libc itself has no `thread_local`; user `thread_local` with M31 (P-1r R19) | same | same |
+| a multi-threaded host calling `c.dll` | races silently (documented exception, 5.19.5) | same | per-thread state | same | same |
+| `-static` | T-P9; no sysroot `libc.a`; T-P11 for the build directory's `libc.a` | same | works | same | same |
+| fenv | undeclared (brief Q20 (a)) | same | same | same | same |
+| signals | undeclared | undeclared | undeclared until the signal design | same | same; a write to a closed pipe or socket returns `EPIPE` (5.19.17) |
+| a 32-bit or big-endian process | 5.18's guard (T-P10) | same | same | same | same |
 
 #### 5.19.17 Interfaces this contract assumes
 
@@ -9310,6 +9563,12 @@ with N6's line through the program's own prototype.
 - **From 5.18 (P-2's part):** LR6 (`LowerGlobalDtorsPass` at slot P0b), LR8 (the synthetic `__dso_handle`), and
   LR11's P-2 shape of the dotnet `'<msil>Main'`: it calls `__llvm_libc_set_c_main()` before `main` whenever the link
   resolves that name, and is `exit(main(argc, argv))` whenever the link resolves `exit`.
+- **From 5.18 (P-2's part, the file-locking switch):** the module initializer of an output that has
+  `'<msil>Main'` sets .NET's file-locking switch first, after the width guard and before the library
+  `ldtoken`s, the cross-assembly relocations and LR5's constructors (5.19.18 **Opening files**); P-2's
+  milestone text fixes the call and amends LR5 and LR11 for it.
+- **From 5.18 (P-3's part):** LR11's dotnet `'<msil>Main'` also passes the `environ` array of 5.19.10 to `main` as
+  `envp` from P-3; P-3's milestone text amends LR11 for it.
 - **From 5.20 (MC-1):** calls to static and instance methods, constructors, static field reads
   (`Stopwatch.Frequency`), string conversions (5.20.10's throwing UTF-8 and UTF-32 decoders, UTF-16), object handles
   with a defined lifetime (5.20.9), boxed value types (`DateTime`, `IntPtr`) as handles and back (brief Q25 (a)),
@@ -9317,15 +9576,505 @@ with N6's line through the program's own prototype.
   `String.Intern`, `Monitor.Enter(object)`/`Exit`/`Wait`/`PulseAll` on a handle, `AppDomain.GetData`/`SetData`,
   `Thread.GetNamedDataSlot`/`GetData`/`SetData`, `new object[]` with `Array.SetValue`/`GetValue`. No delegate: P-2's
   designs need none (5.19.10). If 5.20 lacks one of these, P-2 does not start until a section 12 row resolves it.
+- **From MC-4 (5.20 as MC-4 amends it; after EH-0 with FX-1 to FX-3, before R-a2, so before P-2):** an `msil_catch`
+  entry's handler also stores a ticket of the caught exception through a second trailing `intptr_t *` (in today's
+  spelling, 5.20.17 ME9), so the OS layer reads `HResult`, `InnerException`, `SocketErrorCode` or `NativeErrorCode`
+  through ordinary managed calls and frees the ticket; filters stay type-only (5.20 MA5). P-2's mapping (5.19.5) uses
+  it from the start. If 5.20 lacks it when P-2's milestone text is drafted, P-2 does not start until a section 12 row
+  resolves it.
+- **From MC-5 (5.20 as MC-5 amends it; before P-5a):** `ref` parameters of class types, copied in and out through a
+  stub local (`Socket.ReceiveFrom`'s `ref EndPoint`), and `Nullable` of an enum (`FileStreamOptions.UnixCreateMode`).
+  If 5.20 lacks one of them when P-5a's or P-5b's milestone text is drafted, that stage does not start until a section
+  12 row resolves it.
+- **From 5.21 (R-a and R-a2):** every libc stage after P-2 holds .NET objects as P-2 does (row 'P-2 input: P-2 holds
+  objects as references in locals and internal helpers and as `intptr_t` tickets in C memory ...'): references in
+  locals and internal helpers, tickets in C memory, each freed once, and file names decoded by explicit calls.
 - **From P-1r:** R1 (5.15.4's mask save on `*-unknown-dotnet` triples too, so a `sigsetjmp(buf, nonzero)` site
   references `sigprocmask` and fails to link with N6's line until the signal design), R4 and R5 (M29 extends P-2's
   exit field and `__dso_handle`), R7 (no libc state in M31's TLS block), R16 (slot P0b), R19 (user `thread_local` on
   dotnet through M31).
-- **From M27-M30 and P-3's delegate piece:** MSILLowerSjLj (setjmp, 5.15.4's prefix), M28's
-  `getDelegateConstructor` and P-3's C-function-pointer delegates (threads, `ProcessExit`), M30's inline atomics
-  (P-3's `rand`/`srand` and lock words). M31's TLS is not assumed (5.19.12).
+- **From M27-M30 and P-3's delegate piece:** MSILLowerSjLj (setjmp, 5.15.4's prefix), M28's `getDelegateConstructor`
+  and P-3's C-function-pointer delegates (threads, `ProcessExit`, and P-5b's pump and waiter threads), M30's inline
+  atomics (P-3's `rand`/`srand` and lock words, the descriptor locks of 5.19.12 among them). M31's TLS is not assumed
+  (5.19.12).
+- **For P-5a and P-5b, from P-3 and P-4:** threads and the wait buckets (blocking calls; P-5b's pumps and waiters),
+  mode 3, the layouts frozen at P-3 with 5.19.11's rules for state added after the freeze, and P-4's msil32 layer:
+  each stage freezes its msil64 and msil32 items at its commit.
+- **From the signal design:** the signal design keeps `write` and `send` returning `EPIPE` without `SIGPIPE` unless
+  the program installs a handler, or another rule that design states, written before P-5b freezes (CoreCLR ignores
+  `SIGPIPE`, so from P-5b a write to a closed pipe or socket returns `EPIPE`).
 - **From 5.13/5.17:** the hot-file rules (the libc lives in `libc/`, outside the hot files), the hooks manifest, the
   legs and the post-commit run.
+
+#### 5.19.18 POSIX I/O over .NET (P-5a, P-5b; the descriptor core from P-2)
+
+This item fixes the portable C library's POSIX I/O (the groups under **Scope**), in the steps of the table below; P-5a
+and P-5b follow P-4 under the Phase 3 protocol, outside any phase's numbering and exit gate, as P-4 does. The user's
+decision behind it is "Yeah, add it to the plan." (2026-11-21 19:55), answering Claude's question "Should I sketch a
+portable I/O stage for the plan, or leave it for now?"; the user's picks are section 12's portable I/O rows; the
+scope, split, designs and wording are Claude's. *Forced* marks Claude's decision where a rule of the user's, or a
+fact (infeasibility, strict dominance, POSIX's text), leaves no other answer; the rules are the user's end goal (chat,
+2026-11-04; the row 'Project end goal'), the user's pick on the review page (2026-11-04, item prov-10), "Fail loudly
+by default; recorded temporary workarounds allowed; silent states only with my OK; exit/atexit/atomics keep 'throw
+until M28-M30'", and "Yes, share it." (the row 'C library linking modes (user, 2026-10-31)'); the user may take any of
+them back. A *documented difference* is a silent state: it ships only with the user's OK, asked per stage as a list
+and recorded in a row like the 2026-11-21 row 'Silent states with the user's OK', and Status.md lists it; without that
+OK the case takes the loud form (**Loud failures**). Where a passage of this item, or of the other items of 5.18 and
+5.19 that name the portable I/O steps, depends on a question that section 12's row 'Portable I/O questions left to
+later texts' leaves open, it carries Claude's recommended option until the user's answer, and a different answer
+rewrites it by a section 12 row before the text of the step that needs it is drafted; P-3's two questions keep
+5.19.9's deferral form instead.
+
+| Step | Position | What it adds to POSIX I/O |
+| --- | --- | --- |
+| MC-4 | after EH-0 and FX-1 to FX-3, before R-a2 | A catch entry that hands C the caught exception as a ticket (5.20), so the codes below, P-2's included, are exact |
+| P-2 | directly after R-a2 | The descriptor core, internal: FD at layout major 0 with the descriptions of 0-2 and of every `FILE`; `DotnetFile` on descriptors; the open rules, device names and path form below, for `fopen`, `remove`, `rename` and `tmpnam`; no public descriptor function |
+| P-3 | after M28-M30 | The lock words of FD and of each description; FD frozen at major 1 with sub-blocks 1-13 (13 ENVIRON, 5.19.11); `environ` and `envp` |
+| MC-5 | after P-4, before P-5a | `ref` parameters of class types and `Nullable` of an enum in managed calls (5.20) |
+| P-5a | after MC-5 | Descriptors, file-system and path calls, `libgen.h`, the `unistd` set, `getentropy`, `mmap` without `MAP_SHARED`; `System.Core` |
+| P-5b | after P-5a | Pipes, eventfds and socketpairs; sockets and name lookup; `poll` and `select`; spawning; locks; `MAP_SHARED` |
+
+- **Scope** (an entry point not listed stays absent under rule 2).
+  - P-5a: `open`, `openat` and `fstatat` (with `AT_FDCWD`), `creat`, `close`, `read`, `write`, `pread`, `pwrite`,
+    `readv`, `writev`, `lseek` (with `SEEK_DATA` and `SEEK_HOLE`), `dup`, `dup2`, `dup3`, `fcntl`'s `F_DUPFD`,
+    `F_DUPFD_CLOEXEC`, `F_GETFD`, `F_SETFD`, `F_GETFL` and `F_SETFL`, `ftruncate`, `truncate`, `fsync`, `fdatasync`,
+    `isatty`, `fileno`, `fdopen`, `mkstemp`, `mkostemp`, the large-file names (`lseek64`, `off64_t` and the like) as
+    aliases (`off_t` is 64-bit, 5.19.6); `stat`, `fstat`, `lstat`, `mkdir`, `rmdir`, `unlink`, `access`, `chmod`,
+    `fchmod`, `getcwd`, `chdir`, `realpath`, `symlink`, `readlink`, `opendir`, `readdir`, `rewinddir` (it re-reads),
+    `telldir`, `seekdir`, `closedir`, `scandir`, `alphasort`, `utimes`, `futimens`, `utimensat` (with `AT_FDCWD`),
+    `mkdtemp`, `pathconf`, `fpathconf`, `libgen.h`'s generic `dirname` and `basename`; `getpid`, `sleep`, `usleep`,
+    `nanosleep`, `getpagesize`, `sysconf` (`_SC_PAGESIZE`, `_SC_NPROCESSORS_ONLN`, `_SC_NPROCESSORS_CONF`,
+    `_SC_OPEN_MAX`), `gethostname`, `getentropy`, `clearenv`; `mmap`, `munmap`, `msync`, `posix_madvise`, `madvise`
+    (`MADV_DONTNEED`, `MADV_NORMAL`, `MADV_RANDOM`, `MADV_SEQUENTIAL`, `MADV_WILLNEED`).
+  - P-5a, with documented differences: `statvfs` (fields without a source are synthetic), the `umask` setter (the
+    libc keeps its own mask and clears its bits from every mode it passes; on Linux the kernel then still applies the
+    process's real umask, so a libc mask looser than the real one has no effect; children and other .NET code keep
+    the real one), `putenv` (later writes to the caller's string reach the environment only at the libc's next
+    environment call); and `getuid`, `geteuid`, `getgid`, `getegid`, `getppid`, `uname`, `getrlimit`,
+    `setrlimit` and the user and group lookups (`getpwnam` and its family), exact on Linux from `/proc` and `/etc`
+    (not checked yet) and on Windows each a convention (ids from the account's SID, as Cygwin gives them; `uname` from
+    .NET's OS description); `RLIMIT_NOFILE` is FD's own limit on both OSes.
+  - P-3: `environ` and `envp` (**`environ`**).
+  - P-5b: `pipe`, `pipe2`, `eventfd`, `socketpair`; `posix_spawn`, `posix_spawnp`, `posix_spawn_file_actions_*`,
+    `posix_spawnattr_init`, `posix_spawnattr_destroy`, `posix_spawnattr_getflags` and `posix_spawnattr_setflags` (no
+    signal flags), `popen`, `pclose`, `system`, `waitpid`, `wait`; `socket`, `bind`, `listen`, `accept`, `accept4`,
+    `connect`, `send`, `recv`, `sendto`, `recvfrom`, `sendmsg` and `recvmsg` without control data, `shutdown`,
+    `getsockopt`, `setsockopt`, `getsockname`, `getpeername`, upstream's generic `inet_*` and `htons` families;
+    `ioctl` with `FIONREAD` and `FIONBIO`, and `TIOCGWINSZ` if a probe confirms it; `getaddrinfo`, `freeaddrinfo`,
+    `gai_strerror`, `getnameinfo`, `getservbyname`, `getservbyport`; `poll`, `select`; `fcntl`'s `F_SETLK` and
+    `F_SETLKW`, `lockf` without `F_TEST`, `flock`; `MAP_SHARED` file maps.
+  - Not planned now, each a named future: terminals, pseudo-terminals and `O_NOFOLLOW` (forced: no member drives a
+    terminal, and a check before the open races); `epoll`, `inotify`, `mremap`'s moving form, raw sockets,
+    `SOCK_SEQPACKET`, `sockatmark`, hard links; `shm_open`, `shm_unlink`, `mlock` and `munlock`; `MSG_DONTWAIT` (a
+    check before a blocking call races between threads); `gethostbyname`, `gethostbyaddr`, `h_errno`; spawn attributes
+    beyond the flags; `AI_ADDRCONFIG` control and DNS record queries; `ppoll`, `pselect`, `kill` and every signal (the
+    signal design, brief Q21 (a)), with which `__unix__`, undefined under 5.18 PD2, is taken up again; `dlopen` (no
+    native code).
+  - Never (impossible on CIL or the runtime, so permanent under Claude's reading in the row 'Project end goal';
+    forced): `fork`, `vfork`, the `exec*` family; `mprotect`, `MAP_FIXED`, `PROT_NONE`, guard pages; `PROT_EXEC` (no
+    native code runs, so a JIT that writes code and calls it, such as TCC's `-run`, gets no map); descriptor passing
+    (`SCM_RIGHTS`). `mkfifo`, `mknod` and the `chown` family are absent as not supported yet: no member was found.
+- **How the layer calls .NET.** C/C++ inside the libc calls `System.*` through managed calls (rule 1), holding objects
+  as references in locals and internal helpers and as `intptr_t` tickets in C memory, as P-2 does (5.21 RA3); FD and
+  the descriptions hold tickets, each freed once, with its description's last reference. Every member a stage names is
+  checked against 5.20.2 MA3 before its text is drafted, which is why the layer uses `ProcessStartInfo.Arguments`,
+  `EnvironmentVariables`, `GetFileSystemInfos()` and `IPAddress.Parse(string)` in place of generic or byref members.
+  Data moves through `byte[]` with `Stream.Read` and `Write(byte[], int, int)` and `Marshal.Copy` (5.20.10 S5); a
+  transfer above `INT32_MAX` bytes is split into `int`-sized calls under the description's lock; the cost per transfer
+  is not measured. File names are decoded by explicit calls (`new UTF8Encoding(false, true)`, `Encoding::GetString`,
+  `DecoderFallbackException` giving `EILSEQ`), and names that .NET hands back (`readdir`, `getcwd`, `realpath`,
+  `readlink`) are encoded by the same throwing encoding (`GetByteCount`, `GetBytes`), `EncoderFallbackException`
+  giving `EILSEQ`; both are listed before their base `ArgumentException`. The core needs no delegate; P-5b's pump and
+  waiter threads use P-3's delegates (MC-3's piece).
+- **Errors.** No new errno number: every code here is in 5.19.5's frozen set. MC-4 gives a catch entry the caught
+  exception as a ticket, in the spelling that holds when MC-4's text is drafted; C reads its `HResult`,
+  `InnerException`, `SocketErrorCode` or `NativeErrorCode` through managed calls and frees it on every path; filters
+  stay type-only (MA5). After 5.19.5's type entries: a negative `HResult` is an HRESULT on both OSes, where
+  `0x8007xxxx` carries a Win32 error, which a table in the libc maps (its rows are P-2's milestone text's), and
+  another value (such as `COR_E_IO`, which a bare `IOException` carries) gives `EIO`; on Linux a plain `IOException`'s
+  positive `HResult` is the raw errno (`EEXIST`, `ENOSPC`, `EXDEV`, `ENOTDIR` and the like), read with 5.19.5's swap
+  of 35 and 75, and `UnauthorizedAccessException` carries `EACCES`, `EPERM` or `EBADF` in its `InnerException`; errors
+  without a POSIX counterpart (Win32 codes, raw errnos outside 5.19.5's set, other HRESULTs) go to near codes, a
+  documented difference; on Windows `DirectoryNotFoundException` stands for `ENOENT` and `ENOTDIR`, told apart by a
+  check after the failure (racy: a documented difference), while on Linux `ENOTDIR` keeps its own errno (Claude's
+  recollection of .NET's errno mapping, which P-2's text checks); sockets map `SocketErrorCode` (`WouldBlock` to
+  `EAGAIN`, or `EINPROGRESS` from `connect`; `Shutdown`, which Windows gives for a send after `shutdown` and Linux
+  .NET for `EPIPE` (Claude's recollection), to `EPIPE`; `ProtocolFamilyNotSupported` to `EAFNOSUPPORT`;
+  `SocketNotSupported`, `HostDown`, `Disconnecting` and the other codes with no portable number to near codes, such as
+  `EPROTONOSUPPORT`, `EHOSTUNREACH` and `EPIPE`, in a table that P-5b's text completes and where an unlisted code
+  gives `EIO`: a documented difference); spawning maps `NativeErrorCode` to `ENOENT`, `EACCES` or `ENOEXEC`. Every
+  exception a member documents for ordinary C input is listed, a derived type before its base, or kept away by a check
+  before the call: an empty path gives `ENOENT` before any call; the layer checks a description's access mode before a
+  transfer or a size change (`EBADF`, and `EINVAL` for `ftruncate` on a descriptor not open for writing, as Linux
+  gives) and refuses a negative length or resulting offset with `EINVAL`, so these mistakes never reach .NET's
+  `NotSupportedException` or `ArgumentOutOfRangeException`; on Framework `ArgumentException` for invalid path
+  characters gives `EINVAL` (a device path aside, **Paths**); `ArgumentOutOfRangeException` gives `EFBIG` on calls
+  that change a size and `OperationCanceledException` `ECANCELED`; P-2's primitives list the same. Other exceptions
+  escape (5.20.8 MX1).
+- **The descriptor table** (FD, directory id 2). Descriptors are small integers, process-wide, lowest free first, as
+  POSIX requires; they are the libc's own numbers, never OS handles. FD holds the table's lock word, a soft and a hard
+  limit, the count and a directory of pointers to fixed chunks of 1024 entries, sized for the hard limit, so a lookup
+  needs no lock and the frozen layout never caps the table low (forced: the user's end goal and "Yes, share it."): for
+  example a hard limit of 1,048,576 (a directory of about 8 KB on msil64) and a soft limit of 1024. An entry is
+  `{ptr description, u32 descriptor flags, u32 reserved}`. P-2's milestone text fixes the exact layout at major 0; P-3
+  adds the lock word's encoding and freezes FD at major 1 with sub-blocks 1-13 (13 ENVIRON, 5.19.11). `EMFILE` comes
+  at the soft limit, which `setrlimit(RLIMIT_NOFILE)` may raise to the hard limit and `sysconf(_SC_OPEN_MAX)` reports;
+  `FD_SETSIZE` is 1024. Later state takes new directory ids under 5.19.11's rules for state added after the freeze
+  (the mapping registry, the child table, the lock table, the wake state); `environ`'s array (13 ENVIRON) and, in FD,
+  the per-file locks of **Opening files** (with their lock words, **Locking and threads**) are laid out before the
+  freeze.
+- **Open file descriptions.** `dup`, `dup2`, `dup3` and `F_DUPFD` share one description; every `open` makes a new one.
+  A description lives on the shared heap (5.19.10's scheme, so any copy may free it) and holds at least its kind, a
+  reference count, a lock word, the status flags (`O_ACCMODE`, `O_APPEND`, `O_NONBLOCK`), the 64-bit offset, two
+  tickets (the .NET object; a peer or helper), its operation table or kind (the form that 5.19.9 leaves to P-3's
+  milestone text) and a UTF-8 copy of its canonical path (for Framework's `fstat`, `st_ino`, and the lock and append
+  tables); P-2's milestone text fixes its layout, letting the descriptions of one file share a handle (**Locks**),
+  and P-3 freezes it. Each call holds a reference while it runs;
+  `close` drops the number and one reference, and the .NET object is disposed with the last, so a call blocked in
+  another thread finishes, as on Linux (what a disposed object then throws is not checked yet). Kinds: regular file,
+  console input, output and error (on Linux a console description of a stream that is not a terminal also holds a
+  `FileStream` over its descriptor as its helper ticket, **Descriptors 0, 1 and 2**), and the null, zero and random
+  devices from P-2; directory from P-5a; socket, pipe end, eventfd, socketpair end and child pipe from P-5b. Before
+  each transfer the layer seeks the `FileStream` to the description's offset (5.19.10; a console description keeps
+  none, **Descriptors 0, 1 and 2**); `pread` and `pwrite` are a seek and a transfer under the description's lock.
+- **Locking and threads.** Before P-3, one thread under 5.19.5's stated exception. From P-3 the lock words are
+  5.19.12's dotnet `Mutex`: allocation, `close` and `dup2` take the table's; I/O that uses the offset holds the
+  description's across seek and transfer when `FileStream.CanSeek` is true (never by the reported type: Linux .NET
+  reports FIFOs as regular files); from P-5b, while the descriptions of one file share a handle (**Locks**), such I/O
+  also holds that file's lock (the lock word of its entry among the per-file locks of **Opening files**) across seek
+  and transfer, since a seek through one description moves the handle under the others; blocking I/O on sockets,
+  pipes and the console holds none while it waits. From P-3 the lock guards are RAII objects that release on any
+  exception, once the OS layer is built with `-fexceptions` (the user's pick on the review page, 2026-11-04, item
+  eh-13: "Yes, after probe 9's cost measurement"); if that probe rules it out, an exception that escapes under a lock
+  in a managed host leaves the lock held, a documented difference. The I/O stages' waits (`nanosleep`, in-process
+  reads, `poll`'s in-process wait, `waitpid`) list `ThreadInterruptedException`, release the bucket's monitor and
+  return `EINTR` (`nanosleep` writes the remaining time), as a signal would; what P-3's own waits (mutex, condition,
+  once, join) do with it is P-3's milestone text's (5.19.12), never `EINTR` where POSIX forbids it. `inet_ntoa`'s
+  buffer goes into the second per-thread extension of 5.19.11's rules for state added after the freeze.
+- **stdio on descriptors** (forced: the user's end goal and prov-10). From the core's stage `DotnetFile` holds a
+  descriptor, as upstream's `LinuxFile` holds `int fd`: `fopen` is an `open` plus a `FILE`; the standard `FILE`s sit
+  on 0, 1 and 2; `fileno` returns the number through `get_fileno` (upstream's `src/stdio/generic/fileno.cpp`);
+  `fdopen` wraps a descriptor (`libc/src/stdio/dotnet/fdopen.cpp`; upstream's `create_file_from_fd` is Linux-only);
+  `fclose` closes the descriptor; a `FILE`'s seek uses its description's offset, so a stream and its descriptor mix by
+  POSIX's rules. `dup2` onto 0-2, and `close` plus `open`, redirect the standard `FILE`s inside the libc, while other
+  .NET code (`Console.Out`) keeps the process's own handles: a documented difference, asked with P-5a's text, without
+  which `dup2` onto 0-2 takes the loud form. `stdout`'s buffering is decided when it is set up (5.19.9).
+- **Descriptors 0, 1 and 2** are console descriptions over `Console.OpenStandardInput()`, `OpenStandardOutput()` and
+  `OpenStandardError()`, the unbuffered streams P-2 wraps. Their read and write calls move the file offset that the
+  process shares with its parent, its children and other .NET code (`Console.Out`), as POSIX's descriptors share it,
+  so a console description keeps no offset of its own (Claude's reading). .NET's console streams never seek (`CanSeek`
+  is false; `Length`, `Seek` and `SetLength` throw, on every runtime, whatever the handle), so on a console
+  description `lseek`, `pread` and `pwrite` give `ESPIPE`, `ftruncate` gives `EINVAL`, and `fstat` reports `S_IFCHR`
+  on a terminal (forced: POSIX's answers there) and otherwise `S_IFIFO` with `st_size` 0, right for a pipe and a
+  documented difference for a redirected file. On Linux a console description of a stream that is not a terminal also
+  holds `new FileStream(new SafeFileHandle((IntPtr)n, false), access, 1)` for what the console stream cannot answer:
+  `CanSeek` tells a file from a pipe; on a file `fstat` reports `S_IFREG` with the stream's `Length` (so a seekable
+  device such as `/dev/null` reads as a regular file, and a socket, like a pipe, as a FIFO: documented differences as
+  under **File-system calls**), and `pread`, `pwrite` and `ftruncate` act without moving the shared offset. `lseek`
+  sets that stream's `Position` and then reads its `SafeFileHandle`, which moves the shared offset there, and
+  `lseek(fd, 0, SEEK_CUR)` reads the shared offset as the starting `Position` of a new such stream. Transfers stay on
+  the console stream, since a `FileStream` alone writes at a position of its own and never moves the shared offset, so
+  the other writers of a shared description write over its output: on Linux .NET 8 and 10, `{ prog; printf BB; } > f`,
+  and descriptors 1 and 2 both through such a `FileStream` under `> f 2>&1`, left `BBAA` where POSIX gives `AAAABB`,
+  while the console streams gave `AAAABB` (Claude's probe, 2026-11-22, .NET members run from C#). The same probe found
+  this arrangement exact in each case it ran, on Linux .NET 8 and 10 and, over `Console.OpenStandardInputHandle()` and
+  `OpenStandardOutputHandle()`, on Windows .NET 11: after an `lseek` the console stream read the byte at the new
+  offset, a new stream started where console reads had left the offset, and a `FileStream` write followed by the
+  getter left the offset where POSIX does; an earlier probe of that date (on Linux .NET 8 and 10, one stream per run)
+  found descriptor 0 seeking a redirected file with its length and `/dev/null` with length 0, descriptor 1 reporting a
+  redirected file's length, and both refusing to seek a pipe (`ESPIPE`). On Windows the arrangement over .NET 11's
+  members is a named future with them (**Framework 4.8 and modern .NET**). P-2's tests pin these cases on descriptors
+  0, 1 and 2, two writers on one description included (`prog > f 2>&1`; `{ prog; echo x; } > f`; 5.19.15). A standard
+  stream that Windows .NET opens as `Stream.Null` (an invalid handle: a GUI host, a service) is a closed descriptor,
+  `EBADF`, and so is a standard `FILE` over it from P-2 on (forced: prov-10).
+  `isatty` is the negated `Console.Is*Redirected` for a console description (Framework 4.5+, which caches the first
+  answer) and 0 for every other kind. `close(1)` frees number 1 for the next `open`. Bytes pass unchanged both ways on
+  every OS, with no CRLF translation and no code-page change; P-2's text first checks whether a Linux terminal's stdin
+  goes through .NET's line reader.
+- **Opening files** (P-2's `fopen`, then `open`). `new FileStream(string, FileMode, FileAccess, FileShare, int,
+  FileOptions)` on both runtimes: `O_ACCMODE` gives `FileAccess`; `O_CREAT`, `O_EXCL` and `O_TRUNC` give `FileMode`
+  (`CreateNew` is `O_CREAT|O_EXCL` on Linux, so atomic there); `O_CREAT|O_EXCL` with `O_RDONLY` opens the `FileStream`
+  read-write, since `FileStream` refuses `CreateNew` with `FileAccess.Read` (Claude's recollection, which P-5a's text
+  checks), while the description keeps `O_RDONLY`, and `O_TRUNC` with `O_RDONLY`, which POSIX leaves undefined, gives
+  `EINVAL`; buffer size 1, which bypasses `FileStream`'s buffer on both runtimes (Framework refuses 0); `O_SYNC` and
+  `O_DSYNC` add `FileOptions.WriteThrough`. `ftruncate` is `SetLength`; `fsync` and `fdatasync` are `Flush(true)`. The
+  share mode is `ReadWrite | Delete`, never `Inheritable` (forced: the user's end goal). A C program turns .NET's
+  implicit `flock` on Linux opens off (`AppContext.SetSwitch("System.IO.DisableFileLocking", true)`, Framework 4.6+),
+  so opens follow POSIX's rules. .NET reads the switch once, no later than the process's first open by path, and
+  ignores a later setting (Claude's probe, 2026-11-22, .NET members run from C#, on .NET 8 and 10: set first, an open
+  succeeds while another process holds the file with `FileShare.None`; set after one open, it changes nothing). So the
+  module initializer of an output that has `'<msil>Main'` sets it first, after the width guard (5.18.7), before the
+  library `ldtoken`s and the cross-assembly relocations, which can run other assemblies' code, and before LR5's
+  constructors; `'<msil>Main'`'s call of `__llvm_libc_set_c_main` comes after all of them (5.18 LR11), too late. P-2's
+  milestone text fixes that call (`__llvm_libc_set_c_main` moved there, or a trailer item of its own), amends 5.18 LR5
+  and LR11 for it and pins it in its tests, a constructor's open included (5.19.15); the switch is process-wide, and a
+  host that is not a C program never sets it and keeps .NET's lock (a documented difference). `O_APPEND` is a seek to
+  the end under the description's lock before each write, atomic among writes through one description and, through a
+  per-file append lock keyed by canonical path, among descriptions whose paths canonicalize alike; aliases and other
+  processes can interleave (a documented difference). Growing a file on Windows (`ftruncate`, a write past the end)
+  relies on the file system's zero fill (a documented difference; FAT and network shares are measured first).
+- **Creation modes and directories** (P-5a). On Linux `open`, `creat`, `mkstemp` and `mkostemp` set `mode` at creation
+  through `FileStreamOptions.UnixCreateMode` (a `Nullable` of an enum, through MC-5), and `mkdir` through
+  `Directory.CreateDirectory(string, UnixFileMode)` (forced: prov-10), so the kernel applies the umask, as POSIX says,
+  after the libc's own mask (**Scope**). On Windows a create mode and `chmod`'s owner-write bit set or clear only the
+  read-only attribute, and `st_mode`'s permission bits follow Windows's own C library convention (a documented
+  difference). `mkdtemp` needs a create that fails on an existing directory, which `CreateDirectory` is not: in the
+  temporary directory on Linux it is exact through `Directory.CreateTempSubdirectory` (.NET 7+, over the OS's own
+  `mkdtemp`, which creates the directory 0700 and whose random characters the libc writes back into the template); on
+  Windows .NET appends a random name of its own that does not fit the template's six X's (Claude's recollection) and
+  Framework has no such member, so there, and outside the temporary directory, P-5a's text fixes its form (a racy
+  check, a documented difference, or the loud form) with the user's answer. .NET refuses to open a directory, so the
+  libc checks first: `open(dir, O_RDONLY)` or `O_DIRECTORY` gives a directory description with `fstat` (by path),
+  `fsync` (no effect: .NET has no directory flush) and `close`, both documented differences; writing flags give
+  `EISDIR`; `dirfd`, `fdopendir`, `fchdir` and the `*at` family with a directory descriptor stay absent.
+- **File-system calls** (P-5a) use the `FileInfo`, `DirectoryInfo`, `File`, `Directory` and `Path` members of both
+  runtimes; `readdir` reads `DirectoryInfo.GetFileSystemInfos()`, a snapshot taken at `opendir` (the libc adds `.` and
+  `..`; `rewinddir` takes a new one; `telldir` and `seekdir` are its indexes). `mkdir`'s `EEXIST`, `unlink`'s `ENOENT`
+  and `EISDIR`, and `rename`'s `EXDEV` come from checks before the call, as for P-2's `remove` and `rename`. On
+  Framework `futimens` and `fchmod` take the loud form, and so does `realpath` when a component of its path is a
+  reparse point (`FileAttributes.ReparsePoint`), since no Framework member reads links; modern .NET's `SafeFileHandle`
+  overloads make `fstat`, `futimens` and `fchmod` follow the file. `chdir` moves the whole process's current
+  directory, a C# host's included. Documented differences: `stat`'s fields without a source are synthetic (`st_dev`
+  from the volume, `st_ino` a stable hash of the canonical path, never 0 (forced), `st_nlink` 1, `st_uid` and `st_gid`
+  0, `st_blksize` and `st_blocks` from the size, `st_ctime` the last write time), so aliases, hard links and renames
+  give wrong answers, and on msil32 the hash collides sooner; on Linux FIFOs, devices and sockets read as regular
+  files (`d_type` is `DT_UNKNOWN` except `DT_DIR` and `DT_LNK`) and names that are not valid UTF-8 come back damaged;
+  the checks above race with other processes; on Framework `fstat` works through the path saved at `open` (another
+  file after a rename, `ENOENT` after an unlink); `symlink` (.NET 6's link members) on Windows makes a directory link
+  only when the target is an existing directory, so a link made before its directory is a file link (making a link may
+  need a privilege, unverified); `access` tries an open for `R_OK` and `W_OK` (never of a file the lock table holds)
+  and reads the mode bits on Linux and Windows's extension rule for `X_OK`, and for directories `File.GetUnixFileMode`
+  on Linux and the read-only attribute on Windows.
+- **`unistd` basics** (P-5a). `getpid` is `Process.GetCurrentProcess().Id` (5.19.13 keeps `Environment.ProcessId`
+  out); `sleep`, `usleep` and `nanosleep` round up to whole milliseconds and call `Thread.Sleep(int)`, in chunks of at
+  most `int.MaxValue`, until P-2's monotonic clock passes the deadline, since Win32 `Sleep` may return early;
+  `getpagesize` and `_SC_PAGESIZE` are `Environment.SystemPageSize`; `_SC_NPROCESSORS_ONLN` and `_SC_NPROCESSORS_CONF`
+  are `Environment.ProcessorCount`, fixed at start-up, which on modern .NET applies affinity and CPU limits (whether
+  Framework 4.8 does is not checked yet; P-5a's text checks it), a documented difference; `gethostname` is
+  `Dns.GetHostName`; `getentropy` fills from `RandomNumberGenerator.Create()`'s `GetBytes(byte[])`.
+- **`environ`** (P-3): `#define environ (*__llvm_libc_environ())` over an exported accessor, as `stdout` is spelled
+  (5.19.9). The array lives in sub-block 13 ENVIRON, which P-3 adds and freezes (5.19.11); every copy from P-3 on
+  rebuilds it after `setenv`, `unsetenv`, `clearenv` and `putenv`, and at the libc's next environment call (`getenv`
+  included) brings into `System.Environment` what a program changed through the array: an array it assigned to
+  `environ`, or an element or a string it wrote into the array, which the libc finds by comparing the array with the
+  copy it last made (Claude's design). Children and other .NET code see such a change only then (a documented
+  difference). `main` may take `envp` as a third parameter, which LR11's `'<msil>Main'` passes (the text of the user's
+  pick on the review page, 2026-11-04, item wd-d27, "Do what Claude recommends": "On portable, envp arrives with the
+  environ design"). A program's own `extern char **environ;` compiles after `<unistd.h>` (a redeclaration of the
+  accessor) and without it names a data object `c.dll` does not export, an undefined symbol at link time; a C++
+  declaration in a named namespace fails to link; the macro rewrites every later identifier `environ`, so a struct
+  member of that name stops compiling and a parameter of that name becomes a pointer to a function, whose callers get
+  an incompatible-pointer diagnostic (a warning in C, an error in C++; Claude's reading of C's declarator rules, not
+  compiled). At P-2, `unistd.h` (installed for `getopt`) declares the generated object `environ`, which `c.dll` does
+  not define, so a use fails to link with a plain undefined symbol (5.19.10).
+- **Maps** (P-5a; `MAP_SHARED` in P-5b). A private file map is a view: `MemoryMappedFile.CreateFromFile(FileStream,
+  null, capacity, access, HandleInheritability.None, true)` (Framework 4.6+) and `CreateViewAccessor`, read-only for
+  `PROT_READ` and copy-on-write for `PROT_READ | PROT_WRITE`, so pages load lazily, writes through a copy-on-write
+  view stay private to it, and a write through a read-only map faults: the process ends with .NET's
+  `AccessViolationException` (on Linux by `SIGABRT`, where a native program gets `SIGSEGV`). Its address is the view
+  handle's `DangerousGetHandle()` plus `PointerOffset`, which points at the requested page on every runtime (Windows
+  maps from the 64 KiB boundary at or below the offset, Linux from the page itself), and `munmap` finds the view by
+  that address; offsets must be page-aligned; a map keeps its own references to its description and its
+  `MemoryMappedFile`, so it outlives `close`. Every file map, private or (from P-5b) shared, gives .NET the file's
+  length as its capacity (0, which means that length), since .NET refuses a smaller nonzero one (Claude's recollection
+  of .NET's documentation) and, for a larger one, grows the file (read-write views, and copy-on-write ones on Linux)
+  or refuses it, while POSIX `mmap` never changes a file's length; the view ends at or before the file's end, the rest
+  of its last page reading as zeros, as POSIX requires, and a map that runs whole pages past the end of its file
+  (POSIX: `SIGBUS` when such a page is touched) takes the loud form at `mmap` (**Flags and argument values**). On
+  Windows `ftruncate` of a file with any live view fails (`SetEndOfFile` needs every view unmapped), so there it takes
+  the loud form. An anonymous map is a heap block (`Marshal.AllocHGlobal`, over-allocated, aligned to
+  `Environment.SystemPageSize`, zeroed by the libc, committed at once), a second allocation kind beside 5.19.10's
+  heap; a shared one behaves as a private one, since no other process sees it. Where a heap block cannot be faithful
+  the call is loud: an anonymous map without `PROT_WRITE` gives `ENOTSUP`, and a partial `munmap` of one takes the
+  loud form. A `MAP_SHARED` file map is a view clamped to the file's length, read-only for `PROT_READ` and read-write
+  for `PROT_READ | PROT_WRITE`; `msync(MS_SYNC)` is the accessor's `Flush()`, plus `FileStream.Flush(true)` on
+  Windows, and `MS_ASYNC` is done synchronously. On Windows a view is not guaranteed coherent with plain reads and
+  writes (Microsoft documents no guarantee; local NTFS files were coherent in the probe below), and writes through it
+  may leave `st_mtime` unchanged (documented differences). `madvise`'s `MADV_DONTNEED` zero-fills a private anonymous
+  map, re-reads a private file map and changes nothing in a shared anonymous one; its other advice values, and every
+  `posix_madvise` advice (POSIX: no effect on the semantics of access to memory), are no-ops. On Framework
+  `MemoryMappedFile` lives in `System.Core.dll`, which P-5a adds to 5.19.7's references, and the modern `System.Core`
+  facades forward it: Claude's probe, 2026-11-22 (.NET members run from C#), ran one assembly built against
+  Framework's `System.Core` on Framework 4.8 and .NET 8, 9, 10 and 11 on Windows and .NET 8 and 10 on Linux (local
+  NTFS and ext4 files) and found the type on all of them (forwarded on modern .NET) and the address; the fault,
+  private copy-on-write views, the growth or refusal behind the capacity rule and the zeroed tail (of a read-only map)
+  on Framework 4.8 and .NET 8 and 10, through `CreateFromFile`'s path overload; and shared views coherent with other
+  streams on local NTFS and ext4 files. P-5a's text checks the `FileStream` overload the libc uses (copy-on-write over
+  a stream opened for reading included) and the capacity rule on every runtime of its gate, and its tests keep the map
+  cases there (5.19.15).
+- **Pipes and `poll`** (P-5b). Pipes, eventfds and socketpairs are the libc's own objects in C memory (forced: every
+  other route reaches the same result at more cost): `PIPE_BUF` 4096 with all-or-nothing writes up to it, a capacity
+  of 65,536 bytes, exact `EPIPE` and `EAGAIN`, eventfd's counter, and `socketpair` giving `AF_UNIX` stream sockets
+  inside the process on every runtime; their waits use P-3's wait buckets. Writes to a closed pipe or socket return
+  `EPIPE`, as if `SIGPIPE` were ignored (CoreCLR ignores it). `O_NONBLOCK` sets `Socket.Blocking` to false, has no
+  effect on regular files, as POSIX says, and is exact on in-process objects. `poll` scans (regular files are ready,
+  in-process objects by their state, a closed number gives `POLLNVAL`); if nothing is ready and the timeout is not
+  zero, it waits in `Socket.Select` (sockets), in the wait bucket (in-process objects), or with both in `Select` on an
+  internal wake socket too (a UDP socket bound to the loopback address that sends to itself), which in-process writers
+  wake; then it scans again; `select` takes the same path. `Select` gets `ArrayList`s (it filters them in place), at
+  most 65,536 sockets per list and never an all-empty set; a connect in progress joins the write and the error lists
+  (`POLLOUT`, plus `POLLERR` from the error list), after which the error list means out-of-band data (`POLLPRI`).
+  Linux .NET folds hang-up into read readiness (a one-byte `Peek` tells them apart), and `POLLPRI` and `POLLERR`
+  cannot both be reported for one socket in one call (a documented difference); a wait over about 35.8 minutes loops.
+  Pump threads make stdin and child pipes pollable: a stdin pump starts at the first `poll` or non-blocking read of
+  descriptor 0 and owns stdin from then on, so other .NET code, and a child started before then that still reads
+  stdin, miss what it read ahead, a child started after then gets its stdin through a pipe from the pump and so sees
+  no terminal (`isatty` gives 0; no line editing), and what the pump read but the program did not, like data a pump
+  carries from a child, is lost at exit (documented differences). Pump and waiter threads are background threads.
+- **Sockets and name lookup** (P-5b). `Socket` over `byte[]` for `AF_INET` and `AF_INET6` with `SOCK_STREAM` and
+  `SOCK_DGRAM`, and `Dns`, all in `System` on Framework. `AF_UNIX` uses `UnixDomainSocketEndPoint` behind the modern
+  guard (on Windows where `Socket.OSSupportsUnixDomainSockets`); where it is absent, Framework included, `socket`
+  gives `EAFNOSUPPORT` (forced: POSIX's error for exactly this gap). `recvfrom` and `recvmsg` with an address call
+  `ReceiveFrom(byte[], int, int, SocketFlags, ref EndPoint)` through MC-5's class-type byref, and with a null address
+  `Receive`. `MSG_WAITALL` loops on a blocking socket; `MSG_NOSIGNAL` has no effect. `SO_REUSEADDR` also sets
+  `SO_REUSEPORT` on Linux .NET (a documented difference) and has no effect on Windows. Name lookup: numeric hosts
+  through `inet_pton`; `IPAddress.Any`, `Loopback` and their IPv6 forms for `AI_PASSIVE` and a null host;
+  `Dns.GetHostAddresses(string)`, filtered by family in the libc, and `Dns.GetHostEntry` for canonical names and
+  reverse lookups; an empty name and a name over 255 characters are refused before the call; an empty result gives
+  `EAI_NONAME`. `HostNotFound` and `NoData` (Windows' `WSANO_DATA`) give `EAI_NONAME`, `TryAgain` `EAI_AGAIN`,
+  `NoRecovery` and `SocketError.SocketError` `EAI_FAIL`, `AddressFamilyNotSupported` `EAI_FAMILY` (how Linux's
+  `EAI_NODATA` and `EAI_SYSTEM` arrive, as `HostNotFound` or as `SocketError`, is Claude's recollection only, which
+  P-5b's text checks; either way a documented difference); without `NI_NAMEREQD` `getnameinfo` falls back to the
+  numeric form. Service names come from the system's services file; upstream's `getaddrinfo` and `freeaddrinfo` stubs
+  are replaced.
+- **Spawning** (P-5b) uses `Process` and `ProcessStartInfo` (`UseShellExecute` false, which is not Framework's
+  default; redirected standard streams), all in `System` on Framework. `argv` is one `Arguments` string quoted by the
+  libc under the Windows command-line rules on every runtime, which .NET's Unix `Process` splits by the same rules, so
+  a Linux child gets the exact `argv`. `posix_spawnp` resolves a slash-free name through `PATH` itself and passes an
+  absolute path, and a slash-free `posix_spawn` path goes as `./name`; on Windows the search tries the name, then the
+  name with `.exe`, and a `.bat` or `.cmd` target, whose quoted arguments `cmd.exe` would parse again, is refused in
+  the loud form (scripts run through `system` and `popen`). File actions act on the child's 0-2 only: `addclose` of 3
+  or above is a no-op (a .NET child never receives the libc's descriptors), `adddup2` and `addopen` onto 3 or above
+  are argument-value cases, and the dotnet build copies `addopen`'s path, as POSIX says. A child inherits the
+  process's standard handles while the libc's 0-2 are the original console descriptions; a replaced one reaches the
+  child through a pipe and a pump, so a redirected stdin reaches it as a pipe (not seekable, and what the pump read
+  but the child did not use is lost to the parent too), and a closed or `FD_CLOEXEC` one becomes a closed pipe
+  (documented differences). `wait` and `waitpid(-1)` read the child table, where one waiter thread per child records
+  its exit; the status is `(ExitCode & 0xFF) << 8`, so a Linux child killed by signal N reports 128 + N, and children
+  inherit `SIGPIPE` ignored (documented differences); `ECHILD` for a process that is not a child. `system` and `popen`
+  run `cmd.exe /c` (through `COMSPEC`) on Windows and `/bin/sh -c` on Linux (a documented difference). A child that is
+  an IL image of this toolchain starts on the parent's runtime, through the running host, a libc convention that
+  writes no file where it finds a runtimeconfig to reuse: on modern .NET the parent's host runs it with
+  `exec --runtimeconfig <file> <child> <arguments>` on the parent's framework, passing its arguments and returning its
+  exit code (Claude's probe, 2026-11-22, .NET members run from C#, on Linux), and on Framework an IL `.exe` runs as
+  itself. That host is the program `Environment.ProcessPath` names when its file name is `dotnet` (`dotnet.exe`);
+  under an apphost or another native host `ProcessPath` names that program instead, so there P-5b's text takes the
+  muxer of the framework that `AppContext`'s `FX_DEPS_FILE` names, or the loud form (not probed). The host refuses a
+  child without a runtimeconfig (on Linux exit 131, the low byte of the host's failure code), and none of the
+  `AppContext` keys or `Environment` members the probe read gives the path of a runtimeconfig passed to the parent's
+  host with `--runtimeconfig` (on Linux `/proc/self/cmdline` holds it; on Windows nothing the portable triples may
+  call does: Claude's reading). So P-5b's text fixes, with the user's answer on starting a portable child, which
+  runtimeconfig a child takes when none sits beside the parent's app (`<app>.runtimeconfig.json`, as in the usual
+  `dotnet app.dll` layout and in `msil-run.py`'s private directory) or beside the child, as when the parent's host was
+  started with `--runtimeconfig` naming a file elsewhere: one the libc writes (a file written), one the build system
+  or the user must place beside the child, or the loud form. Framework children are measured before their differences
+  are asked (a UTF-8 preamble on a piped stdin under code page 65001; inherited sockets).
+- **Locks** (P-5b). `fcntl` and `lockf` locks belong to the process (two descriptors of one process never conflict,
+  and closing any descriptor of a file releases the process's locks on it); `flock` locks belong to the open file
+  description (two descriptions conflict, also in one process). One in-process lock table matches files by canonical
+  path; its records never point at a description. Between processes, `FileStream.Lock` and `Unlock`: `LockFile` on
+  Windows (exclusive, mandatory, per handle), a classic `fcntl(F_SETLK)` lock on Linux (`F_WRLCK` on a writable
+  stream, else `F_RDLCK`). The descriptions of one file in the process do their I/O and take their locks through one
+  shared handle, with on Linux a second, read-only one for read locks, both open while any description of the file is,
+  so the process's own I/O never meets its own Windows locks, read locks stay shared on Linux, and no close drops the
+  locks behind an emulated `flock` (not measured yet; P-5b's text fixes it). Blocking requests (`F_SETLKW`, `flock`
+  without `LOCK_NB`, `lockf(F_LOCK)`) retry with back-off (POSIX sets no fairness and only "may" give `EDEADLK`).
+  `flock(LOCK_EX)` on an `O_RDONLY` descriptor takes the lock through a read-write handle when the file can be opened
+  for writing (forced: prov-10), otherwise the loud form. `F_GETLK` and `F_TEST` stay undefined, so SQLite's
+  `os_unix.c` builds only with a recorded flag or patch. Documented differences: Windows read locks are exclusive
+  between processes, and Windows locks bind other processes' handles; emulated `flock` meets native `fcntl` locks and
+  misses native `flock` locks; aliases of one file (case, 8.3 names, links) count as different files. A conflict gives
+  `EAGAIN` or `EACCES`.
+- **Paths** (from P-2's `fopen`, `remove`, `rename` and `tmpnam` on). `/dev/null` (a null description; never a
+  `FileStream`, which Framework refuses for a non-disk file) and `/dev/tty` are recognized in the libc on both OSes
+  (forced: POSIX requires both). `/dev/tty` is the controlling terminal, whatever the redirection of 0-2 (POSIX): on
+  Linux the libc opens that device (`ENXIO` without a terminal; P-2's text checks that `FileStream` opens a character
+  device), and on Windows it is the console descriptions, which follow a redirection of 0-2 where POSIX's `/dev/tty`
+  would not (a documented difference). `/dev/stdin`, `/dev/stdout` and `/dev/stderr` open a new description of what
+  the libc's 0, 1 or 2 names (Linux's reopen meaning). On Windows `/dev/zero` and `/dev/urandom` (`getentropy`'s
+  source) map too and other `/dev/` names give `ENOENT`; on Linux other `/dev/` names are ordinary paths. On Windows
+  every path the libc returns (`getcwd`, `realpath`, `readlink`, paths from `readdir`, P-2's `tmpnam`) uses `/`
+  (`C:/dir`, `//server/share`) and both separators are accepted, so code that splits on `/` and llvm-libc's `dirname`
+  and `basename` work, while a test for a leading `/` still misreads such a path; drive-relative paths and `\\?\`
+  prefixes pass to .NET unchanged. On Framework a device path that the path `FileStream` refuses (`CON`, `NUL`,
+  `COM1`, a named pipe) is loud: from P-2 its .NET exception is left unlisted and escapes (5.20.8 MX1),
+  `NotSupportedException` or, for a `\\.\` path (a named pipe, and the device names under Framework's newer path
+  handling), `ArgumentException` (Claude's recollection; P-2's text checks both of Framework's path-handling modes),
+  which the libc tells apart from invalid characters by the path, so **Errors**' `EINVAL` never takes a device path; a
+  `:` that is not a drive's, which Framework refuses as a path format with `NotSupportedException` (Windows itself
+  would open an alternate data stream), is loud the same way. P-5a's text fixes, with the user's answer, whether these
+  stay loud (**Loud failures**) or take an error code.
+- **Framework 4.8 and modern .NET.** One `c.dll` runs on every runtime and OS (rule 7), so a gap on one shows only at
+  run time. A member newer than Framework 4.8 runs only behind `Environment.Version.Major >= 8`, in a method Framework
+  never JIT-compiles, bound against .NET 8's reference assemblies, which P-5a adds to the build, or P-3 if the user's
+  answer on collectible load contexts needs such a member (5.19.7, 5.19.13), so .NET 8 and .NET 10 take one path; one
+  missing on Windows also tests the OS; each gets a pinned test of both paths; Framework's binding stays the base; the
+  floor is rechecked with P-5a's text while the .NET 8 legs stay (the user's pick on the review page, 2026-11-04, item
+  dl-d22: "Keep the .NET 8 legs until Phase 3 ends, then review"). Linux always runs modern .NET (Claude's reading of
+  the user's pick on that page, item eh-14: "No: CoreCLR and Framework only for now, with Mono and Unity documented as
+  unverified"). .NET 11's members are a named future for the review after Phase 3 that the pick dl-d22 names:
+  `File.CreateHardLink`, `Console.OpenStandard*Handle` (seeks on redirected standard streams on Windows, **Descriptors
+  0, 1 and 2**) and the standard-handle members that let a child take libc files without pumps.
+
+| Area | Framework 4.8 | .NET 8/10 on Windows | .NET 8/10 on Linux | The layer |
+| --- | --- | --- | --- | --- |
+| `FileStream` position | follows the handle | its own (.NET 6+) | its own | seeks to the description's offset before each transfer |
+| `O_APPEND` | a Framework-only constructor | an extension method in another assembly | no member | emulated in the libc everywhere |
+| Sharing | conflicting opens fail | same | an implicit `flock` on every open | `ReadWrite` plus `Delete`; the lock off in C programs |
+| Create mode, permission bits | the read-only attribute | same | `UnixFileMode` (.NET 7+) | exact on Linux; the read-only convention on Windows |
+| Symbolic links; `fstat` after a rename | no member; by path | .NET 6+; by handle (.NET 7+) | .NET 6+; by handle (.NET 7+) | the loud form and the path on Framework |
+| Byte-range locks | `LockFile` | `LockFile` | `fcntl(F_SETLK)` | **Locks** |
+| `AF_UNIX` | none | where the OS has it | yes | `EAFNOSUPPORT` where absent; `socketpair` in-process |
+| Paths, names | drive letters, `\`, UNC; UTF-16 | same | one root; non-UTF-8 names damaged | **Paths**; a lone surrogate gives `EILSEQ` |
+
+- **`-static` copies and hosts.** Mode 3 exists from P-3 (5.19.8): every copy finds FD through the root, descriptions
+  live on the shared heap, tickets are valid on every thread and in every assembly (5.20.9 MH5), and each copy's code
+  is private. Whether a description and a shared `FILE` carry their creator's operation table (as upstream's `File`
+  carries its platform functions, so every copy runs each object's own code), a kind, or both, and what a libc copy in
+  a collectible load context does (modern .NET; on Framework a copy goes with its AppDomain), P-3's milestone text
+  fixes with the user's answers before the major-1 freeze (5.19.9, 5.19.13). In mixed releases (a P-3-era `libc.a`
+  copy beside a P-5b `c.dll`) an older copy ignores the directory entries it does not use (5.19.11); what its actions
+  leave stale in newer state (its `close` not releasing a newer copy's locks) is a documented difference, listed by
+  each stage's text, and the two-release test (5.19.15) covers it. FD and the lock and append tables are one per
+  process on modern .NET and one per AppDomain on Framework (5.19.11). A host that is not a C program sees
+  descriptors only as the integers C functions return (no export hands C a `Stream` or `Socket`: the .NET host
+  helpers idea, R-b), and a loud refusal reaches it as an exception it can catch (MX1).
+- **Flags and argument values.** Macro values are Linux's (forced: strict dominance, since values of its own would add
+  risk for nothing; brief Q15 (b) and Q21 (a) took Linux's numbers too), in new `include/llvm-libc-macros/dotnet/`
+  files with a `__dotnet__` branch in each dispatcher (5.19.14). `limits.h` gains a `__dotnet__` branch: `PATH_MAX`
+  4096, `NAME_MAX` 765 (a Windows name of 255 UTF-16 units takes up to 765 UTF-8 bytes; `d_name` matches),
+  `HOST_NAME_MAX` 255 (POSIX's minimum; forced), `PIPE_BUF` 4096 and `GETENTROPY_MAX` 256, above which `getentropy`
+  gives `EINVAL`. `socklen_t` is 32-bit unsigned through a `__dotnet__` branch of `socklen_t.h`, so a caller passing
+  an `int *` stays safe. `unistd.h` defines `_POSIX_VERSION` as `202405L` and only the `_POSIX_*` options that ship.
+  Undefined, so a use is a compile error and an `#ifdef` fallback adapts: `F_GETLK`, `F_TEST`, `F_SETOWN`, `F_GETOWN`,
+  `F_SETSIG`, `F_OFD_*`, `O_NOFOLLOW`, `O_DIRECT`, `O_ASYNC`, `O_NOATIME`, `O_PATH`, `O_TMPFILE`, `O_TEXT`,
+  `MAP_FIXED`, `PROT_NONE`, `PROT_EXEC`, `MSG_DONTWAIT`, other `madvise` values and the terminal `ioctl` requests
+  other than `TIOCGWINSZ` (if P-5b ships it). Defined: `O_CLOEXEC`, `F_DUPFD_CLOEXEC`, `SOCK_CLOEXEC` and
+  `EFD_CLOEXEC` (with no `exec`, `FD_CLOEXEC` decides only what a spawned child's 0-2 get), `O_NONBLOCK`,
+  `SOCK_NONBLOCK`, `EFD_NONBLOCK`, `O_SYNC`, `O_DSYNC`, `MSG_WAITALL`, and with no effect `O_NOCTTY`, `MSG_NOSIGNAL`,
+  `MAP_NORESERVE` and `O_BINARY`; `SEEK_DATA` gives the offset and `SEEK_HOLE` the size, both `ENXIO` at or past the
+  end (forced: POSIX's virtual hole at the end). An argument-value case returns POSIX's error where POSIX names one
+  (`EINVAL` for an unaligned `mmap` offset, `ENOTSUP` for an anonymous map without `PROT_WRITE`, `ENOTTY` for an
+  `ioctl` request that does not fit the descriptor's kind), otherwise it takes the loud form: `adddup2` and `addopen`
+  onto 3 or above, a map that runs whole pages past the end of its file (an empty file's included; **Maps**), a
+  partial `munmap` of a heap map or a view, `sendmsg` with control data, a terminal request other than `TIOCGWINSZ` on
+  a terminal.
+- **Loud failures.** A function not shipped fails in rule 2's two forms, and an undefined macro is a compile error. At
+  run time, where a shipped function meets a platform that cannot do it, the call returns POSIX's error where POSIX
+  names one for exactly that gap (forced: `EAFNOSUPPORT` for `AF_UNIX`, `ENOTSUP` for an unsupported protection);
+  otherwise it throws `System.PlatformNotSupportedException` naming the function and the platform (5.15.1 rule 1's
+  throw, as the portable width guard throws, brief Q1 (a)): `symlink` and `readlink` on Framework, `realpath` through
+  a link on Framework, `futimens` and `fchmod` on Framework, `ftruncate` under a live view on Windows, a Framework
+  device path (from P-5a; at P-2 its .NET exception escapes, **Paths**), the argument-value cases above, and each
+  documented difference the user does not OK. MC-1 has no `throw`, so the libc throws through managed calls: a `.ctor`
+  call makes the exception and `ExceptionDispatchInfo.Capture(e).Throw()` raises it (both in `mscorlib` from Framework
+  4.5), through R-a's references (5.21.9), so the helper needs no new compiler feature (Claude's reading). From C#, on
+  Windows, that route behaves alike on Framework 4.8, .NET 8 and .NET 11: unhandled, it prints the type, the message
+  and a stack trace, and a caller's `catch` catches it (Claude's probe, 2026-11-22); the first step that needs it
+  tests the route from C on every runtime, on Linux too. An unlisted exception escapes (MX1).
+- **Tests and the oracle** are 5.19.15's: the descriptor core's cases among P-2's tests in `05-os`, P-3's cases for
+  FD and `environ`, P-5a's tests in `msil/test/Portable/09-files` and P-5b's in `10-network` with their rules and
+  their real programs, the two-release test, and the gates.
 
 ### 5.20 Managed calls from C and C++, stage 1 (MC-1)
 
@@ -9406,6 +10155,8 @@ __attribute__((msil_catch(EXCEPTION_TYPE, CODE)))        /* repeatable; order is
     pointer) and `T[]` (SZARRAY).
   - Not in MC-1 (T-M2 with `... is not supported for MSIL yet`): generic instantiations and generic parameters, byrefs
     `&`, custom modifiers, `vararg`, function pointers, `typedref`, and multi-dimensional arrays.
+  - From MC-5 (5.20.18), as parameters only: a byref of a class type, `class T&` (MB1), and the generic instantiation
+    `Nullable` of an enum (MB2); every other form of this list stays T-M2.
   - For an array `.ctor` the signature is `"instance void(int32)"`. It describes `newarr`'s length operand; no member
     is bound.
 - **MA4 ASSEMBLY** (optional) is the resolution scope printed in **text** output only: standalone `-S`/llc and
@@ -9477,6 +10228,8 @@ change. The signature parser is header-only (5.20.5 ML1), so clang links no new 
   - a `this` handle, if the signature is `instance` and MEMBER is not `.ctor`;
   - one parameter per CIL parameter;
   - one trailing `int *` parameter if any `msil_catch` is present.
+  - from MC-4 (5.20.17 ME2), with `msil_catch`, optionally a second trailing `intptr_t *` parameter: the ticket
+    parameter, in today's spelling (5.20.17 ME9).
 
   A wrong count is T-M4, with the expected breakdown; a trailing parameter of another type is T-M5. The C return
   corresponds to the CIL return. For `.ctor` it corresponds to the constructed object, or the array for `newarr`. For a
@@ -9509,6 +10262,7 @@ change. The signature parser is header-only (5.20.5 ML1), so clang links no new 
 | `this` of `valuetype GCHandle` | a handle type | `this-gch` | `FromIntPtr`, `box GCHandle`, `unbox GCHandle`, `call` |
 | `void` (return) | `void` | `void` | - |
 | (trailing) | `int *` | `err` | 5.20.8 |
+| (second trailing, from MC-4) | `intptr_t *` | `exc` | 5.20.17 ME3; today's spelling (ME9) |
 
   Rules that apply to the table:
   - Strings are never returned as C strings. A `string` result is a handle, and C converts it by calling `Encoding`
@@ -9735,6 +10489,9 @@ the C++ mangled name).
   skips declarations with `"msil-managed-type"` beside its `findOfferedTrailerDef` skip.
 - **MK6** MC-1 changes neither `lld/MSIL/InputFiles.*` nor `lld/MSIL/SymbolTable.*` unless MK5's probe requires the
   skip. No native library is ever consulted for a managed call.
+- **MK8** From MC-4, `isValidManagedCall` (`lld/MSIL/ManagedCalls.cpp`) takes the ticket parameter's code `exc`, and
+  nothing new binds: the handler's `GCHandle` calls are 5.20.13's stub-internal rows (5.20.17 ME7). From MC-5, the
+  two forms of 5.20.18 bind through MK1, with MK2's check of the enum and MK3's of the class (MB3).
 
 #### 5.20.8 Exceptions (the rule)
 
@@ -9755,6 +10512,8 @@ escape. MC-1 runs after M27, as ordered.
     original stack trace (measured on Framework 4.8.1, .NET 8/10 and WSL .NET 8/10, portable-mc1.md 3.2).
   - The handler pops the exception, stores the local through the trailing `int *` (`stind.i4`) and leaves to a
     return of the zero value of the C return type: 0, a null handle, 0.0, or nothing for `void`.
+  - From MC-4, with the ticket parameter, the handler stores a new ticket of the exception through the `intptr_t *`
+    (`stind.i`) instead of popping it (5.20.17 ME3).
   - On success, `*err` is not written; the caller initializes it (the `errno` convention). A null `err` is undefined
     in C terms; the handler's store through it faults.
 - **MX3** No exception type is shared between assemblies. MC-1 throws nothing of its own and catches only the types
@@ -10069,7 +10828,7 @@ CLI_BCL_METHOD(String_ctor_PChar, String, ".ctor", true, "void", "char*", Requir
 
 These are refused with `... is not supported for MSIL yet` or simply absent:
 - **Spans and byrefs:** `ref`/`out`/`in` parameters, `Span<T>`/`ReadOnlySpan<T>`, pinned C buffers passed as managed
-  arrays.
+  arrays; MC-5 brings `ref` parameters of class types forward (5.20.18 MB1).
 - **Value types by value:** C structs mapped to .NET structs (explicit layout) as parameters, results or fields. This
   overlaps M33's `TrailerSink::addValueType` and M34's `lld/MSIL/ValueTypes.*`. MC-1 has only enums as integers and
   opaque boxed handles.
@@ -10078,7 +10837,8 @@ These are refused with `... is not supported for MSIL yet` or simply absent:
   answers, Q27 (a)).
 - **Generics:** generic types and methods, for example `GC.AllocateArray<T>`. MA3's grammar has no generic form, and
   msil-ld does not map an object's `MethodSpec` token yet (`OutputModule::mapBCLToken`: "names a generic method
-  instantiation, which is not supported yet"), although its binder already binds `MethodSpec` requests.
+  instantiation, which is not supported yet"), although its binder already binds `MethodSpec` requests. MC-5 brings
+  `Nullable` of an enum as a parameter forward (5.20.18 MB2).
 - **Writes and events:** field writes, events.
 - **C++ members:** C++ member functions and templates as managed-call subjects (T-M13).
 - **Function addresses:** addresses of managed-call functions (T-M10).
@@ -10164,6 +10924,217 @@ about 5,200 planned lines over the nine WPs. Rebuild: the `Attr.td` records are 
   extended for the portable triples; `EILSEQ` in the portable `catch-map` test), its unbuffered streams for hosts that
   are not C programs until `__llvm_libc_set_c_main()` (Q28 (b)), and its binding of `System.*` through the Framework
   4.8 implementation assemblies from P-2 (Q30 (a)).
+
+#### 5.20.17 The caught exception as a ticket (MC-4)
+
+MC-4 lets a managed call hand its caller the exception that one of its `msil_catch` entries caught, as a ticket (5.21
+RA3), so that C reads the exception's members (`HResult`, `InnerException`, `SocketException.SocketErrorCode`,
+`Win32Exception.NativeErrorCode`) through ordinary managed calls. Its first client is the portable C library's OS
+layer, which reads exact `errno` values through it from P-2 on (5.19.5 and 5.19.18 as the portable I/O plan commit
+writes them). It extends MC-1's contract (5.20.1-5.20.16, read with section 12's rows, R-a's 5.21.9 and R-a2's 5.21.16
+RN10), applies wherever MC-1 does (MT1), to C and C++ declarations alike (MS1), and follows the Phase 3 protocol
+outside Phase 3's numbering and exit gate, as MC-1 does. It comes after EH-0 with FX-1 to FX-3, so the window of
+EH-0's silent wrong-code states that the user OK'd does not grow (section 12's row 'Silent states with the user's
+OK', item (6)). It comes before R-a2, which stays directly before P-2 (the user's pick "(b) Before P-2", 2026-11-20
+11:50), so P-2's primitives are written once on it. Section 12's row 'Program order amended (portable I/O)' gives
+both places. MC-4 adds no `BCLMembers.def` row, pass slot, trailer definition, record minor, runtime assembly or
+silent state, and in today's spelling no attribute (ME2). The decisions behind MC-4 and MC-5 are section 12's
+portable I/O rows.
+
+- **ME1 Model.** With `msil_catch`, a managed-call declaration may end with a second trailing parameter, of C type
+  `intptr_t *`, after MS4's trailing `int *`: the ticket parameter. When an entry's filter matches, the stub's handler
+  stores the entry's CODE through the `int *` (MX2) and a new ticket of the caught exception through the
+  `intptr_t *`, then returns MX2's zero value. Without the ticket parameter, MC-1's rules hold unchanged.
+- **ME2 Arity** (amends MS4). The C parameter list is MS4's, with the ticket parameter optional after the `int *`.
+  Sema takes the form from the count (MS4's count, or one more with `msil_catch`), so no attribute marks it in today's
+  spelling (Claude's reading of "through a second trailing `intptr_t *`"). Any other count is T-M4, whose text also
+  names the count with the ticket parameter; a ticket parameter whose type is not a pointer to `intptr_t` is refused
+  in T-M5's form.
+- **ME3 Handler** (amends MX2). With the ticket parameter the handler does not pop the exception: it stores CODE
+  through the `int *` (`stind.i4`), makes a ticket of the exception with `GCHandle::Alloc(object)` and
+  `GCHandle::ToIntPtr` (MC-1's stub-internal rows, 5.20.13) and stores it through the `intptr_t *` (`stind.i`), then
+  leaves to MX2's return. On success neither pointer is written; the caller initializes both (MX2's `errno`
+  convention). A null `intptr_t *` is undefined in C terms, as a null `err` is, and the handler's store through it
+  faults.
+- **ME4 Tickets.** The ticket is the `IntPtr` of a new `GCHandleType.Normal` GCHandle (MH1), owned by the caller and
+  freed exactly once through a managed call of `GCHandle::Free` (MH2). C reads the exception's members through
+  ordinary managed calls, on the ticket as a handle (MS5's `this-obj` row) or on the reference that
+  `GCHandle::get_Target` returns (5.21 RM9), cast to the exception's class (5.21 RS8). Tickets are valid on every
+  thread and in every assembly of the process (MH5). A ticket that is never freed leaks, and use after free is
+  undefined: items (1) and (2) of section 12's row 'Silent states with the user's OK' ("OK all six", 2026-11-19
+  12:37), so MC-4 adds no silent state.
+- **ME5 Filters** (MA5 and MS6 unchanged). Entries still match on the type only, in the order written; the handler,
+  not the filter, hands the exception over. MS6's refusals stand (T-M11), so a ticket always holds an exception of a
+  listed type or of a type derived from one. An unlisted exception escapes (MX1) and makes no ticket.
+
+Example (today's spelling, ME9; a P-2 primitive's shape after R-a2, with 5.21.1's `String`; `FileStream` needs
+`--reference`, while `Exception::get_HResult` and `GCHandle::Free` are table rows):
+
+```c
+__attribute__((msil_method("System.IO.FileStream", ".ctor",
+    "instance void(string, valuetype System.IO.FileMode, valuetype System.IO.FileAccess, "
+    "valuetype System.IO.FileShare, int32)"),
+  msil_catch("System.IO.FileNotFoundException", ENOENT),
+  msil_catch("System.UnauthorizedAccessException", EACCES),
+  msil_catch("System.IO.IOException", EIO)))
+intptr_t __dn_fs_open(String ^path, int mode, int access, int share, int bufsize, int *err, intptr_t *exc);
+__attribute__((msil_method("System.Exception", "get_HResult", "instance int32()")))
+int __dn_hresult(intptr_t exc);                              /* this-obj on the ticket */
+__attribute__((msil_method("valuetype System.Runtime.InteropServices.GCHandle", "Free", "instance void()")))
+void __dn_free(intptr_t ticket);                             /* MH2: once per ticket */
+```
+
+- **ME6 Code and stub** (amends MS5, MR1, ML1 and ML2; the code's name is Claude's). The ticket parameter's conversion
+  code is `exc`, appended to `cli::ManagedConv` after R-a's codes (5.21 RM1); MS5's trailing row gains a second row
+  (`intptr_t *`, `exc`, ME3). MR1's `"msil-managed-conv"` lists it after `err`, and MR4's operands carry it, so T-M17
+  compares it. `ManagedCallIR.h`'s IR rules accept it beside `err`, and `StubWriter` (`MSILManagedCalls.cpp`) writes
+  ME3's handler, which passes `msil-verify.py` with the existing allow-list (MT2).
+- **ME7 msil-ld** (5.20.7 MK8). Nothing new binds: the handler's `GCHandle` calls are 5.20.13's stub-internal rows,
+  which bind with or without references (MK1), so MK2's walk still finds at most one member access, as RL3 reads it
+  for R-a. `isValidManagedCall` (`lld/MSIL/ManagedCalls.cpp`) takes `exc`.
+- **ME8 Not in MC-4.** The caught exception as a reference: references across handlers are EH-1's and EH-2's
+  (5.21.16), so it crosses as a ticket. `out` parameters (5.20.14). Filters on an HResult, a property or a message
+  (MA5). Catch-alls (MS6). Class byrefs and `Nullable` enums are MC-5's (5.20.18).
+- **ME9 Open for MC-4's text: the spelling and the texts.** MC-4's text writes ME1's form in the managed-call
+  spelling that holds when it is drafted: today's `msil_method` and `msil_catch` (5.20.2), unless the cleanup round's
+  milestones respell the declarations first (section 12's strings row of 2026-11-21 notes that they may); the form of
+  a catch entry that asks for the ticket in that spelling goes to the user with it. MC-4's Sema texts are written in
+  that spelling: T-M4's text also names the count with the ticket parameter, and a ticket parameter of another C type
+  gets a text in T-M5's form, with the next free T-M number in 5.20.3's table. MC-4's new declarations, tests
+  included, use no S1-S3 string conversion and, as section 12's row on `*` (2026-11-21) asks of new code, no star
+  handle, so R-a2's rewrite (5.21.16 RN10) and its counts stay as they are.
+- **ME10 Tests** (MC-4's roles; the milestone text gives the WPs). MC-4 is proved on the host triples, and its gate
+  runs no portable step, as MC-1's (brief Q11 (a)):
+  - clang: `clang/test/Sema/attr-msil-method.c` and `clang/test/SemaCXX/attr-msil-method.cpp` accept the ticket form
+    and pin ME9's texts whole; `clang/test/CodeGen/MSIL/msil-method.c` pins `exc` in MR1's attribute and MR4's
+    operand;
+  - CLI: `llvm/unittests/CLI/ManagedSignatureTest.cpp` gains the code's case (MC-4's text fixes the count);
+  - llc: `llvm/test/CodeGen/MSIL/managed-call-catch.ll` pins ME3's handler instruction by instruction, with and
+    without the ticket parameter, at -O0 and -O2 on both host x86_64 triples and msil64, in text and through
+    `llvm-cil-dump`;
+  - lld: `lld/test/MSIL/managed-calls*.test` link the ticket form from objects and through LTO, with and without
+    references, and pin MK2's walk over the handler's calls;
+  - execution, in `msil/test/M3/13-managed-calls/` with MC-1's legs (MT3): `catch-ticket` (`%{msil_refs_netfx}`):
+    listed exceptions give their codes and tickets, C reads `HResult` and `InnerException` through each ticket and
+    frees it once, and a call that succeeds leaves both cells as the caller set them; per-OS values go to per-OS
+    expected files (5.17.4); `catch-ticket-unlisted`: an unlisted exception escapes past the ticket parameter
+    (`%{msil_prog_loud_<L>}`);
+  - portable: `msil/test/Portable/02-managed-calls/` gains one self-checking test with table members only (an invalid
+    byte through `Encoding::GetString` mapped to `EILSEQ` with a ticket, `Exception::get_HResult` through it,
+    `GCHandle::Free` once), run by the post-commit `Portable` legs only.
+
+#### 5.20.18 Class byrefs and `Nullable` enums (MC-5)
+
+MC-5 adds two parameter forms that MA3 refuses and the portable I/O stages need: `ref` parameters of class types, for
+`Socket.ReceiveFrom`'s `ref EndPoint` (the source address of `recvfrom` and `recvmsg`, P-5b), and `Nullable` of an
+enum, for `FileStreamOptions.UnixCreateMode`, a `Nullable<UnixFileMode>` of .NET 7 and later (the create mode of
+`open`, `creat`, `mkstemp` and `mkostemp` on Linux, P-5a). Both are pieces of what 5.20.14 leaves to the fuller
+managed calls, brought forward; everything else there stays there. MC-5 comes after P-4 and before P-5a, with the
+Phase 3 protocol outside any phase's numbering and exit gate (section 12's row 'Program order amended (portable
+I/O)'), so the fuller managed calls' place after Phase 3 (the row 'Program order (user, 2026-11-01, 'Option A, after
+M26')') holds. Its milestone text is drafted after P-4 and fixes what this subsection leaves open.
+
+- **MB1 Class byrefs.** A CIL parameter `class T&` takes a C `intptr_t *` that points at a ticket (0 for null). The
+  stub copies the object into a stub local (ML2 (3)'s dereference, then `castclass T`), passes the local's address and
+  after the call stores a new ticket of the local's value (0 for null) through the pointer. The ticket it reads is
+  borrowed (MH3) and the ticket it writes is the caller's to free (MH2), so a caller that passed a ticket frees both
+  (Claude's reading of "copied in and out through a stub local and passed as tickets"). `out`, `in` and every other
+  byref stay refused (T-M2).
+- **MB2 `Nullable` enums.** A CIL parameter ``valuetype System.Nullable`1<valuetype E>``, E an enum, takes a C integer
+  type of E's width, as MS5's `enum` row does; the stub passes a `Nullable<E>` that holds the value, made by its
+  constructor, a member of a generic type instantiation. A null value and `Nullable` results are not in MC-5 (Claude's
+  reading: P-5a only sets a mode). Every other generic instantiation stays refused (T-M2).
+- **MB3 Sema, IR and msil-ld** (amends MA3, MS5 and 5.20.7). MA3's "Not in MC-1" list loses these two forms only; MS5
+  gains a row and a code for each, named by MC-5's text; MS4's positions do not change. msil-ld binds them through
+  MK1's full-signature match, with MK2's check that E is an enum of the C integer's width (T-M7; T-M8 without
+  references) and MK3's check that T is a reference type (T-M16). The signature text of the instantiation (MA3 has no
+  generic form), its tokens (ML3) and msil-ld's binding of a member of a generic type (5.20.14's 'Generics' item) are
+  MC-5's text's; that binder work is not estimated.
+- **MB4 Tests.** In MC-4's form (ME10), with MC-5's own cases: a loopback UDP `Socket.ReceiveFrom` that returns the
+  sender's address (`%{msil_refs_netfx}`), and `FileStreamOptions.UnixCreateMode` bound against .NET 8's reference
+  assemblies (5.19.13 as the portable I/O plan commit writes it) and run where the member works (Linux .NET; its
+  setter is unsupported on Windows). MC-5's gate runs no portable step, as MC-1's.
+
+#### 5.20.19 Contract amendments MC-4 and MC-5 need
+
+Items 1-6 are section 12 rows of the plan commit that adds 5.20.17-5.20.20; item 7 is written in place by the same
+commit, and item 8 is a row once the user approves its text; item 9 is work for MC-4's and MC-5's documentation WPs,
+and item 10's re-pins land with MC-4's commit.
+
+1. **MC-1's contract** (5.20.1-5.20.16, read with section 12's rows and 5.21.9), with stage-labelled additions in its
+   text:
+   - MA3: MC-5's two parameter forms, `class T&` (MB1) and `Nullable` of an enum (MB2); every other byref and generic
+     instantiation stays refused;
+   - MA5: unchanged; filters match on the type only, and the handler, not the filter, hands C the ticket (ME5);
+   - MS4: the ticket parameter after the `int *` (ME2);
+   - MS5: the second trailing row, `intptr_t *` with the code `exc` (ME6); MC-5's rows come with its text (MB3);
+   - MS6: unchanged; catch-alls stay refused (T-M11), so a ticket always holds an exception of a listed type or of a
+     type derived from one (ME5);
+   - MX2: with the ticket parameter, the handler stores a ticket of the exception instead of popping it (ME3);
+   - 5.20.7: MK8, for the code `exc` (ME7) and MC-5's binding (MB3);
+   - 5.20.14: 'Spans and byrefs' and 'Generics' name MC-5's two forms as brought forward; exception data was never on
+     the list;
+   - MR1, MR4, ML1 and ML2 carry the code `exc` (ME6) and MC-5's codes and stub conversions (MB1-MB3), and 5.20.3's
+     text table gains MC-4's and MC-5's texts with their milestone texts (ME9).
+2. **5.13.5.** A table row each for MC-4 and MC-5 with their upstream files, manifest blocks and `fork-only` lines
+   (MC-4: new hunks in MC-1's hooked `DiagnosticSemaKinds.td` (ME9's texts, in MS7's `err_msil_*` block with no
+   diagnostic group) and `AttrDocs.td` (the ticket form in `MSILCatchDocs`), and the files that MC-4's spelling needs;
+   MC-5: the files its text names). The closing paragraph's "No Phase 3 milestone edits `Attr.td`, an IR intrinsic,
+   `RuntimeLibcalls.td`, `CallingConv.h` or a clang diagnostic group" needs no exemption for these hunks, since in
+   today's spelling they add no attribute record and no group; an `Attr.td` change that the managed-call spelling of
+   their time needs comes with its own exemption row, in the form of the 2026-11-21 row for R-a and R-a2, which also
+   covers section 7's "Phase 3 needs none". The row records the rebuild class: a new Sema text recompiles M26.g's
+   measured class of a new clang diagnostic, 1,081 objects, about 45 minutes at four jobs (R-a.a's Rebuild cost).
+3. **5.13.4 and L7:** MC-4's row from 5.20.20 (no new file, no hot file; `BCLMembers.def` untouched) and MC-5's from
+   its text; L7's milestone list gains MC-4 and MC-5.
+4. **5.15.11:** the rows "Exception tickets in managed calls (MC-4)" and "Class byrefs and `Nullable` enums in managed
+   calls (MC-5)". Until MC-4 a ticket parameter is a wrong count (T-M4); until MC-5 a byref or a `Nullable` in a
+   signature is T-M2 (`... is not supported for MSIL yet`); from each step, its rules. The portable column reads the
+   same.
+5. **5.15.12:** a row for MC-4 (5.20.17) and one for MC-5 (5.20.18).
+6. **5.17.4 and 5.17.13:** no new directory. MC-4's and MC-5's tests go to `M3/13-managed-calls` and
+   `Portable/02-managed-calls`, with hand-written expected files under MC-1's reason ("managed member, no native
+   oracle") and per-OS files (5.17.4's `<os>`) where a member's values differ by OS.
+7. **In place, by the same commit: 5.18.9, 5.19.15 and 5.19.17.** 5.18.9 gains a row for MC-4 and MC-5 beside MC-1's
+   (T-M4 and T-M2 until each step, then 5.20.17's and 5.20.18's rules); 5.19.15's Gates sentence says that MC-4's and
+   MC-5's gates follow MC-1's rule (no portable step) unless their milestone texts say otherwise; 5.19.17 gains
+   **From MC-4** and **From MC-5** items (the caught exception as a ticket, which P-2's primitives use; the two
+   parameter forms, which P-5a and P-5b use).
+8. **Design.md** (the user's OK needed): section 1's managed-calls sentence names MC-4 and MC-5; a section 12 row
+   records the approved text.
+9. **Status.md** and **GettingStarted.md:** MC-4's documentation WP (the ticket parameter, the single free, the OK'd
+   leak and use after free of ME4, reading `HResult`, `InnerException`, `SocketErrorCode` and `NativeErrorCode`, the
+   spelling) and MC-5's (its two forms and their limits).
+10. **Re-pins with MC-4's commit** (R-a's re-pin rows are the form; MC-4's documentation role hands them over): the
+    CLITests `'*'` floors of the later milestones rise by MC-4's actual new cases, and the contexts that later texts
+    cite in MC-4's files are re-verified by `git grep`.
+
+#### 5.20.20 Files and roles (for the MC-4 milestone text; 5.13.4 style)
+
+The roles and WP letters are the milestone text's (MC-4.a-MC-4.i). A file that MC-4's spelling needs (ME9) joins a
+role through 5.20.19 item 2's row.
+
+| Role | Files | What |
+|---|---|---|
+| MC-4.a `MC-4/lists` (root) | `clang/include/clang/Basic/DiagnosticSemaKinds.td`, `clang/include/clang/Basic/AttrDocs.td`, `llvm/include/llvm/CLI/ManagedSignature.h`, `llvm/include/llvm/CLI/ManagedCallIR.h` | ME9's Sema texts, `MSILCatchDocs`, ME6's code and its IR rule |
+| MC-4.b `MC-4/clang` | `clang/lib/Sema/SemaMSILManagedCall.cpp`, `clang/lib/CodeGen/CGMSILManagedCalls.cpp` (only if MR1's copy of Sema's codes needs the new code; the hand-over says) | ME2; ME6's MR1 and MR4 entries |
+| MC-4.c `MC-4/target` | `llvm/lib/Target/MSIL/MSILManagedCalls.cpp`, `llvm/lib/Target/MSIL/MSILStackCheck.cpp` (only if ME3's handler needs more stack than the stub rule gives; the hand-over says) | ME3 |
+| MC-4.d `MC-4/lld` | `lld/MSIL/ManagedCalls.cpp` | ME7 |
+| MC-4.e `MC-4/harness` | `msil/utils/upstream-hooks.txt` | the manifest blocks of 5.20.19 item 2 (L6) |
+| MC-4.f `MC-4/llc-tests` | `llvm/test/CodeGen/MSIL/`, `clang/test/Sema/attr-msil-method.c`, `clang/test/SemaCXX/attr-msil-method.cpp`, `clang/test/CodeGen/MSIL/`, `llvm/unittests/CLI/ManagedSignatureTest.cpp` | ME10's clang, CLI and llc tests |
+| MC-4.g `MC-4/lld-tests` | the whole `lld/test/MSIL/` (L7) | ME10's lld tests |
+| MC-4.h `MC-4/exec-tests` | `msil/test/M3/13-managed-calls/`, `msil/test/Portable/02-managed-calls/` | ME10's execution and portable tests |
+| MC-4.i `MC-4/docs` | `llvm/docs/MSIL/Status.md`, `GettingStarted.md`, `msil/test/README.md` | 5.20.19 items 9 and 10 |
+
+No hot file: the stub's body is written in `MSILManagedCalls.cpp` (ML2 (2)), so `BCLMembers.def`, `MSILPrepareIR.cpp`
+and `MSILAsmPrinter.*` stay untouched. MC-5's roles take this form; its text also gives its roles the files of MB3's
+open parts, such as `MCTargetDesc/MSILMCExpr.*` and `MCTargetDesc/MSILObjectWriter.*` for the instantiation's tokens
+(ML3) and msil-ld's binder files for a member of a generic type.
+
+Effort: MC-4 and MC-5 together, about 3,000-7,000 lines, mostly tests, and 1-3 days of farm wall-clock (Claude's
+estimate for the two together, unmeasured and calibrated only against MC-1's and R-a's estimates; the split between
+them is not estimated). Rebuild: MC-4's Sema texts are 5.20.19 item 2's class; `ManagedSignature.h` and
+`ManagedCallIR.h` reach their includers in clang, the MSIL target and lld.
 
 ### 5.21 Real .NET references in C, first slice (R-a)
 
@@ -15723,6 +16694,8 @@ Steps MC-1 gained only by later rows are here from the start (Claude's decisions
 
 **R-a's re-pin rows** (with R-a's commit, from R-a.n's hand-over; MC-1's re-pin row of 2026-11-16 is the form): M28-M35's CLITests `'*'` floors rise by R-a's actual new cases (6 planned: M28 508, M29 515, M30 516, M31 523, M32 524, M33 530, M34 536, M35 536); M28.g's floor sentence reads '(5.17.7 rebased by P-1r R13, MC-1 and R-a: 461 after P-1a, 488 after MC-1, 494 after R-a, 508 after M28)', M28's exit criteria quote '(508; 19, 13, 30, 10)' (was '(502; 19, 13, 30, 10)'), and M35's case count is 536 (its step 13 note gains R-a's 6); the other suites' floors do not change, since R-a adds cases only to `CLIManagedSignatureTest` (25 → 31); M28.f and M31.f keep P15's `pipeline.ll` line; M28.f gains one llc case: P1 refuses an address-taken reference function before P11 (T-RB2); R-a.n re-verifies by `git grep` every function M28-M35 cite in a file R-a changes (at least `MSILPrepareIR.cpp`, `MSILAsmPrinter.cpp`, `MSILObjectWriter.cpp`, `MSILTargetMachine.cpp`, `MSIL.h`, `MSILFixFunctionBitcasts.cpp`, `MSILISelLowering.{h,cpp}`, `MSILISelLoweringCall.cpp`, `MSILInstrInfo.{td,cpp}`, `MSILRegisterInfo.td`, `MSILMCInstLower.cpp`, `MSILUtilities.cpp`, `MSILMachineFunctionInfo.cpp`, `MSILExplicitLocals.cpp`, `MSILRegStackify.cpp`, `MSILManagedCalls.{h,cpp}`, the target's `CMakeLists.txt`, `lld/MSIL/LTO.cpp`, `lld/MSIL/ManagedCalls.*`, `DiagnosticSemaKinds.td`, `upstream-hooks.txt`, the lit-leg scripts); G3b's and G4's quiet minutes rise by `14-references`' measured time; no BCL re-pin.
 
+**MC-4. Managed calls from C and C++, stage 2: the caught exception as a ticket** (an outline; contract 5.20.17, with 5.20.19 and 5.20.20; its text is drafted after R-a's commit, in the managed-call spelling that holds then: the cleanup round may respell the declarations first (the strings row of 2026-11-21), and R-a amends MC-1's contract (5.21.9)). An `msil_catch` entry may also hand C the caught exception as a ticket (an `intptr_t` GCHandle number, as R-a's tickets are) through a second trailing `intptr_t *` parameter after MS4's `int *`, which the stub's handler writes with the code (MS4, MS5's trailing row, MS6, MX2); the filters stay type-only (MA5), and C reads `HResult`, `InnerException`, `SocketErrorCode` or `NativeErrorCode` through ordinary managed calls and frees the ticket. It goes after the cleanup round's milestones and EH-0 with FX-1 to FX-3 and before R-a2, which stays directly before P-2, so that P-2's OS layer is written once on exact error codes (5.19.5; section 12's row 'Program order amended (portable I/O)', which also places value-type form B's step in that window). Tests in `msil/test/M3/13-managed-calls` with portable copies in `msil/test/Portable/02-managed-calls`; new T-M texts; a hook block for each upstream file it changes; its gate is a host-triple gate with no portable step, as MC-1's under brief Q11 (a).
+
 **R-a2. Real .NET references in C++** (an outline, 5.21.16; the user's "(a) Yes, R-a2" (2026-11-19 12:50); its text is drafted after R-a's
 commit). C++ locals and internal functions' parameters and results, templates by value, overloads, mangling; refused for
 now, as approved: `String&`, lambda captures and class members; Claude's additions: `String&&`, `String ^&`, `String ^&&`,
@@ -15732,7 +16705,7 @@ EH-0 with FX-1 to FX-3 (the user's pick "(b) Before P-2", 2026-11-20 11:50), and
 `intptr_t` or `uintptr_t`, boxed ones excepted (RM10; the user's pick "(b) Retire before P-2", 14:24), so P-2 is
 written on all of it. Its gate repeats R-a's with C++ tests and MC-1's rewritten tests.
 
-**P-2. The single-threaded OS layer over the BCL** (an outline; contract 5.19.2's stage 2, 5.19.9, 5.19.10 and 5.19.11 at major 0; its milestone text is drafted after MC-1's commit; decisions cited as brief Q<n> are the decision brief answers (user, 2026-11-01)). After MC-1, llvm-libc's `OSUtil/dotnet` becomes C/C++ that calls `System.*` through `msil_method` declarations, bound by `--reference` to the build host's Framework 4.8 implementation assemblies `mscorlib.dll` and `System.dll` (brief Q30 (a): `build-libc.py` stops with a message naming a missing file and never falls back to the built-in table or another reference set). It brings: the generic `File` class with a `DotnetFile` over a `System.IO.Stream` handle (`libc/src/__support/File/dotnet/`, the standard-stream accessors in `libc/src/stdio/dotnet/`, `stdout` and friends as lvalue macros over exported accessors), `fopen`/`fclose`/`printf`/`fprintf`/`scanf`/`sscanf`/`asprintf` and the wide streams, with exceptions mapped to errno by `msil_catch` (a derived type before its base) and file names decoded by throwing UTF-8 (`EILSEQ`); the heap (brief Q29 (a), revising the user's mapping of 2026-10-31: a two-pointer header `{base, size}` over `Marshal.AllocHGlobal`/`ReAllocHGlobal`/`FreeHGlobal` on every runtime, `malloc` 16-aligned, `NativeMemory` not used), which also unblocks `strdup`, the tree search functions, `vsscanf`, `atexit` and `hcreate`/`hsearch` (with `HashTable/randomness.h` moved to `LIBC_THREAD_LOCAL`); `internal::exit` over `Environment.Exit` after flushing; `abort` writing `abort() called` to stderr before `Environment.FailFast` (FailFast alone is silent on the Framework console); clocks (`DateTime.UtcNow`, `Stopwatch`), `TimeZoneInfo` for the localtime family, `mktime` and `strftime` (absent until here, brief Q18 (a)); the environment over `System.Environment`; `remove`/`rename`/`tmpfile`/`tmpnam`; `getopt` with its variables per copy (brief Q35 (a)). The dotnet `'<msil>Main'` becomes `exit(main(argc, argv))` when the link resolves `exit`, and calls `c.dll`'s exported `__llvm_libc_set_c_main()` before `main` when the link resolves that name (brief Q28 (b)): until that call `c.dll`'s standard streams are unbuffered, so a host that is not a C program (a C# program calling `c.dll`, which never calls `exit` and gets no `ProcessExit` handler before P-3's delegates) loses no output; after it C's buffering rules apply. `__llvm_libc_set_c_main`, `__cxa_atexit`, `__cxa_finalize` and the stdio accessors are appended to the export list. `LowerGlobalDtorsPass` runs at the reserved dotnet slot `P0b` and global destructors register through `c.dll`'s `__cxa_atexit`, with `.fini_array` staying T-P8 (brief Q31 (a)); msil-ld defines `__dso_handle` (P-1r R5: M29 reuses both). Exit handlers and the final flush run only through `exit()`. errno stays P-1b's exported cell (brief Q16 (a)); the per-thread C block is P-3's. The process root and the discovery names exist at a provisional layout major 0 with one copy (brief Q32 (a)). `TargetLibraryInfo` on dotnet is re-audited for folds into functions `c.dll` lacks (the `printf` to `puts` fold among them). Mode 2 only; tests in `msil/test/Portable/05-os`, run by P-2's own gate with `msil-lit.ps1` (brief Q11 (a)) and by the post-commit legs. Oracle: the host-native transcript of the same program built with llvm-libc's overlay mode under WSL (stdout exists from here, so 5.17.4's portable allowance ends for new tests). **P-2's re-pin rows** (like MC-1's): M29.a, M29.b and M29.d cite P-2's `EntryPoint` exit field and `__dso_handle` (P-1r R5); M31.b's `TrailerExit.cpp` edits name the file that P-2 creates or extends; the CLITrailerTest floors of M28-M35 rise by P-2's cases; 5.13.6 marks slot `P0b` implemented, and M28's and M31's llc-test roles keep any dotnet RUN line P-2 adds to `pipeline.ll`.
+**P-2. The single-threaded OS layer over the BCL** (an outline; contract 5.19.2's stage 2, 5.19.9, 5.19.10 and 5.19.11 at major 0, and 5.19.18's descriptor core; its milestone text is drafted after MC-1's commit; decisions cited as brief Q<n> are the decision brief answers (user, 2026-11-01)). After MC-1, llvm-libc's `OSUtil/dotnet` becomes C/C++ that calls `System.*` through `msil_method` declarations, bound by `--reference` to the build host's Framework 4.8 implementation assemblies `mscorlib.dll` and `System.dll` (brief Q30 (a): `build-libc.py` stops with a message naming a missing file and never falls back to the built-in table or another reference set). It brings: the descriptor core of 5.19.18, with no public descriptor function before P-5a (the FD sub-block at major 0 with room for many descriptors, open file descriptions that hold a `System.IO.Stream` ticket and one shared offset each, descriptors 0-2 over the console streams, on Linux with a `FileStream` over the descriptor for seeks and sizes where a stream is not a terminal, and a descriptor for each `FILE`); the generic `File` class with a `DotnetFile` over a descriptor, as upstream's `LinuxFile` holds one (`libc/src/__support/File/dotnet/`, the standard-stream accessors in `libc/src/stdio/dotnet/`, `stdout` and friends as lvalue macros over exported accessors), so `fopen` is an open plus a `FILE`, the standard `FILE`s sit on descriptors 0-2, `fclose` closes the descriptor and a `FILE`'s seek uses its description's offset; `fopen`/`fclose`/`printf`/`fprintf`/`scanf`/`sscanf`/`asprintf` and the wide streams, with exceptions mapped to errno by `msil_catch` (a derived type before its base), each exact code read from MC-4's exception ticket (5.19.5), and file names decoded by throwing UTF-8 (`EILSEQ`); the heap (brief Q29 (a), revising the user's mapping of 2026-10-31: a two-pointer header `{base, size}` over `Marshal.AllocHGlobal`/`ReAllocHGlobal`/`FreeHGlobal` on every runtime, `malloc` 16-aligned, `NativeMemory` not used), which also unblocks `strdup`, the tree search functions, `vsscanf`, `atexit` and `hcreate`/`hsearch` (with `HashTable/randomness.h` moved to `LIBC_THREAD_LOCAL`); `internal::exit` over `Environment.Exit` after flushing; `abort` writing `abort() called` to stderr before `Environment.FailFast` (FailFast alone is silent on the Framework console); clocks (`DateTime.UtcNow`, `Stopwatch`), `TimeZoneInfo` for the localtime family, `mktime` and `strftime` (absent until here, brief Q18 (a)); the environment over `System.Environment`; `remove`/`rename`/`tmpfile`/`tmpnam`; `getopt` with its variables per copy (brief Q35 (a)). The dotnet `'<msil>Main'` becomes `exit(main(argc, argv))` when the link resolves `exit`, and calls `c.dll`'s exported `__llvm_libc_set_c_main()` before `main` when the link resolves that name (brief Q28 (b)): until that call `c.dll`'s standard streams are unbuffered, so a host that is not a C program (a C# program calling `c.dll`, which never calls `exit` and gets no `ProcessExit` handler before P-3's delegates) loses no output; after it C's buffering rules apply. `__llvm_libc_set_c_main`, `__cxa_atexit`, `__cxa_finalize` and the stdio accessors are appended to the export list. `LowerGlobalDtorsPass` runs at the reserved dotnet slot `P0b` and global destructors register through `c.dll`'s `__cxa_atexit`, with `.fini_array` staying T-P8 (brief Q31 (a)); msil-ld defines `__dso_handle` (P-1r R5: M29 reuses both). Exit handlers and the final flush run only through `exit()`. errno stays P-1b's exported cell (brief Q16 (a)); the per-thread C block is P-3's. The process root and the discovery names exist at a provisional layout major 0 with one copy (brief Q32 (a)). `TargetLibraryInfo` on dotnet is re-audited for folds into functions `c.dll` lacks (the `printf` to `puts` fold among them). Mode 2 only; tests in `msil/test/Portable/05-os`, run by P-2's own gate with `msil-lit.ps1` (brief Q11 (a)) and by the post-commit legs. Oracle: the host-native transcript of the same program built with llvm-libc's overlay mode under WSL (stdout exists from here, so 5.17.4's portable allowance ends for new tests). **P-2's re-pin rows** (like MC-1's): M29.a, M29.b and M29.d cite P-2's `EntryPoint` exit field and `__dso_handle` (P-1r R5); M31.b's `TrailerExit.cpp` edits name the file that P-2 creates or extends; the CLITrailerTest floors of M28-M35 rise by P-2's cases; 5.13.6 marks slot `P0b` implemented, and M28's and M31's llc-test roles keep any dotnet RUN line P-2 adds to `pipeline.ll`.
 
 ### M28. Native-callable function pointers and threads
 
@@ -16730,7 +17703,7 @@ Status.md: atomics as built (inline 1-8 bytes; lock path needs `-latomic` on Lin
 
 **Rebuild cost.** `MSILInstrMemory.td` and `MSILISelLowering.h` rebuild the whole MSIL target (TableGen); `BCLMembers.def` 21 objects; `Clang.cpp` and `SemaStmt.cpp` one large TU each; `NativeLibraries.cpp`, `Trailer.cpp`; a CMake regeneration; relinks; the helper archives: about 12-18 minutes, and G1b's six-triple archives 3-5 more (not counted). Gate after the build, quiet estimate 42-51 minutes: G0 and fetch 1, il-snapshot 5, unit tests 1, calibration 1, net-core 7-8, p3-full 4-6, harness 2-3, programs-hosted 6-8 (both), mscorlib-safe 1, step 26 2, wsl-p3 5-7, full upstream-hooks 3, G6-G9 5-7 (G7 builds SQLite natively at two levels on both OSes). Over 30 normalized minutes, through section 12 rows and in this order (5.17.7): step 26 moves to the post-commit run, then G4's run 2. G3c stays (M30's harness change modifies files), and steps 22-23 stay (an exit criterion names them); a total still above 30 is recorded, not a failure.
 
-**P-3. Threads, per-thread state and `-static` with shared state** (an outline; two milestones; contract 5.19.11 at major 1 and 5.19.12; drafted after M30's commit; decisions cited as brief Q<n> are the decision brief answers (user, 2026-11-01)). After M28's generic trailer pieces and M30's inline atomics: C function pointers to delegates (MC-3's piece, over M28's `getDelegateConstructor`), which also give `c.dll` its `AppDomain.ProcessExit` subscription (`__cxa_finalize(0)` and the final flush, run once against `exit` through the EXIT sub-block's state word, so C's buffering rules apply in every host from here; `__llvm_libc_set_c_main` keeps its export); `pthread`/`thrd` over `System.Threading.Thread`; the per-thread C block, created here (errno moves into it at offset 12; `__llvm_libc_errno` keeps its ABI), one per thread in the named thread data slot `<msil>v1:libc.thread` and freed for a dead thread by a trailer-defined finalizable holder `'<msil>CBlock'` (a K3 type created only in `c.dll`'s and `libc.a`'s outputs, with its own TrailerDefs row; a P-3 re-pin row lets M31.b reuse the holder's shape for `'<msil>Thread'`), with tss keys as llvm-libc's 32-bit keys and their table in the root's TSS sub-block, and thread-exit lists; `strtok`'s state per process (brief Q34). llvm-libc switches to `LIBC_THREAD_MODE_PLATFORM`, where `LIBC_THREAD_LOCAL` becomes `thread_local` (M31's feature, which comes after P-3, and a per-copy object that would break the shared state), so every shipped `LIBC_THREAD_LOCAL` or raw `thread_local` site (`error_to_string.cpp`, shipped since P-1b; `l64a.cpp`; `randomness.h`; `signal_to_string.cpp` if signals ship; `threads/thread.cpp`'s `tss_values` and `atexit_callback_mgr` if built; P-3's root WP enumerates them by grep) gets a `LIBC_TARGET_OS_IS_DOTNET` branch that keeps the object in the C block's thread-local extension, a field each, frozen with the block, and the gate checks that no shipped object has a `.tdata`/`.tbss` section or a TLS reference. `rand`/`srand` join the entry-point and append-only export lists (their `cpp::Atomic` needs M30); the wait buckets are interned-name Monitors `<msil>v1:libc.wait:<i>`; the portable lock path for the generic `__atomic_*` names uses interned-name Monitors `<msil>v1:atomic.lock:<i>`, frozen under T11 at this commit (P-1r R6). The process root lives in AppDomain data (`<msil>v1:libc.root`) and is created under the interned-name lock `<msil>v1:libc.root.lock`; its sub-blocks follow 5.19.11 (the shared descriptor offset, if descriptors exist, applied with `FileStream.Seek` on unbuffered streams on every runtime; `RandomAccess` not used). `libc.a` is installed in the sysroot, T-P9 and T-P11 are lifted and `-static` is enabled, with every copy, `-static` or `c.dll`, sharing one C state; the layout freezes as major 1 at P-3's commit, an append-only ABI between libc releases (brief Q32 (a)); a copy that finds a root or sub-block of an unknown major or a failed layout check writes both versions to stderr and calls `Environment.FailFast` (brief Q33 (a)), never a private copy. The upstream fixes come with it (the recursive `FILE` lock; `exit` closing streams). `-static` copies keep code, the `getopt` variables and `__dso_handle` private. The portable legs gain LTO runs (brief Q13 (a)); tests in `msil/test/Portable/06-threads` and `07-static`. **P-3's re-pin rows:** M31's thread-exit rule on dotnet (P-1r R7, R19), M31.b's reuse of the holder shape, T11's portable freeze, the CLITrailerTest floors of M31-M35.
+**P-3. Threads, per-thread state and `-static` with shared state** (an outline; two milestones; contract 5.19.11 at major 1 and 5.19.12; drafted after M30's commit; decisions cited as brief Q<n> are the decision brief answers (user, 2026-11-01)). After M28's generic trailer pieces and M30's inline atomics: C function pointers to delegates (MC-3's piece, over M28's `getDelegateConstructor`), which also give `c.dll` its `AppDomain.ProcessExit` subscription (`__cxa_finalize(0)` and the final flush, run once against `exit` through the EXIT sub-block's state word, so C's buffering rules apply in every host from here; `__llvm_libc_set_c_main` keeps its export); `pthread`/`thrd` over `System.Threading.Thread`; the per-thread C block, created here (errno moves into it at offset 12; `__llvm_libc_errno` keeps its ABI), one per thread in the named thread data slot `<msil>v1:libc.thread` and freed for a dead thread by a trailer-defined finalizable holder `'<msil>CBlock'` (a K3 type created only in `c.dll`'s and `libc.a`'s outputs, with its own TrailerDefs row; a P-3 re-pin row lets M31.b reuse the holder's shape for `'<msil>Thread'`), with tss keys as llvm-libc's 32-bit keys and their table in the root's TSS sub-block, and thread-exit lists; `strtok`'s state per process (brief Q34); `environ` as an accessor macro over an exported accessor, as `stdout` is spelled (5.19.9), its array in a new sub-block, with `envp` as `main`'s third argument (5.19.10). llvm-libc switches to `LIBC_THREAD_MODE_PLATFORM`, where `LIBC_THREAD_LOCAL` becomes `thread_local` (M31's feature, which comes after P-3, and a per-copy object that would break the shared state), so every shipped `LIBC_THREAD_LOCAL` or raw `thread_local` site (`error_to_string.cpp`, shipped since P-1b; `l64a.cpp`; `randomness.h`; `signal_to_string.cpp` if signals ship; `threads/thread.cpp`'s `tss_values` and `atexit_callback_mgr` if built; P-3's root WP enumerates them by grep) gets a `LIBC_TARGET_OS_IS_DOTNET` branch that keeps the object in the C block's thread-local extension, a field each, frozen with the block, and the gate checks that no shipped object has a `.tdata`/`.tbss` section or a TLS reference. `rand`/`srand` join the entry-point and append-only export lists (their `cpp::Atomic` needs M30); the wait buckets are interned-name Monitors `<msil>v1:libc.wait:<i>`; the portable lock path for the generic `__atomic_*` names uses interned-name Monitors `<msil>v1:atomic.lock:<i>`, frozen under T11 at this commit (P-1r R6). The process root lives in AppDomain data (`<msil>v1:libc.root`) and is created under the interned-name lock `<msil>v1:libc.root.lock`; its sub-blocks follow 5.19.11, FD among them: P-2's descriptor table and open file descriptions (5.19.18) take 5.19.12's 32-bit lock words over the wait buckets, and each description's shared offset is applied with `FileStream.Seek` on unbuffered streams on every runtime (`RandomAccess` not used). `libc.a` is installed in the sysroot, T-P9 and T-P11 are lifted and `-static` is enabled, with every copy, `-static` or `c.dll`, sharing one C state; the layout, FD and the open file descriptions included, freezes as major 1 at P-3's commit, an append-only ABI between libc releases (brief Q32 (a)), and from then on 5.19.11's rules for shared state added after the freeze hold (a new or still-reserved directory id as a first layout, never a frozen sub-block's growth; a copy checks only the directory entries it uses; per-thread fields added later go through a pointer slot that P-3 reserves in the frozen thread-local extension); a copy that finds a root or sub-block of an unknown major or a failed layout check writes both versions to stderr and calls `Environment.FailFast` (brief Q33 (a)), never a private copy. The form of a shared `FILE` and of an open file description (5.19.9), and what a copy does in a collectible load context, are settled by the user's answers to the portable I/O questions on what a libc copy in a collectible load context does and, if such copies stay, on that form, both asked before P-3's text is drafted (section 12's row 'Portable I/O questions left to later texts'). The upstream fixes come with it (the recursive `FILE` lock; `exit` closing streams). `-static` copies keep code, the `getopt` variables and `__dso_handle` private. The portable legs gain LTO runs (brief Q13 (a)); tests in `msil/test/Portable/06-threads` and `07-static`. **P-3's re-pin rows:** M31's thread-exit rule on dotnet (P-1r R7, R19), M31.b's reuse of the holder shape, T11's portable freeze, the CLITrailerTest floors of M31-M35.
 
 ### M31. thread_local and thread-exit destructors
 
@@ -18419,6 +19392,12 @@ GettingStarted.md: C programs on the host C library (`build-builtins.py` after `
 
 **P-4. msil32-unknown-dotnet** (a note; drafted after M35). Until P-4, clang accepts `msil32-unknown-dotnet` for preprocessing and syntax checks, and the backend, `PEOptions::get` and msil-ld refuse it with T-P1; no helper archive, sysroot or `c.dll` exists for it. P-4 owns (5.18.11 P4-3): the address-width parametrization of the backend (about 100 I64 sites) and the D2 mirror; 4-byte pointers in the trailer, the link-info record, constructor slots and function-address leaves; the envelope and guard for a 32-bit process (an msil32 assembly in a 64-bit process is refused loudly, the mirror of T-P10); 4-byte `Interlocked` rows; the TLS header variant; an x86 leg; and the C library's msil32 items (`jmp_buf` size, `sigset_t` words, `clock_t`, `rand`'s cell, the msil32 export list). msil32's data layout, ABI column (`_BitInt` limit 64, no `__int128`), ABI rules and predefines freeze at P-4's commit, as msil64's froze at P-1b's. P-4's own gate runs its own portable directories with `msil-lit.ps1` (brief Q11 (a), the decision brief answers (user, 2026-11-01)).
 
+**MC-5. Managed calls from C and C++, stage 3: `ref` parameters of class types and `Nullable` of an enum** (an outline; contract 5.20.18, with 5.20.19; its text is drafted after P-4's commit, in the managed-call spelling that holds then). Two pieces of the fuller managed calls, and only those, come forward because the portable libc's POSIX I/O needs them: a `ref` parameter of a class type, copied in and out through a stub local and passed as a ticket (`Socket.ReceiveFrom`'s `ref EndPoint`, which gives `recvfrom` its source address), and a member of `Nullable` of an enum, the first generic instantiation MA3 admits (`FileStreamOptions.UnixCreateMode`, a `Nullable<UnixFileMode>`, which sets a file's mode at its creation on Linux); 5.20.7 binds both, and 5.20.14 no longer defers them. It goes after P-4, directly before P-5a (section 12's row 'Program order amended (portable I/O)'). Tests in `msil/test/M3/13-managed-calls` with portable copies in `msil/test/Portable/02-managed-calls`; new T-M texts; a hook block for each upstream file it changes; its gate is a host-triple gate with no portable step, as MC-1's under brief Q11 (a).
+
+**P-5a. Portable POSIX I/O, part 1: files** (an outline; contract 5.19.18's P-5a part and 5.19.2's P-5a row; its text is drafted after MC-5's commit, once the questions that section 12's row 'Portable I/O questions left to later texts' leaves to it are answered). On P-2's descriptor core as P-3 froze it (FD, open file descriptions with one shared offset each, `FILE` over descriptors), P-5a adds the public descriptor functions over `FileStream`, the file-system calls, `libgen.h`, the `unistd` basics with `getentropy`, and `mmap`, with private file maps on `MemoryMappedFile` views clamped to the file's length (a map may reach into its file's last page; one that runs whole pages past the end is refused loudly), and anonymous maps as heap blocks, a second allocation kind beside 5.19.10's heap, which refuse loudly what a heap block cannot enforce; 5.19.18 lists each function, its .NET members and its errors. It reads exact error codes from MC-4's exception ticket and, on Linux, sets a file's mode at its creation through MC-5's `Nullable` of an enum; `System.Core` joins `c.dll`'s references for `MemoryMappedFile` on .NET Framework (modern .NET's `System.Core` facade forwards the type: Claude's probe, 2026-11-22, .NET members run from C#; 5.19.7), and modern-only members run behind `Environment.Version.Major >= 8`, bound against .NET 8's reference assemblies, with an OS test where Windows lacks a member and a pinned test of both paths (5.19.13). New `fork-only` folders and macro headers under `libc/`, each upstream dispatcher or YAML change a hook block (5.19.14); entry points, export lists and `headers.txt` appended for both widths, and the new C ABI items frozen at both widths at P-5a's commit (5.19.3, 5.19.4, 5.19.6, 5.19.7); `TargetLibraryInfo` re-audited and N6's list regenerated (5.18 PL3). Tests in `msil/test/Portable/09-files`, run by P-5a's own gate with `msil-lit.ps1` (brief Q11 (a)) and by the post-commit legs; oracle: the same program built natively with llvm-libc's overlay mode under WSL (5.19.15). The silent differences P-5a brings come to the user as a list with its text; each accepted one enters Status.md, and each refused one takes the loud form (the user's pick prov-10).
+
+**P-5b. Portable POSIX I/O, part 2: network and processes** (an outline; contract 5.19.18's P-5b part and 5.19.2's P-5b row; its text is drafted after P-5a's commit, once the questions that section 12's row 'Portable I/O questions left to later texts' leaves to it are answered). IPv4 and IPv6 sockets over `System.Net.Sockets.Socket`, with `recvfrom`'s source address through MC-5's `ref` parameters of class types, and name lookup over `Dns`; `poll` and `select` over sockets, files and the libc's own pipes, eventfds and socketpairs (buffers in C memory) through one internal wake socket, with pump threads that make the console's stdin and child pipes pollable; process spawning over `System.Diagnostics.Process` (`posix_spawn`, `posix_spawnp`, `popen`, `pclose`, `system`, `waitpid`, `wait`) with waiter threads; `fcntl` record locks (`F_SETLK`, and `F_SETLKW` by retrying), `lockf` and `flock` over an in-process lock table that keeps one handle per file, with `FileStream.Lock` between processes; and `MAP_SHARED` file maps over views clamped to the file's length, whose two Windows differences ship with the user's OK (item (4) of the row 'Silent states with the user's OK (portable I/O)'); 5.19.18 lists each function, its .NET members and its errors. Pumps and waiters are P-3's threads over P-3's delegate piece; `write` and `send` to a closed peer return `EPIPE` without `SIGPIPE` (5.19.17); the C ABI items of sockets, polling, spawning and locks freeze at both widths at P-5b's commit. Tests in `msil/test/Portable/10-network`, with sockets on loopback addresses and port 0 only and a child process that contends for locks, run by P-5b's own gate with `msil-lit.ps1` (brief Q11 (a)) and by the post-commit legs; oracle as P-5a's. The silent differences P-5b brings come to the user as a list with its text; each accepted one enters Status.md, and each refused one takes the loud form (the user's pick prov-10).
+
 ## 7. Phase outlines (phases 2-5)
 
 Phase 2 is planned in full: milestones M12-M23 (section 6) with the contracts of sections 5.6-5.12, from the recon in [recon/p2/](recon/p2/) and the user's decisions of 2026-10-21 (section 10). P2-A, P2-B and P2-C below say what each part covers and which milestones implement it; M12 (backlog fixes) and M23 (the Phase 2 exit) belong to none of them.
@@ -20026,6 +21005,25 @@ the change text ``fix-loop ownership: `<path>` -> <agent>``, for example
 | 2026-11-22 | R-a | Gate procedure as R-a ran it (5.17.7; item (8) of the orchestrator's notes given to R-a's agents): when gate step 1 prints 'no baseline', the gate agent stops the round there, runs no later step and reports an environment problem, not a failure, because step 7 would build the milestone over HEAD's build, and HEAD's IL baseline (steps 1 and 21) could then be taken again only by rebuilding HEAD; the orchestrator takes the baseline from HEAD's build and starts the gate again. In all six of R-a's gate rounds (four in its first run and two in fix run 1) step 1 found the baseline present. Later milestones' notes to their gate agents carry the rule. | Claude's rule (2026-11-21), under the user's pick on the review page (2026-11-04, item prov-10), "Fail loudly by default"; not a user decision. |
 | 2026-11-22 | R-a2 | 5.21.16 RN10's count and the R-a2 row 'In R-a2, directly before P-2 (5.21.16 RN10)' of 2026-11-21: '303 with the error tests' is the no-star check's count (268 + 35); by the verifier's reading of the error tests (36 of 51: `int32[,]` is not a handle place, and `const char *` at an object place counts as a star) it is 304 (recon copy `recon/p3/references.md` sections 5.3 and 5.4). R-a2 counts by its own scan of the tree it starts from. | Claude's correction from the committed recon copy; not a user decision. |
 | 2026-11-22 | R-a | Minute times corrected in R-a's texts of 2026-11-21 (5.21, R-a's 'Gate commands' paragraph, R-a2's outline and section 12's rows of that date): ten minute times given for the user's messages are one to three minutes later than the time the session transcript gives (CST), rounded to the minute: they are the minutes of Claude's records, not the times the messages were sent. The user's change "The only change is you can use 4 CPUs." was sent on 2026-11-20 at 20:41:08, not 20:42 (R-a's 'Gate commands' paragraph and the rows '`msil/utils/ci/calibration.json` re-baselined', 'R-a2's gate' and 'Governance'); the user's pick "(b) Retire before P-2" on 2026-11-20 at 14:21:08, not 14:24 (5.21.9 RM10, 5.21.16 RN10, R-a2's outline and the rows '`*` is a real pointer into C memory', 'In R-a2, directly before P-2 (5.21.16 RN10)', 'P-2 input' and 'R-a2's gate'); the user's pick "(a) Only to Object" on 2026-11-20 at 10:44:05, not 10:45 (5.21 RA7, 5.21.4 RS4 and the row 'Conversions and casts between .NET classes'); the user's "I think A is correct." on 2026-11-20 at 11:43:07, not 11:44 (5.21.9 RM2 and the row 'Managed calls with references'); the user's "Okay." to references Q1 on 2026-11-19 at 02:30:58, not 02:33 (5.21 RA7 and the row 'Program order amended (real .NET references)'); the user's "That's just a raw GCHandle integer." on 2026-11-19 at 01:24:57, not 01:26 (5.21 RA3); the messages that the row '`*` is a real pointer into C memory' quotes, sent on 2026-11-19 from 01:17:04 to 01:25:36, not 01:18-01:26; in the row 'A reference is `T ^r`, `T` a `CLI_TYPE` struct', "Let's go with C, the carrot." and "Your simpler shape I like better." on 2026-11-19 at 10:27:04 and 10:28:19, not 10:27-10:29, and "I guess that's the benefit of the ^ syntax. YOu can represent both." at 10:39:24, not 10:40; and the four directions that the row '.NET objects and strings in C' quotes on 2026-11-18 from 20:27:39 to 20:33:31, not 20:31-20:35, the last of them, which 5.21 RA6 quotes too, at 20:33:31, not 20:35. The recon copy `recon/p3/references.md`, committed with those texts, dates these messages with the same minutes (its section 6.2 dates messages 1 to 3 at 20:31 and 4 to 7 at 20:35; they were sent from 20:27:39 to 20:29:24 and from 20:31:39 to 20:33:31), and it dates other messages of the user late in the same way, wherever it gives these minutes for them: on 2026-11-18, the pick "(B) Cesium + signature" at 15:08:34, not 15:12, the two questions that its section 6.2 dates 20:50 at 20:47:05 and 20:48:42, and the one it dates about 20:55 at 20:51:00; on 2026-11-19, section 6.3's 00:24 message at 00:22:44, section 6.4's two 01:18 messages at 01:15:54 and 01:17:04, its 01:20 message at 01:18:37, its 01:22 question at 01:20:30, its 01:23 question at 01:21:42 and the first of its 01:26 messages at 01:24:57, and section 6.6's two 10:29 messages at 10:27:48 and 10:28:19, its 10:31 question at 10:29:08 and its 10:40 observation at 10:38:42 and 10:39:24. The texts stay as committed; this row gives the transcript's times. | Claude's correction from the session transcript (the times the messages were sent); the messages are the user's, as those texts quote them; not a user decision. |
+| 2026-11-22 | - | Portable I/O added to the plan (user, 2026-11-21; the content's provenance is in the reason column): the portable triples' C library gains, over .NET, the POSIX I/O beyond stdio that the user asked about: P-5a (files: descriptors, file-system calls, `libgen.h`, the `unistd` basics with `getentropy`, `mmap`) and P-5b (network and processes: sockets and name lookup, `poll` and `select`, the libc's own pipes, eventfds and socketpairs, process spawning, `fcntl`, `lockf` and `flock` locks, shared file maps), contracted in 5.19.18; the managed calls gain the caught exception as a ticket (MC-4, before P-2) and `ref` parameters of class types and `Nullable` of an enum (MC-5, before P-5a), contracted in 5.20.17 to 5.20.20; P-2 builds the descriptor core with `FILE` on descriptors, and P-3 freezes it and brings `environ`. Where the running platform lacks a feature, the function returns the error POSIX names for exactly that gap, and a refusal that fails loudly at run time throws `PlatformNotSupportedException` (which gaps without such an error fail loudly is asked with P-5a's text). 5.19.10's "No POSIX descriptor layer through P-3" was the planning text of the contract row of 2026-11-02, not a user decision (the decision brief, `recon/p3/portable-decision-brief.md`, deferred a POSIX descriptor layer and `environ` to the P-2 and P-3 milestone drafts, unasked); these stages replace it. The answers that the user's own rules force, the order, the contracts, the inputs of P-2, P-3 and P-4, the silent states and the questions left to later texts are the portable I/O rows of this date. | The user (2026-11-21 19:55), answering Claude's question "Should I sketch a portable I/O stage for the plan, or leave it for now?", which followed the user's question "You said nothing planned gives the portable trip it. File descriptors, maps, or sockets. Are those not libc things?": "Yeah, add it to the plan." The groups are Claude's decision under that answer (the row 'Portable I/O: answers the user's own rules force' of this date, item (1)); the user's picks in the portable I/O walkthrough (chat, 2026-11-22): "(a) Throw" (~08:22 CST; the loud form), "(a) Views, OK item 32" (~08:32 CST; views for private maps, shared maps in P-5b), "(a) Readiness, pumps" (~08:34 CST; readiness and pumps), "(a) Full" (~08:36 CST; full spawning) and "(a) One handle" (~08:39 CST; locks, blocking by retry, one handle per file); which stage each group goes to is Claude's default split; the scope inside each group, the designs, the section numbers and the wording are Claude's, and so are the ids MC-4, MC-5, P-5a and P-5b (labels that plan-check accepts); the user kept the groups and the ids with "Keep them" (chat, 2026-11-22 ~08:13 CST), answering Claude's portable I/O notice. |
+| 2026-11-22 | - | Portable I/O: answers the user's own rules force (Claude's decisions, which the user may take back; the reason column says which ones the user kept and which states in them follow the user's picks): (1) the scope covers files and network; also shipped: `rewinddir`, `telldir`, `seekdir`, `dirname`, `basename`, `clearenv`, `sendmsg` and `recvmsg` without control data, `ioctl`'s `FIONREAD` and `FIONBIO`, `MSG_WAITALL` by looping, the large-file names as aliases, `posix_spawnattr_init` and `posix_spawnattr_destroy` with the attribute flags but not the signal flags, and `TIOCGWINSZ` if a probe confirms it; `SEEK_DATA` gives the offset and `SEEK_HOLE` the size, with `ENXIO` at or past the end; writing flags on a directory give `EISDIR`; other `ioctl` requests have no macro, a raw request that does not fit the descriptor's kind gives `ENOTTY`, and a terminal request on a terminal follows the answer on gaps that POSIX names no error for; `O_NOFOLLOW`, terminals and pseudo-terminals stay absent as named futures; `fork`, `vfork`, the `exec*` family, `mprotect`, `MAP_FIXED`, `PROT_NONE`, `PROT_EXEC` and descriptor passing never ship, and `mkfifo`, `mknod` and the `chown` family stay absent as not supported yet; (2) `FILE` streams sit on descriptors, as upstream's `LinuxFile`: `fopen` is an open plus a `FILE`, the standard `FILE`s sit on 0-2, `fileno` returns the number, `fdopen` wraps a descriptor, `fclose` closes it and a `FILE`'s seek uses its description's offset, so `dup2` and `close` onto 0-2 redirect the standard `FILE`s inside the libc, while `Console.Out` keeps the process's own handles (a silent difference asked before `dup2` ships; without the user's OK, `dup2` onto 0-2 fails loudly); (3) shared state may be added after P-3's freeze under new or still-reserved directory ids as first layouts, never as growth, and a copy checks only the directory entries it uses and ignores the others, keeping brief Q33 (a)'s FailFast for those (5.19.11, with Claude's details shown with it; a row may amend them until P-3's commit); (4) the descriptor table's frozen layout has room for many descriptors (chunks behind a directory sized for a high hard limit, a lower reported soft limit that `setrlimit` may raise, `FD_SETSIZE` 1024 as on Linux); (5) error codes are exact, read from `InnerException` where the code hides there; (6) where POSIX names an error for exactly a platform's gap (`EAFNOSUPPORT` for `AF_UNIX` on .NET Framework), the function returns it, which 5.19.1 rule 2 says is no stub, and a flag or command that no platform can do (`O_NOFOLLOW`, `PROT_NONE`, `O_DIRECT`) has no macro, nor does `O_TEXT` while the libc has no text mode (whether Windows gets one is asked before P-2's text), nor `F_GETLK`, which the locks do not provide, while `F_SETLKW`, which the locks provide by retrying, has one; (7) modern-only members are used, behind `Environment.Version.Major >= 8` with .NET 8's references while .NET 8's legs stay (rechecked with P-5a's text), with an OS test where Windows lacks a member and a pinned test of both paths; (8) `mkdir` and `mkdtemp` set their mode at creation through `Directory.CreateDirectory(string, UnixFileMode)`; (9) pipes, eventfds and socketpairs are the libc's own objects in C memory; (10) `envp` comes as `main`'s third argument whenever `environ` ships; (11) `flock(LOCK_EX)` on a read-only descriptor locks through a second read-write handle when the file can be opened for writing; (12) a standard stream that .NET gives as `Stream.Null` is a closed descriptor (`EBADF`), P-2's standard `FILE`s over one included; (13) every `FileStream` the libc opens shares `ReadWrite \| Delete`; (14) `/dev/null` and `/dev/tty` are recognized in the libc on both OSes, and on Linux `/dev/stdin`, `/dev/stdout` and `/dev/stderr` follow the libc's 0-2 with Linux's reopen meaning; (15) the macro values are Linux's, and `HOST_NAME_MAX` is 255; (16) where `stat` reports `st_ino`, it is a hash of the canonical path, never 0; (17) a piece that waits for a later step fails loudly until a named step, never as a lasting refusal (`recvfrom`'s source address does not wait: it comes with P-5b through MC-5's `ref` parameters); (18) the portable I/O steps follow the Phase 3 protocol outside any phase's numbering and exit gate, as P-4 does; (19) `getaddrinfo` and `getnameinfo` take service names from the system's services file. | (1): "Yeah, add it to the plan." with the user's question naming sockets (2026-11-21), and the user's end goal (chat, 2026-11-04, row 'Project end goal, in the user's words'): "our criteria in here is to do as much as humanly possible."; (1)'s never list, by that row's test (Claude's reading, kept by the user's pick prov-16: a refusal is permanent only where CIL or the runtime makes the feature impossible, or where the user rules it out); `SEEK_DATA`, `SEEK_HOLE` and `ENOTTY`, by POSIX's `lseek` and `ioctl`, and `EISDIR` by POSIX's `open` (Claude's design, settled with it); (7): the end goal, the facts of 5.19.13, and for the floor the user's pick dl-d22 ("Keep the .NET 8 legs until Phase 3 ends, then review"); (2), (5), (6), (11), (12) and (17): "the end goal of this project is to do everything right" (the same row) and the user's pick prov-10, "Fail loudly by default; recorded temporary workarounds allowed; silent states only with my OK"; (6) also "Okay, so it seems to me we should just do what we can." (the user, chat, 2026-11-10, on uneven platform support); (17) also "It might be true that we have to defer some stuff and write some workarounds in order to do stuff later." (the same row); (3) and (4): "Yes, share it." (the user, 2026-11-01, row 'C library linking modes (user, 2026-10-31)') and its recorded price, an append-only contract between C library releases, and (4) also "as many features as possible, as good as possible, using the most appropriate answer" (the same row); (8), (9), (13), (15) and (16): strict dominance under those rules, (15) after brief Q15 (b), Q21 (a) and POSIX's `limits.h`; (10): the user's pick on the review page (2026-11-04, item wd-d27, "Do what Claude recommends"), whose text reads "On portable, envp arrives with the environ design that plan :9035-9037 requires, placed (Claude) at P-3." (the plan lines it names are 5.19.10's `environ` sentences, which this commit rewrites); (14): POSIX's Base Definitions 10.1 ("shall exist on conforming systems"); (18): the row of 2026-11-01's words "portable work starts inside Phase 3's sequence, outside its numbering and exit" (row 'Program order (user, 2026-11-01, 'Option A, after M26')'), which force it; (19): the user's pick prov-10, since a numbers-only lookup would give POSIX's `EAI_SERVICE` ("The service passed was not recognized") for names the system knows; each decision was Claude's (the forced-answers check of 2026-11-22). Claude's portable I/O notice of 2026-11-22 listed as settled, each summed up briefly, (1)'s scope, ship list, never list and the names absent as not supported yet, and (2)-(10) and (18); the user kept them with "Keep them" (chat, 2026-11-22 ~08:13 CST), answering its question "Do you keep these settled answers, or take one back?", so keeping them is the user's pick as far as the notice showed them (Claude's reading of the answer's reach). What it did not show stays Claude's decision: among others `vfork`, the ship list's members other than `rewinddir`, `telldir`, `dirname`, `clearenv` and the `posix_spawnattr_*` functions, and (1)'s `SEEK_DATA`, `SEEK_HOLE`, `EISDIR`, `ioctl` and named-future answers; (2) beyond `FILE` on descriptors and `dup2` onto 1 with `Console`'s gap asked later; (3)'s two rules; (4)'s parenthesis; (6)'s list of flags and commands other than `F_GETLK` and `F_SETLKW`, `O_TEXT`'s clause included, and its 5.19.1 clause; (7) beyond the .NET 8 version check; and MC-4 and MC-5 in (18). The notice said that the members of the never list never work, not whether `MAP_FIXED` and `PROT_EXEC` have macros, which is asked with P-5a's text. Items (11)-(17) and (19), whose content the notice did not show, stay Claude's decisions ((11), and (17)'s fallback for `recvfrom`'s source address, were shown as such with the questions on locks and on that address). In (1), the `posix_spawnattr_*` functions follow the user's pick "(a) Full" (full spawning, with four `posix_spawnattr` functions added to llvm-libc; chat, 2026-11-22 ~08:36 CST); in (6), `F_GETLK` without a macro and `F_SETLKW` with one follow the user's pick "(a) One handle" (locks, blocking by retry, one handle per file; chat, 2026-11-22 ~08:39 CST); in (17), `recvfrom`'s source address not waiting follows the user's pick "(a) Ref parameters" (`ref` parameters of class types in the managed-calls step; chat, 2026-11-22 ~08:29 CST); and in (18), the place of the steps after P-4, outside any phase's numbering and exit gate, follows the user's pick "(a) After P-4" (where the stages go; chat, 2026-11-22 ~08:42 CST). The wording of each is Claude's. |
+| 2026-11-22 | - | Program order amended (portable I/O): MC-4 (the caught exception as a ticket, 5.20.17) goes after the cleanup round's milestones and EH-0 with FX-1 to FX-3 and before R-a2, which stays directly before P-2; value-type form B's step (`DateTime ^r`) goes in the same window, as its own step, and the two run one after the other, in an order that is Claude's default, stated with form B's text; after P-4 come MC-5 (`ref` parameters of class types and `Nullable` of an enum, 5.20.18), P-5a (files) and P-5b (network and processes), the stages of 5.19.18, before Phase 4 starts and outside any phase's numbering and exit gate. Until the pending exception-model and cleanup-round rows and form B's text apply, the order after M27 of the row 'Program order (user, 2026-11-01, 'Option A, after M26')', as the row 'Program order amended (real .NET references)' of 2026-11-21 reads it, is MC-1, R-a, MC-4, R-a2, P-2, M28, M29, M30, P-3, M31-M35, P-4, MC-5, P-5a, P-5b; 5.18's paragraph is read with this row. MC-4, MC-5, P-5a and P-5b follow the Phase 3 protocol outside its numbering and exit gate, as P-4 does; MC-4's and MC-5's tests live under `msil/test/M3/13-managed-calls`, with portable copies in `msil/test/Portable/02-managed-calls`, P-5a's in `msil/test/Portable/09-files` and P-5b's in `msil/test/Portable/10-network`. Inline IL, the rest of the fuller managed calls, FeatureIdeas.md and the final cleanup stay after Phase 3, and MC-5, P-5a and P-5b come before them. | The user's picks in the portable I/O walkthrough (chat, 2026-11-22): "(a) After P-4" (~08:42 CST; after P-4, outside any phase's numbering), "(a) Split" (~08:43 CST; the exception part before P-2, the rest before the first I/O stage) and "(a) Two stages" (~08:41 CST; two stages, files first, which calls go into each being Claude's default grouping); form B's step before R-a2 is the user's pick "(a) B before R-a2" (chat, 2026-11-22 ~09:09 CST) on references VT-5; that MC-5, P-5a and P-5b come before the goals after Phase 3 is Claude's reading of an order that the row of 2026-11-01 leaves open; the protocol sentence is Claude's decision, forced by that row's words "portable work starts inside Phase 3's sequence, outside its numbering and exit" (the row 'Portable I/O: answers the user's own rules force' of this date, item (18), which the user kept for P-5a and P-5b); the ids (which the user kept with "Keep them", chat, 2026-11-22 ~08:13 CST) and the wording are Claude's. |
+| 2026-11-22 | - | Contract 5.19.18 (portable POSIX I/O, implemented by P-5a and P-5b) added, and contract 5.19 and 5.18, which name the portable steps, amended for it: 5.19.18 fixes the scope by function group (what P-5a and P-5b add, what never ships and why, what stays absent and until which named step), how the layer calls .NET, the descriptor table FD (directory id 2) with room for many descriptors, open file descriptions with one shared offset each, locking, `FILE` over descriptors, descriptors 0-2, non-blocking I/O and `poll`, .NET Framework 4.8 against modern .NET and Windows against Linux in one image, a host that is not a C program, `-static` copies sharing one table, flags and argument values, and where the tests and their oracle are; 5.19.1 rule 2 says that a shipped function meeting a platform gap is no stub (it returns POSIX's error for that gap, else fails loudly); 5.19.2 gains P-5a's and P-5b's rows, and P-2's and P-3's rows the descriptor core; 5.19.3 to 5.19.7 gain the new folders and headers, the entry points per stage and what never ships, the exceptions the primitives list and the exact codes read from MC-4's ticket, the new frozen C ABI items at both widths, and `c.dll`'s new exports and references (`System.Core`; .NET 8's reference set behind a version guard); 5.19.9 to 5.19.17 gain stdio on descriptors, the rewritten descriptor bullet, `environ` at P-3, FD's owner, the new directory ids, the rules for shared state added after P-3's freeze and the freeze list, and the stages' locks, members, upstream files, tests, loud failures and interfaces. | Claude's proposal of 2026-11-21 with its recon (the plan's contract points, the libc tree, the .NET members, the surveyed programs' demand) and its three checks; the user's "Yeah, add it to the plan." (2026-11-21 19:55); the row 'Portable I/O: answers the user's own rules force' of this date; the picks that the portable I/O rows of this date record; the designs, the section number (5.19.18 appends without renumbering) and the wording are Claude's. |
+| 2026-11-22 | - | P-2 input (portable I/O: the descriptor core, 5.19.18): P-2 builds the descriptor core with no public descriptor function (`open`, `read`, `write`, `close`, `lseek`, `dup`, `fileno`, `fdopen` and `fcntl.h` stay absent until P-5a, 5.19.1 rule 2): the FD sub-block (directory id 2) at layout major 0, with room for many descriptors (chunks behind a directory sized for a high hard limit, a lower reported soft limit that `setrlimit` may raise, `FD_SETSIZE` 1024 as on Linux); open file descriptions on 5.19.10's heap, each holding a `System.IO.Stream` ticket and one shared offset, applied with `FileStream.Seek` on unbuffered streams; descriptors 0-2 over `Console.OpenStandardInput/Output/Error()` (on Linux one that is not a terminal also holds a `FileStream` over its descriptor for seeks and sizes, 5.19.18); and a descriptor for each `FILE`. `FILE` sits on descriptors, as upstream's `LinuxFile` holds an `int` descriptor: `fopen` is an internal open plus a `FILE`, the standard `FILE`s sit on 0-2, `fclose` closes the descriptor, and a `FILE`'s seek uses its description's offset (5.19.9). The core is single-threaded until P-3, under 5.19.5's stated exception (brief Q16 (a)), as the rest of P-2's OS layer is; its tests live in `msil/test/Portable/05-os`. | The user's pick "(a) In P-2" (the core in P-2, internal; chat, 2026-11-22 ~08:44 CST); `FILE` on descriptors and the room in the table are Claude's decisions, which the user kept (the row 'Portable I/O: answers the user's own rules force' of this date, items (2) and (4)); that the user's order ("then P-2 (the single-threaded OS layer over the BCL, the first portable `printf`)", row 'Program order (user, 2026-11-01, 'Option A, after M26')') covers a single-threaded internal core is Claude's reading; the design and the wording are Claude's. |
+| 2026-11-22 | - | P-2 input (portable I/O: error codes): P-2's text is drafted on MC-4 as committed, and P-2's primitives give exact codes: each `msil_catch` entry also takes MC-4's exception ticket, and the code comes from the caught exception (on Windows the Win32 code in `HResult`, through the libc's Win32 table, whose rows P-2's text fixes (5.19.18); on Linux the raw errno that a plain `IOException` carries in `HResult`, with 5.19.5's swap of 35 and 75, or that of an `UnauthorizedAccessException`'s inner `IOException`), so `fopen(..., "wx")` of an existing file gives `EEXIST` and a full disk gives `ENOSPC`; on Windows `ENOTDIR` comes from a check after a `DirectoryNotFoundException` (on Linux .NET passes `ENOTDIR`'s errno on, by Claude's recollection, which P-2's text checks). The primitives also list the exceptions that ordinary C input raises and that are not `IOException`s (5.19.5): every path primitive refuses an empty path with `ENOENT` before calling .NET; on .NET Framework a path with invalid characters raises `ArgumentException`, listed as `EINVAL` (a device path's excepted, 5.19.18); on Linux `EFBIG` arrives as `ArgumentOutOfRangeException` on a call that can grow a file and `ECANCELED` as `OperationCanceledException`, listed as those codes, `ArgumentOutOfRangeException` before its base `ArgumentException` (5.20 MA5). `remove` and `rename` check what .NET does not report (`remove`'s `ENOENT`, since `File.Delete` ignores a missing file; `rename`'s `EXDEV`, since `File.Move` copies across volumes). These checks and the `ENOTDIR` check race with other processes, and the Win32 table maps some codes to near POSIX codes: silent differences asked with P-2's text, whose answers P-5a reuses. | The user's picks "(a) Ticket" (the caught exception as a ticket; chat, 2026-11-22 ~08:25 CST) and "(a) Split" (the exception part, MC-4, before P-2; chat, 2026-11-22 ~08:43 CST); exact codes are Claude's decision, which the user kept (the row 'Portable I/O: answers the user's own rules force' of this date, item (5)); the exceptions are those of Claude's proposal's checks (dotnet/runtime's `Interop.IOErrors.cs`); the wording is Claude's. |
+| 2026-11-22 | - | P-2 input (portable I/O: the libc's opens and the standard streams): every `FileStream` the libc opens shares `FileShare.ReadWrite \| FileShare.Delete`, is not inheritable and has buffer size 1, so the libc's buffer is the only one. Whether a C program on Linux turns .NET's implicit file lock off is asked before P-2's text (the row 'Portable I/O questions left to later texts' of this date), and until the user's answer, 5.19.15, 5.19.17 and 5.19.18 carry Claude's recommended option, under which a C program turns the lock off for the process (`AppContext.SetSwitch("System.IO.DisableFileLocking", true)`; `AppContext` exists from .NET Framework 4.6) before the process's first open by path, since .NET reads the switch once and ignores a later setting (Claude's probe, 2026-11-22, .NET members run from C#, on .NET 8 and 10): the module initializer of an output that has `'<msil>Main'` sets it first, before the library `ldtoken`s, the cross-assembly relocations and the constructors (5.18 LR5), since `__llvm_libc_set_c_main` runs only after them (5.18 LR11), and P-2's text fixes the call and amends LR5 and LR11 for it, with tests that open a file another process holds with `LOCK_EX` from `main` and from a constructor; GettingStarted.md documents for hosts the runtimeconfig property and the environment variable `DOTNET_SYSTEM_IO_DISABLEFILELOCKING=1` (which the same probe confirms); and a host that is not a C program never sets the switch, so on Linux its libc opens keep .NET's lock and fail where another process holds `LOCK_EX`, where POSIX's `open` succeeds, a silent difference whose OK is asked with that question. A standard stream that .NET gives as `Stream.Null` (an invalid standard handle on Windows) is a closed descriptor, and P-2's standard `FILE` over it fails with `EBADF`. A standard stream never seeks through .NET's console streams, whose reads and writes move the offset the process shares with its parent and children: on a terminal, `fseek`, `ftell` and `rewind` on a standard `FILE` give `ESPIPE` (from P-5a also `lseek`, `pread` and `pwrite` on 0-2, and `fstat` on 0-2 reports `S_IFCHR`), which is right for a terminal. On Windows the libc cannot tell a pipe from a file, and what a standard stream that is not a terminal answers there is asked before P-2's text; until the user's answer, 5.19.15 and 5.19.18 carry Claude's recommended option, under which such a stream gives the same `ESPIPE`, with `S_IFIFO` and size 0 from `fstat` (from P-5a), right for pipes and wrong for redirected files, a silent difference whose OK is asked with that question (a .NET 11 tier, asked with P-5a's text, would let .NET 11 on Windows answer seeks through `Console.OpenStandardInputHandle()` and `OpenStandardOutputHandle()` in the Linux arrangement below, which Claude's probe of 2026-11-22 (.NET members run from C#) found exact on Windows .NET 11 too, 5.19.18). On Linux a standard stream that is not a terminal keeps its transfers on the console stream and also holds a `FileStream` over `new SafeFileHandle((IntPtr)n, false)` with buffer size 1 for seeks, sizes, `pread` and `pwrite`: `lseek` sets that stream's position and then reads its `SafeFileHandle`, which moves the shared offset, and the shared offset is read as a new such stream's starting position. Claude's probes of 2026-11-22 (.NET members run from C#), on .NET 8 and 10, found this arrangement exact (the offset in step with the console stream's reads and writes; a redirected file seeks with its length on descriptor 0 and reports its length on descriptor 1, `/dev/null` seeks with length 0 on descriptor 0, and a pipe refuses the seek on both, the libc's `ESPIPE`) and a `FileStream` alone wrong for transfers, since it writes at a position of its own and never moves the shared offset: under `2>&1`, or with the shell writing after the program, the later writer overwrote the program's earlier output. So on Linux the standard streams follow POSIX, and P-2's tests keep the redirected and the two-writer cases. P-2's text also first checks whether a Linux terminal's stdin goes through .NET's line reader (5.19.18). | The implicit file lock and what a redirected standard stream answers on Windows are asked before P-2's text, and both answers are the user's; the recommended options are Claude's; `EBADF` for `Stream.Null` and the share mode are Claude's decisions (the row 'Portable I/O: answers the user's own rules force' of this date, items (12) and (13)); the probes and the wording are Claude's. |
+| 2026-11-22 | - | P-2 input (portable I/O: device names, paths, text mode and `unistd.h`): (1) `/dev/null` is an in-libc null description (writes discarded, reads at end of file), never a `FileStream`, and `/dev/tty` the controlling terminal, on both OSes: on Linux the libc opens that device, and on Windows it is the console's descriptions, which follow a redirection of 0-2 where POSIX's `/dev/tty` would not, a silent difference asked with P-2's text; on Linux `/dev/stdin`, `/dev/stdout` and `/dev/stderr` follow the libc's 0-2 with Linux's reopen meaning; on Windows those, `/dev/zero` and `/dev/urandom` map too, and other `/dev/` names give `ENOENT`. (2) On .NET Framework a path `FileStream` refuses `NUL`, `CON`, `COM1`, named pipes and every other non-disk file, with `NotSupportedException` or, for a `\\.\` path, `ArgumentException` (Claude's recollection, which P-2's text checks in both of Framework's path-handling modes); P-2's `fopen` leaves either unlisted, its `EINVAL` entry for invalid characters never taking a device path, so it escapes loudly (5.20.8 MX1), until the user's answer on gaps that POSIX names no error for, asked with P-5a's text, settles it (an `ENOTSUP`-type error or the loud form). (3) The form of the paths the libc returns on Windows (P-2's `tmpnam`; later `getcwd`, `realpath` and the paths built from `readdir`) is asked before P-2's text; until the user's answer, 5.19.18 carries Claude's recommended option, `C:/dir`, with `/` between components and both separators accepted on input. (4) Whether P-2's stdio translates line ends in text mode on Windows, or changes the console's code page, is asked before P-2's text; until the user's answer, 5.19.9 and 5.19.18 carry Claude's recommended option, under which stdio passes bytes unchanged on both OSes, with no CRLF translation, `b` in a mode string changing nothing, and the console's code page left as it is. (5) P-2 installs `unistd.h` for `getopt`, and llvm-libc's header generator writes every object of `include/unistd.yaml` whatever ships (row 'Contract 5.19.1 rule 2, 5.19.4 and the P-1b Goal amended (declared-but-absent names and `memset_explicit`, as built)' of 2026-11-03), so P-2's text makes P-2's `unistd.h` agree with 5.19.10's `environ` bullet, which P-3's accessor macro completes. | (1): `/dev/null`, `/dev/tty` and Linux's `/dev/stdin`, `/dev/stdout` and `/dev/stderr` are Claude's decisions under POSIX's Base Definitions 10.1 ("shall exist on conforming systems"; the row 'Portable I/O: answers the user's own rules force' of this date, item (14)), and the Windows names Claude's design, to be shown with the question on the path form; (2) is the default of the user's pick prov-10 ("Fail loudly by default") until that answer; (3) and (4) are asked before P-2's text, their answers the user's and their recommended options Claude's; the user's pick "(a) P-3, macro" (`environ` at P-3 as an accessor macro; chat, 2026-11-22 ~08:35 CST) for (5); the wording is Claude's. |
+| 2026-11-22 | - | P-3 input (portable I/O: the descriptor core's freeze and later shared state): P-3 makes the FD table's lock word and each open file description's lock word 5.19.12's 32-bit lock words over the wait buckets (allocation, `close` and `dup2` take the table's lock; I/O that uses the shared offset holds the description's lock across seek and transfer when `FileStream.CanSeek` is true, not by the reported file type, and from P-5b, while the descriptions of one file share a handle, also that file's lock, the lock word of its entry among FD's per-file locks; blocking I/O on the console holds no lock while it waits), and freezes FD and the descriptions as major 1 with the other sub-blocks (5.19.11's freeze list). 5.19.11's rules for shared state added after the freeze hold from P-3's commit, and P-3 reserves in the frozen thread-local extension the pointer slot through which per-thread fields added later are reached; until P-3's commit a section 12 row may amend the rules. | The rules are Claude's decision (the row 'Portable I/O: answers the user's own rules force' of this date, item (3)); the locking rules, the slot and the wording are Claude's. |
+| 2026-11-22 | - | P-3 input (portable I/O: `environ`): P-3 brings `environ` as an accessor macro, `#define environ (*__llvm_libc_environ())` over an exported accessor, as `stdout` is spelled (5.19.9): one process-wide array in a new sub-block (5.19.11), rebuilt after every environment change the libc makes; an assignment to `environ`, or an element or a string a program writes into the array, reaches `System.Environment` at the libc's next environment call (`getenv` included), which finds such writes by comparing the array with its last copy, with the silent difference of item (3) of the row 'Silent states with the user's OK (portable I/O)' of this date. `'<msil>Main'` passes the array to `main` as `envp`, its third argument (a change to 5.18 LR11's step 2). Status.md documents the macro's limits: a program's own `extern char **environ;` compiles only after `<unistd.h>` (elsewhere it fails to link with a plain undefined symbol); the macro rewrites every later identifier `environ` (a struct member of that name stops compiling; a parameter of that name becomes a function pointer whose callers get an incompatible-pointer diagnostic); a C++ declaration of `environ` inside a named namespace fails to link. `__llvm_libc_environ` is appended to the export list (5.19.7). | The user's pick "(a) P-3, macro" (yes, at P-3, as an accessor macro; chat, 2026-11-22 ~08:35 CST); `envp` with `environ` is Claude's decision, which the user kept (the row 'Portable I/O: answers the user's own rules force' of this date, item (10)); the design and the wording are Claude's. |
+| 2026-11-22 | - | P-3 input (portable I/O: questions before P-3's text, and the libc's waits): before P-3's text is drafted the user answers what a libc copy does in a collectible load context and then, unless that answer refuses such copies, the form of shared `FILE`s and open file descriptions (the creator's function pointers, a kind enum, or both); if the answer refuses such copies, the creator's function pointers follow (Claude's reading: nothing can unload, and only they run each object's own code in every copy); 5.19.9's sentence on the form stands until then, and 5.19.18 uses the same deferral form. P-3's own waits in the wait buckets (mutex, condition, once, join) list `ThreadInterruptedException`, so that no bucket's monitor stays held (`Monitor.Wait` takes the monitor back before it throws: Claude's recollection, which P-3 checks); whether such a wait lets the exception escape, with the monitor released by the guards of the user's pick on the review page (2026-11-04, item eh-13: "Yes, after probe 9's cost measurement"), or retries the wait and re-asserts the interrupt afterwards, is asked with P-3's text; `EINTR` is no option there, since POSIX forbids it for `pthread_mutex_lock`, `pthread_cond_wait`, `pthread_join` and `pthread_once`. The I/O stages' waits are asked with their lists (5.19.18). | Claude's: the forced-answers check of 2026-11-22 leaves both questions open and makes the waits' answer the user's; the wording is Claude's. |
+| 2026-11-22 | - | P-4 input (portable I/O): P-4's msil32 items (5.18.11 P4-3; P-4's note) include the descriptor core's layouts at 4-byte pointers (the FD sub-block, the open file descriptions, the pointer slot that P-3 reserves for later per-thread fields) and the `environ` sub-block; MC-5, P-5a and P-5b come after P-4, so each freezes its own items at both widths at its commit (5.19.6). | Claude's proposal (what the stages lean on); the user's picks in the portable I/O walkthrough (chat, 2026-11-22): "(a) After P-4" (~08:42 CST; the stages after P-4), "(a) In P-2" (~08:44 CST; the descriptor core in P-2) and "(a) P-3, macro" (~08:35 CST; `environ` at P-3); the wording is Claude's. |
+| 2026-11-22 | - | Portable I/O questions left to later texts, each asked one per message before the text that needs it is drafted: before P-2's text, whether C programs on Linux turn .NET's implicit file lock off, what a redirected standard stream answers on Windows, the form of the paths the libc returns on Windows, and text mode and the console's code page on Windows (the P-2 input rows of this date); with P-2's text, the silent differences P-2 brings (the checks before calls, the `ENOTDIR` check on Windows, the near codes, `/dev/tty` on Windows, appends that aliases and other processes can interleave, and the zero fill of a write past the end on Windows); before P-3's text, what a libc copy in a collectible load context does and, if such copies stay, the form of shared `FILE`s and open file descriptions (the row 'P-3 input (portable I/O: questions before P-3's text, and the libc's waits)'), and what P-3's own waits do with `ThreadInterruptedException`; with P-5a's text, the scope's open edges (`getuid`, `geteuid`, `getgid`, `getegid`, `getppid`, `uname`, `getrlimit`, `setrlimit` and the user and group lookups; the feasible extras `epoll`, `mremap`'s moving form, raw sockets and `SOCK_SEQPACKET`, `inotify` and hard links; `putenv`, `statvfs`, the `umask` setter and `MSG_DONTWAIT`), a .NET 11 tier of members, the run-time form of the gaps that POSIX names no error for (such as `symlink` and `realpath` through a link on .NET Framework, device paths, terminal `ioctl`s, `ftruncate` under a live view on Windows, a partial `munmap` and a map that runs whole pages past the end of its file) and whether `MAP_FIXED` and `PROT_EXEC` stay undefined or fail with `ENOTSUP`, `mkdtemp` outside the temporary directory and on Windows, directory descriptors and `open` of a directory, `socklen_t`, `NAME_MAX` and the form of the macro headers, and `__unix__`; with P-5b's text, `gethostbyname` and `gethostbyaddr`, spawning on Windows (program names and batch files) and starting a portable child; with each stage's text, the stage's silent differences, as a list (the I/O stages' waits among them), and real programs in its gate (each new download with the user's approval, as the user's pick prov-25 asks). Until each answer, the passages of 5.18, 5.19 and 5.20 that depend on it carry Claude's recommended option, except P-3's two questions, which keep 5.19.9's deferral form; a different answer rewrites those passages by a section 12 row before the text that needs it is drafted. | Claude's list, from the forced-answers check of 2026-11-22; every answer is the user's. |
+| 2026-11-22 | - | Silent states with the user's OK (portable I/O), as the user's pick on the review page (2026-11-04, item prov-10) asks: (1) a pump thread that makes descriptor 0 pollable reads ahead of the program: once a program polls stdin or reads it non-blocking, other .NET code that reads the console, and a child started before then that still reads stdin, miss what the pump has read, a child started after then gets stdin through a pipe from the pump and so sees no terminal, and what the pump read but the program did not is lost at exit (P-5b); (2) data that a pump carries from a child into a libc descriptor is lost when the process exits (P-5b); (3) children and other .NET code see an assignment to `environ`, or a write into the array, only at the libc's next environment call (P-3); (4) on Windows a `MAP_SHARED` view is not guaranteed coherent with plain reads and writes of its file, and writes through it may leave `st_mtime` unchanged (P-5b). Status.md lists each item from the step that brings it. | The user's picks in the portable I/O walkthrough (chat, 2026-11-22), each of an option that Claude's question offered with the OK of these silent states (numbered as in the questions): "(a) Readiness, pumps" (~08:34 CST), offered as "(a), with your OK for items 15 and 28", for items (1) and (2); "(a) P-3, macro" (~08:35 CST), offered as "(a), (b) or (c), each with your OK for item 17", for item (3); "(a) Views, OK item 32" (~08:32 CST), whose item 32 is item (4) here; the items' texts are Claude's, shown with the questions. |
+| 2026-11-22 | - | Design.md edits (portable I/O), as approved: section 1's first non-goal names the second and third stages of the managed calls (the caught exception as a ticket during phase 3; `ref` parameters of class types and `Nullable` of an enum after it, before the libc's POSIX I/O); section 6's portable libc bullet gains the POSIX I/O stages after threads and `-static`; section 11's phase 3 row counts two stages of managed calls inside phase 3's sequence and gains MC-5, P-5a and P-5b after P-4. | The user's approval, "Approve as shown" (chat, 2026-11-22 16:17 CST), on Claude's drafts, shown with this text. |
+| 2026-11-22 | MC-4, MC-5 | Contract 5.20.17-5.20.20 added: 5.20.17 the caught exception as a ticket (MC-4: with `msil_catch`, an optional second trailing `intptr_t *` after the `int *`, through which the stub's handler stores a new ticket of the caught exception; filters stay type-only and catch-alls refused; the conversion code `exc`; nothing new binds; no attribute in today's spelling), 5.20.18 class byrefs and `Nullable` enums (MC-5: `class T&` parameters through tickets and `Nullable` of an enum as a parameter, the rest left to its text, drafted after P-4), 5.20.19 contract amendments, 5.20.20 files and roles. MC-4 comes after EH-0 with FX-1 to FX-3 and before R-a2, MC-5 after P-4 and before P-5a (section 12's row 'Program order amended (portable I/O)'); both follow the Phase 3 protocol outside any phase's numbering and exit gate and are written in the managed-call spelling that holds when their texts are drafted. | The user added portable I/O to the plan with "Yeah, add it to the plan." (2026-11-21 19:55), answering Claude's question "Should I sketch a portable I/O stage for the plan, or leave it for now?"; the user's picks in the portable I/O walkthrough (chat, 2026-11-22): "(a) Ticket" (~08:25 CST; the caught exception as a ticket), "(a) Ref parameters" (~08:29 CST; `ref` parameters of class types in the managed-calls step, in the ticket form of 5.20.18 MB1, which is Claude's design: the user named no form with real references), "(a) Nullable in step" (~08:30 CST; `Nullable` of an enum as a parameter in the step) and "(a) Split" (~08:43 CST; the exception part before P-2, the rest after P-4). Exact codes rather than 5.19.5's type-only mapping are Claude's decision under the user's end goal ("the end goal of this project is to do everything right", chat, 2026-11-04 07:06) and POSIX's error lists, a decision the user kept with "Keep them" (chat, 2026-11-22 ~08:13 CST; the row 'Portable I/O: answers the user's own rules force' of this date, item (5)); a form that reaches `InnerException` is Claude's decision under the user's pick on the review page (2026-11-04, item prov-10), "silent states only with my OK". Separate steps written in the spelling that holds then, the ids (which the same answer kept), the design and the wording are Claude's. |
+| 2026-11-22 | MC-4, MC-5 | MC-1's contract (5.20.19 item 1), with stage-labelled additions in its text: MA3 admits, from MC-5, `class T&` parameters and `Nullable` of an enum as a parameter, and every other byref and generic instantiation stays refused; MS4 gains, from MC-4, the optional ticket parameter (`intptr_t *`, in today's spelling, 5.20.17 ME9) after the `int *`; MS5 gains the second trailing row (`intptr_t *`, `exc`); MX2 gains the ticket store, which replaces popping the exception when the ticket parameter is there; 5.20.7 gains MK8 (MC-4 binds nothing new and `isValidManagedCall` takes `exc`; MC-5's forms bind through MK1 with MK2's and MK3's checks); 5.20.14's 'Spans and byrefs' and 'Generics' name MC-5's forms as brought forward; MA5 and MS6 stay as they are (type-only filters, catch-alls refused); MR1, MR4, ML1 and ML2 carry `exc`; 5.20.3's table gains MC-4's and MC-5's texts with their milestone texts. | The user's picks in the portable I/O walkthrough (chat, 2026-11-22): "(a) Ticket" (~08:25 CST; the caught exception as a ticket), "(a) Ref parameters" (~08:29 CST; `class T&` parameters, in MB1's ticket form, Claude's design) and "(a) Nullable in step" (~08:30 CST; `Nullable` of an enum as a parameter); Claude's, in 5.20.12's form. |
+| 2026-11-22 | MC-4, MC-5 | 5.13.5 (5.20.19 item 2): (1) a table row each for MC-4 and MC-5 with their upstream files, manifest blocks and `fork-only` lines (MC-4: new hunks in MC-1's hooked `DiagnosticSemaKinds.td` and `AttrDocs.td`, and the files its spelling needs; MC-5: the files its text names); (2) the closing sentence "No Phase 3 milestone edits `Attr.td`, an IR intrinsic, `RuntimeLibcalls.td`, `CallingConv.h` or a clang diagnostic group" needs no exemption for them: their Sema texts go into MS7's `err_msil_*` block with no diagnostic group, and in today's spelling they add no attribute record; (3) an `Attr.td` change that the managed-call spelling of their time needs comes with its own exemption row, in the form of the 2026-11-21 row for R-a and R-a2, which also covers section 7's sentence "Phase 3 needs none". A new Sema text recompiles M26.g's measured class of a new clang diagnostic, 1,081 objects, about 45 minutes at four jobs (R-a.a's Rebuild cost). | Claude's; the 2026-11-21 row's form. |
+| 2026-11-22 | MC-4, MC-5 | Contract rows (5.20.19 items 3-6): 5.13.4 and L7, MC-4's row from 5.20.20 (no new file, no hot file) and MC-5's from its text; 5.15.11 and 5.15.12, the rows "Exception tickets in managed calls (MC-4)" and "Class byrefs and `Nullable` enums in managed calls (MC-5)" (until MC-4 a ticket parameter is T-M4's wrong count; until MC-5 a byref or a `Nullable` in a signature is T-M2; from each step, its rules; the portable column reads the same); 5.17.4 and 5.17.13, no new directory (`M3/13-managed-calls` and `Portable/02-managed-calls`, hand-written expected files under MC-1's reason, per-OS files where a member's values differ by OS). Item 7's edits (5.18.9's row for MC-4 and MC-5; 5.19.15's gates, which follow MC-1's rule; 5.19.17's **From MC-4** and **From MC-5** items, the ticket for P-2's primitives and the two forms for P-5a and P-5b) are written in place by the same commit. | Claude's, in 5.20.12's form. |
 
 ## Appendix A. Review dispositions (plan v1 -> v2)
 
