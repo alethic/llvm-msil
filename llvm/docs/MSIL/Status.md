@@ -3898,8 +3898,9 @@ module without a reference to the `setjmp` family is left untouched and keeps it
   call that has `returns_twice` on its call site alone (clang emits one after a redeclaration
   that adds the attribute to a function already called, and through an alias declared
   `returns_twice`), which P8 compiles as a plain call with no diagnostic: a silent state from
-  before R-a that has no OK of the user's yet, which section 12's row 'EH input (EH-0: P8 and
-  a call that is `returns_twice` on its call site alone)', 2026-11-22, hands to EH-0; a
+  before R-a that stays, with the user's OK ("Choice a", 2026-11-22), until EH-0 refuses it,
+  as section 12's rows 'EH input (EH-0: P8 and a call that is `returns_twice` on its call site
+  alone)' and 'P8's silent plain call OK'd until EH-0', both 2026-11-22, say; a
   variadic declaration of a `setjmp` name without a fixed buffer parameter (of `sigsetjmp` or
   `__sigsetjmp`, also without a fixed savemask) or of a `longjmp` name without a fixed buffer
   or value parameter, `a variadic declaration of '<name>' is not supported for MSIL; declare it
