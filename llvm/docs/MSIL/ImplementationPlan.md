@@ -17193,6 +17193,427 @@ step, its packages start once that run has ended, as FX-1's did; if it is EH-0, 
 amended (exception-model steps EH-0 to EH-3)' says, and its build waits for the run (5.17.11). A failure in the run
 becomes a fix package of the next step through a section 12 row.
 
+### FX-3. %L in formats built at run time: msil-ld's format wrappers
+
+**Goal.** On the Linux triples the C library's `long double` is 16 bytes (the x87 format on x86_64, binary128 on
+aarch64) and MSIL's is the 8-byte `double` (Status.md section 3), so a `%L` conversion in a format built at run time
+makes `printf` read and `scanf` store 16 bytes where MSIL passed or owns 8 (Status.md section 2, M26's '`%L` formats';
+item (6) of the section 12 row 'Silent states with the user's OK' of 2026-11-21). FX-3 ends that state wherever
+`msil-ld` links an image: on the triples whose native `long double` is wider and whose C runtime is glibc or musl,
+`msil-ld` routes the C library's `printf` and `scanf` functions, their `va_list` variants and the other format
+functions of its glibc and musl variant tables to wrappers in the helper archive (new link-time rule 7 of 5.15.2,
+below), which read the `L` conversions of a format as `double`s and then call the C library. The step is the third fix
+step that the approved row 'Program order amended (exception-model steps EH-0 to EH-3)' sketches (FX-3's placement row
+places it until that row applies): Claude's decision, forced by
+the user's pick on the review page (2026-11-04, item prov-10), "silent states only with my OK", and kept in addition to
+the later native-width `long double` of the user's prov-1 pick ("Also plan a native-width long double as a later
+fidelity feature", review page, 2026-11-04) by the user's "A" (chat, 2026-11-23 00:49 CST). IL text follows the user's
+answer to FX3-Q1, "(a) Warn" (chat, 2026-11-23 17:24 CST): `msil-ld --lto-emit-asm` keeps calling the C library
+directly and warns once per such link (T-FX3-2).
+
+After FX-3, on x86_64 linux-gnu, x86_64 linux-musl, aarch64 linux-gnu and aarch64 linux-musl (the triples of
+`hasWideNativeLongDouble` whose `getCRuntime` is Glibc or Musl): a `%L` (or glibc's `ll` or `q`) before a floating
+conversion in a format built at run time is read and stored as an 8-byte `double` in every image `msil-ld` writes
+(from CIL objects, LTO or ThinLTO; EXEs and `-shared` libraries alike), which FX-3's tests run on x86_64 linux-gnu
+through objects and LTO, in EXEs and in a `-shared` library, and check by linking only for ThinLTO and on the other
+three triples, which no test runs; the address of a routed function is its wrapper's, so C calls `printf` and its kin
+through pointers (c-testsuite's `00189` passes on linux-gnu); c-testsuite's `00204` is a plain entry on linux-gnu; a
+link that calls a routed function needs the helper archive (T-FX3-1 without it), which `build-builtins.py` builds by
+default only for x86_64 linux-gnu, with `--all` for x86_64 linux-musl and aarch64 linux-gnu, and for aarch64
+linux-musl only when `--triple` names it (untested); clang's two `%L` checks of literal formats (M26) fire on these
+triples only for a function declared with an explicit `import_module`, the one form no wrapper reaches in an image;
+and x86_64 windows-gnu needs no wrapper, by FX-3.a's probe (below), so the checks stop firing there.
+
+What stays, recorded (Claude's reading of 5.15.1 rule 1 as the section 12 row '5.15.1 rule 1 amended (workarounds and
+silent states)' amends it): `--lto-emit-asm` text calls the C library directly with T-FX3-2, a recorded temporary
+state in which a `%L` is wrong in any format, since clang's checks no longer fire for these functions; its right
+answer is the wrappers in the text or the text way's removal, which the user put off to the end of the project ("For
+now, let's keep the text mode.", chat, 2026-11-17 ~07:48 CST). And four silent states with the user's OK, the OK of
+FX-3's text approval, whose message named them: a function declared with an explicit import module reads `%L` as
+the C library does, in every output; on aarch64 Linux, which no test runs, the seven glibc format functions without a
+`va_list` form (`error`, `error_at_line`, `argp_error`, `argp_failure`, `__asprintf`, `strfmon`, `strfmon_l`)
+receive a `long double` argument as a `double` (5.15.2's fixed-arity rule passes floating-point arguments unchanged
+there), so a `%L` in their format reads binary128, and for the five that glibc declares with a `printf` format
+attribute clang's literal check no longer fires (on x86_64 Linux their floating-point arguments are compile errors
+already); a native function outside the C library's variant tables that reads a `printf` or `scanf` format,
+such as another native library's own format function that takes a `va_list`, reads `%L` as that library does, and
+clang's literal checks no longer fire for it on these triples or on x86_64 windows-gnu; and a link with the hidden
+test switch `--no-msil-format-wrappers` (below), which O3's and O4's comparison links pass, binds the C library's
+format functions natively, as before FX-3, so a `%L` in their format reads 16 bytes there, which clang's narrowed
+checks do not report. Not in FX-3: the
+native-width `long double` (prov-1's later feature, no step); wrappers in IL text (FX3-Q1 (c), not picked); M26's
+fixed-arity list and the seven functions above; other native libraries' format functions; any change on
+windows-msvc, whose UCRT reads `%L` as `double`; `msil64-unknown-dotnet`, whose C library is MSIL code with MSIL's
+`long double`.
+
+**Depends on:** R-a's commit `65f17bc249bc`; the tools commit that teaches `plan-check.py` the milestone ids `FX-<n>` and `EH-<n>`, with a self-test case of a milestone in the fix steps' form, its `.0` build step included (one commit, before the first fix-step plan commit); FX-3's plan commit (this text and its section 12 rows);
+and the commit of the step that runs before FX-3 (the fix steps run one at a time; Claude's run order is FX-2,
+FX-1, FX-3, FX-4). FX-3's packages start once that step's post-commit run has ended (Claude's scheduling for the
+fix steps, stricter than 5.17.11, which lets the next milestone's packages write code during that run), and FX-3's
+commit, `[MSIL] FX-3: %L in formats built at run time: msil-ld's format wrappers` (section 1 step 8), carries that
+run's line in its body (5.17.11). Contract sections it relies on: 5.9.6, 5.10.7, 5.12.6, 5.14.1-5.14.3, 5.15.1, 5.15.2, 5.17.7,
+5.17.13 and 5.17.14, as the section 12 rows for FX-3 amend them. Every WP reads its Reads entries and the section 12
+rows for FX-3.
+
+**Header changes** (all lld's, built once by FX-3.0 after the implement packages; no LLVM, CLI or clang header
+changes): `lld/MSIL/Config.h` (most lldMSIL objects), `lld/MSIL/NativeLibraries.h`, `lld/MSIL/Variadics.h` and
+`lld/MSIL/SymbolTable.h` (their includers in lldMSIL), the new `lld/MSIL/FormatWrappers.h`, and `lld/MSIL/Options.td`
+(lld's generated option table: its driver object). A later package that needs another header edit stops and reports
+(section 1.2).
+
+Roles (5.13.4): FX-3.a `FX-3/builtins` (root; `sources.txt`), FX-3.b `FX-3/lld` (root), FX-3.c `FX-3/clang-format`,
+FX-3.d `FX-3/harness`, FX-3.e `FX-3/clang-tests`, FX-3.f `FX-3/lld-tests` (all of `lld/test/MSIL/`, L7), FX-3.g
+`FX-3/exec-tests` (with the harness self-tests, 5.17.1), FX-3.h `FX-3/docs`; FX-3.0 is the build agent's step. Hot
+files: `NativeLibraries.{h,cpp}` to `FX-3/lld` (hooks only, L2); `sources.txt` to `FX-3/builtins`; `MSILPrepareIR.cpp`,
+`MSILAsmPrinter.*`, `Trailer.*`, `BCLMembers.def` and `TrailerDefs.def` untouched.
+
+Shared texts (written verbatim by the WPs, pinned whole by FX-3's tests; no phase or milestone number, 5.15.1 rule 2):
+- T-FX3-1 (`msil-ld` error, an image link that routes a name whose wrapper no input defines; once per name, with
+  `>>> referenced by` lines, as `reportUnresolved` gives them), when no helper archive is linked: `native function
+  '<name>' (<module>) reads the 'L' conversions of its format as a 16-byte native 'long double', but 'long double' is
+  an 8-byte 'double' on this MSIL target; msil-ld calls it through the toolchain's wrapper '<wrapper>': link the
+  toolchain's helper archive clang_rt.builtins`; and when one is (`isHelperArchiveLinked`, which tells the two cases
+  apart for compiler runtime helpers today), its second form: `native function '<name>' (<module>) reads the 'L'
+  conversions of its format as a 16-byte native 'long double', but 'long double' is an 8-byte 'double' on this MSIL
+  target; msil-ld calls it through the toolchain's wrapper '<wrapper>', which the linked helper archive
+  clang_rt.builtins does not define: rebuild the archive with this toolchain`
+- T-FX3-2 (`msil-ld` warning, `--lto-emit-asm` only, once per link, at the first native binding of a name that rule 7
+  would route): `--lto-emit-asm text calls the C library's format functions directly, '<name>' (<module>) among them:
+  in any format, their 'L' conversions read or store a 16-byte native 'long double', but 'long double' is an 8-byte
+  'double' on this MSIL target; images that msil-ld writes call these functions through the toolchain's wrappers`
+- The hidden option pair (`Options.td`, `HelpHidden`, default on): `--msil-format-wrappers`, help `Call the C
+  library's printf and scanf functions through the toolchain's wrappers where its 'long double' is wider than MSIL's
+  (default)`; `--no-msil-format-wrappers`, help `Bind the C library's printf and scanf functions natively, without the
+  toolchain's wrappers (for tests)`.
+
+**Rule 7 of 5.15.2 (link time; this text pins it, the 'Contract rows' row adds it to 5.15.2).** On a codegen triple for
+which `hasWideNativeLongDouble` holds and `getCRuntime` is Glibc or Musl, in a link that binds late (not
+`--interface-only`) and writes an image, without `--no-msil-format-wrappers`: a symbol that an object or LTO object
+references, that is still undefined after every input, archive member and LTO object is loaded, whose declaration
+carries no explicit `import_module`, whose name is not a toolchain name (N3), and whose entry (its `import_name`, else
+its name) is a function of the C runtime's variant table (`lld/MSIL/Variadics.cpp`, either column: Glibc 44 pairs, Musl
+21) or, for Glibc, one of `_IO_vfprintf`, `_IO_vsprintf`, `__vsnprintf`, `__vfscanf` and `__vsscanf` (glibc's exported
+aliases of table variants), resolves to the helper archive's definition `__msil_ldfmt_<entry>`, provided late binding
+would otherwise bind it natively (5.9.6: no native object on the command line defines it, no toolchain-built library
+exports it, and a native library defines the entry under the lookup late binding makes). A VARARG reference then binds
+to a variadic wrapper by rule 1 (equal FixedParams and IL signature), and a reference of a variant to its `va_list`
+wrapper; a program's own definition of a name, an explicit import and a toolchain name are never routed. Routes are
+taken in symbol-table order, so the output stays deterministic. A routed name whose wrapper no input defines is T-FX3-1
+for its live references: its first form in a link without the helper archive, its second in a link whose helper archive
+lacks the wrapper (one built before FX-3). Under `--lto-emit-asm` nothing is routed; there, on the same triples and
+without `--no-msil-format-wrappers`, the first native binding of a name that the rule would route prints T-FX3-2, and
+with that option nothing is printed. On the triples of rule 7 rule 4 does not arise for a routed function: its address
+is its wrapper's. On every other triple (windows-msvc, windows-gnu, `msil64-unknown-dotnet`) and with
+`--no-msil-format-wrappers`, rules 1-6 bind exactly as before FX-3.
+
+**Work packages**
+
+#### FX-3.a The probe and the wrappers: `msil_ldfmt.c` (implement, ~700-1,100 lines)
+
+- Owned files: `msil/lib/builtins/msil_ldfmt.c`, `msil/lib/builtins/sources.txt`
+- Depends on: nothing
+- Reads: this plan sections 5.10.7, 5.14.1-5.14.3, 5.15.1 (rule 4) and 5.15.2, this milestone's texts and the section 12 rows for FX-3; msil/lib/builtins/msil_longdouble.c (its header, the MSIL_MEMBER blocks); msil/lib/builtins/msil_ucrt_stdio.c (its typedefs and declarations without system headers); msil/lib/builtins/sources.txt (the msil_longdouble.c line and its comment); msil/utils/build/build-builtins.py (CFLAGS, MEMBER_FLAG); lld/MSIL/Variadics.cpp (glibcVariants, isGlibcOnlyName); llvm/docs/MSIL/recon/p3/fp-helpers.md (the measured %L failures); llvm/docs/MSIL/recon/p3/decision-brief.md (R15 option (iii))
+- Provides: (1) first, before any code, the windows-gnu probe, with HEAD's tools on the Windows host, outputs in its
+  scratch folder: an `x86_64-pc-windows-msvc-msil` program that calls `msvcrt.dll`'s `vsprintf` (an explicit import,
+  with a `va_list` that the program builds) and `sscanf` (an explicit variadic import, called with fixed arity, 5.15.2)
+  with formats built at run time, `%.3Lf|%d` of (2.5, 7) and `%Lf %d` of `2.5 7` into a `long double` between guard
+  bytes, and the same through the UCRT's `snprintf` and `sscanf`; the hand-over records whether both C runtimes read
+  and store `%L` as an 8-byte `double` (Claude's expectation, from MSVC's 8-byte `long double`). If either does not,
+  FX-3.a stops and reports (section 1.2): windows-gnu would then need wrappers, and its scanf family has no `va_list`
+  form (`lld/MSIL/Variadics.cpp`'s msvcrt list), so the orchestrator brings a revised text to the user. (2)
+  `msil/lib/builtins/msil_ldfmt.c` (K1, 5.14.3 A8: the LLVM file header, no system header, `__msil_*` names only, hidden
+  by A2's flags), one function per member (`#if MSIL_MEMBER(<name>)`):
+  - `__msil_ldfmt_rewrite(const char *fmt, int scanf_grammar, char *buf, __SIZE_TYPE__ cap, char **heap)` and its
+    wide twin `__msil_ldfmt_wrewrite` (elements of `__WCHAR_TYPE__`), which return `fmt` itself when no conversion
+    needs a change, else a rewritten copy in `buf` when it fits `cap` elements, else in `*heap` from `malloc` (the
+    caller frees it), else a null pointer. The rewrite: inside each conversion specification, a length modifier `L`,
+    `ll` or `q` (glibc reads all three as `long double` before a floating conversion) before one of `a A e E f F g G`
+    is dropped in a `printf`-family format and becomes `l` in a `scanf`-family format; every other character is
+    copied, so `%L` before an integer conversion (glibc's `long long`) and every literal byte stay. The grammar is
+    glibc's: `%%`; for `printf`, `%`, an optional `<n>$`, the flags `-+ #0'I`, a width (digits, `*` or `*<m>$`), a
+    precision (`.` and digits, `*` or `*<m>$`), length modifiers (`hh h l ll L q j z Z t`, C23's `w<N>` and
+    `wf<N>`, whose `f` is no conversion) and the conversion; for `scanf`, `%`, an optional `<n>$`, the flags `*`, `'`
+    and `I`, a width, `m` (and the GNU `a` before `s`, `S` or `[` outside the ISO C forms), length modifiers and the
+    conversion, with a `[`
+    set skipped to its closing `]` (a `]` right after `[` or `[^` belongs to the set). An incomplete specification at
+    the end of the format is copied unchanged.
+  - For each routed name of rule 7 (Glibc 93: the 44 variadic names and 44 variants of `glibcVariants` and the five
+    aliases; Musl uses 42 of them, the archive holding all): `__msil_ldfmt_<name>`. A `va_list` form takes the C
+    function's parameters, rewrites the format through a 256-element local buffer, calls the C library's function
+    through the declaration `__msil_ldfmt_native_<name>` with `import_name("<name>")` (bound natively by 5.14.2's N3
+    row as amended), frees a heap copy and returns the result unchanged. A variadic form (`__msil_ldfmt_printf(const
+    char *, ...)`) calls its variant's wrapper between `__builtin_va_start` and `__builtin_va_end`. No wrapper keeps
+    state; `_chk` flags, `obstack` and `FILE` pointers, `syslog` priorities and `err` statuses pass through.
+  - When the copy cannot be allocated, a wrapper never calls the C library with the unchanged format: one that returns
+    a count returns -1 with `errno` set to `ENOMEM` (`*__errno_location() = 12`, glibc's and musl's value), one that
+    returns nothing or never returns (`vsyslog`, `__vsyslog_chk`, `vwarn`, `vwarnx`, `verr`, `verrx` and their
+    variadic forms) calls `abort`.
+  (3) `sources.txt`: `msil/lib/builtins/msil_ldfmt.c *-linux-*`, after `msil_longdouble.c`'s line, with a comment
+  naming rule 7.
+
+The probe needs no FX-3 code; FX-3.g turns it into `05-variadics/msvcrt-ldfmt.test`. Checks: the C file compiled with
+A2's command for `x86_64-unknown-linux-gnu-msil` (HEAD's clang) in its scratch folder; the two rewriters, built
+natively for Linux with the native oracle's compiler and sysroot (E7h) and run in WSL, against a table of formats
+whose rewritten form, given `double` arguments, must print the same text and store the same bytes under glibc as the
+original format given native `long double` arguments; `python msil/utils/build/build-builtins.py --all --out D:/llvm-msil-scratch/milestones/FX-3/FX-3.a/builtins-all`
+with HEAD's clang (G1b's compile on the six triples; the member lists in the hand-over).
+
+#### FX-3.b msil-ld: rule 7, the N3 import-name rule and T-FX3-1, T-FX3-2 (implement, ~250-450 lines)
+
+- Owned files: `lld/MSIL/FormatWrappers.h`, `lld/MSIL/FormatWrappers.cpp`, `lld/MSIL/Variadics.h`, `lld/MSIL/Variadics.cpp`, `lld/MSIL/NativeLibraries.h`, `lld/MSIL/NativeLibraries.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`, `lld/MSIL/LTO.cpp`, `lld/MSIL/Driver.cpp`, `lld/MSIL/Options.td`, `lld/MSIL/Config.h`, `lld/MSIL/CMakeLists.txt`
+- Depends on: nothing
+- Reads: this plan sections 5.9.5, 5.9.6, 5.9.15, 5.10.7, 5.10.10, 5.10.14, 5.12.6, 5.13.1, 5.13.2, 5.14.2 and 5.15.2, this milestone's texts and the section 12 rows for FX-3; lld/MSIL/Driver.cpp (applyAlternateNames, the sequence after compileBitcodeFiles, handleForcedExports); lld/MSIL/SymbolTable.cpp (bindObjectSymbol, bindLateSymbols, resolveAlternateNames, reportUnresolved); lld/MSIL/LTO.cpp (annotateImports); lld/MSIL/NativeLibraries.cpp (mayBindNatively, hasWideNativeLongDouble, getLongDoubleRejectionText); lld/MSIL/NativeLibraries.h (the name-class predicates); lld/MSIL/Variadics.cpp (glibcVariants, isGlibcOnlyName, getCRuntime, getVaListVariant, bindVaListVariant); lld/MSIL/Signatures.cpp (CallBinder::checkNativeReferences); lld/MSIL/Options.td (gc_sections, msil_type_member_limit); lld/MSIL/Config.h
+- Provides: `lld/MSIL/FormatWrappers.{h,cpp}` (L2: the logic; hooks elsewhere): `bool hasFormatWrappers(const Ctx &)`
+  (rule 7's triple, link and option test); `std::optional<std::string> getFormatWrapper(StringRef entry, CRuntime rt)`
+  (`__msil_ldfmt_<entry>` for rule 7's names, from a new `Variadics.h` accessor over the variant tables, so the lists
+  cannot drift; the five Glibc aliases in `FormatWrappers.cpp`, sorted and checked at first use like the tables);
+  `void applyFormatWrappers()` (the route of each qualifying symbol into `ctx.formatWrapperRoutes`, and its wrapper
+  added as an undefined reference whose `--why-extract` reason is `<format wrapper of '<name>'>`, so the member loads);
+  `void resolveFormatWrappers()` (each routed symbol pointed at its wrapper's definition, as `resolveAlternateNames`
+  does; T-FX3-1 where the wrapper stayed undefined, in its second form when `isHelperArchiveLinked`, which
+  `NativeLibraries.h` then declares (a hook), finds a helper archive in the link); hooks: in `Driver.cpp`,
+  `applyFormatWrappers` and `addPendingFiles` after the LTO objects and their archive members are loaded and before
+  `reportMissingExports` (object-producing links only), `resolveFormatWrappers` beside `resolveAlternateNames`, and the
+  option pair into `ctx.arg.formatWrappers` (`Config.h`, with the routes); in `SymbolTable.cpp`, `bindLateSymbols` skips
+  routed symbols, and `bindObjectSymbol` asks `mayBindNativelyByImportName`; in `NativeLibraries.{h,cpp}` (hot: hooks
+  only), `bool mayBindNativelyByImportName(StringRef name, StringRef importName, const Ctx &)`, true when both names may
+  bind natively, or when `name` is a toolchain name (N3), `importName` is not empty and may bind natively (5.14.2's N3
+  row as amended), with the same rule in `LTO.cpp`'s `annotateImports`; in `LTO.cpp`, T-FX3-2 once per link. Not
+  changed: `--print-imports`' form (the wrappers' native calls appear as
+  `__msil_ldfmt_native_vprintf -> libc.so.6!vprintf [function, GLIBC_2.2.5]`; a routed name is no import),
+  `Signatures.cpp`, the variant tables' contents, rules 1-6 on other triples.
+
+Checks: `msil-syntax.ps1` on its files; a private `lld` (HEAD's other libraries) linking, in its scratch folder, a
+`printf` and a `__isoc99_sscanf` call for `x86_64-unknown-linux-gnu-msil` against `variadic-tables.test`'s glibc
+stand-in and a two-member stand-in archive built with llc from IR that defines `__msil_ldfmt_printf` and
+`__msil_ldfmt___isoc99_sscanf`; the same link without the archive (T-FX3-1) and with a one-member stand-in
+`libclang_rt.builtins.a` that lacks `__msil_ldfmt_printf` (T-FX3-1's second form), with `--no-msil-format-wrappers`
+(today's `printf -> libc.so.6!vprintf`) and under `--lto-emit-asm` (T-FX3-2, no member loaded).
+
+#### FX-3.c clang: the `%L` checks on the wrapped triples (implement, ~20-60 lines)
+
+- Owned files: `clang/lib/Sema/SemaChecking.cpp`
+- Depends on: FX-3.a
+- Reads: this plan sections 5.10.7, 5.13.5 and 5.15.2 ('`long double` formats (R15)'), this milestone's texts and the section 12 rows for FX-3; clang/lib/Sema/SemaChecking.cpp (getMSILNativeLongDoubleSize, CheckPrintfHandler::HandlePrintfSpecifier, CheckScanfHandler::HandleScanfSpecifier, checkFormatStringExpr); clang/include/clang/Basic/DiagnosticSemaKinds.td (warn_msil_printf_long_double, warn_msil_scanf_long_double); clang/include/clang/Basic/Attr.td (WebAssemblyImportModule); clang/test/Sema/msil-long-double-format.c
+- Provides: on the triples of rule 7 (clang's test: Linux x86_64 or AArch64), the two checks fire only when the called
+  function's declaration carries `import_module` (`WebAssemblyImportModuleAttr`), for its variadic and `va_list`
+  forms alike; on x86_64 windows-gnu `getMSILNativeLongDoubleSize` returns 0, by FX-3.a's probe; the texts and the
+  group `Format` stay as M26 built them, so `DiagnosticSemaKinds.td` is not touched (no diagnostic rebuild).
+
+An upstream file with M26's `hook` block: the hunk stays a hook (5.6.1). Checks: `msil-syntax.ps1` on the file; the
+rule itself is checked by FX-3.e with FX-3.0's build.
+
+#### FX-3.0 Build after the implement packages (build agent) (infra, no source changes)
+
+- Owned files: (none; build agent, writes only the build tree and scratch folders)
+- Depends on: FX-3.a, FX-3.b, FX-3.c
+- Reads: this plan sections 4, 5.14.3 (A10) and 11 ('Baselines before the build'), this milestone's Header changes, Rebuild cost and gate steps 1, 9, 21 and 25; msil/utils/build/msil-build.ps1; msil/utils/ci/build-targets.txt; msil/utils/il-snapshot.py; msil/utils/build/build-builtins.py
+- Provides: the IL baseline `D:/llvm-msil-scratch/milestones/FX-3/gate/il-baseline`, written with HEAD's build before
+  FX-3's build (R-a.0's step 0 (a) with FX-3's paths, and its rule for a repeated FX-3.0); step 0 (b)'s result; the
+  shared build with every implement package's change, and the helper archives rebuilt with it
+  (`build-builtins.py --build-dir D:/llvm-msil/build --jobs 8`); the rebuild class (objects at eight jobs) in the
+  hand-over; step 3's sample result
+
+Executed by the build agent, which edits no tracked file and first waits for a running post-commit run, as R-a.0 does.
+Step 0: (a) the IL baseline; (b) with HEAD's build, before FX-3's build, gate step 21's lit command over
+`msil/test/M3/05-variadics` as HEAD has it (no gate step or leg has run O4 on the Linux triple over that directory),
+with each failing test in the hand-over and whether only its O4 comparison failed. Step 1:
+`pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard -Jobs 8`. Step 2:
+`python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 8`. Step 3, the first
+joint run of FX-3.a and FX-3.b: in its scratch folder, `clang --target=x86_64-unknown-linux-gnu-msil` links a program
+whose format, built at run time, prints `%Lf` of 2.5, with `-Wl,--print-imports`: the listing names
+`__msil_ldfmt_native_vprintf -> libc.so.6!vprintf` and no `printf ->` line. A failure is reported for the implementation
+triage; this step fixes nothing.
+
+#### FX-3.d Harness: msil-prog's equivalence links and the hook block (infra, ~40-120 lines)
+
+- Owned files: `msil/utils/msil-prog.py`, `msil/utils/upstream-hooks.txt`
+- Depends on: FX-3.0
+- Reads: this plan sections 5.12.4, 5.12.6, 5.13.5, 5.17.1 and 5.17.14, this milestone's texts and the section 12 rows for FX-3; msil/utils/msil-prog.py (the --equiv-out and --also-il links); msil/utils/upstream-hooks.txt (SemaChecking.cpp's block); msil/utils/equiv-allowed.txt
+- Provides: `msil-prog.py` passes `-Wl,--no-msil-format-wrappers` to O3's and O4's equivalence link (`--equiv-out`) and
+  to O4's text link (`--also-il`), on every triple (a no-op off rule 7's triples), with its docstring's line; the `il`
+  output (`--link-output il`) passes nothing, so it prints T-FX3-2 as a user's link does; the
+  `SemaChecking.cpp` block of `upstream-hooks.txt` updated if `check-upstream-hooks.py --check` asks for it
+
+Checks: `check-upstream-hooks.py --check`; `msil-prog.py`'s own self-test options as its docstring lists them; the
+self-tests are FX-3.g's.
+
+#### FX-3.e clang tests (test, ~80-200 lines)
+
+- Owned files: `clang/test/Sema/msil-long-double-format.c`
+- Depends on: FX-3.c, FX-3.0
+- Reads: this plan section 5.15.2 ('`long double` formats (R15)'), this milestone's texts, FX-3.c's Provides line and the section 12 rows for FX-3 (among them the move of M33.g's `va_list` cases); clang/test/Sema/msil-long-double-format.c
+- Provides: on `x86_64-unknown-linux-gnu-msil`, `x86_64-unknown-linux-musl-msil`, `aarch64-unknown-linux-gnu-msil` and
+  `aarch64-unknown-linux-musl-msil`, literal `%Lf` in `printf`, `fprintf`, `scanf` and `sscanf` and in `vprintf`,
+  `vfprintf`, `vsnprintf`, `vscanf` and `vsscanf` (declared with `format(printf, n, 0)` or `format(scanf, n, 0)`) gets
+  no diagnostic for plain declarations, and the printf warning and the scanf error (`-Wno-error=format`: a warning) for
+  the same declarations with `import_module`; on `x86_64-w64-windows-gnu-msil`, the windows-msvc triples and under
+  `-Wno-format`, nothing; both texts pinned whole
+
+From the specification only. Checks: the test run by hand with FX-3.0's `clang` and `FileCheck`.
+
+#### FX-3.f msil-ld tests (test, ~400-800 lines)
+
+- Owned files: `lld/test/MSIL/`
+- Depends on: FX-3.b, FX-3.0
+- Reads: this plan sections 5.10.7, 5.10.14, 5.14.2, 5.15.2 and 5.17.18, this milestone's texts, FX-3.b's Provides line and the section 12 rows for FX-3; lld/test/MSIL/variadic-tables.test (its gen.py and stand-ins); lld/test/MSIL/native-variadic.test; lld/test/MSIL/stock-bitcode.test (a warning pinned whole); lld/test/MSIL/libcall.test; lld/test/MSIL/obj-pinvoke.test; lld/test/MSIL/obj-signatures.test; lld/test/MSIL/undefined.test
+- Provides: `format-wrappers.test`, with a stand-in wrapper archive (llc objects of IR that defines the wrappers it
+  needs, `llvm-ar`) and `variadic-tables.test`'s stand-in C libraries: on `x86_64-unknown-linux-gnu-msil`, a VARARG
+  `printf`, a direct `vprintf`, `__printf_chk`, `__isoc99_sscanf`, `syslog` and `_IO_vfprintf` route (`--print-imports`
+  lists only the wrappers' native calls; `--why-extract` names the routed function), an `import_name`-only declaration
+  of `printf` routes by its entry, a program's own `vprintf` stays its own while its `printf` routes, an explicit
+  `import_module` of `vprintf` binds as given, a toolchain name is never routed, `&printf` is the wrapper's address
+  (rule 4's error gone), T-FX3-1 in both forms (no archive; a stand-in `libclang_rt.builtins.a` without the wrapper),
+  `--no-msil-format-wrappers` gives today's bindings, objects, LTO, ThinLTO and `-shared` alike; musl: its 42 names
+  route and `__isoc99_*` is no route; `aarch64-unknown-linux-gnu-msil` and `aarch64-unknown-linux-musl-msil` (an
+  `EM_AARCH64` stand-in of each C library) link-only, with their routes and T-FX3-1; windows-msvc, windows-gnu and
+  `msil64-unknown-dotnet`: no route; `--lto-emit-asm` on linux-gnu: no member loaded and T-FX3-2 once per link, none
+  with `--no-msil-format-wrappers`; the N3 import-name rule (a `__msil_*` declaration with `import_name` binds natively;
+  one without stays undefined with N3's line); and the tests that link a routed name on a Linux triple without a wrapper
+  archive (at least `variadic-tables.test`, `native-variadic.test`, `libcall.test`, `obj-pinvoke.test`,
+  `obj-signatures.test`, `undefined.test`) pass `--no-msil-format-wrappers` where they test another rule, with a
+  comment, or pin the new behaviour
+
+L7: the whole directory. Checks: the tests run by hand with FX-3.0's `msil-ld`, also with `RUN_LLD_MAIN_TWICE=1`.
+
+#### FX-3.g Execution tests: msil/test/M3/05-variadics, c-testsuite's list and the harness self-tests (test, ~900-1,600 lines)
+
+- Owned files: `msil/test/M3/05-variadics/`, `msil/test/Programs/c-testsuite/libc.txt`, `msil/test/harness/Inputs/ctest-lists.py`, `msil/test/harness/ctest-lists.test`, `msil/test/harness/msil-prog-format-wrappers.test`, `msil/utils/equiv-allowed.txt`
+- Depends on: FX-3.a, FX-3.b, FX-3.c, FX-3.0, FX-3.d
+- Reads: this plan sections 5.5, 5.12.6, 5.15.2, 5.17.4, 5.17.13 and 5.17.14, this milestone's texts, the Provides lines of FX-3.a-FX-3.d and the section 12 rows for FX-3; msil/test/M3/05-variadics/natives.test; msil/test/M3/05-variadics/native-errors.test; msil/test/M3/05-variadics/ucrt-noinc.test; msil/test/Programs/c-testsuite/libc.txt; msil/test/harness/ctest-lists.test; msil/test/harness/Inputs/ctest-lists.py (DIAG_LEFT, the modifier table and its checks, its docstring); msil/test/Programs/zlib-full/fortify.test (the _FORTIFY_SOURCE flags and the va_list _chk entries clang reaches); msil/test/M3/05-variadics/shared-variadic.test (the -shared library form); msil/utils/equiv-allowed.txt (its A9 and -shared skip lines); FX-3.0's hand-over (step 0 (b))
+- Provides: in `05-variadics`, split-file `%{msil_prog}` tests whose formats are built at run time (from pieces through
+  a `volatile` index, so clang sees no literal), with values a `double` holds exactly and precisions whose text is the
+  same for a native `long double`, so `.expected` (Windows DLL-CRT oracle) and `.linux.expected` (E7h) are ordinary
+  transcripts; `%La` and precisions past a `double`'s are checked with FileCheck against the `double`'s own text:
+  `ldfmt-printf.test` (`printf`, `fprintf`, `sprintf`, `snprintf` and the program's own variadic function over
+  `vprintf`, `vfprintf`, `vsnprintf`; `%Lf`, `%.3Le`, `%10.4Lg`, `%-12.2Lf`, `%+Lf`, `%*.*Lf`, `%Ld` unchanged, `%%Lf`
+  unchanged), `ldfmt-glibc.test` (Linux: `asprintf`, `dprintf` and `_IO_vfprintf` (declared by the test); `%1$Lf`,
+  `%llf` and `%qf`; not `obstack_printf`, whose `obstack_init` hands `malloc` and `free` to native code, which is not
+  supported before M28; `format-wrappers.test` pins its route), `ldfmt-scanf.test` (`sscanf`, `vsscanf`, `fscanf` of a
+  file in the run directory; `%Lf`, `%Le`, `%Lg`, `%La`, `%3Lf`, `%*Lf`, `%Lf%n`, scan sets `%[L]` and `%[^L]` beside
+  `%Lf`, `%Ld`; every target between guard bytes that must stay intact; built with `-std=c17`, which names
+  `__isoc99_sscanf`, and `-std=c23`, which names `__isoc23_sscanf`), `ldfmt-wide.test` (`swprintf`, `vswprintf`,
+  `swscanf`, printed with `%ls`), `ldfmt-chk.test` (Linux, `-O2 -D_FORTIFY_SOURCE=2`: glibc's fortified `printf`,
+  `fprintf`, `sprintf` and `snprintf`, which reach `__vprintf_chk`, `__vfprintf_chk`, `__vsprintf_chk` and
+  `__vsnprintf_chk` with a `va_list`, as `zlib-full/fortify.test` found, and `__printf_chk`, `__sprintf_chk` and
+  `__snprintf_chk` called through the test's own declarations, which reach the variadic wrappers), `ldfmt-err.test`
+  (`warnx`, `vwarnx`, `syslog` with `LOG_PERROR` to stderr, and `errx`'s exit status; Linux, FileCheck of stderr),
+  `ldfmt-addr.test` (`printf` and `fprintf` called through pointers, also from a global initializer as c-testsuite's
+  `00189` does; its O4 on the Linux triple is skipped by a line of `equiv-allowed.txt`, below), `ldfmt-shared.test` (a
+  `-shared` library through `%{msil_shlibs}`, as `shared-variadic.test` builds one, whose exported function prints a
+  run-time `%Lf` format through `snprintf` and `vsnprintf` and reads one with `sscanf`, called by the program;
+  `UNSUPPORTED: msil-link-output=il`), all at -O0 and -O2 on both triples unless marked; `msvcrt-ldfmt.test` (FX-3.a's
+  probe: `msvcrt.dll` through explicit imports and the UCRT; Windows); `native-errors.test`'s address case linked with
+  `-Wl,--no-msil-format-wrappers` (rule 4's text still pinned) and the comments of `natives.test` and
+  `native-errors.test` for the wrappers; `libc.txt`: `00204` and `00189` plain entries, the header comments that name
+  them gone; `ctest-lists.py`: `DIAG_LEFT` empty, the modifier table without `00189` and `00204`, its docstring's `lists` paragraph to match (it names 00189's `diag` entry and 00204's exclusion), the check texts 'no diag entry is left in either list' and 'libc.txt's entries with a modifier are 00214's exclusion and 00212's, 00216's and 00218's native windows-msvc' (the work rows 2026-11-02 'M28.e extended' and the fix-loop rows after it gave both files to M28.k, a test package); `ctest-lists.test`'s comment and checks to match; `msil-prog-format-wrappers.test`
+  (the equivalence and O4 text links pass `-Wl,--no-msil-format-wrappers`, the `il` output does not); in
+  `equiv-allowed.txt`, `skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/05-variadics/ldfmt-addr.test programs that
+  take the address of a C library format function, which msil-ld routes to a helper-archive wrapper, have no
+  --lto-emit-asm text: it links no archive member, so plan 5.15.2 rule 4 refuses the address there (5.14.3
+  A9)` and `skip O4 msil/test/M3/05-variadics/ldfmt-shared.test -shared libraries and links against them have no
+  --lto-emit-asm text`; for an existing test that fails FX-3.0's step 0 (b) only in its O4 comparison, a `skip
+  O4@x86_64-unknown-linux-gnu-msil` line whose reason names the difference, when one of 5.12.6's reasons covers it; a
+  difference that none covers, or any other failure there, is reported (section 1.2)
+
+From the specification only. Checks: each program built and run by hand with FX-3.0's tools on .NET 10 (Windows) and
+WSL .NET 10 (Linux), outputs in its scratch folder; `update-expected.py --check` on `05-variadics` for both OSes.
+
+#### FX-3.h Documentation (docs, ~150-300 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/test/README.md`
+- Depends on: FX-3.a, FX-3.b, FX-3.c, FX-3.0, FX-3.d, FX-3.e, FX-3.f, FX-3.g
+- Reads: this plan section 5.15.2, this milestone's text and the section 12 rows for FX-3; the hand-overs of FX-3.0-FX-3.g
+- Provides: Status.md: a `####` subsection '`%L` in formats built at run time (FX-3)' in section 2's entry 'The fix steps and the temporary warning after R-a (FX-1 to FX-4)' (after R-a's entry, with a `####` subsection per step; the first of the four steps to commit creates it): the wrappers (`__msil_ldfmt_<name>`, rule 7's names and triples), what programs get (run-time `%L` formats, the addresses of routed functions, `--print-imports`' lines, the archive requirement with T-FX3-1's two forms quoted whole), clang's narrowed checks with the windows-gnu probe's result as built, and IL text (T-FX3-2 quoted whole, O3's and O4's links); M26's '`%L` formats (R15)' bullet and M26's `msil-ld` rules 2, 4 and 6 pointing to that subsection; section 3's `long double` row as built, and section 3's opening sentence naming FX-3 among the steps that changed rows; section 1's c-testsuite table and target (`00204` and `00189` plain entries on linux-gnu, 139 of the 140 pairs); in 'Silent states with the user's OK', one sentence after item 6's last, that FX-3 ended the `%L` state in the images `msil-ld` writes, with FX-3's commit and its date, and a new item listing R-FX3-6's four cases; in 'Recorded temporary workarounds', a bullet for R-FX3-7's `--lto-emit-asm` state; GettingStarted.md: the paragraph '**`long double` formats.**' as built, the c-testsuite paragraph without `00204` and `00189` and with the 139 target, and section 7's `lld/test/MSIL` and harness counts (one new test each); in `msil/test/README.md`, the new tests and the self-test, FX-3.g's new tests in the `M3/` count and in its lists of tests with a `.linux.expected` file and of tests without an `.expected` file, a row for each new line of `equiv-allowed.txt` in its table of those lines, and three corrections of the `05-variadics/` row (`ucrt-noinc`
+  links the wrappers on the Linux triple, while its `il` output and O4's links link none; `natives` reaches
+  `dprintf`, `sscanf`, `asprintf` and `syslog` through the wrappers; `native-errors`' address case is linked with
+  `--no-msil-format-wrappers`); the hand-over of FX-3's re-pin rows. Design.md is not FX-3.h's: FX-3's plan commit
+  applies its text if the user approves it (L8; R-FX3-8); otherwise FX-3.h proposes it as Status.md section 6's next item (28 unless a step before FX-3 adds one)
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (in order; eight lit workers and the job counts written here, by the section 12 row 'The CPU rule
+after R-a'; scratch under `D:/llvm-msil-scratch/milestones/FX-3/gate`):
+
+```text
+ 1. pwsh -NoProfile -Command '$b = "D:/llvm-msil-scratch/milestones/FX-3/gate/il-baseline"; if (Test-Path -LiteralPath "$b/il-snapshot.json") { "baseline present: $b" } else { "no baseline (FX-3.0 writes it with the build of HEAD before building): $b"; exit 1 }'  (FX-3.0's IL baseline; this step never writes one)
+ 2. pwsh -NoProfile -Command '"D: has {0:N1} GB free (report only)" -f ((Get-PSDrive D).Free / 1GB)'
+ 3. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0)
+ 4. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out D:/llvm-msil-scratch/linux-sysroot  (G0)
+ 5. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out D:/llvm-msil-scratch/linux-sysroot --builtins --clang D:/llvm-msil/build/bin/clang.exe --jobs 8  (G0)
+ 6. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/make-glibc-sysroot.sh /mnt/d/llvm-msil-scratch/glibc-sysroot  (G0)
+ 7. python D:/llvm-msil/msil/utils/corpus/fetch.py --cache D:/llvm-msil-scratch/corpus-cache --check  (offline; c-testsuite and the hosted programs are cached, in the default cache that lit and update-expected.py read in the later steps)
+ 8. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard -Jobs 8  (G1)
+ 9. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 8  (the Linux archive gains msil_ldfmt.c's members)
+10. pwsh -NoProfile -Command 'python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --check; if ($LASTEXITCODE) { exit 1 }; python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --check-list; exit $LASTEXITCODE'  (A10, A3)
+11. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --all --jobs 8 --out D:/llvm-msil-scratch/milestones/FX-3/gate/builtins-all  (G1b: msil_ldfmt.c's members on the three Linux triples' lists, on none of the three Windows triples')
+12. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe  (G2)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 494  (R-a's floor; FX-3 adds no case. FX-1, before FX-3 in Claude's run order, adds 5: FX-1's re-pin rows raise this floor to 499 if this text is in the plan when FX-1 commits, and FX-3's plan commit writes FX-1's floor here if FX-1 has committed by then)
+14. python D:/llvm-msil/msil/utils/ci/calibrate.py --label start  (G2c)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net-core -Jobs 8  (G3: lld/test/MSIL and clang/test/Sema/msil-long-double-format.c among check-msil's paths)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg p3-full -Jobs 8  (G3b: 05-variadics on Windows, msvcrt-ldfmt.test among them)
+17. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $s = @(python msil/utils/ci/gate-select.py harness); $s; if ($s[0] -eq "harness: run") { pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Leg harness -Jobs 8; exit $LASTEXITCODE }'  (G3c)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-p3 -Jobs 8  (G4: run 1 holds 05-variadics through the wrappers on the Linux triple)
+19. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 8 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1 --param msil_require_verify=1" lld/test/MSIL  (LLD_IN_TEST=2: the routes are per-link state)
+20. pwsh -NoProfile -Command "& D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 8 -LitArgs '-sv --param msil_pipeline=obj --param msil_opt_levels=O0,O1,O2,O3 --param msil_runner=wsl --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_wsl_dotnet=private --param msil_dotnet_runtime=10 --param msil_native_oracle=required --param msil_linux_sysroot=D:/llvm-msil-scratch/linux-sysroot --param msil_glibc_sysroot=D:/llvm-msil-scratch/glibc-sysroot --param msil_also_run=8,10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1' msil/test/M3/05-variadics"  (every level, .NET 8 and 10 and TC=0, Linux triple)
+21. pwsh -NoProfile -Command "& D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 8 -LitArgs '-sv --param msil_pipeline=lto --param msil_equiv=1 --param msil_runner=wsl --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_wsl_dotnet=private --param msil_dotnet_runtime=10 --param msil_native_oracle=required --param msil_linux_sysroot=D:/llvm-msil-scratch/linux-sysroot --param msil_glibc_sysroot=D:/llvm-msil-scratch/glibc-sysroot --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1' msil/test/M3/05-variadics"  (LTO, O4 through the equivalence links without wrappers, Linux triple; `ldfmt-addr.test` and `ldfmt-shared.test` skip O4 by their lines)
+22. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg programs-hosted-wsl -Jobs 8  (every hosted program's printf through the wrappers; transcripts unchanged)
+23. pwsh -NoProfile -Command '$env:LIT_FILTER = "Programs/c-testsuite/libc/"; pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg ctest-wsl -Jobs 8; exit $LASTEXITCODE'  (libc.txt on linux-gnu: 00204 and 00189 plain)
+24. pwsh -NoProfile -Command '$env:LIT_FILTER = "Programs/c-testsuite/libc/"; pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg ctest -Jobs 8; exit $LASTEXITCODE'  (libc.txt on windows-msvc, unchanged)
+25. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $o = "D:/llvm-msil-scratch/milestones/FX-3/gate/il-after"; Remove-Item -Recurse -Force -LiteralPath $o -ErrorAction SilentlyContinue; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 8 --out $o --compare D:/llvm-msil-scratch/milestones/FX-3/gate/il-baseline --skip-changed msil/test/M1 msil/test/M2 llvm/test/CodeGen/MSIL; exit $LASTEXITCODE'  (no IL change in llc and clang -S output)
+26. python D:/llvm-msil/msil/utils/ci/calibrate.py --label end  (G4c)
+27. python D:/llvm-msil/msil/utils/ci/calibrate.py --combine D:/llvm-msil/build/lit-results/calibration-start.json D:/llvm-msil/build/lit-results/calibration-end.json
+28. pwsh -NoProfile -Command 'python D:/llvm-msil/msil/utils/ci/check-upstream-hooks.py --self-test; if ($LASTEXITCODE) { exit 1 }; pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Jobs 8; exit $LASTEXITCODE'  (G5 in full: SemaChecking.cpp changes)
+29. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $req = [ordered]@{ "msil/lib/builtins/msil_ldfmt.c" = "__msil_ldfmt_rewrite"; "msil/lib/builtins/sources.txt" = "msil/lib/builtins/msil_ldfmt.c *-linux-*"; "lld/MSIL/FormatWrappers.cpp" = "__msil_ldfmt_"; "lld/MSIL/NativeLibraries.h" = "mayBindNativelyByImportName"; "lld/MSIL/Options.td" = "msil-format-wrappers"; "msil/utils/msil-prog.py" = "--no-msil-format-wrappers"; "clang/lib/Sema/SemaChecking.cpp" = "WebAssemblyImportModuleAttr"; "clang/test/Sema/msil-long-double-format.c" = "import_module"; "lld/test/MSIL/format-wrappers.test" = "RUN:"; "msil/test/M3/05-variadics/msvcrt-ldfmt.test" = "RUN:"; "msil/test/harness/msil-prog-format-wrappers.test" = "RUN:"; "msil/utils/equiv-allowed.txt" = "05-variadics/ldfmt-addr.test"; "llvm/docs/MSIL/Status.md" = "__msil_ldfmt_" }; foreach ($k in $req.Keys) { if (-not (Select-String -LiteralPath ($r + $k) -SimpleMatch $req[$k] -Quiet -ErrorAction SilentlyContinue)) { $bad += "$k lacks $($req[$k])" } }; foreach ($t in @("00204 exclude", "00189 diag")) { if (Select-String -LiteralPath ($r + "msil/test/Programs/c-testsuite/libc.txt") -SimpleMatch $t -Quiet) { $bad += "libc.txt still has $t" } }; $n = @(Get-ChildItem -LiteralPath ($r + "msil/test/M3/05-variadics") -Filter *.test).Count; if ($n -lt 17) { $bad += "05-variadics: $n tests, needs 17" }; if ($bad.Count) { $bad; exit 1 }; "FX-3 presence check: ok ($n tests in 05-variadics)"'  (G6)
+30. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; New-Item -ItemType Directory -Force D:/llvm-msil-scratch/milestones/FX-3/gate | Out-Null; $j = "D:/llvm-msil-scratch/milestones/FX-3/gate/legs.json"; pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Describe | Set-Content -Encoding utf8 $j; if ($LASTEXITCODE) { exit 1 }; python msil/test/M2/08-semantics/Inputs/check-matrix.py --legs $j .; exit $LASTEXITCODE'  (G6)
+31. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; . msil/utils/build/msil-env.ps1; $d = @(python msil/utils/ci/gate-select.py expected-dirs); if ($LASTEXITCODE) { exit 1 }; if ($d.Count) { python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --jobs 8 --levels O0,O2 @d; if ($LASTEXITCODE) { exit 1 }; python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --jobs 8 --levels O0,O2 --os linux @d; exit $LASTEXITCODE }'  (G7)
+32. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- clang/lib lld/MSIL msil/lib"  (G8: no diff)
+33. python D:/llvm-msil/msil/utils/ci/linux-syntax-check.py --changed-from HEAD --jobs 8
+34. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope FX-3"  (G9)
+```
+
+Under 5.17.7's rule only G4's run 2 may move to the post-commit run (step 18 then reads `-Leg wsl-p3 -Run 1`): G3c
+cannot, because FX-3's harness change edits existing files (`msil-prog.py`, `ctest-lists.py`, `ctest-lists.test`),
+and steps 15, 16, 18's run 1 and 19-25 are named by exit criteria. No step carries a quiet estimate (Claude's
+reading, for plan texts, of the user's words of 2026-11-22); round 1 measures the gate, and a total above 5.17.7's
+budget is recorded in a section 12 row, as 5.17.7 says. The post-commit run (5.17.11) adds `programs-lto-wsl` (O4 on the Linux programs, through the equivalence links
+without wrappers), `ctest-lto` and the `det*` legs.
+
+**Exit criteria:**
+- Formats built at run time read and store `%L` as `double` on the Linux triple at -O0 to -O3 through objects and at
+  -O2 through LTO, on WSL .NET 10, .NET 8 and TC=0 (steps 18, 20, 21), in EXEs and in `ldfmt-shared.test`'s
+  `-shared` library, and on Windows the same programs give the same transcripts (step 16); every scan set, guard and
+  unchanged conversion of FX-3.g holds.
+- The probe holds: `msvcrt.dll` and the UCRT read and store `%L` as an 8-byte `double` (`msvcrt-ldfmt.test`, step 16),
+  so windows-gnu routes nothing and clang's checks are off there.
+- Rule 7 exactly: `format-wrappers.test` (steps 15, 19) shows every route and every non-route of FX-3.f's list, T-FX3-1
+  (both forms) and T-FX3-2 pinned whole, `--no-msil-format-wrappers` giving today's bindings; clang's checks only for
+  explicit imports on the Linux triples (step 15).
+- Nothing else moves: every hosted program's transcript (step 22); c-testsuite's `libc.txt` with 139 of its 140 (test,
+  triple) pairs passing, 136 against `.c.expected` and 3 against the native transcript, `00214` excluded, no `diag`
+  entry (steps 23, 24); O4 equal through the equivalence links, but for FX-3.g's skip lines (step 21); il-snapshot of
+  M1, M2 and `llvm/test/CodeGen/MSIL` unchanged (step 25); G1b builds `msil_ldfmt.c` on the three Linux triples (step
+  11); the CLITests floor holds; G2-G9 pass.
+
+**Review focus:** the rewriter against glibc's own parsing (no byte changed outside an `L`, `ll` or `q` before a
+floating conversion; scan sets; `%%`; a format that ends inside a specification); a route never takes a program's own
+definition, a toolchain-built library's export, an explicit import or a toolchain name, and the wrappers' own native
+calls are never routed (no recursion); `--lto-emit-asm` never loads a wrapper member; `--no-msil-format-wrappers`
+restores today's bindings byte for byte; T-FX3-1 instead of a silent native binding when the archive is missing or lacks
+the wrapper; hooks only in `NativeLibraries.{h,cpp}`.
+
+**Rebuild cost.** lldMSIL's objects that include `Config.h`, `NativeLibraries.h`, `Variadics.h` or `SymbolTable.h`, the
+new `FormatWrappers.cpp`, lld's option table and relinks of `lld` and `LLDAsLibAllTests`; one clang object
+(`SemaChecking.cpp`) and relinks of clang and its tools; the helper archives of the Linux triples (one new source, its
+members split by `MSIL_MEMBER`). No LLVM, CLI or clang header changes. FX-3.0 counts the objects; round 1 measures the gate.
+
+**FX-3's re-pin rows** (with FX-3's commit, from FX-3.h's hand-over): the probe's result as built (row 'FX-3's
+windows-gnu probe as built'); the `CLITests` floors of M28-M35 and of later FX-<n> texts unchanged (FX-3 adds no
+case); the citations that M28-M35 and every later FX-<n> or EH-<n> text in the plan make of `lld/MSIL/Driver.cpp`,
+`SymbolTable.{h,cpp}`, `NativeLibraries.{h,cpp}`, `LTO.cpp`, `Variadics.{h,cpp}`, `Options.td`, `Config.h` and
+`lld/MSIL/CMakeLists.txt` re-verified by `git grep`, with the counts that FX-3's new files change, such as FX-4's
+count of `SymbolTable.h`'s includers among lldMSIL's objects if `FormatWrappers.cpp` includes it; no BCL re-pin.
+
 **MC-4. Managed calls from C and C++, stage 2: the caught exception as a ticket** (an outline; contract 5.20.17, with 5.20.19 and 5.20.20; its text is drafted after R-a's commit, in the managed-call spelling that holds then: the cleanup round may respell the declarations first (the strings row of 2026-11-21), and R-a amends MC-1's contract (5.21.9)). An `msil_catch` entry may also hand C the caught exception as a ticket (an `intptr_t` GCHandle number, as R-a's tickets are) through a second trailing `intptr_t *` parameter after MS4's `int *`, which the stub's handler writes with the code (MS4, MS5's trailing row, MS6, MX2); the filters stay type-only (MA5), and C reads `HResult`, `InnerException`, `SocketErrorCode` or `NativeErrorCode` through ordinary managed calls and frees the ticket. It goes after the cleanup round's milestones and EH-0 with FX-1 to FX-3 and before R-a2, which stays directly before P-2, so that P-2's OS layer is written once on exact error codes (5.19.5; section 12's row 'Program order amended (portable I/O)', which also places value-type form B's step in that window). Tests in `msil/test/M3/13-managed-calls` with portable copies in `msil/test/Portable/02-managed-calls`; new T-M texts; a hook block for each upstream file it changes; its gate is a host-triple gate with no portable step, as MC-1's under brief Q11 (a).
 
 **R-a2. Real .NET references in C++** (an outline, 5.21.16; the user's "(a) Yes, R-a2" (2026-11-19 12:50); its text is drafted after R-a's
@@ -21549,6 +21970,14 @@ the change text ``fix-loop ownership: `<path>` -> <agent>``, for example
 | 2026-11-23 | FX-1, M28 | P-1r R2 and R3 (rows of 2026-11-03) read for FX-1: R3's three sentences (5.15.3's bullet, M28.b (1)'s hook sentence and the 2026-10-28 row's) now describe FX-1's touch, which starts `<Module>::.cctor` after the portable guard when `TrailerInput::Guard` is set; R3's `CLITrailerTest` case (a `TwoPhase` input with `Guard`, `SpilledData` and a library type: the guard, then the touch, then the `ldtoken`) is FX-1.d's case (3); R3's 'M28.d (5)'s spill rule also applies, unchanged, to dotnet `-shared` links' is FX-1.c's rule, which applies on every triple; R3's host-only pins are FX-1.e's cases (1)-(4), beside its `msil64-unknown-dotnet` case (5). In R2, 'the spilled-data race fix' leaves M28's generic pieces (it is FX-1's); '`SpilledData` keeps M28.d (5)'s rule on every triple (R3)' reads '`SpilledData` keeps FX-1's rule on every triple'; and 'M28 therefore changes no dotnet output's bytes, except for the `<Module>::.cctor` touch in a `-shared` output whose `'<msil>Data'` fields spill (R3)' reads 'M28 therefore changes no dotnet output's bytes (the touch is FX-1's)'. | Claude's re-pin for FX-1; P-1r's rows are Claude's audit rows. |
 | 2026-11-23 | FX-1 | Contract rows (FX-1): 5.9.10, the `TrailerInput` block gains `bool SpilledData = false;  // FX-1: TwoPhase only, '<msil>Data''s fields spill`, and its two-phase paragraph's 'phase 2 (the `ldtoken`s, cross relocations and constructors) into `<Module>::.cctor`, which is omitted when empty' reads 'phase 2 (the `ldtoken`s, cross relocations and constructors) into `<Module>::.cctor`, which is omitted when empty unless `SpilledData` is set (FX-1): then it starts, after the portable guard when one is set, with `ldsfld '<msil>data'` and `pop`, so that phase 1 runs inside the module initializer'; 5.9.15, the two-phase bullet's 'then `<Module>::.cctor` phase 2' reads 'then `<Module>::.cctor` phase 2, which a library whose `'<msil>Data'` fields spill starts with a read of `'<msil>data'` (FX-1)'; 5.13.3, a row `llvm/lib/CLI/TrailerSpill.cpp` (FX-1, `FX-1/trailer`; M28, `M28/thunks`, for the thunk part's fields in the count): the spilled-data touch and `cli::countTrailerDataFields`; 5.13.4, FX-1's rows (`FX-1/lists` (root): `Trailer.h`, the flag and the count; `FX-1/trailer`: `Trailer.cpp`, `llvm/lib/CLI/TrailerParts.h`, `TrailerSpill.cpp`, `llvm/lib/CLI/CMakeLists.txt`, the touch and the count; `FX-1/lld`: `lld/MSIL/Writer.cpp`, the spill decision), and `M28/thunks` gains `TrailerSpill.cpp` and loses 'the spilled `'<msil>Data'` race (5.15)'; 5.14.5, S1: msil-ld sets `SpilledData`, and the whole-program text producer leaves it false (text never spills); S2: its default keeps every output; 5.15.3, its 'What msil-ld does' bullet 'Runs phase 1 inside the module initializer of a `-shared` library whose `'<msil>Data'` fields spill (...) ... so every thread waits for the module initializer.' leaves 5.15.3 for FX-1's text, and its test list reads '`shared-thunks.test` (library pointers)' and loses 'and the spilled-`'<msil>Data'` two-thread first use'; 5.15.12, M28's row loses 'the spill-race fix'; 5.17.6, the `scale` row's milestones read '(FX-1, M28, M29, M31 unless their sections say otherwise)'; 5.17.13, the `M3/09-threads` row's 'Created by' reads 'FX-1 (`spill-race.test`), M28 (mutexes), M30 (atomics), M31 (TLS)' and its contents gain 'FX-1: two C# threads first using each of 64 copies of a spilling `-shared` library (`%msil_csc`, as `08-atomics/barrier-spin.test`)'; its thread rules hold for `spill-race.test` except rule 4 (a missing touch fails only some runs), whose sensitivity FX-1's listings and unit tests carry; the capability table is unchanged (the threads are C#'s, as M24's `barrier-spin.test`'s are); 5.18.7 PE5, its last sentence, which begins 'The guard precedes phase 1's image work and M28's', reads 'The guard precedes phase 1's image work and, in a `-shared` library whose `'<msil>Data'` fields spill, FX-1's `ldsfld`/`pop` touch of the data field (guard first, then the touch).' | Claude's, in the form of R-a's 'Contract rows' row. |
 | 2026-11-23 | FX-1 | Design.md edit (FX-1), as approved: 5.4's bullet on the spilled-data race states the fix, a library whose `'<msil>Data'` fields spill runs the first phase inside its module initializer so that a second thread waits for it, in place of the limit and its 'phase 3's threads fix it'. | The user's approval of the exact text, "(a) Apply as shown" (chat, 2026-11-23 12:22 CST), on Claude's draft, shown with this text. Item 22 is the one item of 16-23 that the user's pick on the review page (2026-11-04, item prov-3) did not approve as applied. |
+| 2026-11-23 | FX-3 | FX-3 (`%L` in formats built at run time), the third fix step that the approved row 'Program order amended (exception-model steps EH-0 to EH-3)' sketches, runs right after R-a and before the cleanup round's milestones, where the user's pick on Claude's question on the order after R-a puts the fix steps: one fix step at a time, in Claude's run order after FX-2 and FX-1, before or after EH-0 as that row's scheduling falls. Until that approved row applies, this row places FX-3, read with 5.18's paragraph and row 'Program order amended (real .NET references)'. Its text is section 6's `### FX-3.`, after FX-1's. FX-3 follows the Phase 3 protocol outside its numbering and exit gate, as MC-1 and R-a do (its tests run in every post-commit run and in M35's gate legs); its execution tests live under `msil/test/M3/05-variadics`, its link tests under `lld/test/MSIL` and its clang test under `clang/test/Sema`. | The step, as that row records it: Claude's decision, forced by the user's pick on the review page (2026-11-04, item prov-10), "silent states only with my OK", kept in addition to the later native-width `long double` of the user's prov-1 pick ("Also plan a native-width long double as a later fidelity feature", review page, 2026-11-04) by the user's "A" (chat, 2026-11-23 00:49 CST); its place before the cleanup round's milestones, the user's "B" (chat, 2026-11-22 23:49 CST), set in that row, which the user approved with "A" (chat, 2026-11-23 05:53 CST) and which goes into this table before EH-0 starts; the user's approval of this text, "(a) Apply as shown" (chat, 2026-11-23 17:35 CST). Claude's: the order among the fix steps (that row leaves it to Claude's scheduling), the protocol and exit-gate wording, the test places. |
+| 2026-11-23 | FX-3 | 5.15.2 gains link-time rule 7, the format wrappers, as FX-3's text pins it: on a triple whose native `long double` is wider and whose C runtime is Glibc or Musl, in a link that binds late and writes an image, a still-undefined reference that late binding would bind natively and whose entry is a function of the C runtime's variant table (either column) or one of glibc's five exported aliases of table variants resolves to the helper archive's `__msil_ldfmt_<entry>`, which reads the `L`, `ll` and `q` modifiers before a floating conversion as `double` (a `printf` format drops them, a `scanf` format reads `l`) and calls the C library through a `__msil_ldfmt_native_<entry>` declaration with `import_name`; a program's own definition, an explicit `import_module` and a toolchain name are never routed; without the wrapper the link fails with T-FX3-1; `--lto-emit-asm` routes nothing and warns once per link with T-FX3-2; the hidden `--no-msil-format-wrappers` (for tests) restores rules 1-6. Rule 4 does not arise for a routed function, whose address is its wrapper's; rule 6's `--print-imports` lists the wrappers' native calls. 5.15.2's '`long double` formats (R15)' reads: on the triples of rule 7 clang's two checks fire only for a function declared with `import_module`; on x86_64 windows-gnu they do not fire, its C runtimes reading `%L` as an 8-byte `double` (FX-3.a's probe; if the probe disagrees, FX-3 stops and its text comes back to the user); its last sentence, 'c-testsuite 00204 stays a `long-double` exclusion on linux-gnu (5.17.14)', reads 'c-testsuite 00204 is a plain entry on linux-gnu from FX-3 (5.17.14)'. Decision R15 (section 10's table) reads with this row: its clang checks are narrowed so, and 00204 is no longer excluded. | Claude's design, from Claude's view on the review page (2026-11-04, item prov-1: archive wrappers on the Linux triples for the plain, wide-character, `_chk`, `__isoc99` and `__isoc23` families, computed formats in the tests, windows-gnu decided by a probe; the user picked "Also plan a native-width long double as a later fidelity feature" there, not that option), made a step by the approved row 'Program order amended (exception-model steps EH-0 to EH-3)', which goes into this table before EH-0 starts, and kept by the user's "A" (chat, 2026-11-23 00:49 CST); Claude's additions in FX-3's text, shown to the user with it: the variadic forms routed directly, the `syslog`, `err` and `warn` functions and glibc's aliases, `ll` and `q`, clang's checks narrowed to explicit imports, the hidden option, the names. The text way's answer is the user's, "(a) Warn" (chat, 2026-11-23 17:24 CST). The user's approval of this text, "(a) Apply as shown" (chat, 2026-11-23 17:35 CST). |
+| 2026-11-23 | FX-3 | Contract rows (FX-3): 5.10.14, `msil-ld`'s texts gain T-FX3-1 (error) and T-FX3-2 (warning, `--lto-emit-asm`), written in FX-3's 'Shared texts'; 5.13.3, the new files `lld/MSIL/FormatWrappers.{h,cpp}` (FX-3, `FX-3/lld`: rule 7's routes, T-FX3-1 and T-FX3-2) and `msil/lib/builtins/msil_ldfmt.c` (FX-3, `FX-3/builtins`: the rewriters and the wrappers); 5.13.4 and L7, FX-3's rows as its 'Roles' paragraph lists them, `FX-3/lld` owning the hot `NativeLibraries.{h,cpp}` and `FX-3/builtins` the shared `sources.txt`; 5.13.5, no new upstream file: FX-3's hunk in M26's hooked `clang/lib/Sema/SemaChecking.cpp` stays a hook; 5.14.2, N3's 'Never from' cell reads 'native libraries, except that a `__msil_*` declaration with an `import_name` resolves natively under that entry name (`mayBindNativelyByImportName`; FX-3's wrappers call the C library so); other assemblies'; 5.14.3 A6 gains 'FX-3 `msil_ldfmt.c` (the `*-linux-*` triples; 5.15.2 rule 7)', and A8 holds as written (the wrappers define only `__msil_*` names and declare the native functions they call); 5.15.1 rule 4's list of K1 files gains `msil_ldfmt.c` (FX-3); 5.15.11, the row '`%L` in formats built at run time (FX-3)': until FX-3 silent, with the user's OK of the row 'Silent states with the user's OK' (item 6); from FX-3, rule 7's wrappers in images and `--lto-emit-asm` text with T-FX3-2, while explicit imports, the seven aarch64 fixed-arity format functions, other native libraries' format functions and links with `--no-msil-format-wrappers` stay silent with the user's OK; 5.15.12, the row 'FX-3 \| 5.15.2 rule 7 and its texts; 5.14.2's N3 import-name rule'; 5.12.6, O3's and O4's equivalence link and O4's text link pass `-Wl,--no-msil-format-wrappers`, so both compare outputs without wrappers, and a program that takes the address of a function that rule 7 routes has no `--lto-emit-asm` text (that text links no archive member, so rule 4 refuses the address there, as it does in O4's equivalence link without wrappers; the reason of 5.14.3 A9's helper-archive lines): FX-3.g adds `skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/05-variadics/ldfmt-addr.test` with that reason, and for `ldfmt-shared.test` the `-shared` line of M22's library tests; 5.17.1's table, the row of `msil/utils/msil-prog.py` gains 'FX-3 (`-Wl,--no-msil-format-wrappers` on O3's and O4's equivalence links and O4's text link)' and the row of `msil/test/Programs/c-testsuite/*` gains 'FX-3: `00204` and `00189` plain entries of `libc.txt`'; 5.17.7, G1b's list gains FX-3; 5.17.13, the `M3/05-variadics` row's 'Created by' reads 'M26, FX-3 (formats built at run time, the probe of msvcrt's `%L`)', and the capability table gains 'FX-3 \| `%L` in formats built at run time and the addresses of the C library's format functions, on the Linux triples'; 5.17.14, `00204` and `00189` are plain entries of `libc.txt` on linux-gnu from FX-3, and after the sentence that begins 'Target at M26's commit:' (M26's record, as the row 'M26 exit target amended (5.17.14, exit criteria)' amends it) a new sentence reads 'Target from FX-3's commit: 139 of the 140 (test, triple) pairs pass, 136 against `.c.expected` and 3 against the native transcript; the other is `00214`'s exclusion.', the vocabulary word `long-double` stays, unused, and the sentence 'Used for `00204 exclude linux-gnu long-double` and `00214 exclude windows-msvc not-portable`.' reads 'Used for `00214 exclude windows-msvc not-portable`.'; M35's exit criterion 'except `00204` on linux-gnu and `00214` on windows-msvc (UNSUPPORTED with their reasons)' reads 'except `00214` on windows-msvc (UNSUPPORTED with its reason)'. | Claude's, in 5.20.12's form. |
+| 2026-11-23 | FX-3, M28 | The row 'M28.e extended (M26 leftover: c-testsuite 00189 on linux-gnu)' of 2026-11-02 and its three fix-loop ownership rows of the same date (`msil/test/Programs/c-testsuite/libc.txt` to M28.e, `msil/test/harness/Inputs/ctest-lists.py` and `msil/test/harness/ctest-lists.test` to M28.k) are superseded: with rule 7 `fprintf`'s address is its wrapper's on linux-gnu, so FX-3 makes `00189` a plain entry (FX-3.g, `libc.txt`), FX-3.g changes `ctest-lists.py` and `ctest-lists.test`, as that row gave both to M28.k, FX-3.h drops the 00189 row from Status.md, GettingStarted.md and `msil/test/README.md`, and M28's gate loses that row's `ctest-wsl` exit check. M28.d's variant stub as the table entry of a natively bound variadic function stays for the triples without wrappers (windows-gnu's `msvcrt.dll`) and for links with `--no-msil-format-wrappers`; M28.h's `native-fnaddr.test` takes its glibc variadic case with `--no-msil-format-wrappers` (with the wrappers that address is the wrapper's, which `format-wrappers.test` covers). | Claude's reading of rule 7's effect, found while drafting FX-3 (c-testsuite's `00189` takes `&fprintf` and calls through it); the superseded rows are Claude's records of 2026-11-02, not user decisions. |
+| 2026-11-23 | FX-3, M33 | The row 'M33.g extended (M26 leftover: `%L` in va_list format functions)' of 2026-11-02 and its row 'fix-loop ownership: `clang/test/Sema/msil-long-double-format.c` -> M33.g' are superseded: FX-3.e owns the test and adds the `va_list` cases with FX-3's expectations (no diagnostic for plain declarations on the Linux triples, the printf warning and the scanf error with `import_module`, nothing on windows-gnu after the probe, on the windows-msvc triples or under `-Wno-format`); M33.g no longer touches the file. | Claude's: FX-3 changes the checks those cases would pin, so they move with it; the superseded rows are Claude's records of 2026-11-02, not user decisions. |
+| 2026-11-23 | FX-3 | Silent states with the user's OK (FX-3), as the user's pick on the review page (2026-11-04, item prov-10) asks: (1) a function declared with an explicit `import_module` (5.10.7, the only way `clang -S` and llc text reach the C library's format functions) reads a `%L` in its format as the C library does, in every output, since explicit imports bind as given; (2) on aarch64 Linux, which no test runs, `error`, `error_at_line`, `argp_error`, `argp_failure`, `__asprintf`, `strfmon` and `strfmon_l`, which have no `va_list` form and keep 5.15.2's fixed-arity rule, receive a `long double` argument as a `double`, so a `%L` in their format reads binary128 (on x86_64 Linux their floating-point arguments are compile errors), until an AArch64 runtime runs them, and from FX-3 clang's literal check no longer fires for the five of them that glibc declares with a `printf` format attribute; (3) a native function outside the C library's variant tables that reads a `printf` or `scanf` format, such as another native library's own format function that takes a `va_list`, reads `%L` as that library does, and from FX-3 clang's literal checks no longer fire for it on the triples of 5.15.2 rule 7 or on x86_64 windows-gnu; (4) a link with the hidden test switch `--no-msil-format-wrappers` (FX-3's 'Shared texts'; O3's and O4's equivalence links and O4's text link pass it, 5.12.6) binds the C library's format functions as before FX-3, so a `%L` in their format reads 16 bytes there, and clang's literal checks, narrowed by FX-3, do not report it. Status.md lists all four from FX-3's commit. Item (6) of the row 'Silent states with the user's OK' of 2026-11-21 ends for `%L` at FX-3's commit. | The user's approval of FX-3's text, "(a) Apply as shown" (chat, 2026-11-23 17:35 CST), whose message named the four cases and offered a loud form of each as a change (Claude's reading of "silent states only with my OK", review page, 2026-11-04). The wording and the scope of the four cases are Claude's. |
+| 2026-11-23 | FX-3 | Recorded temporary state (5.15.1 rule 1 as amended): from FX-3, `msil-ld --lto-emit-asm` text calls the C library's format functions directly on the triples of 5.15.2 rule 7, so a `%L` in any format, literal or built at run time, is read as a 16-byte native `long double` there (clang's checks no longer fire for these functions), and `msil-ld` warns once per such link (T-FX3-2). The right answer is the wrappers in the text or the text way's removal; the step that replaces it is the end-of-project decision on the text way. Status.md lists it. | The user's answer to FX3-Q1, "(a) Warn" (chat, 2026-11-23 17:24 CST), option (a) 'Warn'; the user kept the text way and put its removal off to the end of the project: "For now, let's keep the text mode." (chat, 2026-11-17 ~07:48 CST). Claude's: the warning's text and the hidden option for O4. |
+| 2026-11-23 | FX-3 | Design.md edits (FX-3), as approved: 4.7's `long double` bullet reads 'On triples whose native `long double` is wider than `double`, a `long double` argument of a native variadic function is passed as a `double`. On the Linux triples, in the images it writes, `msil-ld` therefore calls the C library's `printf` and `scanf` families, and its other format functions with a `va_list` form, through toolchain wrappers that read the `L` conversions of a format, also one built at run time, as `double`s. A function declared with an explicit import module is called as declared, and there clang warns about `printf`-family formats with `L` and rejects `scanf`-family ones, which would write past the object. x86_64 MinGW's C runtimes read `L` as a `double` already.' | The user's approval of FX-3's text, "(a) Apply as shown" (chat, 2026-11-23 17:35 CST), on Claude's draft, shown with this text. |
 
 ## Appendix A. Review dispositions (plan v1 -> v2)
 
