@@ -16932,6 +16932,267 @@ FX-<n> or EH-<n> text in the plan, cite in the files FX-2 changes (`MSILInstrMem
 MI-level records with a CIL value, which R-a's re-pin row gives M28.f, stays, since `INITBLK_LONG` carries none. The
 `CLITests` floors do not change, since FX-2 adds no case; no BCL re-pin.
 
+### FX-1. The spilled-data race of -shared libraries
+
+**Goal.** Status.md section 6's item 22 (Design.md 5.4; section 12 row 'Known limit after M22 (spilled `'<msil>Data'`
+fields and threads; recorded, not M23 work)'). In a `-shared` library whose `'<msil>Data'` fields spill into
+`'<msil>Spill<N>'` classes (more than 65,534 of them, or `--msil-type-member-limit`), the type initializers of
+`'<msil>Data'` and of a spill class depend on each other, so two threads that first use the library at the same time can
+let one of them read a spilled field before phase 1 stored it: a zero address. FX-1 is the user's pick on the review
+page (2026-11-04, item prov-3), "Approve 16-21 and 23; fix item 22 as a step after MC-1; show me 4.5/4.6 again after the
+rewrites"; its place, right after R-a and before the cleanup round's milestones, is the user's pick "B" (chat,
+2026-11-22 23:49 CST), as the section 12 row that places FX-1 records it (and the approved row 'Program order amended
+(exception-model steps EH-0 to EH-3)', once it applies). Its design is
+the fix that the row 'Known limit after M22' proposed and that the 2026-10-28 M28 row, 5.15.3, M28.b, M28.d and P-1r R3
+planned for M28 (Claude's), which this plan commit's rows move into FX-1: msil-ld sets `cli::TrailerInput::SpilledData`
+for a `-shared` link whose `'<msil>Data'` fields spill, decided before it builds the trailer; `cli::buildTrailer` then
+makes `<Module>::.cctor` and starts it, right after the portable guard when `TrailerInput::Guard` is set (5.18.7 PE5)
+and before phase 2's `ldtoken`s, with `ldsfld '<msil>Data'::'<msil>data'` and `pop` (the touch). Phase 1 then runs
+inside the module initializer, on one thread, with each spill class's `.cctor` nested in it, and every other thread that
+uses the library waits for the module initializer (ECMA-335 II.10.5.3). The spill classes' `.cctor`s stay. Links that do
+not spill, EXEs, `--interface-only` libraries, objects and every whole-program text are unchanged byte for byte: only
+msil-ld's images have spill classes, and the whole-program text producer leaves `SpilledData` false (5.14.5 S1). From
+FX-1 on, a C program never meets the race: a program's module initializer holds an `ldtoken` of every library it links
+(5.9.10), whose resolution runs that library's module initializer (recon `p2/exports-multiasm.md` 6.1, measured on .NET
+8, .NET 10, Framework 4.8 and Linux), and with it a spilling library's phase 1, before `main`. Only a host that loads a
+library and first uses it from two threads at once, such as a C# program, still has two first uses meet, and now its
+second thread waits for the module initializer. FX-1 adds no diagnostic (FX-1.c's consistency check is an internal
+error, section 2's rule for internal invariants) and no silent state; it ends one of the four silent wrong-code states
+of item (6) of the row 'Silent states with the user's OK' (2026-11-21). Not in FX-1: M28's thunks and the `'<msil>Data'`
+fields they add (M28.b counts them in `countTrailerDataFields`); C threads (M28); a portable execution test (FX-1.d and
+FX-1.e pin the portable order); any other change to the two-phase initialization.
+
+**Depends on:** R-a (`65f17bc249bc`); the tools commit that teaches `plan-check.py` the milestone ids `FX-<n>` and `EH-<n>`, with a self-test case of a milestone in the fix steps' form, its `.0` build step included (one commit, before the first fix-step plan commit); FX-1's plan commit (this text and the rows that move the fix
+out of M28); and the commit of the step that runs before FX-1 (the fix steps run one at a time, as FX-1's placement
+row says; Claude's run order is FX-2, FX-1, FX-3, FX-4), whose post-commit line `phase gate: <n> row(s), <k> not
+PASS, <min> min` FX-1's commit body carries (5.17.11). FX-1's packages start once that post-commit run has ended
+(Claude's scheduling for the fix steps, stricter than 5.17.11, which lets the next milestone's packages write code
+during the run: runs that shared the tree with a next step's work have failed before with no defect in the committed
+step). Contract text: 5.9.10, 5.9.15 and 5.18.7 PE5 as FX-1's contract row amends them, 5.9.12, 5.13.1-5.13.4,
+5.14.5 S1-S2, 5.17.6, 5.17.7 and 5.17.13. Every WP reads its Reads entries, this text and the section 12 rows for
+FX-1, among them the rows that move the fix out of M28 and P-1r R3 as FX-1 reads it.
+
+**Header changes** (all in FX-1.a and built once, by FX-1.0 after the implement packages; a later package that needs
+another header edit stops and reports, section 1.2):
+- `llvm/include/llvm/CLI/Trailer.h` (`TrailerInput::SpilledData`, `cli::countTrailerDataFields`; a hot file, 5.13.1
+  L1): the lib/CLI, lldMSIL and MSIL target TUs that include it
+
+Roles (5.13.4; L4): FX-1.a `FX-1/lists` (root), FX-1.b `FX-1/trailer`, FX-1.c `FX-1/lld`, FX-1.d `FX-1/cli-tests`,
+FX-1.e `FX-1/lld-tests`, FX-1.f `FX-1/exec-tests`, FX-1.g `FX-1/docs`; FX-1.0 is the build agent's step. Hot files:
+`Trailer.h` to `FX-1/lists`, `Trailer.cpp` to `FX-1/trailer` (one hook, L2); `lld/MSIL/Synthetic.cpp`,
+`lld/MSIL/NativeLibraries.*`, `MSILAsmPrinter.*` and `BCLMembers.def` untouched.
+
+Shared texts: none; FX-1 adds no diagnostic (its one internal-error text is msil-ld's own, FX-1.c).
+
+**Work packages** (sizes are estimates)
+
+#### FX-1.a Declarations: the flag and the count (implement, ~30 lines)
+
+- Owned files: `llvm/include/llvm/CLI/Trailer.h`
+- Reads: this plan sections 5.9.10, 5.9.15, 5.13.1, 5.13.4, 5.14.5 and 5.18.7 (PE5), this milestone's text and the section 12 rows for FX-1; llvm/include/llvm/CLI/Trailer.h (TrailerInput, TrailerOwner, buildTrailer)
+- Provides: `bool TrailerInput::SpilledData = false`, after `Guard`, documented as 'FX-1, `TwoPhase` only: the fields of `'<msil>Data'` spill into spill classes. `<Module>::.cctor` then exists and starts, after the guard when one is set and before the `ldtoken`s, with `ldsfld '<msil>data'` and `pop`, so that phase 1 runs inside the module initializer and every other thread waits for it. Without it the trailer is unchanged.'; `LLVM_ABI unsigned countTrailerDataFields(const TrailerInput &In);`, documented as 'The number of fields that `buildTrailer(In, ...)` makes in `'<msil>Data'`: 0 without `TwoPhase`; otherwise 1 for `'<msil>data'` when `In.Image` or `In.SpilledData` is set, else 0. msil-ld calls it before it sets `SpilledData`; setting it adds at most `'<msil>data'`, so a decision to spill stays right.'; the touch in `buildTrailer`'s doc comment
+
+Declarations only (L4), first, with the header compilable after every edit. Checks: `msil-syntax.ps1` on
+`llvm/lib/CLI/Trailer.cpp` and `lld/MSIL/Writer.cpp`.
+
+#### FX-1.b The trailer: the touch and the count (implement, ~60 lines)
+
+- Owned files: `llvm/lib/CLI/Trailer.cpp`, `llvm/lib/CLI/TrailerParts.h`, `llvm/lib/CLI/TrailerSpill.cpp`, `llvm/lib/CLI/CMakeLists.txt`
+- Depends on: FX-1.a
+- Reads: this plan sections 5.9.10, 5.13.1-5.13.3, 5.14.5 and 5.18.7 (PE5), this milestone's text, FX-1.a's Provides line and the section 12 rows for FX-1; llvm/include/llvm/CLI/Trailer.h; llvm/lib/CLI/Trailer.cpp (cli::buildTrailer, emitPhase1, emitPhase2); llvm/lib/CLI/TrailerParts.h; llvm/lib/CLI/TrailerGuard.cpp; llvm/lib/CLI/CMakeLists.txt
+- Provides: `void cli::emitSpilledDataTouch(TrailerSink &Sink, TrailerMethod &Cctor)`, declared in `TrailerParts.h` (it appends `ldsfld <Sink.getDataField()>; pop` to `<Module>::.cctor`), and `cli::countTrailerDataFields`, both defined in the new `TrailerSpill.cpp`, with its line in `CMakeLists.txt`; the hook in `buildTrailer`
+
+The hook (L2, a few lines in `Trailer.cpp`): with `TwoPhase`, `<Module>::.cctor` is made when phase 2 has work, when
+`Guard` is set or when `SpilledData` is set; with `SpilledData` the touch comes right after `BeginModuleInitializer`,
+which emits the guard, and before `emitPhase2`'s `ldtoken`s; assertions state that `SpilledData` needs `TwoPhase` and
+a phase 1. Without `SpilledData` every output is HEAD's, byte for byte (5.14.5 S2). `countTrailerDataFields` counts
+exactly the `'<msil>Data'` fields that `buildTrailer` makes, and its comment says that a later field of `'<msil>Data'`
+is counted there too (FX-1.d checks it on every input shape). Checks: `msil-syntax.ps1` on `Trailer.cpp` and
+`TrailerSpill.cpp`.
+
+#### FX-1.c msil-ld: the spill decision (implement, ~40 lines)
+
+- Owned files: `lld/MSIL/Writer.cpp`
+- Depends on: FX-1.a
+- Reads: this plan sections 5.9.10, 5.9.12, 5.9.15 and 5.14.5, this milestone's text, FX-1.a's Provides line and the section 12 rows for FX-1, among them 'M22.b item (2) and 5.9.12 as built (spill classes of `-shared` outputs)'; lld/MSIL/Writer.cpp (Writer::run, Writer::finish, Writer::assignOwners); lld/MSIL/Config.h (msilTypeMemberLimit); llvm/include/llvm/BinaryFormat/CLI.h (MaxFieldsPerType)
+- Provides: in `Writer::run`, after the `TrailerInput` is filled and before `buildTrailer`, a `-shared` link without `--interface-only` sets `SpilledData` when the fields that `assignOwners` will place in `'<msil>Data'` (every field that is not the trailer's), together with the `cli::countTrailerDataFields(In)` fields that the trailer adds there, exceed `'<msil>Data'`'s field limit, `min(65,534, --msil-type-member-limit)`, counted as `assignOwners` counts them (one helper serves both); after `assignOwners`, a check that `'<msil>Data'`'s fields went to spill classes exactly when `SpilledData` was set, which on a mismatch stops the link with `reportFatalInternalError` and the text `msil-ld: the spill decision for '<msil>Data' does not match its fields` (section 2's rule for internal invariants; not an assertion, so that a build without assertions stops too)
+
+The spill classes and their `.cctor`s stay as M22 built them. Checks: `msil-syntax.ps1` on `Writer.cpp`.
+
+#### FX-1.0 Build after the implement packages (build agent) (infra, no source changes)
+
+- Owned files: (none; build agent, writes only the build tree and scratch folders)
+- Depends on: FX-1.a, FX-1.b, FX-1.c
+- Reads: this plan sections 4, 5.13.5, 5.14.3 (A10) and 11 ('Baselines before the build'), this milestone's Header changes, Rebuild cost and gate steps 1, 8 and 22; msil/utils/build/msil-build.ps1; msil/utils/il-snapshot.py; msil/utils/build/build-builtins.py; lld/test/MSIL/shared-data-class.test
+- Provides: the IL baseline in `D:/llvm-msil-scratch/milestones/FX-1/gate/il-baseline`, written with HEAD's build before FX-1's build (gate steps 1 and 22 read it); the shared build with the implement packages' changes and the helper archive rebuilt with it, for the test packages' checks by hand; the number of objects the build compiled, in the hand-over, for 5.13.5 and the Rebuild cost paragraph; step 3's listing in the hand-over
+
+Executed by the build agent, not an implementer; it edits no tracked file. First, as the gate agent does, it checks
+for a running post-commit run (a `run-m1-gate.ps1` process) and waits for it to end, checking every 5 minutes for at
+most 6 hours, then reports an environment problem. Step 0, with HEAD's build, as section 11's 'Baselines before the
+build' asks: `pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $b = "D:/llvm-msil-scratch/milestones/FX-1/gate/il-baseline"; if (Test-Path -LiteralPath "$b/il-snapshot.json") { $h = (Get-Content -Raw -LiteralPath "$b/il-snapshot.json" | ConvertFrom-Json).head; if ($h -ne (git rev-parse HEAD)) { "baseline of another commit, not replaced: $b ($h)"; exit 1 }; "baseline present: $b" } else { python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 8 --skip-changed --out $b msil/test/M1 msil/test/M2 llvm/test/CodeGen/MSIL; exit $LASTEXITCODE }'`,
+whose failure stops FX-1.0 before the build; a repeated FX-1.0 keeps the baseline. Step 1:
+`pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard -Jobs 8`, with the number of
+compiled objects from the build log. Step 2, after a good build:
+`python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 8` (5.14.3 A10). Step 3,
+the first joint run of FX-1.a-FX-1.c: in its scratch folder, `llc -filetype=obj` and
+`msil-ld -shared --msil-type-member-limit=4` on a sample it writes in the shape of `shared-data-class.test`'s
+`spill.ll` (eight internal `i32` globals and two exported functions that read them), then `llvm-cil-dump`: the
+library's `<Module>::.cctor` starts with the touch, and linked without the limit it has no `<Module>::.cctor`. A
+compile error or another listing is reported with its file for the implementation triage; this step fixes nothing.
+
+#### FX-1.d CLI unit tests: the touch and the count (test, ~250 lines)
+
+- Owned files: `llvm/unittests/CLI/TrailerTest.cpp`
+- Depends on: FX-1.a, FX-1.0
+- Reads: this plan sections 5.9.10, 5.14.5 and 5.18.7 (PE5), this milestone's text, FX-1.a's and FX-1.b's Provides lines and the section 12 rows for FX-1, among them P-1r R3 as FX-1 reads it; llvm/unittests/CLI/TrailerTest.cpp (RecordingSink, PortableGuardFirstInTwoPhaseOutput)
+- Provides: exactly 5 new `CLITrailerTest` cases (29 to 34): (1) a `TwoPhase` input with an image and neither phase-2 work, guard nor entry: with `SpilledData`, `<Module>::.cctor` exists, owned by `<Module>` with the `.cctor` flags, and is exactly `ldsfld '<msil>data'; pop; ret`; without it there is no `<Module>::.cctor`; `'<msil>Data'::.cctor` is the same in both; (2) a `TwoPhase` input with library types, a cross relocation and a constructor: with `SpilledData`, `<Module>::.cctor` is `ldsfld '<msil>data'; pop` followed by exactly the code of the same input without it, and every other method is unchanged; (3) P-1r R3's case: a `TwoPhase` input with `Guard`, `SpilledData` and a library type: the guard's head first (as `PortableGuardFirstInTwoPhaseOutput` splits it), then the touch, then the `ldtoken`, with the guard's two failure blocks after the last `ret`; (4) a `TwoPhase` input whose phase 1 holds only function addresses (no image): with `SpilledData` the sink makes `'<msil>data'` once, the touch reads it, and phase 1 is the same with and without the flag; (5) `countTrailerDataFields`: 0 without `TwoPhase`, with and without an image (the sink then makes `'<msil>data'` in `<Module>`); 0 for `TwoPhase` without an image; 1 with an image; 1 with an image and cross relocations; 1 without an image and with `SpilledData`; for each `TwoPhase` input equal to the number of `'<msil>data'` fields that the recording sink saw `buildTrailer` make
+
+From the specification only. Checks: `msil-syntax.ps1` on the file; the gate builds and runs it (steps 7, 10, 11).
+
+#### FX-1.e msil-ld tests: the touch in listings (test, ~120 lines)
+
+- Owned files: `lld/test/MSIL/shared-data-class.test`
+- Depends on: FX-1.a, FX-1.c, FX-1.0
+- Reads: this plan sections 5.9.10, 5.9.15, 5.17.18 and 5.18.7 (PE5), this milestone's text, FX-1.c's Provides line and the section 12 rows for FX-1; lld/test/MSIL/shared-data-class.test; lld/test/MSIL/shared-two-phase.test (NO-PHASE2, PHASE2); lld/test/MSIL/portable-guard.test (GUARD); lld/test/MSIL/Inputs/shared/listing.py; lld/test/MSIL/Inputs/members.py
+- Provides: in `shared-data-class.test`, through `listing.py`: (1) `spill.dll` (`x86_64-pc-windows-msvc-msil`, `--msil-type-member-limit=4`): `<Module>::.cctor` is exactly `.method '.cctor' void() flags=0x1891 impl=0x0000`, `.maxstack 1`, `L0: ldsfld native int '<msil>Data'::'<msil>data'`, `L1: pop`, `L2: ret`, and `members.py` still prints `limit 4 ok`; (2) the same object linked without the limit: `no method <Module>::.cctor`; (3) the same IR through `llc -mtriple=x86_64-unknown-linux-gnu-msil`: the same touch; (4) `spill.o` linked at the limit with a small `-shared` library of its own as an input (a new split-file part): `<Module>::.cctor` starts with the touch, then the `ldtoken` of that library's export class and `pop`; (5) the IR through `llc -mtriple=msil64-unknown-dotnet`, listed with `llvm-cil-dump --forms=canon`: the guard's ten instructions L0-L9 (as `portable-guard.test` pins them), then `L10: ldsfld native int '<msil>Data'::'<msil>data'`, `L11: pop`, `L12: ret`; linked without the limit, the guard followed by `L10: ret`; the file's other checks unchanged and its header comment naming the touch
+
+From the specification only. Checks: the test run by hand with FX-1.0's `msil-ld`, outputs in its scratch folder.
+
+#### FX-1.f The two-thread run: msil/test/M3/09-threads (test, ~250 lines)
+
+- Owned files: `msil/test/M3/09-threads/`
+- Depends on: FX-1.a, FX-1.b, FX-1.c, FX-1.0
+- Reads: this plan sections 5.5, 5.12.3, 5.17.4 and 5.17.13 (its thread rules), this milestone's text and the section 12 rows for FX-1; llvm/docs/MSIL/recon/p2/exports-multiasm.md section 6.1; msil/test/M3/08-atomics/barrier-spin.test (its C# host, `embed.py` and RUN lines); msil/test/M2/04-shared/csharp-consumer.test
+- Provides: `spill-race.test` (`REQUIRES: msil-csc`), in `barrier-spin.test`'s form, whose header says why its threads are C#'s
+
+The library (`spill.c`, a split-file part) has 64 `static volatile int` variables, each with its own value, and three
+exported functions: one reads a variable whose address field stays in `'<msil>Data'`, one reads a variable whose field
+spills, and one sums all 64, so that none is dropped. It is built at -O0 and -O2 (with `-flto` under the `lto`
+pipeline) as `-shared -Wl,--export-class=Race.Native -Wl,--msil-type-member-limit=8`, verified and, with jitall,
+force-JITted. Before any run, a split-file Python helper prints, from `%msil_canon`'s listing of each library, the
+class that holds each of the two variables' address fields, and FileCheck requires `'<msil>Data'` for the first and a
+`'<msil>Spill<N>'` class for the second, so that a change of placement fails the test instead of leaving it without a
+race. The host (`host.cs`, compiled by `%msil_csc`, with the library inside it through `embed.py` as in
+`barrier-spin.test`) runs 64 rounds. Each round loads a fresh copy of the library with `Assembly.Load(byte[])`, whose
+statics are its own, so that each round is a first use; takes the two functions' `MethodInfo`s (neither the load, nor
+`GetType`, nor `GetMethod` runs a library's module initializer: recon `p2/exports-multiasm.md` 6.1); and starts two
+threads that wait at one `Barrier`. Released, the thread of the spilled variable first calls `Thread.SpinWait(1000 * r)`
+in round r (0-63), so that the rounds move the moment at which the two first uses meet; then each thread makes its
+delegate, calls its function and stores the result, or a mark when the call throws. Only the main thread prints, after
+joining both: `spill race: 64 rounds, <n> wrong`, where a result is wrong when it is not its variable's value, and it
+exits 0 when n is 0, else 3. The runs are `barrier-spin.test`'s: the configured runtime, each `msil_also_run` entry
+through `%{msil_also_run_check}` and, on Windows triples with the library bound to mscorlib, a net48 host on .NET
+Framework 4.8; FileCheck requires `spill race: 64 rounds, 0 wrong` and `[exit 0]`. No `.expected` file: a C# host has
+no native oracle (5.17.4, as for `barrier-spin.test`). The test keeps 5.17.13's thread rules 1-3 and 5. Rule 4 cannot
+hold for it: without the touch a run fails only when the two first uses meet inside a spill class's type initializer,
+which no test can force, so FX-1.e's listings and FX-1.d's cases are the checks that fail every time the touch is
+missing. This run takes, on every runtime, the path that FX-1 changes (one thread runs the module initializer while
+the other waits), but it finds a wrong value only by chance, whether the touch is missing or a runtime fails to make
+the second thread wait; that wait is the runtime's type-initialization rule (ECMA-335 II.10.5.3), which FX-1 relies on
+and does not prove.
+
+From the specification only. Checks: the test built and run by hand with FX-1.0's tools on .NET 10 and the
+Framework, outputs in its scratch folder.
+
+#### FX-1.g Documentation (docs, ~80 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/test/README.md`
+- Depends on: FX-1.a, FX-1.b, FX-1.c, FX-1.0, FX-1.d, FX-1.e, FX-1.f
+- Reads: this plan sections 5.9.10, 5.9.15 and 5.17.13, this milestone's text and the section 12 rows for FX-1; the hand-overs of FX-1.0-FX-1.f; the three owned files
+- Provides: Status.md: in 'Libraries and assembly-to-assembly linking (M22)', the two-phase bullet's known limit replaced by the rule as built (a spilling library's module initializer starts with the touch, after the guard on `msil64-unknown-dotnet`; phase 1 runs inside it and every other thread waits; libraries that do not spill are unchanged), naming `shared-data-class.test` and `spill-race.test`; a `####` subsection 'The spilled-data race of `-shared` libraries (FX-1)' in section 2's entry 'The fix steps and the temporary warning after R-a (FX-1 to FX-4)' (after R-a's entry, with a `####` subsection per step; the first of the four steps to commit creates it); in 'Silent states with the user's OK', item 6 gains one sentence after its last: that FX-1 ended the race, with FX-1's commit and its date; the unit-test counts; GettingStarted.md's unit-test and `lld/test/MSIL` rows (the counts, FX-1's change to `shared-data-class.test`); msil/test/README.md: the `09-threads/` row (created by FX-1 with `spill-race`, `REQUIRES: msil-csc`, a C# host as for `barrier-spin`, FileCheck, no `.expected`), `09-threads` FX-1 and M28 in the M3 directory list, FX-1 in the sentence on which step created which `M3/` directory, the `M3/` count (one more test and one more `.test` file), `09-threads/spill-race` in the list of `M3/` tests that have no `.expected` file, and `spill-race.test` beside `barrier-spin.test` in the `msil-csc` sentence; the hand-over of FX-1's re-pin rows
+
+Design.md is not FX-1.g's: FX-1's plan commit applies its text (L8).
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (in order; at eight workers, by the row 'The CPU rule after R-a' (2026-11-22): eight lit workers and
+a `-Jobs 8` or `--jobs 8` of its own on every step that runs work in parallel, one process at a time on the others;
+no portable step, as R-a's):
+
+```text
+ 1. pwsh -NoProfile -Command '$b = "D:/llvm-msil-scratch/milestones/FX-1/gate/il-baseline"; if (Test-Path -LiteralPath "$b/il-snapshot.json") { "baseline present: $b" } else { "no baseline (FX-1.0 writes it with the build of HEAD before building): $b"; exit 1 }'  (FX-1.0's IL baseline, taken with HEAD's build; this step never writes one)
+ 2. pwsh -NoProfile -Command '"D: has {0:N1} GB free (report only)" -f ((Get-PSDrive D).Free / 1GB)'
+ 3. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0)
+ 4. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out D:/llvm-msil-scratch/linux-sysroot  (G0)
+ 5. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out D:/llvm-msil-scratch/linux-sysroot --builtins --clang D:/llvm-msil/build/bin/clang.exe --jobs 8  (G0)
+ 6. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/make-glibc-sysroot.sh /mnt/d/llvm-msil-scratch/glibc-sysroot  (G0)
+ 7. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard -Jobs 8  (G1)
+ 8. python D:/llvm-msil/msil/utils/build/build-builtins.py --build-dir D:/llvm-msil/build --jobs 8
+ 9. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe  (G2)
+10. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 499  (494 after R-a + FX-1.d's 5; a step that commits before FX-1 and adds CLITests cases raises it by its re-pin row)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLITrailerTest.*' -NoSkip -MinTests 34  (29 + FX-1.d's 5)
+12. python D:/llvm-msil/msil/utils/ci/calibrate.py --label start  (G2c)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net-core -Jobs 8  (G3, with lld/test/MSIL)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg p3-full -Jobs 8  (G3b: msil/test/M3, 09-threads included, on .NET 10, TC=0 and Framework 4.8)
+15. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $s = @(python msil/utils/ci/gate-select.py harness); $s; if ($s[0] -eq "harness: run") { pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Leg harness -Jobs 8; exit $LASTEXITCODE }'  (G3c)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-p3 -Jobs 8  (G4: run 1 takes msil/test/M3, 09-threads included)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg scale -Jobs 8  (5.17.6: FX-1 changes the trailer)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 8 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1 --param msil_require_verify=1" lld/test/MSIL  (the spill decision is new per-link state)
+19. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 8 -LitArgs "-sv --param msil_pipeline=obj --param msil_dotnet_runtime=8 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1 --param msil_require_csc=1" msil/test/M3/09-threads  (.NET 8)
+20. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 8 -LitArgs "-sv --param msil_pipeline=lto --param msil_dotnet_runtime=10 --param msil_run_netfx=1 --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1 --param msil_require_csc=1" msil/test/M3/09-threads  (LTO, Windows triple)
+21. pwsh -NoProfile -Command "& D:/llvm-msil/msil/utils/build/msil-lit.ps1 -Jobs 8 -LitArgs '-sv --param msil_pipeline=lto --param msil_runner=wsl --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_wsl_dotnet=private --param msil_dotnet_runtime=10 --param msil_native_oracle=required --param msil_linux_sysroot=D:/llvm-msil-scratch/linux-sysroot --param msil_glibc_sysroot=D:/llvm-msil-scratch/glibc-sysroot --param msil_also_run=10+tc0 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_hosted=1 --param msil_require_csc=1' msil/test/M3/09-threads"  (LTO, Linux triple)
+22. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $o = "D:/llvm-msil-scratch/milestones/FX-1/gate/il-after"; Remove-Item -Recurse -Force -LiteralPath $o -ErrorAction SilentlyContinue; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 8 --out $o --compare D:/llvm-msil-scratch/milestones/FX-1/gate/il-baseline --skip-changed msil/test/M1 msil/test/M2 llvm/test/CodeGen/MSIL; exit $LASTEXITCODE'  (5.14.5 S2: no compiler output changes)
+23. python D:/llvm-msil/msil/utils/ci/calibrate.py --label end  (G4c)
+24. python D:/llvm-msil/msil/utils/ci/calibrate.py --combine D:/llvm-msil/build/lit-results/calibration-start.json D:/llvm-msil/build/lit-results/calibration-end.json
+25. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5: FX-1 edits no upstream file)
+26. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $req = [ordered]@{ "llvm/include/llvm/CLI/Trailer.h" = "countTrailerDataFields"; "llvm/lib/CLI/Trailer.cpp" = "SpilledData"; "llvm/lib/CLI/TrailerParts.h" = "emitSpilledDataTouch"; "llvm/lib/CLI/TrailerSpill.cpp" = "emitSpilledDataTouch"; "llvm/lib/CLI/CMakeLists.txt" = "TrailerSpill.cpp"; "lld/MSIL/Writer.cpp" = "countTrailerDataFields"; "llvm/unittests/CLI/TrailerTest.cpp" = "countTrailerDataFields"; "lld/test/MSIL/shared-data-class.test" = "msil64-unknown-dotnet"; "msil/test/M3/09-threads/spill-race.test" = "msil-type-member-limit"; "msil/test/README.md" = "spill-race"; "llvm/docs/MSIL/Status.md" = "spill-race.test" }; foreach ($k in $req.Keys) { if (-not (Select-String -LiteralPath ($r + $k) -SimpleMatch $req[$k] -Quiet -ErrorAction SilentlyContinue)) { $bad += "$k lacks $($req[$k])" } }; $st = (Get-Content -Raw -LiteralPath ($r + "llvm/docs/MSIL/Status.md")) -replace "\s+", " "; if ($st.Contains("Known limit: in a library whose") -or $st.Contains("planned as fix step FX-1")) { $bad += "Status.md still states the race as a known limit" }; if ($bad.Count) { $bad; exit 1 }; "FX-1 presence check: ok"'  (G6)
+27. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; New-Item -ItemType Directory -Force D:/llvm-msil-scratch/milestones/FX-1/gate | Out-Null; $j = "D:/llvm-msil-scratch/milestones/FX-1/gate/legs.json"; pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Describe | Set-Content -Encoding utf8 $j; if ($LASTEXITCODE) { exit 1 }; python msil/test/M2/08-semantics/Inputs/check-matrix.py --legs $j .; exit $LASTEXITCODE'  (G6)
+28. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; . msil/utils/build/msil-env.ps1; $d = @(python msil/utils/ci/gate-select.py expected-dirs); if ($LASTEXITCODE) { exit 1 }; if ($d.Count) { python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --jobs 8 --levels O0,O2 @d; if ($LASTEXITCODE) { exit 1 }; python msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check --jobs 8 --levels O0,O2 --os linux @d; exit $LASTEXITCODE }'  (G7; spill-race.test has no native oracle and is skipped)
+29. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests lld/MSIL"  (G8: no diff)
+30. python D:/llvm-msil/msil/utils/ci/linux-syntax-check.py --changed-from HEAD --jobs 8
+31. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope FX-1"  (G9)
+```
+
+Under 5.17.7's rule only G4's run 2 may move to the post-commit run (by round 1's measurement, through a section 12
+row; step 16 then reads `-Leg wsl-p3 -Run 1`). Every other step of FX-1's own is named by an exit criterion,
+`scale` (step 17) and the LTO runs (steps 20, 21) among them, and 5.17.7 never moves such a step, nor G3, G3b or
+G4's run 1. FX-1 changes no harness file, so step 15 runs nothing unless `gate-select.py` says otherwise. No step
+carries a quiet estimate (Claude's reading, for plan texts, of the user's words of 2026-11-22); round 1 measures
+the gate, and a total above 5.17.7's budget is recorded in a section 12 row, as 5.17.7 says.
+
+**Exit criteria:** a `-shared` link whose `'<msil>Data'` fields spill starts `<Module>::.cctor` with the touch, after
+the guard on `msil64-unknown-dotnet` and before the `ldtoken`s, and a link that does not spill keeps its output
+(steps 13, 18: `shared-data-class.test`); exactly 5 new `CLITrailerTest` cases, floors 499 and 34 (steps 10, 11);
+`spill-race.test` passes with 0 wrong in 64 rounds at -O0 and -O2 on .NET 10, TC=0 and Framework 4.8 on the Windows
+triple (step 14), on WSL .NET 10 and TC=0 (step 16), on .NET 8 (step 19) and through LTO on both host x86_64 triples
+(steps 20, 21); `scale` passes (step 17); il-snapshot of M1, M2 and `llvm/test/CodeGen/MSIL` unchanged (step 22);
+manifest and pins, presence, legs, expected files, format, Linux syntax and scope pass (steps 25-31).
+
+**Review focus:** `countTrailerDataFields` equals what `buildTrailer` makes in `'<msil>Data'` on every input, and
+msil-ld decides with `assignOwners`' own capacity rule, so that the check after `assignOwners` cannot fire; the
+touch reads `'<msil>data'`, a trailer field that never spills; only a hook in `Trailer.cpp`; no output changes for a
+link that does not spill, for an EXE or for any text; in `spill-race.test` nothing touches a copy of the library before
+its two threads, and the placement check keeps the test meaningful.
+
+**Rebuild cost.** `Trailer.h` recompiles the lib/CLI, lldMSIL and MSIL target TUs that include it (the class of M28's
+`Trailer.h` item); `TrailerSpill.cpp` is new, so CMake regenerates lib/CLI; then the relinks of llc, opt, clang, lld
+with its copies, MSILTests, CLITests, LLDAsLibAllTests and the CLI tools, and the helper archives (step 8). FX-1.0 counts the objects.
+
+**FX-1's re-pin rows** (with FX-1's commit, from FX-1.g's hand-over; R-a's re-pin rows are the form): M28-M35's
+CLITests `'*'` floors rise by FX-1's actual new cases less the one that moves from M28.g to FX-1.d (P-1r R3's case),
+so by 4 with the planned 5 (from R-a's floors: M28 508 to 512, M29 515 to 519, M30 516 to 520, M31 523 to 527, M32
+524 to 528, M33 530 to 534, M34 536 to 540, M35 536 to 540; from the floors as a step that commits between R-a and FX-1 re-pins them, if one does); the `CLITests` `'*'`
+floor of every later FX-<n> text already in the plan, which counts from R-a's 494 (FX-3's gate step 13 and
+FX-4's gate step 9 in Claude's drafts), rises by all of FX-1's actual new cases, so to 499 with the planned 5; M28-M33's `CLITrailerTest` floors (P-1r R13's) rise the same way, by FX-1's new
+`CLITrailerTest` cases less R3's, so by 4 with the planned 5 (M28 30 to 34 at step 15, M29 34 to 38 at step 16, M30
+35 to 39 at step 17, M31 38 to 42 at step 16, M32 39 to 43 at step 15, M33 40 to 44 at step 15), and the notes of
+those steps follow; M28's planned minimum falls from 14 to 13; M28.g's floor sentences, as P-1r R13 reads them, read
+'keeping every case (gate floor 34: FX-1's count)' for 'keeping every case (gate floor 30: P-1a's 29 plus R3's case)',
+'The gate's floors count the 13 `CLITrailerThunksTest` cases (R2) as M28's additions' for 'The gate's floors count
+the 13 `CLITrailerThunksTest` cases (R2) and R3's `CLITrailerTest` case as M28's additions', and '(5.17.7 rebased by
+P-1r R13, MC-1, R-a and FX-1: 461 after P-1a, 488 after MC-1, 494 after R-a, 499 after FX-1, 512 after M28)'; M28's
+exit criteria quote '(512; 19, 13, 34, 10)' (was '(508; 19, 13, 30, 10)'); M35's case count is 540, and its step 13
+note gains FX-1's 5 and M28's 13; FX-1.g re-verifies by `git grep`
+every function that M28-M35, and every later FX-<n> or EH-<n> text in the plan, cite in a file FX-1 changes (`Trailer.h`, `Trailer.cpp`, `TrailerParts.h`,
+`llvm/lib/CLI/CMakeLists.txt`, `lld/MSIL/Writer.cpp`, `TrailerTest.cpp`, `shared-data-class.test`).
+
+**How FX-1 ends.** With its commit, `[MSIL] FX-1: The spilled-data race of -shared libraries` (section 1 step 8),
+whose body lists the packages, the gate results, FX-1's re-pin rows and the post-commit line of the step before it;
+then its own post-commit run (5.17.11), whose line goes into the next step's commit body. If the next step is a fix
+step, its packages start once that run has ended, as FX-1's did; if it is EH-0, EH-0 starts as the row 'Program order
+amended (exception-model steps EH-0 to EH-3)' says, and its build waits for the run (5.17.11). A failure in the run
+becomes a fix package of the next step through a section 12 row.
+
 **MC-4. Managed calls from C and C++, stage 2: the caught exception as a ticket** (an outline; contract 5.20.17, with 5.20.19 and 5.20.20; its text is drafted after R-a's commit, in the managed-call spelling that holds then: the cleanup round may respell the declarations first (the strings row of 2026-11-21), and R-a amends MC-1's contract (5.21.9)). An `msil_catch` entry may also hand C the caught exception as a ticket (an `intptr_t` GCHandle number, as R-a's tickets are) through a second trailing `intptr_t *` parameter after MS4's `int *`, which the stub's handler writes with the code (MS4, MS5's trailing row, MS6, MX2); the filters stay type-only (MA5), and C reads `HResult`, `InnerException`, `SocketErrorCode` or `NativeErrorCode` through ordinary managed calls and frees the ticket. It goes after the cleanup round's milestones and EH-0 with FX-1 to FX-3 and before R-a2, which stays directly before P-2, so that P-2's OS layer is written once on exact error codes (5.19.5; section 12's row 'Program order amended (portable I/O)', which also places value-type form B's step in that window). Tests in `msil/test/M3/13-managed-calls` with portable copies in `msil/test/Portable/02-managed-calls`; new T-M texts; a hook block for each upstream file it changes; its gate is a host-triple gate with no portable step, as MC-1's under brief Q11 (a).
 
 **R-a2. Real .NET references in C++** (an outline, 5.21.16; the user's "(a) Yes, R-a2" (2026-11-19 12:50); its text is drafted after R-a's
@@ -21282,6 +21543,12 @@ the change text ``fix-loop ownership: `<path>` -> <agent>``, for example
 | 2026-11-23 | FX-2 | `msil/test/M3/15-memory/memset-4g.test`'s limits as built (FX-2.d; 5.17.9's `%{msil_limits}` rule): `REDEFINE: %{msil_limits} = --timeout 30 --mem-limit-mb 6144`, for its buffer of 4 GiB and 4,231 bytes (lit's defaults are a 4096 MiB cap and the 60 s `msil_timeout`). Its comment gives the slowest command, a run of the `-O0` image on WSL .NET 10, at 5.5-8.4 s in five runs (median 6.8 s), each measured alone on 2026-11-23 while other builds and tests kept the host busy: not the quiet time that 5.17.9 asks for, so the 30 s timeout is under five times a busy median and no measured quiet time bounds it; `msil/test/README.md`'s `%{msil_limits}` bullet says these times were measured on a busy host. FX-2's three gate rounds ran the test (steps 13 and 15-19) with no timeout. No quiet measurement is planned while the user's words on timings stand; one made later sets the timeout by 5.17.9's rule. | FX-2.d's hand-over (open issues 1 and 2: one native-oracle run took about 10 s while the host was loaded) and FX-2.f's hand-over (its open issue on this comment); `msil/test/lit.cfg.py` (`msil_timeout` 60, `msil_mem_limit_mb` 4096); gate round 3: `memset-4g` passed in `p3-full`, in `wsl-p3`'s run 1 and in steps 16-19; the user's words of 2026-11-22 (chat, 19:38 CST), "I'm not worried about timings at all right now.", as row 'Governance (FX-2)' cites them; leaving the measurement for later is Claude's reading of them; FX-2.d's measurement, recorded by Claude, not a user decision |
 | 2026-11-23 | - | Portable input (P-2: the `-O2` image that four Portable tests read after `%{msil_prog}`): `msil/test/Portable/00-freestanding/helpers.test`, `shared-pair.test` and `guard-x86.test` and `msil/test/Portable/01-libc/libm-empty.test` read the fixed path `%t.O2.d/prog.exe` after `%{msil_prog}`, which builds only the levels of `msil_opt_levels` and empties only their work folders, so a run whose levels leave out O2 reads an image that an earlier run or an older build left there and passes or fails on it (in a build tree that holds none, it fails on the missing file); every leg that runs `msil/test/Portable` (`portable-smoke`, `portable-smoke-wsl`) builds O2 today, so no verdict is affected. FX-2 found the same read in its two `memset-loop.test` copies and fixed it there with `rm -rf %t.O2.d %t.O2.dump && %{msil_prog}`; P-2, the next portable step, fixes the four tests the same way, or builds the image it reads with `%{msil_prog_O2}`, as `msil/test/Programs/zlib-full/fortify.test` does. | FX-2 review round 2, finding 1 (CIL-semantics lens), whose verifier found the same unguarded read in these four tests; FX-2's triage left them out of FX-2's fixes because no FX-2 package owns them, and no M28-M35 package owns `msil/test/Portable`; Claude's placement, not a user decision |
 | 2026-11-23 | FX-2 | FX-2's build and rebuild class (5.13.5; FX-2's Header changes and Rebuild cost): FX-2.0's build after FX-2.a and FX-2.b (`msil-build.ps1 -Standard -Jobs 8`, its step 1) ran 59 ninja steps: the six TableGen runs of the MSIL target (`MSILGenAsmWriter.inc`, `MSILGenRegisterInfo.inc`, `MSILGenSDNodeInfo.inc`, `MSILGenSubtargetInfo.inc`, `MSILGenDAGISel.inc` and `MSILGenInstrInfo.inc`), 36 C++ objects (27 of the 42 source files directly under `llvm/lib/Target/MSIL`; 6 of the 11 under its `MCTargetDesc` and `TargetInfo`, all in `LLVMMSILDesc`: `MSILInstPrinter.cpp`, `MSILAsmBackend.cpp`, `MSILMCCodeEmitter.cpp`, `MSILMCTargetDesc.cpp`, `MSILTargetObjectStreamer.cpp` and `MSILObjectWriter.cpp`; so 33 of the target's 53; and the three unit-test files that the Rebuild cost names), the two static libraries `LLVMMSILCodeGen` and `LLVMMSILDesc`, twelve relinked executables (`llc`, `opt`, `clang`, `lld` with `msil-ld`, `llvm-lto2`, `llvm-mc`, `llvm-ar`, `llvm-nm`, `llvm-objdump`, `MCTests`, `MSILTests` and `LLDAsLibAllTests`) and `llvm-ranlib`, `llvm-lib` and `llvm-dlltool` generated from `llvm-ar` again: the class that the Rebuild cost names ('most of the MSIL target recompiles'). The gate rounds' builds (step 7) then compiled FX-2.c's `MSILCILRecordsTest.cpp` and relinked `MSILTests` (round 1), nothing (round 2), and 20 objects of `LLVMMSILCodeGen` with `LLVMMSILCodeGen` and eight relinks (round 3), after the comment-only fixes in `MSILSelectionDAGInfo.cpp` and `MSILSelectionDAGInfo.h`. The Rebuild cost and the row 'Governance (FX-2)' estimate no time, and this row records none. | FX-2.0's hand-over ('Objects compiled, for 5.13.5', with its lists) and its step-1 build log (59 steps: six TableGen runs, 36 'Building CXX object' lines, two static libraries, twelve executables and three copies); the step-7 build logs of gate rounds 1 to 3; FX-2.0's Provides line hands the count over 'for 5.13.5', as R-a.0's did for the row 'R-a's build and rebuild class (5.13.5; R-a's Header changes and Rebuild cost)'; FX-2.0's count, recorded by Claude, not a user decision |
+| 2026-11-23 | FX-1 | FX-1 (the spilled-data race of Status.md section 6's item 22; Design.md 5.4) is a milestone of its own, one of the three fix steps that run right after R-a and before the cleanup round's milestones, where the user's pick on Claude's question on the order after R-a puts them. Until the approved row 'Program order amended (exception-model steps EH-0 to EH-3)' applies, this row places FX-1, read with 5.18's paragraph and row 'Program order amended (real .NET references)'. The fix steps run one at a time, each with its own text, gate, commit and post-commit run; FX-1 launches after the commit of the step that runs before it, once that step's post-commit run has ended (stricter than 5.17.11, which lets the next milestone's packages write code during that run). FX-1 follows the Phase 3 protocol outside its numbering and exit gate, as MC-1 and R-a do; its tests live under `msil/test/M3/09-threads`, `lld/test/MSIL` and `llvm/unittests/CLI`, and run in every post-commit run and in M35's gate legs. A failure of FX-1's post-commit run becomes a fix package of the step after it through a section 12 row (5.17.11). The tools commit that teaches `plan-check.py` the milestone ids `FX-<n>` and `EH-<n>` (one commit, before the first fix-step plan commit) comes before FX-1's plan commit; FX-1's plan commit carries `### FX-1.`, these rows, Design.md 5.4's text as approved and Status.md's two-phase bullet naming FX-1. | The step is the user's pick on the review page (2026-11-04, item prov-3), "Approve 16-21 and 23; fix item 22 as a step after MC-1; show me 4.5/4.6 again after the rewrites". Its place is the user's pick "B" (chat, 2026-11-22 23:49 CST) on Claude's question 'After R-a: in what order do the cleanup round, EH-0 and the three fix steps come?', whose option (b) read 'EH-0 and the fix steps first, then the round.', set in the order row that the user approved as shown with "A" (chat, 2026-11-23 05:53 CST), which goes into this table before EH-0 starts. Claude's: one milestone per fix step, the launch rule, the protocol sentence (outside the exit gate), the test directories and the commits. |
+| 2026-11-23 | FX-1, M28 | Row 'Known limit after M22 (spilled `'<msil>Data'` fields and threads; recorded, not M23 work)' answered by FX-1: the 2026-10-28 M28 row that answers it ('M28 fixes the race as that row proposed') is superseded, and FX-1 fixes the race as that row proposed. A `-shared` link whose `'<msil>Data'` fields spill sets `cli::TrailerInput::SpilledData` (msil-ld decides it before it builds the trailer, with `cli::countTrailerDataFields`, the count of `'<msil>Data'`'s trailer fields, in place of M28.a's planned `countTrailerFields(In, Owner)`, of which only `'<msil>Data'`'s count has a caller), and `<Module>::.cctor` then exists and starts, after the portable guard when `TrailerInput::Guard` is set, with `ldsfld '<msil>data'` and `pop`, before the `ldtoken`s, so that phase 1 runs inside the module initializer. It is tested by `lld/test/MSIL/shared-data-class.test` (listings on both host x86_64 triples and `msil64-unknown-dotnet`), five `CLITrailerTest` cases and `msil/test/M3/09-threads/spill-race.test` (two C# threads first using each of 64 copies of a spilling library, on both host x86_64 triples, on .NET 10, .NET 8, Framework 4.8 and WSL .NET 10). M28.j's two-thread test of the race is dropped, not moved. It cannot move: C's own thread functions are link errors before M28 (msil-ld refuses `pthread_create`, `CreateThread`, `_beginthread`, `_beginthreadex` and `thrd_create` until then, and on `msil64-unknown-dotnet` `c.dll` lacks `pthread_create` and `thrd_create` until P-3). Kept in M28, it would add little: from FX-1 on, a C program's module initializer holds an `ldtoken` of every library it links (5.9.10), whose resolution runs a spilling library's phase 1 before `main` (recon `p2/exports-multiasm.md` 6.1), so the test's threads would never wait for the module initializer, and it would catch a missing touch only by chance, with fewer first uses than `spill-race.test`'s rounds, while `shared-data-class.test`'s listing catches it every time. Status.md's two-phase bullet names FX-1 as the step that fixes it. | The user's pick on the review page (2026-11-04, item prov-3), "fix item 22 as a step after MC-1"; superseding the 2026-10-28 row and moving the fix out of M28 is Claude's reading of that pick, as Claude's note on that item said and as the approved order row records it (the user approved it as shown with "A" (chat, 2026-11-23 05:53 CST); it goes into this table before EH-0 starts). The design is the 2026-10-27 row's proposal as the 2026-10-28 row and P-1r R3 planned it (Claude's). Claude's design: dropping M28.j's test as redundant, the C# host and its rounds, and `countTrailerDataFields`. |
+| 2026-11-23 | FX-1, M28 | M28's texts on the spilled-data race and its touch, now FX-1's (the row of this date that supersedes the 2026-10-28 row), read: (1) M28's Goal without 'The spilled-`'<msil>Data'` race (section 12 row 'Known limit after M22') is fixed.'; (2) M28's Header changes: the `Trailer.h` item without '`SpilledData`, `cli::countTrailerFields`'; (3) M28.a (1): the code block without the `SpilledData` line and without the `countTrailerFields` declaration and its comment (FX-1.a declares `TrailerInput::SpilledData` and `cli::countTrailerDataFields`); (4) M28.b: the title 'Thunks: phase-1 thunks, the table, the dispatch definitions'; the Reads line without the row 'Known limit after M22 (...)'; the Provides line without '`cli::countTrailerFields`;'; the owned files with `llvm/lib/CLI/TrailerSpill.cpp`; in (1), without 'with `TwoPhase` and `SpilledData`, `<Module>::.cctor` exists and starts with `ldsfld` of `Sink.getDataField()` and `pop`, before the `ldtoken`s, so every thread waits for the module initializer (5.15.3);', and, in place of '`countTrailerFields` counts exactly the fields `buildTrailer` makes for that owner.', 'The thunk part's fields of `'<msil>Data'` are counted in `cli::countTrailerDataFields` (FX-1, `TrailerSpill.cpp`), so that it still counts exactly the fields `buildTrailer` makes there.'; (5) M28.c (3): '`UCOThunks` stays false (`SpilledData`, FX-1's, keeps its default)' for '`UCOThunks` and `SpilledData` stay false'; (6) M28.d: the title without ', the spill race'; the Reads line without the row 'Known limit after M22 (...)' (it keeps 'M22.b item (2) and 5.9.12 as built (spill classes of `-shared` outputs)'); the Provides line without '`TrailerInput::SpilledData`'; item (5) reads '(5) **Spill race**: moved to FX-1.c, whose spill decision in `Writer.cpp` stays as it is.'; the Checks without 'a `-shared` library at `--msil-type-member-limit=8` shows the touch at the start of `<Module>::.cctor`;'; (7) M28.g: the list without 'the `SpilledData` touch;' and with '`countTrailerDataFields` equal to the `'<msil>Data'` fields made, the thunk part's included' for '`countTrailerFields` equal to the fields made'; P-1r R3's `CLITrailerTest` case is FX-1.d's, so M28's planned new CLITests cases are 13 (FX-1's re-pin rows give the floors); (8) M28.h: the title without ', the spill race'; the Reads line without the row; `shared-thunks.test` without 'at `--msil-type-member-limit=8` the touch starts `<Module>::.cctor`, and without spilling no `<Module>::.cctor` appears' (FX-1.e pins both in `shared-data-class.test`); (9) M28.j: the title 'Thread tests and Lua: M3/09-threads, the unmodified lua.c'; the Reads line without the row, and '5.15.3 (threads)' for '5.15.3 (threads, the spill race)'; the thread tests end with 'a `pthread_key_create` destructor run by glibc at thread exit (Linux).', the spill-race case dropped (row of this date); M28.j writes at least 6 tests besides FX-1's `spill-race.test`, so M28's gate step 33 requires 7 `.test` files in `msil/test/M3/09-threads`; (10) M28.l: Status.md's list without 'the spill race fixed'; (11) M28's exit criteria: 'msil-ld rules' without 'the spill race is fixed (listing in `shared-thunks.test`, two-thread first use in `09-threads`);'; (12) M28's `gc-churn` legs take `msil/test/M3/09-threads` with FX-1's `spill-race.test` in it, a C# host that reads no argv. | Claude's re-pin of M28's texts for FX-1 (the row of this date that supersedes the 2026-10-28 row, and the amendment of the order row's move list that the user approves with this text, B6); the texts that the order row's list does not name (M28's Header changes, the Reads lines, M28.g's count, M28's gate step 33) follow from its 'every M28 text on the spill race and its touch' (Claude's reading). |
+| 2026-11-23 | FX-1, M28 | P-1r R2 and R3 (rows of 2026-11-03) read for FX-1: R3's three sentences (5.15.3's bullet, M28.b (1)'s hook sentence and the 2026-10-28 row's) now describe FX-1's touch, which starts `<Module>::.cctor` after the portable guard when `TrailerInput::Guard` is set; R3's `CLITrailerTest` case (a `TwoPhase` input with `Guard`, `SpilledData` and a library type: the guard, then the touch, then the `ldtoken`) is FX-1.d's case (3); R3's 'M28.d (5)'s spill rule also applies, unchanged, to dotnet `-shared` links' is FX-1.c's rule, which applies on every triple; R3's host-only pins are FX-1.e's cases (1)-(4), beside its `msil64-unknown-dotnet` case (5). In R2, 'the spilled-data race fix' leaves M28's generic pieces (it is FX-1's); '`SpilledData` keeps M28.d (5)'s rule on every triple (R3)' reads '`SpilledData` keeps FX-1's rule on every triple'; and 'M28 therefore changes no dotnet output's bytes, except for the `<Module>::.cctor` touch in a `-shared` output whose `'<msil>Data'` fields spill (R3)' reads 'M28 therefore changes no dotnet output's bytes (the touch is FX-1's)'. | Claude's re-pin for FX-1; P-1r's rows are Claude's audit rows. |
+| 2026-11-23 | FX-1 | Contract rows (FX-1): 5.9.10, the `TrailerInput` block gains `bool SpilledData = false;  // FX-1: TwoPhase only, '<msil>Data''s fields spill`, and its two-phase paragraph's 'phase 2 (the `ldtoken`s, cross relocations and constructors) into `<Module>::.cctor`, which is omitted when empty' reads 'phase 2 (the `ldtoken`s, cross relocations and constructors) into `<Module>::.cctor`, which is omitted when empty unless `SpilledData` is set (FX-1): then it starts, after the portable guard when one is set, with `ldsfld '<msil>data'` and `pop`, so that phase 1 runs inside the module initializer'; 5.9.15, the two-phase bullet's 'then `<Module>::.cctor` phase 2' reads 'then `<Module>::.cctor` phase 2, which a library whose `'<msil>Data'` fields spill starts with a read of `'<msil>data'` (FX-1)'; 5.13.3, a row `llvm/lib/CLI/TrailerSpill.cpp` (FX-1, `FX-1/trailer`; M28, `M28/thunks`, for the thunk part's fields in the count): the spilled-data touch and `cli::countTrailerDataFields`; 5.13.4, FX-1's rows (`FX-1/lists` (root): `Trailer.h`, the flag and the count; `FX-1/trailer`: `Trailer.cpp`, `llvm/lib/CLI/TrailerParts.h`, `TrailerSpill.cpp`, `llvm/lib/CLI/CMakeLists.txt`, the touch and the count; `FX-1/lld`: `lld/MSIL/Writer.cpp`, the spill decision), and `M28/thunks` gains `TrailerSpill.cpp` and loses 'the spilled `'<msil>Data'` race (5.15)'; 5.14.5, S1: msil-ld sets `SpilledData`, and the whole-program text producer leaves it false (text never spills); S2: its default keeps every output; 5.15.3, its 'What msil-ld does' bullet 'Runs phase 1 inside the module initializer of a `-shared` library whose `'<msil>Data'` fields spill (...) ... so every thread waits for the module initializer.' leaves 5.15.3 for FX-1's text, and its test list reads '`shared-thunks.test` (library pointers)' and loses 'and the spilled-`'<msil>Data'` two-thread first use'; 5.15.12, M28's row loses 'the spill-race fix'; 5.17.6, the `scale` row's milestones read '(FX-1, M28, M29, M31 unless their sections say otherwise)'; 5.17.13, the `M3/09-threads` row's 'Created by' reads 'FX-1 (`spill-race.test`), M28 (mutexes), M30 (atomics), M31 (TLS)' and its contents gain 'FX-1: two C# threads first using each of 64 copies of a spilling `-shared` library (`%msil_csc`, as `08-atomics/barrier-spin.test`)'; its thread rules hold for `spill-race.test` except rule 4 (a missing touch fails only some runs), whose sensitivity FX-1's listings and unit tests carry; the capability table is unchanged (the threads are C#'s, as M24's `barrier-spin.test`'s are); 5.18.7 PE5, its last sentence, which begins 'The guard precedes phase 1's image work and M28's', reads 'The guard precedes phase 1's image work and, in a `-shared` library whose `'<msil>Data'` fields spill, FX-1's `ldsfld`/`pop` touch of the data field (guard first, then the touch).' | Claude's, in the form of R-a's 'Contract rows' row. |
+| 2026-11-23 | FX-1 | Design.md edit (FX-1), as approved: 5.4's bullet on the spilled-data race states the fix, a library whose `'<msil>Data'` fields spill runs the first phase inside its module initializer so that a second thread waits for it, in place of the limit and its 'phase 3's threads fix it'. | The user's approval of the exact text, "(a) Apply as shown" (chat, 2026-11-23 12:22 CST), on Claude's draft, shown with this text. Item 22 is the one item of 16-23 that the user's pick on the review page (2026-11-04, item prov-3) did not approve as applied. |
 
 ## Appendix A. Review dispositions (plan v1 -> v2)
 

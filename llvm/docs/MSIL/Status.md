@@ -2210,7 +2210,9 @@ contract and recon `p2/exports-multiasm.md` section 10 the design.
   a library whose `'<msil>Data'` fields spill (more than 65,534 of them), the type initializers
   of `'<msil>Data'` and of a spill class depend on each other, so when two threads first use
   such a library at the same time one of them may read a spilled field before phase 1 has
-  stored it (no test covers it; the fix is planned with phase 3's threads).
+  stored it (no test covers it; the fix is planned as fix step FX-1, one of the steps that run
+  right after R-a: the user's pick on the review page, 2026-11-04, item prov-3, "fix item 22 as
+  a step after MC-1").
 - **The symbol table (Q25).** A private attribute class `'<msil>SymbolTable'` (extending
   `System.Attribute`, AllowMultiple, constructor `(uint8[])`) carries the table on the Assembly
   row: format 1.0 (magic `MSYM`), flags (0x01 INTERFACE), the toolchain ABI version, the triple
