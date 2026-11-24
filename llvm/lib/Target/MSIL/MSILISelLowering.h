@@ -195,6 +195,12 @@ private:
   /// Expands a SELECT_<RC> pseudo into a branch triangle that joins the two
   /// values with a PHI (CIL has no select instruction).
   MachineBasicBlock *emitSelect(MachineInstr &MI, MachineBasicBlock *BB) const;
+  /// Expands an INITBLK_LONG pseudo, a memset whose native int length may
+  /// have bits at or above bit N, into a guard on those bits, a loop that
+  /// fills blocks of 2^(N-1) bytes with initblk while one of them is set, and
+  /// one initblk of the rest (decision D15: no length is cut).
+  MachineBasicBlock *emitLongInitBlk(MachineInstr &MI,
+                                     MachineBasicBlock *BB) const;
 };
 
 } // end namespace llvm

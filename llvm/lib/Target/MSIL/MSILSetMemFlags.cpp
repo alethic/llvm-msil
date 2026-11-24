@@ -16,7 +16,9 @@
 /// (decision D24): instruction selection leaves them 0, and this pass, right
 /// after it, copies the alignment and volatility of each instruction's memory
 /// operands into the immediate, which MSILMCInstLower turns into CIL_Unaligned
-/// and CIL_Volatile prefix instructions ahead of the access.
+/// and CIL_Volatile prefix instructions ahead of the access. The INITBLK_LONG
+/// pseudo gets its flags here too: its custom inserter runs later, in
+/// FinalizeISel, and copies them onto every initblk it builds.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -73,7 +75,8 @@ static int getMemFlagsOperandIdx(const MachineInstr &MI) {
 /// The alignment that the CIL instruction of \p MI assumes for its address
 /// unless an 'unaligned.' prefix says otherwise (ECMA-335 III.2.5): the size
 /// of the value for ldind and stind, and the natural size of the machine (the
-/// pointer size) for cpblk and initblk (III.3.30, III.3.36).
+/// pointer size) for cpblk and initblk (III.3.30, III.3.36), and for the
+/// INITBLK_LONG pseudo, which becomes initblks.
 static uint64_t getNaturalAlignment(const MachineInstr &MI,
                                     const DataLayout &DL) {
   switch (MI.getOpcode()) {
@@ -97,6 +100,7 @@ static uint64_t getNaturalAlignment(const MachineInstr &MI,
   case MSIL::STIND_I:
   case MSIL::CPBLK:
   case MSIL::INITBLK:
+  case MSIL::INITBLK_LONG:
     return DL.getPointerSize();
   default:
     llvm_unreachable("memflags operand on an unexpected instruction");
@@ -137,7 +141,8 @@ static bool setMemFlags(MachineFunction &MF) {
     for (MachineInstr &MI : MBB) {
       int FlagsOpIdx = getMemFlagsOperandIdx(MI);
       // An instruction without memory operands keeps its flags: instruction
-      // selection gives every load, store, cpblk and initblk memory operands.
+      // selection gives every load, store, cpblk, initblk and INITBLK_LONG
+      // memory operands.
       if (FlagsOpIdx < 0 || MI.memoperands_empty())
         continue;
       MachineOperand &FlagsOp = MI.getOperand(FlagsOpIdx);

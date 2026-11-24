@@ -6,15 +6,25 @@
 ; constant, or a constant above 2^32-1, is a call of
 ; [mscorlib]System.Buffer::MemoryCopy(void*, void*, int64, int64) with the
 ; source first (MSILISD::MEMMOVE: src, dst, len; then 'conv.i8; dup' supplies
-; the length twice, .maxstack 4). A memset whose length is a variable native int
-; is truncated with conv.i4 (the documented 4 GiB limit of D15); a constant
-; memset length of 2^32 or more is split into initblk blocks of 2^31 bytes with
-; the remainder last (set_4g5, set_9g). cpblk and initblk assume addresses
-; aligned to the native int size, so an alignment of 1, 2 or 4 is announced
-; with 'unaligned. N' (isel.md 11.3 encodes the memflags of cpblk and initblk
-; against the natural size 8; ECMA-335 III.2.5), and an 8-aligned (or better)
-; operation has no prefix. The only volatile. prefixes are those of the
-; volatile memset set_9g. A zero-length memcpy or memset is nothing at all.
+; the length twice, .maxstack 4). A memset whose length is known only at run
+; time fills every byte at any length (D15 as section 12's row 'D15 amended
+; (FX-2)' amends it, milestone FX-2): an int32 length is initblk's size
+; operand as it is (set_var_i32len), and a native int length is guarded
+; (set_var): when it is not above 2^32-1 ('ldc.i8 4294967295; conv.i',
+; 'cgt.un', 'brfalse'), one initblk takes it through conv.i4; otherwise a loop
+; fills initblk blocks of 2^31 bytes ('ldc.i4 -2147483648') and steps the
+; address up and the length down by 2^31 ('ldc.i8 2147483648; conv.i', 'add'
+; and 'sub') while the rest is above 2^32-1 ('cgt.un', 'brtrue'), and one
+; initblk then fills the rest through conv.i4 (memset-guarded-loop.ll and
+; memset-guarded-loop.mir cover the other forms). A constant memset length of
+; 2^32 or more is split into initblk blocks of 2^31 bytes with the remainder
+; last (set_4g5, set_9g), with no guard and no loop. cpblk and initblk assume
+; addresses aligned to the native int size, so an alignment of 1, 2 or 4 is
+; announced with 'unaligned. N' (isel.md 11.3 encodes the memflags of cpblk
+; and initblk against the natural size 8; ECMA-335 III.2.5), and an 8-aligned
+; (or better) operation has no prefix. The only volatile. prefixes are those
+; of the volatile memset set_9g. A zero-length memcpy or memset is nothing at
+; all.
 ;
 ; The constant lengths that are checked as cpblk/initblk (1000 bytes up to
 ; 9 GiB) are far above any inline load/store expansion; a short constant
@@ -23,12 +33,14 @@
 ; intrinsic on arguments. The memcpy CIL is the same at -O0 and -O2 (CHECK).
 ; A memset computes its int32 length before its fill value, and at -O0
 ; RegStackify only stackifies a def that sits right before its use (recon
-; passes-frame.md 5.1), so at -O0 a constant or truncated length waits in an
-; int32 local (O0) while at -O2 it is pushed right before initblk (O2); the
-; operand order (destination, value, length) is the same. No method has a
-; frame, and no '.locals' is 'init'. An undefined external 'memcpy', 'memset'
-; or 'memmove' call would be a P/Invoke (and an error until M8), so the output
-; must not name them.
+; passes-frame.md 5.1), so at -O0 a constant length waits in an int32 local
+; (O0) while at -O2 it is pushed right before initblk (O2); the operand order
+; (destination, value, length) is the same. The guarded loop of set_var keeps
+; its values in locals at -O0, and at -O2 pushes them where they are used and
+; keeps the loop's address and rest in the argument slots (starg). No method
+; has a frame, and no '.locals' is 'init'. An undefined external 'memcpy',
+; 'memset' or 'memmove' call would be a P/Invoke (and an error until M8), so
+; the output must not name them.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not="'memcpy'(" --implicit-check-not="'memset'(" \
 ; DEFINE:   --implicit-check-not="'memmove'(" --implicit-check-not=pinvokeimpl --implicit-check-not=volatile. \
@@ -330,21 +342,101 @@ define void @set_1000_a4(ptr %d) {
   ret void
 }
 
-; A variable native int length is truncated to int32 (4 GiB limit, D15).
+; A variable native int length: the guard, the loop and the tail. The guard
+; compares the length (argument 1) with 2^32-1 and jumps to the tail when it
+; is not above. The loop fills 2^31 bytes at its address, adds 2^31 to the
+; address and subtracts it from the rest, and repeats while the rest is above
+; 2^32-1; at -O2 the address and the rest live in argument slots 0 and 1, at
+; -O0 in native int locals (3 and 4 carry them into the loop and the tail).
+; The tail fills the rest, which then fits 32 bits, through conv.i4.
 ; CHECK-LABEL: .method {{.*}}'set_var'(
 ; CHECK-SAME:  native int, native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 3{{$}}
-; O0-NEXT:     {{^}}  .locals (int32){{$}}
-; O0-NEXT:     {{^}}  ldarg.1{{$}}
-; O0-NEXT:     {{^}}  conv.i4{{$}}
-; O0-NEXT:     {{^}}  stloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
+; O2-NEXT:     {{^}}  ldarg.1{{$}}
+; O2-NEXT:     {{^}}  ldc.i8 4294967295{{$}}
+; O2-NEXT:     {{^}}  conv.i{{$}}
+; O2-NEXT:     {{^}}  cgt.un{{$}}
+; O2-NEXT:     {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[TAIL:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}@BB[[F]]_[[LOOP:[0-9]+]]:{{$}}
+; O2-NEXT:     {{^}}  ldarg.0{{$}}
+; O2-NEXT:     {{^}}  ldc.i4.0{{$}}
+; O2-NEXT:     {{^}}  ldc.i4 -2147483648{{$}}
+; O2-NEXT:     {{^}}  initblk{{$}}
+; O2-NEXT:     {{^}}  ldarg.0{{$}}
+; O2-NEXT:     {{^}}  ldc.i8 2147483648{{$}}
+; O2-NEXT:     {{^}}  conv.i{{$}}
+; O2-NEXT:     {{^}}  add{{$}}
+; O2-NEXT:     {{^}}  starg.s 0{{$}}
+; O2-NEXT:     {{^}}  ldarg.1{{$}}
+; O2-NEXT:     {{^}}  ldc.i8 2147483648{{$}}
+; O2-NEXT:     {{^}}  conv.i{{$}}
+; O2-NEXT:     {{^}}  sub{{$}}
+; O2-NEXT:     {{^}}  dup{{$}}
+; O2-NEXT:     {{^}}  starg.s 1{{$}}
+; O2-NEXT:     {{^}}  ldc.i8 4294967295{{$}}
+; O2-NEXT:     {{^}}  conv.i{{$}}
+; O2-NEXT:     {{^}}  cgt.un{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F]]_[[LOOP]]{{$}}
+; O2-NEXT:     {{^}}@BB[[F]]_[[TAIL]]:{{$}}
+; O2-NEXT:     {{^}}  ldarg.0{{$}}
+; O2-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O2-NEXT:     {{^}}  ldarg.1{{$}}
 ; O2-NEXT:     {{^}}  conv.i4{{$}}
+; O2-NEXT:     {{^}}  initblk{{$}}
+; O0-NEXT:     {{^}}  .locals (int32, native int, int32, native int, native int, native int, native int, native int, native int, int32, native int){{$}}
+; O0-NEXT:     {{^}}  ldc.i4.0{{$}}
+; O0-NEXT:     {{^}}  stloc.0{{$}}
+; O0-NEXT:     {{^}}  ldc.i8 4294967295{{$}}
+; O0-NEXT:     {{^}}  conv.i{{$}}
+; O0-NEXT:     {{^}}  stloc.1{{$}}
+; O0-NEXT:     {{^}}  ldarg.1{{$}}
+; O0-NEXT:     {{^}}  ldloc.1{{$}}
+; O0-NEXT:     {{^}}  cgt.un{{$}}
+; O0-NEXT:     {{^}}  stloc.2{{$}}
+; O0-NEXT:     {{^}}  ldarg.0{{$}}
+; O0-NEXT:     {{^}}  stloc.3{{$}}
+; O0-NEXT:     {{^}}  ldarg.1{{$}}
+; O0-NEXT:     {{^}}  stloc.s 4{{$}}
+; O0-NEXT:     {{^}}  ldloc.2{{$}}
+; O0-NEXT:     {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[TAIL:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP:[0-9]+]]:{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 4{{$}}
+; O0-NEXT:     {{^}}  stloc.s 5{{$}}
+; O0-NEXT:     {{^}}  ldloc.3{{$}}
+; O0-NEXT:     {{^}}  stloc.s 6{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 6{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  initblk{{$}}
+; O0-NEXT:     {{^}}  ldc.i4 -2147483648{{$}}
+; O0-NEXT:     {{^}}  initblk{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 6{{$}}
+; O0-NEXT:     {{^}}  ldc.i8 2147483648{{$}}
+; O0-NEXT:     {{^}}  conv.i{{$}}
+; O0-NEXT:     {{^}}  add{{$}}
+; O0-NEXT:     {{^}}  stloc.s 7{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 5{{$}}
+; O0-NEXT:     {{^}}  ldc.i8 2147483648{{$}}
+; O0-NEXT:     {{^}}  conv.i{{$}}
+; O0-NEXT:     {{^}}  sub{{$}}
+; O0-NEXT:     {{^}}  stloc.s 8{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 8{{$}}
+; O0-NEXT:     {{^}}  ldloc.1{{$}}
+; O0-NEXT:     {{^}}  cgt.un{{$}}
+; O0-NEXT:     {{^}}  stloc.s 9{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 7{{$}}
+; O0-NEXT:     {{^}}  stloc.3{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 8{{$}}
+; O0-NEXT:     {{^}}  stloc.s 4{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 9{{$}}
+; O0-NEXT:     {{^}}  brtrue.s @BB[[F]]_[[LOOP]]{{$}}
+; O0-NEXT:     {{^}}@BB[[F]]_[[TAIL]]:{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 4{{$}}
+; O0-NEXT:     {{^}}  stloc.s 10{{$}}
+; O0-NEXT:     {{^}}  ldloc.3{{$}}
+; O0-NEXT:     {{^}}  ldloc.0{{$}}
+; O0-NEXT:     {{^}}  ldloc.s 10{{$}}
+; O0-NEXT:     {{^}}  conv.i4{{$}}
+; O0-NEXT:     {{^}}  initblk{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'set_var'{{$}}
 define void @set_var(ptr %d, i64 %n) {

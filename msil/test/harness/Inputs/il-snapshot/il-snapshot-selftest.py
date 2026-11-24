@@ -70,6 +70,42 @@ keeps __pycache__ out of the source tree) and checks:
     --llc-arg: Snapshot.compile(), with run() replaced so nothing runs,
     passes each argument to llc after the optimization level and to clang
     as '-mllvm <argument>' before the input.
+  * FX-2's --expect-change REGEX (plan 5.17.5, FX-2.b's interface; FX-2's
+    gate step 22 passes 'initblk'): compare(new, old, normalize, skipped,
+    re.compile(REGEX)), the call main() makes, and once
+    compare(..., expect_change=REGEX), on an old and a new copy of the
+    baseline made for each case. A differing .il whose baseline (the old
+    tree's file as written) matches REGEX through re.search is accepted:
+    listed as 'il-snapshot: expected change: <name>' (sorted, with no
+    diff), counted in the one line 'il-snapshot: --expect-change: <N>
+    differing .il files were accepted because their baseline text matches
+    <REGEX>' (printed with N = 0 too) and left out of the result and of the
+    summary's differ count, so trees whose only differences are accepted
+    give 0; without the option the same trees list it, with its diff, and
+    print neither line. A differing .il whose baseline does not match is
+    listed, also when only its new text matches, and case matters; a
+    changed .err (of the accepted .il's own input and configuration), a
+    missing .il and an extra .il are listed although REGEX matches each of
+    them. With --normalize forms a file that differs only in the forms is
+    not accepted, and REGEX is matched against the baseline as written,
+    not as normalized; with --skip-changed the skipped input's files are
+    neither accepted nor counted; a baseline that is not valid UTF-8 is
+    searched all the same. main() exits 2 as above for --expect-change
+    without --compare, given twice, empty, not a valid regular expression,
+    and without a value. In the cases expect-change-accepted and
+    expect-change-not-matched main(argv) also runs end to end on the
+    case's trees, with --compare <old tree> --expect-change REGEX, a
+    --build that does not exist and two PATHs under the module's REPO,
+    which is moved to a folder inside WORKDIR with --out beside it (under
+    lit WORKDIR lies inside the checkout, and main() refuses an --out
+    inside the repository). Its input listing (find_inputs()) and its
+    snapshot (snapshot()) are replaced, so --out receives a copy of the new
+    tree and nothing is compiled, and git() by a fake that answers only
+    'rev-parse HEAD' (the stamp's head). Trees whose only difference is
+    accepted give exit status 0, the 'expected change:' line, the count
+    line and no 'differs:' line; with 'cpblk', which no baseline holds,
+    main() gives 1 and lists each differing file as 'differs:'; and
+    il-snapshot.json in --out records REGEX as "expect-change".
 
 It prints 'ok: <case>' on stdout for each case that passes and, for one that
 fails, 'FAIL: <case>: <why>' with the output it saw on stderr. Exit status 0
@@ -80,6 +116,7 @@ Nothing runs git, clang or llc.
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import re
 import shutil
@@ -472,6 +509,11 @@ def usage_cases(work, repo):
     baseline = os.path.join(work, "usage-baseline")
     os.makedirs(baseline)
     in_repo = os.path.join(repo, "msil", "test", "il-snapshot-selftest-out")
+    # FX-2's --expect-change runs name a --compare that exists, so that only
+    # the REGEX is wrong.
+    compare = ["--build", build, "--out", out, "--compare", baseline]
+    bad_regex = "(initblk"
+    bad_message = re.escape(regex_error(bad_regex))
     return (
         (
             "compare-not-a-directory",
@@ -532,7 +574,50 @@ def usage_cases(work, repo):
             r"^il-snapshot: error: --normalize applies to --compare, which is missing$",
             out,
         ),
+        (
+            "expect-change-without-compare",
+            ["--build", build, "--out", out, "--expect-change", "x", "msil/test/M1"],
+            r"^il-snapshot: error: --expect-change applies to --compare, "
+            r"which is missing$",
+            out,
+        ),
+        (
+            "expect-change-repeated",
+            compare + ["--expect-change", "a", "--expect-change", "b", "msil/test/M1"],
+            r"^il-snapshot: error: --expect-change is given 2 times; give one "
+            r"REGEX \(alternatives with '\|'\)$",
+            out,
+        ),
+        (
+            "expect-change-empty",
+            compare + ["--expect-change", "", "msil/test/M1"],
+            r"^il-snapshot: error: --expect-change is empty: it would accept any "
+            r"\.il file$",
+            out,
+        ),
+        (
+            # The message ends with re's own message for the REGEX.
+            "expect-change-invalid",
+            compare + ["--expect-change", bad_regex, "msil/test/M1"],
+            r"^il-snapshot: error: --expect-change %s is not a valid regular "
+            r"expression: %s$" % (re.escape(bad_regex), bad_message),
+            out,
+        ),
+        (
+            "expect-change-no-value",
+            compare + ["msil/test/M1", "--expect-change"],
+            r"error: argument --expect-change: expected one argument$",
+            out,
+        ),
     )
+
+
+def regex_error(pattern):
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        return str(e)
+    raise SetupError("%r is a valid regular expression" % pattern)
 
 
 def check_usage(module, argv, pattern, must_not_exist):
@@ -873,6 +958,482 @@ def run_m20_cases(module, work, old, report):
     report("llc-arg commands", errors, output)
 
 
+# -------------------------------------------------- FX-2's --expect-change
+# --expect-change REGEX (FX-2, plan 5.17.5; FX-2.b's interface): once
+# --skip-changed has left out the skipped inputs' files and --normalize has
+# decided which files are equal, each .il file that both trees hold and that
+# still differs is accepted when re.search(REGEX, <its baseline, the old
+# tree's file as written, decoded as UTF-8 with surrogateescape>) matches.
+# An accepted file is listed as 'il-snapshot: expected change: <name>'
+# (sorted, with no diff) instead of 'differs: <name>', and counts neither in
+# compare()'s result nor in the summary's differ count, but in the line
+# 'il-snapshot: --expect-change: <N> differing .il files were accepted
+# because their baseline text matches <REGEX>', which is printed whenever
+# the option is given. .err, missing and extra files are never accepted.
+# Each case changes fresh copies of the baseline, a new and an old tree, and
+# gives the runs of compare() to check.
+
+EXPECTED_PREFIX = "il-snapshot: expected change: "
+EXPECT_COUNT_RE = re.compile(
+    r"^il-snapshot: --expect-change: (\d+) differing \.il files were accepted "
+    r"because their baseline text matches (.*)$"
+)
+
+# 'clear', a memset with a run-time length, as D15 printed it before FX-2
+# (one initblk of the length cut by conv.i4) and in FX-2's guarded loop (a
+# guard on bits 32 and up, initblk in 2 GiB blocks, initblk of the rest).
+CLEAR_BEFORE = (
+    ".method public static void 'clear'(native int 'p', native int 'n') cil managed",
+    "{",
+    "  .maxstack 3",
+    "  ldarg.0",
+    "  ldc.i4.0",
+    "  ldarg.1",
+    "  conv.i4",
+    "  initblk",
+    "  ret",
+    "} // end of method 'clear'",
+    "",
+)
+CLEAR_AFTER = (
+    ".method public static void 'clear'(native int 'p', native int 'n') cil managed",
+    "{",
+    "  .maxstack 3",
+    "  .locals (native int, native int)",
+    "  ldarg.0",
+    "  stloc.0",
+    "  ldarg.1",
+    "  stloc.1",
+    "  ldarg.1",
+    "  ldc.i8 4294967295",
+    "  conv.i",
+    "  cgt.un",
+    "  brfalse.s @BB1_2",
+    "@BB1_1:",
+    "  ldloc.0",
+    "  ldc.i4.0",
+    "  ldc.i4 -2147483648",
+    "  initblk",
+    "  ldloc.0",
+    "  ldc.i8 2147483648",
+    "  conv.i",
+    "  add",
+    "  stloc.0",
+    "  ldloc.1",
+    "  ldc.i8 2147483648",
+    "  conv.i",
+    "  sub",
+    "  dup",
+    "  stloc.1",
+    "  ldc.i8 4294967295",
+    "  conv.i",
+    "  cgt.un",
+    "  brtrue.s @BB1_1",
+    "@BB1_2:",
+    "  ldloc.0",
+    "  ldc.i4.0",
+    "  ldloc.1",
+    "  conv.i4",
+    "  initblk",
+    "  ret",
+    "} // end of method 'clear'",
+    "",
+)
+# 'zero' as a loop of byte stores and as the one initblk that the optimizer
+# can make of it.
+ZERO_LOOP = (
+    ".method public static void 'zero'(native int 'p') cil managed",
+    "{",
+    "  .maxstack 3",
+    "  .locals (native int)",
+    "  ldc.i4.0",
+    "  conv.i",
+    "  stloc.0",
+    "@BB2_1:",
+    "  ldarg.0",
+    "  ldloc.0",
+    "  add",
+    "  ldc.i4.0",
+    "  stind.i1",
+    "  ldloc.0",
+    "  ldc.i4.1",
+    "  conv.i",
+    "  add",
+    "  dup",
+    "  stloc.0",
+    "  ldc.i4.s 64",
+    "  conv.i",
+    "  blt.un.s @BB2_1",
+    "  ret",
+    "} // end of method 'zero'",
+    "",
+)
+ZERO_INITBLK = (
+    ".method public static void 'zero'(native int 'p') cil managed",
+    "{",
+    "  .maxstack 3",
+    "  ldarg.0",
+    "  ldc.i4.0",
+    "  ldc.i4.s 64",
+    "  initblk",
+    "  ret",
+    "} // end of method 'zero'",
+    "",
+)
+
+
+def append_method(root, name, lines):
+    write(root, name, read(root, name) + ("\n".join(lines) + "\n").encode("utf-8"))
+
+
+def expect(regex, accepted=(), differs=(), missing=(), extra=(), **options):
+    """One run of compare(): REGEX (None runs it without --expect-change),
+    the names it must accept and list, and the options normalize and
+    skipped (compare()'s third and fourth arguments), as_str (pass REGEX as
+    the keyword expect_change=, not compiled as main() passes it), present
+    (lines the output must hold) and main (run main() end to end with
+    --compare and --expect-change REGEX instead: run_main_expect())."""
+    run = types.SimpleNamespace(
+        regex=regex,
+        accepted=list(accepted),
+        differs=list(differs),
+        missing=list(missing),
+        extra=list(extra),
+        normalize=(),
+        skipped=(),
+        as_str=False,
+        present=(),
+        main=False,
+    )
+    for key, value in options.items():
+        if not hasattr(run, key):
+            raise SetupError("expect() has no option %r" % key)
+        setattr(run, key, value)
+    return run
+
+
+def case_expect_accepted(new, old):
+    # FX-2's gate (step 22 passes 'initblk'): 'clear' had one initblk in
+    # the baseline and has the guarded loop now.
+    append_method(old, WIN_O0_IL, CLEAR_BEFORE)
+    append_method(new, WIN_O0_IL, CLEAR_AFTER)
+    return [
+        expect("initblk", accepted=[WIN_O0_IL]),
+        expect("initblk", accepted=[WIN_O0_IL], as_str=True),
+        # main() end to end passes the option on to the comparison: exit
+        # status 0, and the stamp records the pattern.
+        expect("initblk", accepted=[WIN_O0_IL], main=True),
+        # Without the option the same trees differ, with the diff.
+        expect(
+            None,
+            differs=[WIN_O0_IL],
+            present=["--- old/" + WIN_O0_IL, "+++ new/" + WIN_O0_IL],
+        ),
+    ]
+
+
+def case_expect_not_matched(new, old):
+    # FX-2.b's sample: of the two changed .il files only WIN_O0_IL's
+    # baseline holds localloc; the changed .err is listed too.
+    replace_last(new, WIN_O0_IL, b"  .maxstack 2\n", b"  .maxstack 3\n")
+    replace_last(new, WIN_O2_IL, b"  .maxstack 1\n", b"  .maxstack 2\n")
+    replace_last(new, LNX_ERR, b"@msil_dtor_fn", b"@msil_dtor_fx")
+    diff = [
+        "--- old/" + WIN_O2_IL,
+        "+++ new/" + WIN_O2_IL,
+        "-  .maxstack 1",
+        "+  .maxstack 2",
+    ]
+    return [
+        expect(
+            "localloc", accepted=[WIN_O0_IL], differs=[WIN_O2_IL, LNX_ERR], present=diff
+        ),
+        # Case matters (re.search with no flags), and the count line comes
+        # with 0 accepted files too.
+        expect("LOCALLOC", differs=[WIN_O0_IL, WIN_O2_IL, LNX_ERR]),
+        # main() end to end with 'cpblk', which no baseline holds (WIN_O0_IL's
+        # holds 'localloc'): exit status 1, all three files listed, WIN_O0_IL
+        # with its diff, and the stamp records the pattern.
+        expect(
+            "cpblk",
+            differs=[WIN_O0_IL, WIN_O2_IL, LNX_ERR],
+            present=["--- old/" + WIN_O0_IL, "+++ new/" + WIN_O0_IL],
+            main=True,
+        ),
+    ]
+
+
+def case_expect_baseline_only(new, old):
+    # The baseline alone decides, shown with the same two texts in both
+    # directions: WIN_O0_IL's baseline holds initblk and its new text does
+    # not (accepted); WIN_O2_IL's new text holds initblk and its baseline
+    # does not (listed: at FX-2's gate, an input whose baseline IL has no
+    # initblk must compile to the same IL).
+    append_method(old, WIN_O0_IL, ZERO_INITBLK)
+    append_method(new, WIN_O0_IL, ZERO_LOOP)
+    append_method(old, WIN_O2_IL, ZERO_LOOP)
+    append_method(new, WIN_O2_IL, ZERO_INITBLK)
+    return [expect("initblk", accepted=[WIN_O0_IL], differs=[WIN_O2_IL])]
+
+
+def case_expect_err_missing_extra(new, old):
+    # 'MSIL|exit' matches every file of both trees (each .il names MSIL in
+    # its first line, each .err ends with its exit status), yet only the
+    # changed .il is accepted: the changed .err of the same input and
+    # configuration, a missing .il and an extra .il are listed.
+    replace_last(new, WIN_O0_IL, b"  .maxstack 2\n", b"  .maxstack 3\n")
+    replace_last(new, WIN_O0_ERR, b"[exit 0]\n", b"[exit 1]\n")
+    remove(new, LNX_IL)
+    write(new, MINGW_IL, read(new, WIN_O2_IL))
+    return [
+        expect(
+            "MSIL|exit",
+            accepted=[WIN_O0_IL],
+            differs=[WIN_O0_ERR],
+            missing=[LNX_IL],
+            extra=[MINGW_IL],
+        )
+    ]
+
+
+def case_expect_normalize(new, old):
+    # --normalize decides first: WIN_O0_IL differs only in the forms, so it
+    # is not accepted although its baseline holds 'ldc.i4.0'. WIN_O2_IL
+    # still differs, and REGEX is matched against its baseline as written
+    # ('ldc.i4.0'), not as normalized ('ldc.i4 0').
+    forms_only(new, old)
+    replace_last(new, WIN_O2_IL, b"  .maxstack 1\n", b"  .maxstack 2\n")
+    return [
+        expect(r"ldc\.i4\.0", accepted=[WIN_O2_IL], normalize=["forms"]),
+        expect(r"ldc\.i4 0", differs=[WIN_O2_IL], normalize=["forms"]),
+    ]
+
+
+def case_expect_skip_changed(new, old):
+    # --skip-changed leaves a skipped input's files out first: return-0.c's
+    # two .il files differ and their baselines match 'MSIL', yet with that
+    # input skipped only dtors.ll's .il is accepted and counted.
+    replace_last(new, WIN_O0_IL, b"  .maxstack 2\n", b"  .maxstack 3\n")
+    replace_last(new, WIN_O2_IL, b"  .maxstack 1\n", b"  .maxstack 2\n")
+    replace_last(new, LNX_IL, b"'dtors'", b"'dtorz'")
+    return [
+        expect("MSIL", accepted=[LNX_IL], skipped=["msil/test/M1/00-smoke/return-0.c"]),
+        # Without the skipped input all three are accepted, listed sorted.
+        expect("MSIL", accepted=[WIN_O0_IL, WIN_O2_IL, LNX_IL]),
+    ]
+
+
+def case_expect_raw_bytes(new, old):
+    # A baseline that is not valid UTF-8 is searched all the same (an IR
+    # name need not be UTF-8, and D11 prints a non-ASCII name's bytes as
+    # they are).
+    for root in (new, old):
+        write(root, LNX_IL, read(root, LNX_IL) + b"// '\xff'\n")
+    replace_last(new, LNX_IL, b"'dtors'", b"'dtorz'")
+    return [expect("dtors", accepted=[LNX_IL])]
+
+
+EXPECT_CASES = (
+    ("expect-change-accepted", case_expect_accepted),
+    ("expect-change-not-matched", case_expect_not_matched),
+    ("expect-change-baseline-only", case_expect_baseline_only),
+    ("expect-change-err-missing-extra", case_expect_err_missing_extra),
+    ("expect-change-normalize", case_expect_normalize),
+    ("expect-change-skip-changed", case_expect_skip_changed),
+    ("expect-change-raw-bytes", case_expect_raw_bytes),
+)
+
+
+def run_expect(module, new, old, run):
+    """compare(new, old, ...) as the run says: (what was called, its result,
+    its output)."""
+    args = [new, old, run.normalize, run.skipped]
+    kwargs = {}
+    what = "compare(new, old, %r, %r" % (run.normalize, run.skipped)
+    if run.regex is None:
+        what += ")"
+    elif run.as_str:
+        kwargs["expect_change"] = run.regex
+        what += ", expect_change=%r)" % run.regex
+    else:
+        args.append(re.compile(run.regex))
+        what += ", re.compile(%r))" % run.regex
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            result = module.compare(*args, **kwargs)
+    except Exception as e:  # a crash fails the case, not the self-test
+        result, returned = "%s: %s" % (type(e).__name__, e), False
+    else:
+        returned = True
+    # A diff of a file that is not UTF-8 may hold surrogates, which the
+    # report on stderr could not encode.
+    output = out.getvalue().encode("ascii", "backslashreplace").decode("ascii")
+    return what, result, output, returned
+
+
+# main() end to end, the runs with main=True: main(argv) with --compare
+# <old tree> --expect-change REGEX, a --build that does not exist and the
+# fixture stamp's two paths. The input listing (find_inputs()) and the
+# snapshot (snapshot()) are replaced, so that --out receives a copy of the
+# new tree (its il-snapshot.json aside) and nothing is compiled, and git() by
+# a fake that answers only 'rev-parse HEAD', the stamp's head. Under lit
+# WORKDIR lies inside the checkout, and main() refuses an --out inside the
+# repository: the module's REPO becomes a folder inside WORKDIR that holds
+# the paths, with --out beside it.
+
+MAIN_HEAD = "0123456789abcdef0123456789abcdef01234567"
+# The paths and inputs of the fixture's stamp (so compare() prints no note
+# that the snapshots differ in their paths), and its counts.
+MAIN_PATHS = ("msil/test/M1", "llvm/test/CodeGen/MSIL")
+MAIN_INPUTS = ("llvm/test/CodeGen/MSIL/dtors.ll", "msil/test/M1/00-smoke/return-0.c")
+MAIN_COUNTS = {"inputs": 2, "files": 2, "split-parts": 0, "compiles": 12}
+
+
+def fake_rev_parse(args):
+    """git(args) of il-snapshot.py, answering only 'rev-parse HEAD'."""
+    if list(args) != ["rev-parse", "HEAD"]:
+        raise FakeGitError("git %r: expected 'rev-parse HEAD'" % list(args))
+    return (MAIN_HEAD + "\n").encode("ascii")
+
+
+@contextlib.contextmanager
+def replaced(module, **values):
+    """The module's globals set to values, and restored afterwards."""
+    for name in values:
+        if not hasattr(module, name):
+            raise SetupError("il-snapshot.py has no %s" % name)
+    saved = {name: getattr(module, name) for name in values}
+    for name, value in values.items():
+        setattr(module, name, value)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(module, name, value)
+
+
+def copy_snapshot(src, dst):
+    """Copy the files of the snapshot src, its il-snapshot.json aside, to dst."""
+    for d, dirs, names in os.walk(src):
+        for n in names:
+            name = slash(os.path.relpath(os.path.join(d, n), src))
+            if name != STAMP:
+                write(dst, name, read(src, name))
+
+
+def run_main_expect(module, base, new, old, run):
+    """main(argv) end to end as the run says, with its folders in base: (what
+    was called, its exit status, its output, whether it returned, its --out,
+    the errors of the stamp it wrote)."""
+    if run.regex is None or run.normalize or run.skipped or run.as_str:
+        raise SetupError("a main() run takes a REGEX and no other option")
+    repo = os.path.join(base, "repo")
+    out = os.path.join(base, "out")
+    paths = [fixture_path(repo, p) for p in MAIN_PATHS]
+    for path in paths:
+        os.makedirs(path)
+    argv = ["--build", os.path.join(base, "no-build"), "--out", out]
+    argv += ["--compare", old, "--expect-change", run.regex] + paths
+
+    def find_inputs(args):
+        # The real one checks --build's tools and asks git for HEAD's files.
+        args.skipped = []
+        return list(MAIN_INPUTS)
+
+    def snapshot(args, inputs):
+        copy_snapshot(new, args.out)
+        return dict(MAIN_COUNTS)
+
+    what = "main(--compare <old> --expect-change %r)" % run.regex
+    fakes = dict(
+        REPO=repo, find_inputs=find_inputs, snapshot=snapshot, git=fake_rev_parse
+    )
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with replaced(module, **fakes):
+        try:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                try:
+                    status = module.main(argv)
+                except SystemExit as e:  # argparse's usage errors
+                    status = e.code
+        except Exception as e:  # a crash fails the case, not the self-test
+            status, returned = "%s: %s" % (type(e).__name__, e), False
+        else:
+            returned = True
+    output = stdout.getvalue() + stderr.getvalue()
+    output = output.encode("ascii", "backslashreplace").decode("ascii")
+    errors = []
+    if returned:
+        try:
+            with open(os.path.join(out, STAMP), encoding="utf-8") as f:
+                stamp = json.load(f)
+        except (OSError, ValueError) as e:
+            errors.append("no readable %s in --out: %s" % (STAMP, e))
+        else:
+            if not isinstance(stamp, dict):
+                stamp = {}
+            errors += differ(
+                "the stamp's 'expect-change'", run.regex, stamp.get("expect-change")
+            )
+            errors += differ("the stamp's 'head'", MAIN_HEAD, stamp.get("head"))
+    return what, status, output, returned, out, errors
+
+
+def check_expect(module, work, label, mutate):
+    new = os.path.join(work, label, "new")
+    old = os.path.join(work, label, "old")
+    shutil.copytree(BASELINE, new)
+    shutil.copytree(BASELINE, old)
+    errors, outputs = [], []
+    for i, run in enumerate(mutate(new, old)):
+        # tree: the new tree that compare() saw, a main() run's --out.
+        if run.main:
+            base = os.path.join(work, label, "main%d" % i)
+            what, result, output, returned, tree, errs = run_main_expect(
+                module, base, new, old, run
+            )
+        else:
+            what, result, output, returned = run_expect(module, new, old, run)
+            tree, errs = new, []
+        if not returned:
+            errors.append("%s raised %s" % (what, result))
+            outputs.append("%s raised %s:\n%s" % (what, result, output))
+            continue
+        outputs.append("%s gave %r:\n%s" % (what, result, output))
+        got = output.splitlines()
+        errs += verify_compare(
+            result, output, tree, old, run.differs, run.missing, run.extra, run.present
+        )
+        if run.main:
+            # main() exits 1 for a difference that is not accepted, else 0.
+            status = 1 if run.differs or run.missing or run.extra else 0
+            if result != status:
+                errs.append("main() gave %r, expected %d" % (result, status))
+        accepted = [
+            l[len(EXPECTED_PREFIX) :] for l in got if l.startswith(EXPECTED_PREFIX)
+        ]
+        errs += differ("accepted files (output order)", sorted(run.accepted), accepted)
+        counts = [m.groups() for m in map(EXPECT_COUNT_RE.match, got) if m]
+        want = [] if run.regex is None else [(str(len(run.accepted)), run.regex)]
+        errs += differ("'--expect-change: <N> ... matches <REGEX>' lines", want, counts)
+        for name in run.accepted:
+            for line in ("--- old/" + name, "+++ new/" + name):
+                if line in got:
+                    errs.append("the accepted file is diffed: %r" % line)
+        errors += ["%s: %s" % (what, e) for e in errs]
+    return errors, "".join(outputs)
+
+
+def run_fx2_cases(module, work, report):
+    for label, mutate in EXPECT_CASES:
+        try:
+            errors, output = check_expect(module, work, label, mutate)
+        except SetupError as e:
+            errors, output = ["setup: %s" % e], ""
+        report("compare " + label, errors, output)
+
+
 # --------------------------------------------------------------------- main
 
 
@@ -944,6 +1505,7 @@ def main(argv):
     errors, output = check_note(module, work)
     report("exclude note", errors, output)
     run_m20_cases(module, work, old, report)
+    run_fx2_cases(module, work, report)
     return 1 if failed else 0
 
 

@@ -9,14 +9,15 @@
 """Compile every C and IR input of the MSIL tests and keep IL and diagnostics.
 
     python msil/utils/il-snapshot.py --build DIR --out DIR [--compare DIR]
-        [--normalize forms] [--exclude PATH]... [--llc-arg=ARG]...
-        [--skip-changed] [--jobs N] [--timeout S] PATH...
+        [--normalize forms] [--expect-change REGEX] [--exclude PATH]...
+        [--llc-arg=ARG]... [--skip-changed] [--jobs N] [--timeout S] PATH...
 
-Plan 5.12.4 (M15; M18 and M20 extend it): the proof that a change leaves the
-text of 'clang -S' and llc byte-identical (5.10.13, D14 frozen). It runs from
-the repository root (paths are taken relative to the current directory and
-must lie in the repository) and compiles, with the tools of --build
-(<build>/bin/clang and <build>/bin/llc):
+Plan 5.12.4 (M15; M18 and M20 extend it, and FX-2 adds --expect-change,
+5.17.5): the proof that a change leaves the text of 'clang -S' and llc
+byte-identical (5.10.13, D14 frozen). It runs from the repository root
+(paths are taken relative to the current directory and must lie in the
+repository) and compiles, with the tools of --build (<build>/bin/clang and
+<build>/bin/llc):
 
   * every .c file under PATH... that 'git ls-tree -r HEAD' lists:
       clang --target=<triple> -std=gnu17 -ffreestanding -Werror=return-type
@@ -89,7 +90,8 @@ counts), so no other directory is ever emptied by accident.
 shown as unified diffs, and the exit status is 1. The usual use is a
 baseline written with the build of HEAD before a milestone's build, and a
 second snapshot with the new build compared against it. The files of the
-inputs that --skip-changed left out are not compared.
+inputs that --skip-changed left out are not compared, and a differing .il
+file that --expect-change accepts (below) is no difference.
 
 --normalize forms (M18, plan 5.12.4; only with --compare) compares the .il
 files of both snapshots after the encoding forms that plan Q26 and 5.10.11
@@ -112,9 +114,27 @@ inside '{{...}}' (its docstring gives the rules). A difference that remains
 is listed and diffed as above, with the diff taken between the normalized
 texts.
 
+--expect-change REGEX (FX-2, plan 5.17.5; only with --compare) accepts the
+changes a gate expects. A .il file that differs (after --normalize, when it
+is given) and whose baseline text, the file of --compare DIR as written and
+read as UTF-8, matches REGEX by Python's re.search with no flags ('(?m)'
+makes '^' and '$' match at each line) is accepted: it is listed as
+'il-snapshot: expected change: <name>' instead of 'differs: <name>', gets
+no diff and is no difference, so the exit status and the summary's
+'N differ' leave it out, and the summary counts the accepted files on a
+line of their own ('il-snapshot: --expect-change: N differing .il files
+were accepted because their baseline text matches REGEX'). A differing .il
+file whose baseline text does not match, a differing .err file and a
+missing or extra file fail as they do without the option. FX-2's gate
+passes --expect-change initblk: only an input whose baseline IL holds an
+initblk may compile to other IL. Write --expect-change=REGEX when REGEX
+starts with '-'. --expect-change without --compare, given twice, empty or
+not a valid regular expression is a usage error.
+
 Exit status: 0 on success (with --compare: no difference); 1 when --compare
-finds a difference; 2 on a usage error or when the snapshot cannot be taken
-(a missing tool, git failing, an input that cannot be split or read).
+finds a difference that --expect-change does not accept; 2 on a usage error
+or when the snapshot cannot be taken (a missing tool, git failing, an input
+that cannot be split or read).
 """
 
 import argparse
@@ -569,10 +589,15 @@ def read_stamp(directory):
         return None
 
 
-def compare(new, old, normalize=(), skipped=()):
+def compare(new, old, normalize=(), skipped=(), expect_change=None):
     """Compare snapshot new with snapshot old, the .il files after the
     --normalize kinds in normalize, leaving out the files of the inputs in
-    skipped (--skip-changed); returns the number of differences."""
+    skipped (--skip-changed) and accepting each differing .il file whose
+    text in old matches expect_change (--expect-change: a regular expression,
+    as a string or compiled; None for none); returns the number of
+    differences that were not accepted."""
+    if isinstance(expect_change, str):
+        expect_change = re.compile(expect_change)
     fa, fb = tree_files(new), tree_files(old)
     left_out = 0
     if skipped:
@@ -581,6 +606,7 @@ def compare(new, old, normalize=(), skipped=()):
                 del files[name]
                 left_out += 1
     differs, missing, extra = [], [], []
+    accepted = []  # differing .il files that --expect-change accepts
     normalized = {}  # name -> (old text, new text) of a normalized .il file
     equal_after = 0  # .il files equal only after normalizing
     for name in sorted(set(fa) | set(fb)):
@@ -592,15 +618,28 @@ def compare(new, old, normalize=(), skipped=()):
             with open(fa[name], "rb") as f:
                 a = f.read()
             with open(fb[name], "rb") as f:
-                b = f.read()
+                b = baseline = f.read()
             if a != b and normalize and name.endswith(".il"):
                 a, b = normalize_bytes(a, normalize), normalize_bytes(b, normalize)
                 if a == b:
                     equal_after += 1
                 else:
                     normalized[name] = (b, a)
-            if a != b:
+            if a == b:
+                continue
+            # --expect-change searches the old file as written (not normalized).
+            if (
+                expect_change is not None
+                and name.endswith(".il")
+                and expect_change.search(
+                    baseline.decode("utf-8", errors="surrogateescape")
+                )
+            ):
+                accepted.append(name)
+            else:
                 differs.append(name)
+    for name in accepted:
+        say("expected change: %s" % name)
     for name in differs:
         print("differs: %s" % name)
     for name in missing:
@@ -634,6 +673,11 @@ def compare(new, old, normalize=(), skipped=()):
             "--normalize %s: the .il files of both snapshots were compared "
             "normalized; %d of them differ only in those forms"
             % (",".join(normalize), equal_after)
+        )
+    if expect_change is not None:
+        say(
+            "--expect-change: %d differing .il files were accepted because "
+            "their baseline text matches %s" % (len(accepted), expect_change.pattern)
         )
     say(
         "compared %d files with %s: %d differ, %d missing, %d extra"
@@ -702,6 +746,15 @@ def parse_args(argv):
         "('forms': short branches, short ldc.i4 forms, nomangle; repeatable)",
     )
     p.add_argument(
+        "--expect-change",
+        action="append",
+        default=[],
+        metavar="REGEX",
+        help="with --compare: accept, and list as an expected change, each "
+        "differing .il file whose baseline text matches REGEX (re.search; "
+        "write --expect-change=REGEX when REGEX starts with '-')",
+    )
+    p.add_argument(
         "--exclude",
         action="append",
         default=[],
@@ -744,6 +797,28 @@ def check_args(args):
     args.normalize = [k for k in NORMALIZATIONS if k in args.normalize]
     if args.normalize and not args.compare:
         raise UsageError("--normalize applies to --compare, which is missing")
+    # --expect-change: one REGEX, with --compare; a pattern that cannot be
+    # compiled, or an empty one (it would accept any .il file), is refused.
+    patterns = args.expect_change
+    args.expect_change = args.expect_change_re = None
+    if patterns:
+        if not args.compare:
+            raise UsageError("--expect-change applies to --compare, which is missing")
+        if len(patterns) > 1:
+            raise UsageError(
+                "--expect-change is given %d times; give one REGEX (alternatives "
+                "with '|')" % len(patterns)
+            )
+        if not patterns[0]:
+            raise UsageError("--expect-change is empty: it would accept any .il file")
+        try:
+            args.expect_change_re = re.compile(patterns[0])
+        except re.error as e:
+            raise UsageError(
+                "--expect-change %s is not a valid regular expression: %s"
+                % (patterns[0], e)
+            ) from None
+        args.expect_change = patterns[0]
     if args.compare:
         args.compare = os.path.abspath(args.compare)
         if not os.path.isdir(args.compare):
@@ -787,6 +862,8 @@ def main(argv=None):
     }
     if args.normalize:
         stamp["normalize"] = args.normalize
+    if args.expect_change is not None:
+        stamp["expect-change"] = args.expect_change
     if args.llc_args:
         stamp["llc-args"] = args.llc_args
     if args.skip_changed:
@@ -795,7 +872,14 @@ def main(argv=None):
         json.dump(stamp, f, indent=2, sort_keys=True)
         f.write("\n")
     if args.compare:
-        return 1 if compare(args.out, args.compare, args.normalize, args.skipped) else 0
+        differences = compare(
+            args.out,
+            args.compare,
+            args.normalize,
+            args.skipped,
+            args.expect_change_re,
+        )
+        return 1 if differences else 0
     return 0
 
 

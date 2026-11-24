@@ -1,6 +1,6 @@
 # MSIL backend: status of Phase 2
 
-State after milestone R-a (2026-11-22, branch `msil`, with upstream llvm-project main at
+State after the fix step FX-2 (2026-11-23, branch `msil`, with upstream llvm-project main at
 `1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
 M24-M35, M24 laid the foundations of Phase 3, M25 built the helper archive
 `clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple, and M26 made
@@ -154,10 +154,14 @@ declaration, compare by identity, convert to `System.Object` by themselves and t
 class only by a C cast that a small stub checks when the program runs, and pass to managed
 calls with at most one `castclass` (a `this` reference calls with `callvirt`, so an override
 runs); C memory keeps an object only as a ticket, a raw GCHandle number, and everything else
-is a named compile error (section 2, "Real .NET references in C (R-a)"). How to build and use
-it is in [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in
-section 3 of [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every
-later amendment.
+is a named compile error (section 2, "Real .NET references in C (R-a)"). FX-2, the first of
+the fix steps after R-a, made a `memset` whose length is known only at run time fill every
+byte at any length, where `initblk` had silently taken only the length's low 32 bits: a guard
+tests the length's bits 32 and up, and when one is set a loop of 2 GiB `initblk`s comes before
+the last one (section 2, "The fix steps and the temporary warning after R-a (FX-1 to FX-4)").
+How to build and use it is in [GettingStarted.md](GettingStarted.md); the decisions
+referred to as D1-D38 are in section 3 of [ImplementationPlan.md](ImplementationPlan.md), and
+its section 12 records every later amendment.
 
 ## 1. Phase 2 exit criteria
 
@@ -1053,9 +1057,13 @@ assemble them with `ilasm -arm64`; execution stays x86_64-only (D6).
   large structs by reference to a copy that clang makes.
 - Memory: loads and stores of every scalar width, `volatile` and unaligned accesses (`volatile.`
   and `unaligned.` prefixes), `memcpy`/`memset`/`memmove` (`cpblk`, `initblk`, and
-  `System.Buffer::MemoryCopy` when the copy may overlap or the length is variable; D15). Static
-  frames: one `localloc` per function for address-taken locals, local arrays and over-aligned
-  objects (D13).
+  `System.Buffer::MemoryCopy` when the copy may overlap or the length is variable; D15). Since
+  FX-2 a `memset` whose length is known only at run time fills every byte at any length: a
+  length that may reach 2^32 is tested, and above 2^32 - 1 a loop of 2 GiB `initblk`s comes
+  before the last `initblk`, so clearing 5 GiB clears 5 GiB (until FX-2 `initblk` took such a
+  length through `conv.i4` and wrote n mod 2^32 bytes, with no diagnostic; "The fix steps and
+  the temporary warning after R-a (FX-1 to FX-4)" below). Static frames: one `localloc` per
+  function for address-taken locals, local arrays and over-aligned objects (D13).
 - Global variables: initialized and zero-initialized data, string literals, pointers to globals and
   functions in initializers (relocations), constructors (`__attribute__((constructor))`) in
   priority order, linkonce/weak/comdat definitions as ordinary ones (D12, D26). Everything lives
@@ -3432,7 +3440,8 @@ LR4).
   links a freestanding portable program), `msil-portable-builtins` (the archive) and, on
   Windows, `msil-dotnet-x86` (the 32-bit .NET 8 and .NET 10 hosts and the 32-bit Framework).
   `msil_require_portable=1` and `msil_require_x86=1` turn their absence into configuration
-  errors. `msil/test/Portable/00-freestanding` holds thirteen self-checking programs whose
+  errors. `msil/test/Portable/00-freestanding` holds thirteen self-checking programs (fourteen
+  since FX-2, whose `memset-loop` is the portable copy of `M3/15-memory/memset-loop.test`) whose
   expected files are hand-written `[exit 0]` under plan 5.17.4's portable allowance
   (`msil/test/README.md`); under a host triple they are UNSUPPORTED, and `gate-select.py`
   leaves `Portable/` out of the expected-file checks. `msil-run.py` gained `--runtime-major N`
@@ -5588,6 +5597,11 @@ GettingStarted.md section 3, ".NET references in C", has a complete program.
      (section 12's row 'Program order amended (real .NET references)'): R-a was launched on
      2026-11-21 and committed on 2026-11-22, inside the four weeks (by 2026-12-19) after which
      the orchestrator would have stopped and asked the user whether EH-0 and FX-1 to FX-3 go first.
+     FX-2's commit ended one of them, the `memset` length: FX-2 runs first among the fix steps
+     (Claude's scheduling), right after R-a (the user's answer "B" to Claude's question D6;
+     section 12's placement row for FX-2), and a `memset` whose length is known only at run time
+     now fills every byte ("The fix steps and the temporary warning after R-a (FX-1 to FX-4)"
+     below). The other three stay silent until their steps.
 
   MC-1's C-string conversions S1-S3 are silent with the user's OK until R-a2 (the workarounds
   below). A loud rule came with the six: the jumps past a reference's declaration are refused
@@ -5690,6 +5704,208 @@ Tests in the tree after R-a: `llvm/test/CodeGen/MSIL` 184 (175 llc tests, 8 MIR 
 `verify-object-locals.test`), and `CLITests` with 494 tests in 23 suites (new: six of
 `CLIManagedSignatureTest`).
 
+### The fix steps and the temporary warning after R-a (FX-1 to FX-4)
+
+Four short steps follow R-a outside Phase 3's numbering (plan section 12's row 'Fix-step ids',
+2026-11-23): the three fix steps FX-1 to FX-3, each of which ends one of the silent wrong-code
+states of item 6 of R-a's 'Silent states with the user's OK' above (FX-1 the race on spilled
+`'<msil>Data'` fields of a library, "Libraries and assembly-to-assembly linking (M22)" above
+and Design.md 5.4; FX-2 the `memset` length, D15; FX-3 `%L` in formats built at run time), and
+FX-4, a temporary warning about calls through native function pointers until M28 (the user's
+answer "C" to Claude's question NFP, 2026-11-23). An id names a step, not its place in the run
+order, which each step's placement row gives: the fix steps and EH-0 come right after R-a and
+before the cleanup round's milestones (the user's answer "B" to Claude's question D6,
+2026-11-22), and FX-2 runs first among them (Claude's scheduling; plan section 12's placement
+row for FX-2). FX-2 follows the Phase 3 protocol outside Phase 3's numbering and exit gate, as
+MC-1 and R-a do: its tests run in every post-commit run and in M35's gate legs, and add no exit
+criterion, matrix row or exit-corpus program. Each step adds its subsection here when it
+commits.
+
+#### FX-2: `memset` with a run-time length, a guarded loop in 2 GiB blocks
+
+FX-2 (plan section 6, FX-2) makes a `memset` whose length is known only at run time fill every
+byte, at any length. Until FX-2, D15's `initblk` took such a length through `conv.i4`, so a fill
+of n bytes wrote n mod 2^32 bytes and reported nothing: clearing 5 GiB cleared 1 GiB. FX-2
+carries out the user's pick on the review page (2026-11-04, item risk-memset): "Fix it now as
+a fix step: a guarded loop in 2 GiB blocks when the length has high bits". The design inside
+that pick is Claude's (plan section 12's row 'D15 amended (FX-2)'): the guard on bits 32 and
+up (Claude's reading of "when the length has high bits"), the rest filled last as a constant
+length already was, and no guard where the length cannot reach 2^32. FX-2 adds no silent state
+and no diagnostic that a program can meet; its one new text is the error of a hidden testing
+option.
+
+```c
+#include <stddef.h>
+void clear(void *p, size_t n) { __builtin_memset(p, 0, n); }     /* the guard, the loop, the rest */
+void clear32(void *p, unsigned n) { __builtin_memset(p, 0, n); } /* below 2^32: one initblk */
+```
+
+At `-O2` `clear` becomes this IL (the comments are added here), while `clear32` stays
+`ldarg.0; ldc.i4.0; ldarg.1; unaligned. 1; initblk; ret`:
+
+```text
+  ldarg.1                 // the length
+  ldc.i8 4294967295
+  conv.i
+  cgt.un
+  brfalse.s @BB0_3        // at most 2^32 - 1: the last initblk alone
+@BB0_2:
+  ldarg.0
+  ldc.i4.0
+  ldc.i4 -2147483648      // a block of 2^31 bytes (initblk reads its size as unsigned)
+  unaligned. 1
+  initblk
+  ldarg.0
+  ldc.i8 2147483648
+  conv.i
+  add
+  starg.s 0               // the address moves on by 2^31
+  ldarg.1
+  ldc.i8 2147483648
+  conv.i
+  sub
+  dup
+  starg.s 1               // and the rest shrinks by 2^31
+  ldc.i8 4294967295
+  conv.i
+  cgt.un
+  brtrue.s @BB0_2         // while the rest does not fit 32 bits
+@BB0_3:
+  ldarg.0
+  ldc.i4.0
+  ldarg.1
+  conv.i4                 // the rest, at most 2^32 - 1
+  unaligned. 1
+  initblk
+  ret
+```
+
+- **The rule (D15 as amended).** A memset is `initblk`, and a length known only at run time is
+  never cut. When such a length may have bits at or above bit 32, a guard tests them: when none
+  is set, one `initblk` takes the low 32 bits as before; otherwise a loop fills blocks of 2^31
+  bytes (2 GiB) while the rest does not fit 32 bits, and one `initblk` then fills the rest, as a
+  constant length that does not fit 32 bits is split. An `i32` length in IR, or one that the
+  compiler proves below 2^32 (an `unsigned int` widened to `size_t`, a value masked with
+  0xFFFFFFFF), keeps the single `initblk` with no guard, and a constant length keeps its split
+  (blocks of 2^31 bytes, the rest last, with no guard and no loop). D15's 'Never libcalls'
+  stands: no output calls a C library's `memset` for an `llvm.memset`.
+- **Where it applies.** Every triple that compiles (all have 64-bit pointers;
+  `msil32-unknown-dotnet` is refused until P-4), every output (`clang -S` and llc text, CIL
+  objects, LTO images and `--lto-emit-asm` text), every optimization level, and every fill that
+  reaches instruction selection as `llvm.memset`: a C `memset` that clang treats as the
+  builtin, `__builtin_memset`, `__builtin_bzero`, and a zeroing loop that the optimizer turns
+  into one (LoopIdiomRecognize, at `-O1`, `-O2`, `-O3` and `-Os`; at `-O0`, and at `-Oz`, where
+  LoopRotation copies no loop header, a loop that tests at the top, as `memset-loop`'s does,
+  stays a loop of byte stores). FX-2 changes nothing else: `memcpy` and `memmove` never cut a
+  length (`cpblk` only for constant lengths up to 2^32 - 1, otherwise
+  `System.Buffer::MemoryCopy` with an `int64` length), and `c.dll`'s own `memset` (a byte loop)
+  and a call of the C library's `memset` (under `-fno-builtin`, say) are not `initblk`s.
+- **The prefixes and the blocks.** Instruction selection gives such a memset the pseudo
+  `INITBLK_LONG` (memflags, destination, value, native int length and N), which
+  `MSILSetMemFlags` gives its memflags as it gives `INITBLK` its own (D24). Its custom inserter,
+  which runs later, in `FinalizeISel`, builds the guard, the loop and the last block as new
+  basic blocks, as `emitSelect` builds a select's triangle (D34), and copies the flags and the
+  memory operand onto each `INITBLK`, so a volatile memset keeps `volatile.` and an unaligned
+  one `unaligned. N` on every block; every block starts at a multiple of 2^(N-1) bytes from the
+  destination, so the flags stay exact. No IR pass is added (plan 5.13.6 is unchanged).
+- **The hidden option `-msil-memset-guard-bits=<N>`** (default 32; llc, `clang -mllvm`, and
+  `msil-ld`'s `-mllvm`, which a clang link passes as `-Wl,-mllvm,-msil-memset-guard-bits=<N>`)
+  moves the guard to bits N and up and the block to 2^(N-1) bytes, so that tests run the loop
+  at small lengths on every runtime: with 4 the guard compares with 15, the blocks are 8 bytes,
+  and 32-bit lengths are guarded too. Its default carries out the user's pick: the 2 GiB blocks
+  are the pick's words, and testing bits 32 and up is Claude's reading of it. A value that is
+  not a number from 4 to 32 (read as `cl::parser<unsigned>` reads numbers, so `0x20` is 32 and
+  `033`, with its leading 0, is octal 27) is never clamped: when the options are parsed, before
+  any input is read, the tool prints
+  `<tool>: for the --msil-memset-guard-bits option: '<N>' is not a number from 4 to 32` (`llc:`,
+  `llc.exe:` on Windows, `clang (LLVM option parsing):`, `msil-ld (LLVM option parsing):`) and
+  exits with status 1, with no output file and no `LLVM ERROR`. The text after the prefix is
+  FX-2's one shared text, T-FX2-1.
+- **The 2 GiB block is the user's.** No run test before FX-2 ran an `initblk` of 2^31 bytes or
+  more; `memset-4g` (below) is the first. If a runtime writes a wrong byte, throws or crashes in
+  it while the native oracle passes, the work stops and the user decides (plan FX-2, 'Stop and
+  report, the 2 GiB block'): no other block size, guard, test exclusion, retry or interim
+  workaround in the meantime. FX-2's gate runs it against the native oracle on .NET 10, with
+  `DOTNET_TieredCompilation=0` and on the .NET Framework 4.8 at `-O0` to `-O3` on the Windows
+  triple, on .NET 8, on WSL .NET 10, also with `DOTNET_TieredCompilation=0`, at `-O0` and `-O2`
+  on the Linux triple, and through LTO on both host triples.
+- **Other code keeps its IL.** FX-2's gate compares the IL of `msil/test/M1`, `msil/test/M2` and
+  `llvm/test/CodeGen/MSIL` with a snapshot of HEAD's build (`il-snapshot.py --compare
+  --skip-changed --expect-change initblk`, below), so only a file whose baseline IL already held
+  an `initblk` may differ, and review checks that each such file differs only in the functions
+  that hold a memset whose length is known only at run time: at those memsets, in the functions'
+  `.maxstack` and locals, and in the code after a guarded memset, which moves into the last
+  block, where at `-O0` the operands of a commutative instruction can come in the other order
+  (plan section 12's row 'FX-2's step-22 review criterion clarified', 2026-11-23; Claude's
+  reading). The gate accepted `memcpy-memset.c` and `memory-ops.ll` of `msil/test/M1/05-memory`
+  at `-O0` on the two host triples and at `-O2` on the snapshot's four triples; at `-O0`, five
+  `ceq` operand pairs in `@intrinsics` of `memory-ops.ll` come in the other order, with the same
+  behaviour. `msil/test/M1/05-memory` runs at every level and on .NET 8.
+  D21 gains no allowance: the guard, the loop and both `initblk`s pass verification with the
+  existing allow-list.
+- **`il-snapshot.py --expect-change REGEX`** (plan 5.17.5 as section 12's row 'FX-2 re-pin
+  (`il-snapshot.py --expect-change` from M28)' moves it from M28 to FX-2): with `--compare`, a
+  differing `.il` file whose baseline text matches REGEX (`re.search`) is accepted, listed as
+  `il-snapshot: expected change: <file>` and counted on a summary line of its own; a differing
+  `.err`, a missing and an extra file still fail (GettingStarted.md section 7, "The IL
+  snapshot").
+- **Tests.** llc (from the specification): `memintrinsics.ll`'s `set_var` pins the guard, the
+  loop and the last block whole at `-O0` and `-O2`, and its header says how a run-time length
+  is filled; the new `memset-guarded-loop.ll` runs on `x86_64-unknown-linux-gnu-msil`,
+  `x86_64-pc-windows-msvc-msil`, `aarch64-unknown-linux-gnu-msil` and `msil64-unknown-dotnet` at
+  `-O0` and `-O2`, at the default and with `-msil-memset-guard-bits=4` (one set of CHECK lines
+  for both), with `-verify-machineinstrs` and ilasm round trips: 1-aligned, 2-aligned and
+  volatile memsets (both `initblk`s carry `unaligned. N` and `volatile.`), a fill byte from an
+  argument, a stack array as the destination, a stack object's address as the length, two
+  memsets in one block and one in a loop, no guard for an `i32` length, a `zext` and an `and`
+  with 0xFFFFFFFF (all three guarded with 4), constant lengths unchanged (1000 and 2^32 + 5),
+  `=32` equal to the default, the MIR before `FinalizeISel` (`INITBLK_LONG` with its flags, N
+  and the store memory operand) and after it, and T-FX2-1 pinned whole for 3, 33 and `four`,
+  also with a missing input file; `memset-guarded-loop.mir` (`-run-pass=finalize-isel` on both
+  x86_64 triples) pins the three blocks with their PHIs and successor lists, the `NoPHIs`
+  property, both `INITBLK`s' flags and memory operands, a frame-index destination and length
+  copied with `COPY_I64`, the instructions after the pseudo and a second pseudo expanded in the
+  first one's last block. Unit tests: `MSILCILRecords.MSILLongInitBlkIsACustomInsertedPseudo`
+  (no CIL value, the custom insertion hook, its operands and `INITBLK`'s implicit def) and
+  `INITBLK_LONG` in `MultiOpcodeRecordsCarryNoValue`; the count of 187 MI-level records with a
+  CIL value stays. Execution: `msil/test/M3/15-memory` (2 tests: `memset-loop`, every length
+  from 0 to 200 and 255, 256, 257, 1000 and 4096 at offsets 0 to 15 of a buffer with guard
+  bytes, through `memset`, `__builtin_bzero` and a zeroing loop, with lengths and fill bytes
+  read through `volatile` objects and `-msil-memset-guard-bits=4` on every compile and on the
+  link, so that the loop runs at small lengths, with its `-O2` image, dumped by `%msil_cil_dump`
+  (feature `msil-cil-dump`), FileChecked for the option's 8-byte loop block (`ldc.i4.8`,
+  `unaligned. 1` and `initblk` as one pattern) once for each way of fill, three in all (so that
+  a zeroing loop left a loop of byte stores, or a fill that lost its guard, leaves two blocks
+  and fails the check while the transcript stays the same), and, before, between and after the
+  blocks, for neither the default guard's constant (`ldc.i8 4294967295`) nor its 2 GiB block
+  (`ldc.i4 -2147483648`), a check that fails for a compile without `%{msil_copts}` on the object
+  pipeline (clang generates the code) and for a link without `%{msil_libs}` under LTO (`msil-ld`
+  generates it), and with T-FX2-1 pinned whole after `clang (LLVM option parsing):` for 3
+  through `%{msil_copts}`, after `msil-ld (LLVM option parsing):` for 33 through `%{msil_libs}`
+  (the clang driver then reports the failed link) and for 3 given straight to `msil-ld`, which
+  refuses it before it opens a missing input; and `memset-4g`, a run-time length of 2^32 + 4,103
+  bytes at a 1-aligned address of a `calloc` buffer, then the constant length 2^32 + 5 at the
+  same address, every byte of the buffer checked after each fill, under a 6144 MiB memory cap
+  and a 30-second timeout), whose expected files come from the DLL C runtime oracle, which E7h
+  matches, and `memset-loop`'s portable copy
+  `msil/test/Portable/00-freestanding/memset-loop.test` (`__builtin_memset` and
+  `__builtin_bzero` only, self-checking, `[exit 0]`, its `-O2` image checked the same way for
+  two blocks, one for each builtin, in the post-commit `Portable` legs);
+  msil/test/README.md lists them. Harness: `il-snapshot.test` checks both outcomes of
+  `--expect-change`, what it never accepts (a file whose new text alone matches; `.err`,
+  missing and extra files; the inputs that `--skip-changed` leaves out), that it reads the
+  baseline as written, not as `--normalize forms` maps it, a baseline that is not valid UTF-8,
+  and its usage errors, in twelve new cases.
+
+Tests in the tree after FX-2: `llvm/test/CodeGen/MSIL` 186 (176 llc tests, 9 MIR tests and
+`irsymtab-linker-options.ll`; new: `memset-guarded-loop.ll` and `memset-guarded-loop.mir`),
+`msil/test/M3` 89 (two in `15-memory`), `msil/test/Portable` 48 (fourteen in
+`00-freestanding`), `msil/test/harness` 160 (unchanged; twelve new cases in `il-snapshot.test`),
+`MSILTests` with 136 tests in 12 suites (new:
+`MSILCILRecords.MSILLongInitBlkIsACustomInsertedPseudo`), and, unchanged,
+`clang/test/CodeGen/MSIL` 48, `lld/test/MSIL` 146, `msil/test/Programs` 248 and `CLITests` with
+494 tests in 23 suites.
+
 ## 3. What Phase 2 does not do
 
 Phase 2 is the linker phase; most of what it leaves out is Phase 3's (plan section 7, P3-A and
@@ -5765,7 +5981,6 @@ milestone has not come (section 1).
 
 - An IL identifier is at most 1023 bytes, because both ilasms reject longer names; a longer C
   name is a compile error.
-- `memset` with a variable length is limited to 4 GiB (`initblk` takes a 32-bit size).
 - A P/Invoke records only the native library's name (M15): a library of your own must be
   where the runtime's loader finds it when the program runs, next to the program or on the
   system's search path, and on another system the same name may be another build of the
@@ -6084,3 +6299,10 @@ one of the decision brief's Design.md edits DM-1 to DM-17, which the user approv
 click (question box, 2026-11-01, Q12: "Approve all"); it was applied with the plan (plan 5.20.12
 item 8), and the rules of what it built are plan 5.20's and section 2, "Managed calls from C and
 C++ (MC-1)".
+
+FX-2 proposes no Design.md item: Design.md names `initblk` among the IL instructions it needs
+(7.1) and sets no limit on the length of a fill, and the only `int64` that the guard and the loop
+put on the stack is a constant outside the `int32` range, `ldc.i8` then `conv.i`, a sequence
+that 2.3 already lists. The rule is D15 as plan section 12's row 'D15 amended (FX-2)' amends it,
+and section 2, "The fix steps and the temporary warning after R-a (FX-1 to FX-4)", describes
+what FX-2 built.

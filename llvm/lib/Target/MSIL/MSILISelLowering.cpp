@@ -910,6 +910,8 @@ MSILTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   case MSIL::SELECT_F64:
   case MSIL::SELECT_OBJ:
     return emitSelect(MI, BB);
+  case MSIL::INITBLK_LONG:
+    return emitLongInitBlk(MI, BB);
   default:
     llvm_unreachable("Unexpected instr type to insert");
   }
@@ -1580,4 +1582,184 @@ MachineBasicBlock *MSILTargetLowering::emitSelect(MachineInstr &MI,
   // The function has PHIs now, also when it was read from MIR without any.
   MF->getProperties().resetNoPHIs();
   return SinkMBB;
+}
+
+MachineBasicBlock *
+MSILTargetLowering::emitLongInitBlk(MachineInstr &MI,
+                                    MachineBasicBlock *BB) const {
+  // initblk takes an unsigned int32 length (decision D15), and this memset's
+  // native int length may have bits at or above bit N. Split the block after
+  // the pseudo into a guard on those bits, a loop that fills blocks of
+  // 2^(N-1) bytes while one of them is set, and an initblk of the rest:
+  //
+  //   BB:       ...
+  //             %lim = CONST_I64 2^N - 1
+  //             %big = CGT_UN_I64 %len, %lim
+  //             BR_UNLESS TailMBB, %big
+  //   LoopMBB:  %p   = PHI %dst, BB, %p2, LoopMBB
+  //             %n   = PHI %len, BB, %n2, LoopMBB
+  //             INITBLK <flags>, %p, %val, (CONST_I32 2^(N-1) as an int32)
+  //             %p2  = ADD_I64 %p, (CONST_I64 2^(N-1))
+  //             %n2  = SUB_I64 %n, (CONST_I64 2^(N-1))
+  //             BR_IF LoopMBB, (CGT_UN_I64 %n2, %lim)
+  //   TailMBB:  %pt  = PHI %dst, BB, %p2, LoopMBB
+  //             %nt  = PHI %len, BB, %n2, LoopMBB
+  //             INITBLK <flags>, %pt, %val, (CONV_I4_I64 %nt)
+  //             ...                         ; the rest of BB
+  //
+  // The rest is below 2^N bytes when TailMBB runs, so conv.i4 keeps all of
+  // it (initblk reads the int32 as unsigned). FinalizeISel runs custom
+  // inserters after the passes of MSILPassConfig::addInstSelector, so
+  // MSILSetMemFlags has already put the 'unaligned.' and 'volatile.' prefixes
+  // into the pseudo's memflags operand, and both INITBLKs copy them. Every
+  // block starts at a multiple of 2^(N-1) bytes from the destination, and
+  // 2^(N-1) is at least 8, so each INITBLK's memory operand, the pseudo's
+  // aligned to at most 2^(N-1), keeps the prefixes exact. As in emitSelect,
+  // the successor lists are built here explicitly.
+  const TargetInstrInfo &TII = *Subtarget->getInstrInfo();
+  const DebugLoc &DL = MI.getDebugLoc();
+  MachineFunction *MF = BB->getParent();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  // (memflags, dst, val, len, N); -msil-memset-guard-bits admits N from 4 to
+  // 32 only.
+  const int64_t Flags = MI.getOperand(0).getImm();
+  const unsigned GuardBits = MI.getOperand(4).getImm();
+  assert(GuardBits >= 4 && GuardBits <= 32 && "guard bits out of range");
+  const uint64_t BlockSize = uint64_t(1) << (GuardBits - 1);
+  const uint64_t Limit = (uint64_t(1) << GuardBits) - 1;
+
+  // Every record but ARGUMENT_<RC> defines ARGUMENTS, which nothing after
+  // the ARGUMENT_<RC>s at the top of the entry block reads: the definition is
+  // dead, as on the records that instruction selection emits (plan 5.4).
+  const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
+  auto Emit = [&](MachineBasicBlock &MBB, MachineBasicBlock::iterator Pos,
+                  unsigned Opc, Register Def = Register()) {
+    MachineInstrBuilder MIB = Def.isValid()
+                                  ? BuildMI(MBB, Pos, DL, TII.get(Opc), Def)
+                                  : BuildMI(MBB, Pos, DL, TII.get(Opc));
+    MIB->addRegisterDead(MSIL::ARGUMENTS, TRI);
+    return MIB;
+  };
+  auto NewReg = [&](const TargetRegisterClass &RC) {
+    return MRI.createVirtualRegister(&RC);
+  };
+  const TargetRegisterClass &I32RC = MSIL::I32RegClass;
+  const TargetRegisterClass &I64RC = MSIL::I64RegClass;
+
+  // The address of a stack object is a frame index operand until prologue
+  // and epilogue insertion, but a PHI needs a register: copy it into one.
+  MachineBasicBlock::iterator GuardPos(MI);
+  auto GetReg = [&](const MachineOperand &MO) -> Register {
+    if (!MO.isFI())
+      return MO.getReg();
+    Register Reg = NewReg(I64RC);
+    Emit(*BB, GuardPos, MSIL::COPY_I64, Reg).addFrameIndex(MO.getIndex());
+    return Reg;
+  };
+  Register Dst = GetReg(MI.getOperand(1));
+  Register Val = MI.getOperand(2).getReg();
+  Register Len = GetReg(MI.getOperand(3));
+
+  // The memory operands of both INITBLKs: the pseudo's (the same pointer,
+  // flags and size), aligned to at most a block.
+  SmallVector<MachineMemOperand *, 1> MMOs;
+  for (const MachineMemOperand *MMO : MI.memoperands())
+    MMOs.push_back(MF->getMachineMemOperand(
+        MMO->getPointerInfo(), MMO->getFlags(), MMO->getSize(),
+        commonAlignment(MMO->getAlign(), BlockSize),
+        MMOMetadata(MMO->getAAInfo(), MMO->getRanges(), MMO->getMemCacheHint()),
+        MMO->getSyncScopeID(), MMO->getSuccessOrdering(),
+        MMO->getFailureOrdering()));
+
+  const BasicBlock *LLVMBB = BB->getBasicBlock();
+  MachineFunction::iterator InsertPos = std::next(BB->getIterator());
+  MachineBasicBlock *LoopMBB = MF->CreateMachineBasicBlock(LLVMBB);
+  MachineBasicBlock *TailMBB = MF->CreateMachineBasicBlock(LLVMBB);
+  MF->insert(InsertPos, LoopMBB);
+  MF->insert(InsertPos, TailMBB);
+
+  // TailMBB takes over the instructions after the pseudo, the terminators
+  // among them, and the successors of BB (with the PHIs that name BB).
+  TailMBB->splice(TailMBB->begin(), BB, std::next(MI.getIterator()), BB->end());
+  TailMBB->transferSuccessorsAndUpdatePHIs(BB);
+
+  BB->addSuccessor(LoopMBB);
+  BB->addSuccessor(TailMBB);
+  LoopMBB->addSuccessor(LoopMBB);
+  LoopMBB->addSuccessor(TailMBB);
+
+  // The guard: no bit at or above bit N is set when len <= 2^N - 1.
+  Register Lim = NewReg(I64RC);
+  Register Big = NewReg(I32RC);
+  Emit(*BB, GuardPos, MSIL::CONST_I64, Lim).addImm(Limit);
+  Emit(*BB, GuardPos, MSIL::CGT_UN_I64, Big).addReg(Len).addReg(Lim);
+  Emit(*BB, GuardPos, MSIL::BR_UNLESS).addMBB(TailMBB).addReg(Big);
+
+  // The loop: one block of 2^(N-1) bytes per round while the rest has a bit
+  // at or above bit N set.
+  MachineBasicBlock::iterator LoopEnd = LoopMBB->end();
+  Register Ptr = NewReg(I64RC);
+  Register Rest = NewReg(I64RC);
+  Register NextPtr = NewReg(I64RC);
+  Register NextRest = NewReg(I64RC);
+  BuildMI(*LoopMBB, LoopEnd, DL, TII.get(TargetOpcode::PHI), Ptr)
+      .addReg(Dst)
+      .addMBB(BB)
+      .addReg(NextPtr)
+      .addMBB(LoopMBB);
+  BuildMI(*LoopMBB, LoopEnd, DL, TII.get(TargetOpcode::PHI), Rest)
+      .addReg(Len)
+      .addMBB(BB)
+      .addReg(NextRest)
+      .addMBB(LoopMBB);
+  Register BlockLen = NewReg(I32RC);
+  Emit(*LoopMBB, LoopEnd, MSIL::CONST_I32, BlockLen)
+      .addImm(SignExtend64<32>(BlockSize));
+  Emit(*LoopMBB, LoopEnd, MSIL::INITBLK)
+      .addImm(Flags)
+      .addReg(Ptr)
+      .addReg(Val)
+      .addReg(BlockLen)
+      .setMemRefs(MMOs);
+  Register PtrStep = NewReg(I64RC);
+  Emit(*LoopMBB, LoopEnd, MSIL::CONST_I64, PtrStep).addImm(BlockSize);
+  Emit(*LoopMBB, LoopEnd, MSIL::ADD_I64, NextPtr).addReg(Ptr).addReg(PtrStep);
+  Register RestStep = NewReg(I64RC);
+  Emit(*LoopMBB, LoopEnd, MSIL::CONST_I64, RestStep).addImm(BlockSize);
+  Emit(*LoopMBB, LoopEnd, MSIL::SUB_I64, NextRest)
+      .addReg(Rest)
+      .addReg(RestStep);
+  Register More = NewReg(I32RC);
+  Emit(*LoopMBB, LoopEnd, MSIL::CGT_UN_I64, More).addReg(NextRest).addReg(Lim);
+  Emit(*LoopMBB, LoopEnd, MSIL::BR_IF).addMBB(LoopMBB).addReg(More);
+
+  // The rest, at the destination or after the last block, before the
+  // instructions TailMBB took over.
+  MachineBasicBlock::iterator TailPos = TailMBB->begin();
+  Register TailPtr = NewReg(I64RC);
+  Register TailRest = NewReg(I64RC);
+  BuildMI(*TailMBB, TailPos, DL, TII.get(TargetOpcode::PHI), TailPtr)
+      .addReg(Dst)
+      .addMBB(BB)
+      .addReg(NextPtr)
+      .addMBB(LoopMBB);
+  BuildMI(*TailMBB, TailPos, DL, TII.get(TargetOpcode::PHI), TailRest)
+      .addReg(Len)
+      .addMBB(BB)
+      .addReg(NextRest)
+      .addMBB(LoopMBB);
+  Register RestLen = NewReg(I32RC);
+  Emit(*TailMBB, TailPos, MSIL::CONV_I4_I64, RestLen).addReg(TailRest);
+  Emit(*TailMBB, TailPos, MSIL::INITBLK)
+      .addImm(Flags)
+      .addReg(TailPtr)
+      .addReg(Val)
+      .addReg(RestLen)
+      .setMemRefs(MMOs);
+
+  MI.eraseFromParent();
+  // The function has PHIs now, also when it was read from MIR without any.
+  MF->getProperties().resetNoPHIs();
+  return TailMBB;
 }

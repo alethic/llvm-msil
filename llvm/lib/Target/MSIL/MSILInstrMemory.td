@@ -8,7 +8,8 @@
 ///
 /// \file
 /// MSIL memory access code-gen constructs: ldind/stind with a memflags_op
-/// first operand, cpblk, initblk, the memmove call and the fences.
+/// first operand, cpblk, initblk and its guarded loop (INITBLK_LONG), the
+/// memmove call and the fences.
 ///
 /// An address is one native int (I64) operand: CIL has no offset or index
 /// operands, so address arithmetic is explicit (isLegalAddressingMode accepts
@@ -39,6 +40,15 @@ def SDT_MSILCpBlk : SDTypeProfile<0, 3, [SDTCisVT<0, i64>, SDTCisVT<1, i64>,
 // low 8 bits of value.
 def SDT_MSILInitBlk : SDTypeProfile<0, 3, [SDTCisVT<0, i64>, SDTCisVT<1, i32>,
                                            SDTCisVT<2, i32>]>;
+// (dst, value, len, N): a memset whose native int length, known only at run
+// time, may have bits at or above bit N, a target constant (32 unless
+// -msil-memset-guard-bits says otherwise). It is selected as the INITBLK_LONG
+// pseudo, which sets len bytes at dst with initblk in blocks of 2^(N-1) bytes
+// while the rest does not fit N bits, and then the rest.
+def SDT_MSILInitBlkLong : SDTypeProfile<0, 4, [SDTCisVT<0, i64>,
+                                               SDTCisVT<1, i32>,
+                                               SDTCisVT<2, i64>,
+                                               SDTCisVT<3, i32>]>;
 // (src, dst, len): the argument order of System.Buffer::MemoryCopy, with a
 // native int length.
 def SDT_MSILMemMove : SDTypeProfile<0, 3, [SDTCisVT<0, i64>, SDTCisVT<1, i64>,
@@ -49,6 +59,8 @@ def MSILcpblk : SDNode<"MSILISD::CPBLK", SDT_MSILCpBlk,
                         SDNPMemOperand]>;
 def MSILinitblk : SDNode<"MSILISD::INITBLK", SDT_MSILInitBlk,
                          [SDNPHasChain, SDNPMayStore, SDNPMemOperand]>;
+def MSILinitblk_long : SDNode<"MSILISD::INITBLK_LONG", SDT_MSILInitBlkLong,
+                              [SDNPHasChain, SDNPMayStore, SDNPMemOperand]>;
 def MSILmemmove : SDNode<"MSILISD::MEMMOVE", SDT_MSILMemMove,
                          [SDNPHasChain, SDNPMayLoad, SDNPMayStore,
                           SDNPMemOperand]>;
@@ -138,6 +150,24 @@ def : Pat<(MSILcpblk I64:$dst, I64:$src, I32:$len),
           (CPBLK 0, I64:$dst, I64:$src, I32:$len)>;
 def : Pat<(MSILinitblk I64:$dst, I32:$val, I32:$len),
           (INITBLK 0, I64:$dst, I32:$val, I32:$len)>;
+
+// A memset whose native int length, known only at run time, may have bits at
+// or above bit $bits (decision D15). A SelectionDAG covers one basic block,
+// so the loop is built after instruction selection: the custom inserter
+// MSILTargetLowering::emitLongInitBlk tests those bits, fills blocks of
+// 2^($bits-1) bytes with INITBLK while one of them is set, and fills the rest
+// with one more INITBLK. It runs after MSILSetMemFlags, which fills $flags as
+// for INITBLK, and gives every INITBLK these flags and a memory operand like
+// the pseudo's. The pseudo never reaches MC.
+let usesCustomInserter = 1, isPseudo = 1, hasSideEffects = 0, mayLoad = 0,
+    mayStore = 1 in
+defm INITBLK_LONG : I<(outs),
+                      (ins memflags_op:$flags, I64:$dst, I32:$val, I64:$len,
+                           i32imm:$bits),
+                      []>;
+
+def : Pat<(MSILinitblk_long I64:$dst, I32:$val, I64:$len, timm:$bits),
+          (INITBLK_LONG 0, I64:$dst, I32:$val, I64:$len, timm:$bits)>;
 
 // memmove, and memcpy without a constant int32 length: overlapping cpblk
 // gives different results on CoreCLR and .NET Framework (ECMA leaves it

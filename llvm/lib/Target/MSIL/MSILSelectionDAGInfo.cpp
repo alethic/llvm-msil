@@ -14,19 +14,33 @@
 /// \file
 /// This file implements the MSILSelectionDAGInfo class.
 ///
-/// memcpy, memmove and memset never become library calls (decision D15):
-/// there is no C library to link against in Phase 1. A memcpy with a constant
-/// length that fits an unsigned int32 is 'cpblk'; every other memcpy and every
-/// memmove calls System.Buffer::MemoryCopy, which has memmove semantics on
-/// every runtime (an overlapping cpblk does not); memset is 'initblk'.
+/// memcpy, memmove and memset never become library calls (decision D15): the
+/// intrinsics stay in IL in every output, and standalone text calls no C
+/// library function outside the import table of decision D14. A memcpy with a
+/// constant length that fits an unsigned int32 is 'cpblk'; every other memcpy
+/// and every memmove calls System.Buffer::MemoryCopy, which has memmove
+/// semantics on every runtime (an overlapping cpblk does not).
+///
+/// A memset is 'initblk', whose length is an unsigned int32, and no memset
+/// length is ever cut. A constant length that does not fit 32 bits is split
+/// into blocks of 2 GiB, the rest last. A length known only at run time that
+/// may have bits at or above bit 32 becomes MSILISD::INITBLK_LONG, a guarded
+/// loop that MSILTargetLowering::emitLongInitBlk builds after instruction
+/// selection: when none of those bits is set, one initblk fills the block;
+/// otherwise initblks of 2 GiB fill it while the rest does not fit 32 bits,
+/// and one more initblk fills the rest. The hidden option
+/// -msil-memset-guard-bits=<N> moves the guard to bits N and up and the blocks
+/// to 2^(N-1) bytes, so that tests can run the loop at small lengths.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "MSILSelectionDAGInfo.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/Support/Alignment.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MathExtras.h"
 
 #define GET_SDNODE_DESC
@@ -35,6 +49,36 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "msil-selectiondag-info"
+
+namespace {
+
+/// The parser of -msil-memset-guard-bits: it refuses a value that is not a
+/// number from 4 to 32 while the command line is parsed, before any input is
+/// read, and never clamps one. From 4 on, every block of the loop starts at a
+/// multiple of 8 bytes from the destination, so the initblks of the loop and
+/// of the rest keep the pseudo's 'unaligned.' prefix exactly.
+struct MemsetGuardBitsParser : public cl::parser<unsigned> {
+  MemsetGuardBitsParser(cl::Option &O) : cl::parser<unsigned>(O) {}
+
+  // Returns true on error, as cl::parser<unsigned>::parse does.
+  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg, unsigned &Value) {
+    if (Arg.getAsInteger(0, Value) || Value < 4 || Value > 32)
+      return O.error("'" + Arg + "' is not a number from 4 to 32");
+    return false;
+  }
+};
+
+} // end anonymous namespace
+
+// A memset whose length is known only at run time and may have bits at or
+// above bit N tests them and fills blocks of 2^(N-1) bytes in a loop while one
+// of them is set. The default, 32, fills a length that initblk cannot take in
+// blocks of 2 GiB; a smaller N runs the loop at small lengths, for tests.
+static cl::opt<unsigned, false, MemsetGuardBitsParser> MemsetGuardBits(
+    "msil-memset-guard-bits", cl::Hidden, cl::init(32), cl::value_desc("N"),
+    cl::desc("MSIL: guard a memset whose length is known only at run time "
+             "on bits N and up of the length, and fill blocks of 2^(N-1) "
+             "bytes while one of them is set (4 to 32)"));
 
 MSILSelectionDAGInfo::MSILSelectionDAGInfo()
     : SelectionDAGGenTargetInfo(MSILGenSDNodeInfo) {}
@@ -151,13 +195,35 @@ SDValue MSILSelectionDAGInfo::EmitTargetCodeForMemset(
         MSILISD::INITBLK, DL, DAG.getVTList(MVT::Other), Ops, MVT::i8, MMO);
   };
 
-  // initblk takes an unsigned int32 length. A variable length is truncated
-  // with conv.i4: memset of 4 GiB or more with a variable length is a
-  // documented Phase-1 limit.
+  // initblk takes an unsigned int32 length, and a length known only at run
+  // time is never cut. N is 32 unless -msil-memset-guard-bits says otherwise.
+  // When bits N and up of the zero-extended length are known to be zero, one
+  // initblk takes its low 32 bits: at any N, a length proved below 2^N, and at
+  // the default N = 32 also every length of 32 bits, which a smaller N guards
+  // unless it is proved below 2^N. Otherwise MSILISD::INITBLK_LONG
+  // carries the native int length and N, and its custom inserter
+  // (MSILTargetLowering::emitLongInitBlk) builds a guard on those bits, a loop
+  // of initblks of 2^(N-1) bytes while one of them is set, and one initblk of
+  // the rest.
   std::optional<uint64_t> Length = getConstantLength(Size);
-  if (!Length)
-    return EmitInitBlk(Chain, Dst, DAG.getZExtOrTrunc(Size, DL, MVT::i32),
-                       DstPtrInfo, getBlockSize(std::nullopt), Alignment);
+  if (!Length) {
+    unsigned GuardBits = MemsetGuardBits;
+    LocationSize MemSize = getBlockSize(std::nullopt);
+    SDValue Len = DAG.getZExtOrTrunc(Size, DL, MVT::i64);
+    if (DAG.MaskedValueIsZero(Len, APInt::getBitsSetFrom(64, GuardBits)))
+      return EmitInitBlk(Chain, Dst, DAG.getZExtOrTrunc(Size, DL, MVT::i32),
+                         DstPtrInfo, MemSize, Alignment);
+    // MSILISD::INITBLK_LONG (dst, value, len, N): the store memory operand
+    // has an unknown size, as for a single initblk of a run-time length.
+    MachineMemOperand *MMO =
+        getBlockMemOperand(DAG, DstPtrInfo, MachineMemOperand::MOStore,
+                           IsVolatile, MemSize, Alignment);
+    SDValue Ops[] = {Chain, Dst, Value, Len,
+                     DAG.getTargetConstant(GuardBits, DL, MVT::i32)};
+    return DAG.getMemIntrinsicNode(MSILISD::INITBLK_LONG, DL,
+                                   DAG.getVTList(MVT::Other), Ops, MVT::i8,
+                                   MMO);
+  }
 
   // A constant length is never truncated: one that does not fit an unsigned
   // int32 is split into blocks of 2 GiB, the remainder last.

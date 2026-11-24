@@ -28,8 +28,11 @@ namespace llvm {
 namespace MSILISD {
 
 // The nodes the .td files define (ARGUMENT, RETURN, BR_TABLE, and the memory
-// intrinsics CPBLK, INITBLK and MEMMOVE, which carry memory operands) are
-// generated into MSILGenSDNodeInfo.inc.
+// intrinsics CPBLK, INITBLK, INITBLK_LONG and MEMMOVE, which carry memory
+// operands) are generated into MSILGenSDNodeInfo.inc. INITBLK_LONG is a
+// memset whose length, known only at run time, may have bits at or above bit N
+// (32 unless -msil-memset-guard-bits says otherwise); its custom inserter
+// fills it in a guarded loop of initblks.
 enum NodeType : unsigned {
   // A call with variadic results, which TableGen cannot describe:
   // (chain, callee, arguments...) -> (results..., chain). Instruction
@@ -47,8 +50,8 @@ public:
 
   const char *getTargetNodeName(unsigned Opcode) const override;
 
-  // memcpy, memmove and memset never become libcalls (cpblk, initblk and
-  // System.Buffer::MemoryCopy).
+  // memcpy, memmove and memset never become libcalls (cpblk, initblk, the
+  // guarded initblk loop of INITBLK_LONG and System.Buffer::MemoryCopy).
   SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, const SDLoc &DL,
                                   SDValue Chain, SDValue Dst, SDValue Src,
                                   SDValue Size, Align DstAlign, Align SrcAlign,

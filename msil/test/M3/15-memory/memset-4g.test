@@ -1,0 +1,102 @@
+# memset with a run-time length of 2^32 + 4103 bytes at a 1-aligned address of a calloc buffer, then the constant length 2^32 + 5 at the same address with another fill byte, every byte of the buffer checked after each fill: the filled bytes, the first fill's bytes beyond the second and the guard bytes before and after.
+# FX-2 (plan D15 as section 12's row 'D15 amended (FX-2)' amends it): before
+# FX-2, initblk took a run-time length through conv.i4, so the first fill
+# wrote 4103 bytes and reported nothing. Now the guard sees bit 32 set, the
+# loop fills one block of 2^31 bytes (2 GiB) and the last initblk the
+# remaining 2^31 + 4103 bytes, a size of 2^31 or more, negative as an int32.
+# The second fill's length is a constant, which FX-2 leaves to the split that
+# constant lengths already had. The first length is read through a volatile
+# object, so that no level folds it (a noinline function's result alone
+# could still be folded by interprocedural constant propagation); the fill
+# bytes are volatile too. calloc's zeros are the guard bytes: 61 before the
+# fills (an odd count, so the fills start at a 1-aligned address: calloc's
+# memory is at least 8-aligned) and 67 after the first fill. The buffer's
+# address is stored to a volatile pointer and read back, so no level knows
+# that calloc zeroed it and every check reads memory. After each fill the
+# program counts the bytes that differ from what C gives, region by region,
+# eight bytes at a time where the address is 8-aligned and one at a time at
+# the ends, and prints the counts; a failed calloc prints its own line and
+# exits 1. No run test before FX-2 runs an initblk of 2^31 bytes or more. A
+# runtime that writes a wrong byte, throws or crashes here while the native
+# oracle passes is reported to the user before anything else changes,
+# because the 2 GiB block is the user's pick (FX-2's 'Stop and report, the
+# 2 GiB block'): no other block size, guard, test exclusion, retry or interim
+# workaround in the meantime.
+# Limits (plan 5.17.9): the buffer takes 4 GiB + 4231 bytes, so every command
+# runs under a 6144 MiB memory cap instead of the default 4096 MiB. The
+# slowest command, a run of the -O0 image on WSL .NET 10, took 5.5-8.4 s in
+# five runs, with a median of 6.8 s (each run measured alone on 2026-11-23,
+# while other builds and tests kept the host busy; every other run, on WSL
+# .NET 10 with TC=0, the E7h oracle, Windows .NET 10 with and without TC=0,
+# .NET 8, the .NET Framework and the DLL C runtime oracle, took 1.9-5.8 s),
+# so the timeout is 30 s, under five times the median.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_limits} = --timeout 30 --mem-limit-mb 6144
+# RUN: %{msil_prog}
+#--- main.c
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define BEFORE 61              /* guard bytes before the fills */
+#define AFTER 67               /* guard bytes after the first fill */
+#define LEN2 0x100000005ull    /* the second fill: 2^32 + 5, a constant */
+
+static volatile unsigned long long v_len1 = 0x100001007ull; /* 2^32 + 4103 */
+static volatile unsigned char v_fill1 = 0xA5, v_fill2 = 0x3C;
+static unsigned char *volatile v_buf;
+
+/* The bytes of [p, p + n) that are not c: one at a time up to an 8-aligned
+   address, then eight at a time, then the rest one at a time. */
+static unsigned long long count_bad(const unsigned char *p, size_t n, unsigned char c) {
+  unsigned long long bad = 0;
+  uint64_t pattern = 0x0101010101010101ull * c;
+  for (; n && ((uintptr_t)p & 7); ++p, --n)
+    bad += *p != c;
+  for (; n >= 8; p += 8, n -= 8) {
+    uint64_t w;
+    memcpy(&w, p, 8);
+    if (w != pattern)
+      for (int i = 0; i < 8; ++i)
+        bad += p[i] != c;
+  }
+  for (; n; ++p, --n)
+    bad += *p != c;
+  return bad;
+}
+
+int main(void) {
+  size_t n1 = (size_t)v_len1;
+  size_t total = BEFORE + n1 + AFTER;
+  unsigned char *buf = calloc(total, 1);
+  if (!buf) {
+    printf("calloc of %llu bytes failed\n", (unsigned long long)total);
+    return 1;
+  }
+  v_buf = buf;
+  buf = v_buf;
+  unsigned char *p = buf + BEFORE;
+  unsigned char c1 = v_fill1, c2 = v_fill2;
+
+  memset(p, c1, n1);
+  unsigned long long a0 = count_bad(buf, BEFORE, 0);
+  unsigned long long a1 = count_bad(p, n1, c1);
+  unsigned long long a2 = count_bad(p + n1, AFTER, 0);
+  printf("memset of %llu bytes (run-time length) at a 1-aligned address: "
+         "%llu bad bytes before, %llu inside, %llu after\n",
+         (unsigned long long)n1, a0, a1, a2);
+
+  memset(p, c2, LEN2);
+  unsigned long long b0 = count_bad(buf, BEFORE, 0);
+  unsigned long long b1 = count_bad(p, LEN2, c2);
+  unsigned long long b2 = count_bad(p + LEN2, n1 - LEN2, c1);
+  unsigned long long b3 = count_bad(p + n1, AFTER, 0);
+  printf("memset of %llu bytes (constant length) at the same address: "
+         "%llu bad bytes before, %llu inside, %llu beyond it, %llu after\n",
+         LEN2, b0, b1, b2, b3);
+  free(buf);
+  return (a0 | a1 | a2 | b0 | b1 | b2 | b3) != 0;
+}

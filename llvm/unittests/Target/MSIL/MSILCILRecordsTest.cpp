@@ -18,9 +18,10 @@
 //   M26's LOCALLOC_I64; 187 with R-a's CONST_NULL, CEQ_OBJ, BEQ_OBJ,
 //   BNE_UN_OBJ, BR_IF_OBJ, BR_UNLESS_OBJ, ARG_GET_OBJ, ARG_SET_OBJ,
 //   LOCAL_GET_OBJ, LOCAL_SET_OBJ and DROP_OBJ), and the records that
-//   MSILMCInstLower expands into several CIL_ instructions carry none. The
-//   shortest forms that MSIL::buildLdcI4 and MSIL::buildVarInst choose are
-//   cli::ILBuilder's (Q26, 5.7.5).
+//   MSILMCInstLower expands into several CIL_ instructions carry none, nor do
+//   the pseudos that never reach MC, FX-2's INITBLK_LONG among them (the
+//   count stays 187). The shortest forms that MSIL::buildLdcI4 and
+//   MSIL::buildVarInst choose are cli::ILBuilder's (Q26, 5.7.5).
 // - MSILBCLMembers: the BCLMembers.def X-macro, the cli:: table built from it,
 //   and printBCLMemberRef, which prints Phase 1's [mscorlib] text and the
 //   object form's [msil.bcl] text (5.11.7, 5.8.4).
@@ -461,11 +462,68 @@ TEST_F(MSILCILRecords, MultiOpcodeRecordsCarryNoValue) {
       MSIL::ADJCALLSTACKUP, MSIL::SELECT_I32,    MSIL::SELECT_F64,
       MSIL::ARG_TEE_OBJ,    MSIL::LOCAL_TEE_OBJ, MSIL::ARGUMENT_OBJ,
       MSIL::COPY_OBJ,       MSIL::TEE_OBJ,       MSIL::SELECT_OBJ,
+      MSIL::INITBLK_LONG,
   };
   for (unsigned Opc : Records) {
     SCOPED_TRACE(nameOf(Opc));
     EXPECT_EQ(MSIL::NoCILOpcode, MSIL::getCILOpcodeValue(MII->get(Opc)));
   }
+}
+
+// FX-2's INITBLK_LONG (plan 5.4's memory row as section 12's row 'Contract
+// rows (FX-2)' extends it; FX-2.a): the pseudo that instruction selection
+// gives a memset whose length, known only at run time, may reach 2^N. It
+// never reaches MC: its custom inserter builds the guard, the loop and the
+// tail of INITBLKs in FinalizeISel, so it carries no CIL value and uses the
+// custom insertion hook. Its operands are memflags first, as INITBLK's, then
+// the destination, the fill value, the native int length and N; it only
+// stores.
+TEST_F(MSILCILRecords, MSILLongInitBlkIsACustomInsertedPseudo) {
+  const MCInstrDesc &Long = MII->get(MSIL::INITBLK_LONG);
+  EXPECT_EQ("INITBLK_LONG", nameOf(MSIL::INITBLK_LONG));
+  EXPECT_EQ(MSIL::NoCILOpcode, MSIL::getCILOpcodeValue(Long));
+  EXPECT_FALSE(MSIL::isCILRecord(*MII, MSIL::INITBLK_LONG));
+  EXPECT_TRUE(Long.usesCustomInsertionHook());
+  EXPECT_TRUE(Long.isPseudo());
+  EXPECT_TRUE(Long.mayStore());
+  EXPECT_FALSE(Long.mayLoad());
+  EXPECT_FALSE(Long.hasUnmodeledSideEffects());
+  EXPECT_FALSE(Long.isTerminator());
+  EXPECT_FALSE(Long.isBranch());
+  EXPECT_FALSE(Long.isCall());
+
+  // (outs) (ins memflags_op:$flags, I64:$dst, I32:$val, I64:$len,
+  // i32imm:$bits).
+  EXPECT_EQ(0u, Long.getNumDefs());
+  EXPECT_FALSE(Long.isVariadic());
+  ASSERT_EQ(5u, Long.getNumOperands());
+  ArrayRef<MCOperandInfo> Ops = Long.operands();
+  EXPECT_EQ(unsigned(MSIL::OPERAND_MEMFLAGS), unsigned(Ops[0].OperandType));
+  EXPECT_EQ(unsigned(MCOI::OPERAND_REGISTER), unsigned(Ops[1].OperandType));
+  EXPECT_EQ(int(MSIL::I64RegClassID), int(Ops[1].RegClass));
+  EXPECT_EQ(unsigned(MCOI::OPERAND_REGISTER), unsigned(Ops[2].OperandType));
+  EXPECT_EQ(int(MSIL::I32RegClassID), int(Ops[2].RegClass));
+  EXPECT_EQ(unsigned(MCOI::OPERAND_REGISTER), unsigned(Ops[3].OperandType));
+  EXPECT_EQ(int(MSIL::I64RegClassID), int(Ops[3].RegClass));
+  EXPECT_EQ(unsigned(MCOI::OPERAND_IMMEDIATE), unsigned(Ops[4].OperandType));
+  EXPECT_EQ(-1, int(Ops[4].RegClass));
+
+  // The INITBLK it expands into: the same memflags, destination and value
+  // operands, an int32 length, the CIL value of initblk, and the same
+  // implicit ARGUMENTS def (plan 5.4: 'implicit-def dead $arguments').
+  const MCInstrDesc &Short = MII->get(MSIL::INITBLK);
+  ASSERT_EQ(4u, Short.getNumOperands());
+  for (unsigned I = 0; I != 3; ++I) {
+    SCOPED_TRACE(I);
+    EXPECT_EQ(unsigned(Short.operands()[I].OperandType),
+              unsigned(Ops[I].OperandType));
+    EXPECT_EQ(int(Short.operands()[I].RegClass), int(Ops[I].RegClass));
+  }
+  EXPECT_EQ(int(MSIL::I32RegClassID), int(Short.operands()[3].RegClass));
+  EXPECT_EQ(uint16_t(Opcode::Initblk), MSIL::getCILOpcodeValue(Short));
+  EXPECT_FALSE(Short.usesCustomInsertionHook());
+  EXPECT_TRUE(equal(Short.implicit_defs(), Long.implicit_defs()));
+  EXPECT_TRUE(is_contained(Long.implicit_defs(), MCPhysReg(MSIL::ARGUMENTS)));
 }
 
 //===----------------------------------------------------------------------===//

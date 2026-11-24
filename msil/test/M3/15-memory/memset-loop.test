@@ -1,0 +1,159 @@
+# memset with a length known only at run time, at small lengths through the guarded loop (-msil-memset-guard-bits=4): every length from 0 to 200 and the lengths 255, 256, 257, 1000 and 4096, at offsets 0 to 15 of a buffer with guard bytes, through memset, __builtin_bzero and a zeroing loop, every byte inside and the guard bytes outside checked; the -O2 image has the option's 8-byte blocks and no default guard, and clang -mllvm and msil-ld's -mllvm refuse a value outside 4 to 32.
+# FX-2 (plan D15 as section 12's row 'D15 amended (FX-2)' amends it): a
+# memset whose length is known only at run time and may have bits at or
+# above bit N (32 by default) tests them; when none is set, one initblk fills
+# the block, otherwise a loop fills blocks of 2^(N-1) bytes while the rest does
+# not fit N bits, and one initblk fills the rest. The hidden option
+# -msil-memset-guard-bits=4 moves the guard to bits 4 and up and the block to
+# 8 bytes, so that this program runs the loop at small lengths on every
+# runtime: lengths 0-15 take the guard's other way (one initblk), 16 and more
+# one or more rounds of the loop and then the last initblk. The option goes
+# to every compile (%{msil_copts}; the native oracle's clang, the same binary,
+# accepts it and has no use for it) and to the MSIL link (%{msil_libs}: under
+# lto msil-ld generates the code). The lengths are read through volatile
+# objects, as are the fill bytes of memset (never 0xEE, the guard byte), so
+# nothing folds at any level and no level can bound a length: every fill that
+# reaches llvm.memset has the guard. The three ways reach it as llvm.memset:
+# memset through the C library's declaration (M3 tests are hosted, plan
+# 5.17.3, so clang treats it as the builtin), __builtin_bzero with the value
+# 0, and a zeroing loop, which LoopIdiomRecognize turns into a memset at -O1,
+# -O2, -O3 and -Os. At -O0 the loop stays a loop of byte stores, and so it
+# does at -Oz: under minsize LoopRotation copies no loop header, so the loop
+# keeps its exit test at the top, and LoopIdiomRecognize turns a store into a
+# memset only when the store's block dominates the loop's exits. The program
+# checks those bytes just the same, and the IL check below reads the -O2
+# image, where the loop is a memset. Each fill writes buf + 32 + off, after a
+# constant-length memset (one initblk, unchanged by FX-2) has set all of buf
+# to 0xEE; then the program compares every byte of buf: the filled ones with
+# the fill byte, the others (at least 32 guard bytes on each side) with 0xEE.
+# It prints a line for each of the first bad bytes it finds and one summary
+# line: the number of fills, the number of bad bytes and a checksum of all of
+# buf after every fill.
+# The bytes alone cannot show that the option took effect: at these lengths
+# the default guard (bits 32 and up) takes its other way, one initblk, which
+# fills every case just as well. So this run's -O2 image is dumped and
+# checked for the option's shape: a loop block of 8 bytes (ldc.i4.8,
+# unaligned. 1, since every fill here is 1-aligned, then initblk, matched as
+# one pattern across the three lines, because the .cctor's ldc.i4.8 comes
+# first and FileCheck does not retry a CHECK-NEXT chain at a later match) for
+# each way of fill, so the pattern three times, and before, between and after
+# the three blocks neither the default guard's constant 2^32 - 1 (ldc.i8
+# 4294967295) nor its 2 GiB block (ldc.i4 -2147483648). With a way that does
+# not reach the guard (a zeroing loop left a loop of byte stores, or a bzero
+# that lost its guard) the image has two blocks and the program's transcript
+# is the same, so only the count tells. The pattern is written out three
+# times, with the two NOT lines around each, rather than counted with a COUNT
+# suffix, because FileCheck checks the NOT lines before a counted check only
+# up to its first match. A compile without %{msil_copts} (obj: clang
+# generates the code) or a link without %{msil_libs} (lto: msil-ld generates
+# it) fails this check. Every gate and CI leg that runs this directory builds
+# -O2; the RUN line of %{msil_prog} first removes the -O2 work folder and the
+# dump that an earlier run left (on that line, because update-expected.py
+# runs any other RUN line before %{msil_prog} as one that prepares the
+# inputs), so a run whose msil_opt_levels leave out O2 fails at the dump and
+# never reads an image from another run.
+# Last, the option's parser refuses a value that is not a number from 4 to 32
+# when the options are parsed, with the shared text T-FX2-1 after LLVM's
+# prefix: 3 through %{msil_copts}, which every compile gets (obj and lto
+# alike), gives the clang (LLVM option parsing) line; 33 through
+# %{msil_libs} gives the msil-ld (LLVM option parsing) line, after which the
+# clang driver reports the failed link; and msil-ld refuses 3 before it opens
+# any input (here a missing one). Each of these builds stops at the refusal,
+# so -O0 alone is built; they come after %{msil_prog}, whose -O0 build uses
+# the same directory. The last redefinition of %{msil_copts} gives it its
+# valid value back: update-expected.py reads that one for the native oracle.
+# Plan 5.17.13 (FX-2, M3/15-memory).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_copts} = -mllvm -msil-memset-guard-bits=4
+# REDEFINE: %{msil_libs} = -Wl,-mllvm,-msil-memset-guard-bits=4
+# RUN: rm -rf %t.O2.d %t.O2.dump && %{msil_prog}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump %t.O2.d/prog.exe > %t.O2.dump %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=LOOP --input-file %t.O2.dump %}
+# LOOP-NOT: ldc.i8 4294967295{{$}}
+# LOOP-NOT: ldc.i4 -2147483648{{$}}
+# LOOP:     {{^ +L[0-9]+: }}ldc.i4.8{{[[:space:]]+L[0-9]+: }}unaligned. 1{{[[:space:]]+L[0-9]+: }}initblk{{$}}
+# LOOP-NOT: ldc.i8 4294967295{{$}}
+# LOOP-NOT: ldc.i4 -2147483648{{$}}
+# LOOP:     {{^ +L[0-9]+: }}ldc.i4.8{{[[:space:]]+L[0-9]+: }}unaligned. 1{{[[:space:]]+L[0-9]+: }}initblk{{$}}
+# LOOP-NOT: ldc.i8 4294967295{{$}}
+# LOOP-NOT: ldc.i4 -2147483648{{$}}
+# LOOP:     {{^ +L[0-9]+: }}ldc.i4.8{{[[:space:]]+L[0-9]+: }}unaligned. 1{{[[:space:]]+L[0-9]+: }}initblk{{$}}
+# LOOP-NOT: ldc.i8 4294967295{{$}}
+# LOOP-NOT: ldc.i4 -2147483648{{$}}
+# REDEFINE: %{msil_copts} = -mllvm -msil-memset-guard-bits=3
+# RUN: %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=REFUSE-CLANG --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REDEFINE: %{msil_copts} = -mllvm -msil-memset-guard-bits=4
+# REDEFINE: %{msil_libs} = -Wl,-mllvm,-msil-memset-guard-bits=33
+# RUN: %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=REFUSE-LINK --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: not %msil_ld -mllvm -msil-memset-guard-bits=3 %t/missing.o -o %t/missing.exe 2>&1 | FileCheck %s --check-prefix=REFUSE-EARLY --implicit-check-not="cannot open" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REFUSE-CLANG: {{^}}clang (LLVM option parsing): for the --msil-memset-guard-bits option: '3' is not a number from 4 to 32{{$}}
+# REFUSE-LINK:  {{^}}msil-ld (LLVM option parsing): for the --msil-memset-guard-bits option: '33' is not a number from 4 to 32{{$}}
+# REFUSE-LINK:  clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# REFUSE-EARLY: {{^}}msil-ld (LLVM option parsing): for the --msil-memset-guard-bits option: '3' is not a number from 4 to 32{{$}}
+#--- main.c
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#define GUARD 32       /* guard bytes before offset 0 and after the longest fill */
+#define MAX_OFF 15     /* offsets 0 to 15 */
+#define MAX_LEN 4096   /* the longest fill */
+#define GUARD_BYTE 0xEE
+#define NUM_LENGTHS 206 /* 0 to 200, then the five of v_long */
+#define MAX_REPORTS 8
+
+static unsigned char buf[GUARD + MAX_OFF + MAX_LEN + GUARD];
+
+/* Read through volatile objects, so that no level knows a length or a fill
+   byte: every length below is a run-time value. */
+static volatile size_t v_one = 1;
+static volatile unsigned short v_long[5] = {255, 256, 257, 1000, 4096};
+static volatile unsigned char v_fill[7] = {0x5A, 0xA5, 0x00, 0xFF, 0x80, 0x7F, 0x01};
+
+static const char *const way_name[3] = {"memset", "__builtin_bzero", "a zeroing loop"};
+
+static void fill_memset(unsigned char *p, int c, size_t n) { memset(p, c, n); }
+
+static void fill_bzero(unsigned char *p, size_t n) { __builtin_bzero(p, n); }
+
+static void fill_loop(unsigned char *p, size_t n) {
+  for (size_t i = 0; i < n; ++i)
+    p[i] = 0;
+}
+
+int main(void) {
+  size_t one = v_one;
+  unsigned fills = 0, bad = 0;
+  uint32_t sum = 0;
+  for (unsigned k = 0; k < NUM_LENGTHS; ++k) {
+    size_t len = (k <= 200 ? k : v_long[k - 201]) * one;
+    for (size_t off = 0; off <= MAX_OFF; ++off) {
+      for (unsigned way = 0; way < 3; ++way) {
+        unsigned char c = way == 0 ? v_fill[(k + off) % 7] : 0;
+        unsigned char *p = buf + GUARD + off;
+        memset(buf, GUARD_BYTE, sizeof buf);
+        if (way == 0)
+          fill_memset(p, c, len);
+        else if (way == 1)
+          fill_bzero(p, len);
+        else
+          fill_loop(p, len);
+        ++fills;
+        for (size_t i = 0; i < sizeof buf; ++i) {
+          unsigned char want = i >= GUARD + off && i < GUARD + off + len ? c : GUARD_BYTE;
+          if (buf[i] != want) {
+            if (bad < MAX_REPORTS)
+              printf("%s, length %u, offset %u: buf[%u] is 0x%02x, not 0x%02x\n",
+                     way_name[way], (unsigned)len, (unsigned)off, (unsigned)i, buf[i], want);
+            ++bad;
+          }
+          sum = sum * 31u + buf[i];
+        }
+      }
+    }
+  }
+  printf("memset-loop: %u fills, %u bad bytes, checksum %08x\n", fills, bad, (unsigned)sum);
+  return bad != 0;
+}

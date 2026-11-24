@@ -45,6 +45,41 @@
 # untracked one and both names of a rename; --llc-arg is checked on the
 # commands Snapshot.compile() builds (nothing runs): llc gets each argument,
 # clang '-mllvm <argument>'.
+#
+# FX-2's --expect-change REGEX (plan 5.17.5; FX-2 gate step 22 compares
+# with --expect-change initblk) is checked through compare(new, old,
+# normalize, skipped, re.compile(REGEX)), the call main() makes, on an old
+# and a new copy of the fixture per case. A differing .il whose baseline
+# (the --compare tree's file as written) matches REGEX through re.search is
+# accepted: it is listed as 'il-snapshot: expected change: <name>' (sorted,
+# with no diff), counted in 'il-snapshot: --expect-change: <N> differing .il
+# files were accepted because their baseline text matches <REGEX>' (printed
+# with N = 0 too) and left out of compare()'s result and the summary's
+# differ count, so trees whose only differences are accepted give 0 (exit
+# 0); without the option the same trees list the file with its diff. A
+# differing .il whose baseline does not match still fails, also when only
+# its new text matches (what the gate relies on: an input whose baseline IL
+# has no initblk compiles to the same IL), and case matters. A changed .err
+# (of the accepted .il's own input and configuration), a missing .il and an
+# extra .il still fail although the pattern given matches each of them.
+# With --normalize forms a file that differs only in the forms is not
+# accepted, and REGEX is matched against the baseline as written, not as
+# normalized; with --skip-changed the skipped input's files are neither
+# accepted nor counted; a baseline that is not valid UTF-8 is searched all
+# the same. main() exits 2, names the problem and creates no --out for
+# --expect-change without --compare, given twice, empty, not a valid
+# regular expression, and without a value. In the cases
+# expect-change-accepted and expect-change-not-matched main() also runs end
+# to end on the case's trees with --compare and --expect-change: its input
+# listing and its snapshot are replaced (--out receives a copy of the new
+# tree, and nothing is compiled), git by a fake that answers only 'rev-parse
+# HEAD', and the module's repository root by a folder inside %t that holds
+# the PATHs, with --out beside it (main() refuses an --out inside the
+# repository). On trees whose only difference is accepted main() exits 0
+# and prints the 'expected change:' line and the count line but no
+# 'differs:' line; with 'cpblk', which no baseline holds, it exits 1 and
+# lists each differing file as 'differs:'; and il-snapshot.json in --out
+# records REGEX as "expect-change".
 
 # RUN: rm -rf %t
 # RUN: %python %S/Inputs/il-snapshot/il-snapshot-selftest.py %S/../../utils/il-snapshot.py %t > %t.log
@@ -53,4 +88,7 @@
 # RUN: %{harness_check} contains %t.log "^ok: exclude file$" "^ok: exclude directory$" "^ok: exclude boundary$" "^ok: exclude no-match$" "^ok: exclude non-input$" "^ok: exclude duplicates$" "^ok: exclude sorted$" "^ok: exclude note$"
 # RUN: %{harness_check} contains %t.log "^ok: compare normalize-forms$" "^ok: compare normalize-real-difference$" "^ok: compare normalize-err-exact$" "^ok: usage normalize-without-compare$"
 # RUN: %{harness_check} contains %t.log "^ok: compare skip-changed$" "^ok: skip-changed git-status$" "^ok: llc-arg commands$"
+# RUN: %{harness_check} contains %t.log "^ok: compare expect-change-accepted$" "^ok: compare expect-change-not-matched$" "^ok: compare expect-change-baseline-only$" "^ok: compare expect-change-err-missing-extra$"
+# RUN: %{harness_check} contains %t.log "^ok: compare expect-change-normalize$" "^ok: compare expect-change-skip-changed$" "^ok: compare expect-change-raw-bytes$"
+# RUN: %{harness_check} contains %t.log "^ok: usage expect-change-without-compare$" "^ok: usage expect-change-repeated$" "^ok: usage expect-change-empty$" "^ok: usage expect-change-invalid$" "^ok: usage expect-change-no-value$"
 # RUN: %{harness_check} lacks %t.log "^FAIL"

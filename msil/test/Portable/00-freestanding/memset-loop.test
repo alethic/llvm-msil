@@ -1,0 +1,111 @@
+# memset with a length known only at run time on msil64-unknown-dotnet, at small lengths through the guarded loop (-msil-memset-guard-bits=4): the lengths and offsets of M3/15-memory/memset-loop.test, filled through __builtin_memset and __builtin_bzero, every byte inside and the guard bytes outside checked; the -O2 image has the option's 8-byte blocks and no default guard.
+# FX-2 (plan D15 as section 12's row 'D15 amended (FX-2)' amends it), the
+# portable copy of M3/15-memory/memset-loop.test: every length from 0 to 200
+# and the lengths 255, 256, 257, 1000 and 4096 at offsets 0 to 15 of a buffer
+# with 32 or more guard bytes (0xEE) on each side. -msil-memset-guard-bits=4
+# goes to every compile (%{msil_copts}) and to the link (%{msil_libs}, for
+# the code generation of an LTO link), so lengths 0-15 take the guard's other
+# way (one initblk) and 16 and more run the loop of 8-byte blocks before the
+# last initblk. The lengths and the fill bytes are read through volatile
+# objects, so nothing folds at any level and every fill has the guard. Only
+# the builtins reach the guard here: under -ffreestanding, which this
+# directory compiles with, a plain memset call needs the C library, which the
+# directory does not link, and a zeroing loop stays a loop of stores (no
+# memset idiom without the library). Before each fill a constant-length
+# __builtin_memset (one initblk, unchanged by FX-2) sets all of buf to 0xEE;
+# after it the program compares every byte of buf.
+# Each failed group sets one bit of the exit status: bits 0-2 a wrong byte
+# inside a __builtin_memset fill of 0-15 bytes, of 16-200 bytes and of 255
+# bytes or more, bits 3-5 the same for __builtin_bzero, bit 6 a changed guard
+# byte before a fill and bit 7 one after it.
+# The exit status alone cannot show that the option took effect: at these
+# lengths the default guard (bits 32 and up) takes its other way, one
+# initblk, which fills every case just as well. So this run's -O2 image is
+# dumped and checked for the option's shape, as in
+# M3/15-memory/memset-loop.test: a loop block of 8 bytes (ldc.i4.8,
+# unaligned. 1, since every fill here is 1-aligned, then initblk, matched as
+# one pattern across the three lines, because the .cctor's ldc.i4.8 comes
+# first and FileCheck does not retry a CHECK-NEXT chain at a later match) for
+# each builtin, so the pattern twice, and before, between and after the two
+# blocks neither the default guard's constant 2^32 - 1 (ldc.i8 4294967295)
+# nor its 2 GiB block (ldc.i4 -2147483648). With a builtin whose fill lost
+# its guard the image has one block and the exit status is still 0, so only
+# the count tells. The pattern is written out twice, with the two NOT lines
+# around each, rather than counted with a COUNT suffix, because FileCheck
+# checks the NOT lines before a counted check only up to its first match. A
+# compile without %{msil_copts} (obj: clang generates the code) or a link
+# without %{msil_libs} (lto: msil-ld generates it) fails this check. Every
+# leg that runs this directory builds -O2; the RUN line of %{msil_prog}
+# first removes the -O2 work folder and the dump that an earlier run left (on
+# that line, because update-expected.py runs any other RUN line before
+# %{msil_prog} as one that prepares the inputs), so a run whose
+# msil_opt_levels leave out O2 fails at the dump and never reads an image
+# from another run.
+# REDEFINE: %{msil_expected_rule} = windows,linux: portable: no stdout before P-2; the program checks itself
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_copts} = -mllvm -msil-memset-guard-bits=4
+# REDEFINE: %{msil_libs} = -Wl,-mllvm,-msil-memset-guard-bits=4
+# RUN: rm -rf %t.O2.d %t.O2.dump && %{msil_prog}
+# RUN: %if msil-cil-dump %{ %msil_cil_dump %t.O2.d/prog.exe > %t.O2.dump %}
+# RUN: %if msil-cil-dump %{ FileCheck %s --check-prefix=LOOP --input-file %t.O2.dump %}
+# LOOP-NOT: ldc.i8 4294967295{{$}}
+# LOOP-NOT: ldc.i4 -2147483648{{$}}
+# LOOP:     {{^ +L[0-9]+: }}ldc.i4.8{{[[:space:]]+L[0-9]+: }}unaligned. 1{{[[:space:]]+L[0-9]+: }}initblk{{$}}
+# LOOP-NOT: ldc.i8 4294967295{{$}}
+# LOOP-NOT: ldc.i4 -2147483648{{$}}
+# LOOP:     {{^ +L[0-9]+: }}ldc.i4.8{{[[:space:]]+L[0-9]+: }}unaligned. 1{{[[:space:]]+L[0-9]+: }}initblk{{$}}
+# LOOP-NOT: ldc.i8 4294967295{{$}}
+# LOOP-NOT: ldc.i4 -2147483648{{$}}
+#--- main.c
+#include <stddef.h>
+
+#define GUARD 32       /* guard bytes before offset 0 and after the longest fill */
+#define MAX_OFF 15     /* offsets 0 to 15 */
+#define MAX_LEN 4096   /* the longest fill */
+#define GUARD_BYTE 0xEE
+#define NUM_LENGTHS 206 /* 0 to 200, then the five of v_long */
+
+static unsigned char buf[GUARD + MAX_OFF + MAX_LEN + GUARD];
+
+/* Read through volatile objects, so that no level knows a length or a fill
+   byte: every length below is a run-time value. */
+static volatile size_t v_one = 1;
+static volatile unsigned short v_long[5] = {255, 256, 257, 1000, 4096};
+static volatile unsigned char v_fill[7] = {0x5A, 0xA5, 0x00, 0xFF, 0x80, 0x7F, 0x01};
+
+static void fill_memset(unsigned char *p, int c, size_t n) { __builtin_memset(p, c, n); }
+
+static void fill_bzero(unsigned char *p, size_t n) { __builtin_bzero(p, n); }
+
+int main(void) {
+  size_t one = v_one;
+  unsigned fails = 0;
+  for (unsigned k = 0; k < NUM_LENGTHS; ++k) {
+    size_t len = (k <= 200 ? k : v_long[k - 201]) * one;
+    unsigned group = k < 16 ? 0 : k <= 200 ? 1 : 2;
+    for (size_t off = 0; off <= MAX_OFF; ++off) {
+      for (unsigned way = 0; way < 2; ++way) {
+        unsigned char c = way == 0 ? v_fill[(k + off) % 7] : 0;
+        unsigned char *p = buf + GUARD + off;
+        __builtin_memset(buf, GUARD_BYTE, sizeof buf);
+        if (way == 0)
+          fill_memset(p, c, len);
+        else
+          fill_bzero(p, len);
+        for (size_t i = 0; i < sizeof buf; ++i) {
+          if (i < GUARD + off) {
+            if (buf[i] != GUARD_BYTE)
+              fails |= 1u << 6;
+          } else if (i < GUARD + off + len) {
+            if (buf[i] != c)
+              fails |= 1u << (3 * way + group);
+          } else if (buf[i] != GUARD_BYTE) {
+            fails |= 1u << 7;
+          }
+        }
+      }
+    }
+  }
+  return (int)fails;
+}
