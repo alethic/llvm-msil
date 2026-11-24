@@ -8,10 +8,11 @@
 //
 // This file declares the parts of the trailer that cli::buildTrailer
 // (Trailer.cpp, ImplementationPlan.md 5.9.10) calls, one source file per
-// concern (5.14.5 S1, 5.13.3): the UCRT stdio options (TrailerStdio.cpp) and
-// the portable width and byte-order guard (TrailerGuard.cpp). It is private
-// to lib/CLI: the producers fill cli::TrailerInput, and only the builder
-// calls the parts.
+// concern (5.14.5 S1, 5.13.3): the UCRT stdio options (TrailerStdio.cpp), the
+// portable width and byte-order guard (TrailerGuard.cpp) and the touch of
+// '<msil>data' in a library whose '<msil>Data' fields spill
+// (TrailerSpill.cpp). It is private to lib/CLI: the producers fill
+// cli::TrailerInput, and only the builder calls the parts.
 //
 //===----------------------------------------------------------------------===//
 
@@ -56,6 +57,17 @@ PortableGuardLabels emitPortableGuard(TrailerSink &Sink, const PortableGuard &G,
 void emitPortableGuardFailures(TrailerSink &Sink, const PortableGuard &G,
                                TrailerMethod &Cctor,
                                const PortableGuardLabels &Labels);
+
+/// Appends the spilled-data touch (TrailerSpill.cpp; FX-1) to \p Cctor, the
+/// <Module>::.cctor of a TwoPhase output with TrailerInput::SpilledData, right
+/// after the guard if there is one and before phase 2's 'ldtoken's:
+///
+///   ldsfld native int '<msil>Data'::'<msil>data'   // Sink.getDataField()
+///   pop
+///
+/// The read runs '<msil>Data'::.cctor, phase 1, inside the module
+/// initializer, which every other thread that uses the output waits for.
+void emitSpilledDataTouch(TrailerSink &Sink, TrailerMethod &Cctor);
 
 /// True when In.UCRTStdio names a function whose option word the module
 /// initializer sets (TrailerStdio.cpp; plan 5.15.2, hosted-libc H3), so that

@@ -1,6 +1,6 @@
 # MSIL backend: status of Phase 2
 
-State after the fix step FX-2 (2026-11-23, branch `msil`, with upstream llvm-project main at
+State after the fix step FX-1 (2026-11-24, branch `msil`, with upstream llvm-project main at
 `1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
 M24-M35, M24 laid the foundations of Phase 3, M25 built the helper archive
 `clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple, and M26 made
@@ -158,7 +158,12 @@ is a named compile error (section 2, "Real .NET references in C (R-a)"). FX-2, t
 the fix steps after R-a, made a `memset` whose length is known only at run time fill every
 byte at any length, where `initblk` had silently taken only the length's low 32 bits: a guard
 tests the length's bits 32 and up, and when one is set a loop of 2 GiB `initblk`s comes before
-the last one (section 2, "The fix steps and the temporary warning after R-a (FX-1 to FX-4)").
+the last one. FX-1, the second, made a `-shared` library whose `'<msil>Data'` fields spill into
+further classes, and which has a first phase, start its module initializer with a read of a
+`'<msil>Data'` field (after the guard on `msil64-unknown-dotnet`), so its first phase runs
+inside the module initializer and a second thread that first uses the library waits for it,
+where one of two such threads could read a spilled field before the first phase had stored it
+(section 2, "The fix steps and the temporary warning after R-a (FX-1 to FX-4)").
 How to build and use it is in [GettingStarted.md](GettingStarted.md); the decisions
 referred to as D1-D38 are in section 3 of [ImplementationPlan.md](ImplementationPlan.md), and
 its section 12 records every later amendment.
@@ -2206,13 +2211,21 @@ contract and recon `p2/exports-multiasm.md` section 10 the design.
   the `ldtoken`s and the cross-assembly relocations after its own relocations and before its
   constructors, as Design.md 4.1 and 5.4 say since plan section 10 item 10 was resolved on
   2026-10-27 (no assembly links against a program, so nothing waits on its first phase). An EXE
-  without library inputs, and every `-S` text, is byte for byte what M21 wrote. Known limit: in
-  a library whose `'<msil>Data'` fields spill (more than 65,534 of them), the type initializers
-  of `'<msil>Data'` and of a spill class depend on each other, so when two threads first use
-  such a library at the same time one of them may read a spilled field before phase 1 has
-  stored it (no test covers it; the fix is planned as fix step FX-1, one of the steps that run
-  right after R-a: the user's pick on the review page, 2026-11-04, item prov-3, "fix item 22 as
-  a step after MC-1").
+  without library inputs, and every `-S` text, is byte for byte what M21 wrote. Since FX-1 a
+  library whose `'<msil>Data'` fields spill into spill classes (more than 65,534 of them, or
+  `--msil-type-member-limit`) and which has a phase 1 (a data image, a function address or a
+  data import) always has `<Module>::.cctor` and starts it with the touch, a read of
+  `'<msil>Data'::'<msil>data'` and a `pop`, after the guard on `msil64-unknown-dotnet` and
+  before the `ldtoken`s: phase 1 runs inside the module initializer, on one thread, and every
+  other thread that first uses the library waits for it. Before FX-1 the type initializers of
+  `'<msil>Data'` and of a spill class depended on each other, so when two threads first used
+  such a library at the same time one of them could read a spilled field before phase 1 had
+  stored it. A library without a phase 1, whose spilled fields are all those of undefined weak
+  symbols, which nothing stores, has nothing to race and keeps its output, as does a library
+  whose fields do not spill (`shared-data-class.test` pins all three in listings, and
+  `spill-race.test` checks the touch in its libraries' listings, runs two first uses on the
+  gates' runtimes and runs a C program against each library; "The fix steps and the temporary
+  warning after R-a (FX-1 to FX-4)" below).
 - **The symbol table (Q25).** A private attribute class `'<msil>SymbolTable'` (extending
   `System.Attribute`, AllowMultiple, constructor `(uint8[])`) carries the table on the Assembly
   row: format 1.0 (magic `MSYM`), flags (0x01 INTERFACE), the toolchain ABI version, the triple
@@ -2344,7 +2357,9 @@ contract and recon `p2/exports-multiasm.md` section 10 the design.
   -filetype=obj` and read them with `llvm-cil-dump`: the layout (`shared-layout`), export
   selection (`shared-export-selection`), the symbol table's golden bytes and printed lines
   (`shared-symbol-table`), both initializers and an EXE's one (`shared-two-phase`), a library's `'<msil>Data'` class
-  with spill classes and a native data import (`shared-data-class`), MemberRefs,
+  with spill classes and a native data import (`shared-data-class`, which since FX-1 also pins
+  the touch of a library whose fields spill and which has a phase 1, and its absence
+  otherwise), MemberRefs,
   the accessor rewrite and cross-assembly relocations (`shared-import`), the identity checks
   on images that `Inputs/shared/gen.py` patches, a table without an export class among them
   (`shared-checks`), `-z defs` (`shared-zdefs`),
@@ -5603,7 +5618,12 @@ GettingStarted.md section 3, ".NET references in C", has a complete program.
      (Claude's scheduling), right after R-a (the user's answer "B" to Claude's question D6;
      section 12's placement row for FX-2), and a `memset` whose length is known only at run time
      now fills every byte ("The fix steps and the temporary warning after R-a (FX-1 to FX-4)"
-     below). The other three stay silent until their steps.
+     below). FX-1's commit (2026-11-24) ended a second, the race on the spilled `'<msil>Data'`
+     fields of a library: FX-1 runs second among the fix steps (Claude's scheduling), and a
+     library whose `'<msil>Data'` fields spill now runs its first phase inside its module
+     initializer, so a second thread that first uses it waits instead of reading a spilled field
+     too early (the same section below); the other two, EH-0's and `%L` in formats built at run
+     time (FX-3), stay silent until their steps.
 
   MC-1's C-string conversions S1-S3 are silent with the user's OK until R-a2 (the workarounds
   below). A loud rule came with the six: the jumps past a reference's declaration are refused
@@ -5717,11 +5737,12 @@ FX-4, a temporary warning about calls through native function pointers until M28
 answer "C" to Claude's question NFP, 2026-11-23). An id names a step, not its place in the run
 order, which each step's placement row gives: the fix steps and EH-0 come right after R-a and
 before the cleanup round's milestones (the user's answer "B" to Claude's question D6,
-2026-11-22), and FX-2 runs first among them (Claude's scheduling; plan section 12's placement
-row for FX-2). FX-2 follows the Phase 3 protocol outside Phase 3's numbering and exit gate, as
-MC-1 and R-a do: its tests run in every post-commit run and in M35's gate legs, and add no exit
-criterion, matrix row or exit-corpus program. Each step adds its subsection here when it
-commits.
+2026-11-22), and FX-2 runs first among them and FX-1 second (Claude's scheduling: plan section
+12's placement rows for FX-2 and FX-1, and the run order FX-2, FX-1, FX-3, FX-4 that plan
+section 6 gives). FX-2 and FX-1 follow the Phase 3 protocol outside Phase 3's numbering and
+exit gate, as MC-1 and R-a do: their tests run in every post-commit run and in M35's gate legs,
+and add no exit criterion, matrix row or exit-corpus program. Each step adds its subsection here
+when it commits, in the order of the commits.
 
 #### FX-2: `memset` with a run-time length, a guarded loop in 2 GiB blocks
 
@@ -5907,6 +5928,165 @@ Tests in the tree after FX-2: `llvm/test/CodeGen/MSIL` 186 (176 llc tests, 9 MIR
 `MSILCILRecords.MSILLongInitBlkIsACustomInsertedPseudo`), and, unchanged,
 `clang/test/CodeGen/MSIL` 48, `lld/test/MSIL` 146, `msil/test/Programs` 248 and `CLITests` with
 494 tests in 23 suites.
+
+#### The spilled-data race of `-shared` libraries (FX-1)
+
+FX-1 (plan section 6, FX-1) ends the race of section 6's item 22 (Design.md 5.4) on the spilled
+`'<msil>Data'` fields of a library. In a `-shared` library whose `'<msil>Data'` fields spill into
+`'<msil>Spill<N>'` classes (more than 65,534 of them, or `--msil-type-member-limit`), the type
+initializers of `'<msil>Data'`, whose `.cctor` runs phase 1 and stores every address field, and
+of a spill class, whose `.cctor` reads a `'<msil>Data'` field first (M22), depend on each other,
+so until FX-1 two threads that first used such a library at the same time could let one of them
+read a spilled field before phase 1 had stored it: a zero address, with no diagnostic. FX-1
+carries out the user's pick on the review page (2026-11-04, item prov-3), "fix item 22 as a
+step after MC-1", in the place that the user's answer "B" to Claude's question D6 (2026-11-22)
+gives the fix steps. The design is Claude's: the fix that plan section 12's row 'Known limit
+after M22' proposed, which the plan had set for M28 until FX-1's rows moved it. FX-1 adds no
+silent state and no diagnostic that a program can meet; its one new text is an internal error
+of `msil-ld` (below).
+
+```c
+static volatile int v0 = 100, v1 = 101, v2 = 102, v3 = 103;
+static volatile int v4 = 104, v5 = 105, v6 = 106, v7 = 107;
+int total(void) { return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7; }
+int final(void) { return v7; }
+```
+
+Compiled with `clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c` and linked
+with `msil-ld -shared --msil-type-member-limit=4`, this library keeps `'<msil>data'` and the
+address fields of `v0` to `v2` in `'<msil>Data'` and moves its other seven fields into
+`'<msil>Spill1'` and `'<msil>Spill2'`, and `llvm-cil-dump` lists its `<Module>::.cctor` as the
+touch alone; linked without the limit, nothing spills and it has no `<Module>::.cctor`:
+
+```text
+  .method '.cctor' void() flags=0x1891 impl=0x0000
+    .maxstack 1
+    L0: ldsfld native int '<msil>Data'::'<msil>data'
+    L1: pop
+    L2: ret
+```
+
+- **The rule (plan 5.9.10 and 5.9.15 as section 12's rows 'Contract rows (FX-1)' and 'FX-1.c's
+  Provides line as built, with its check as review round 1's fix completes it' amend them).**
+  Before it builds the trailer of a `-shared` library (not `--interface-only`), `msil-ld`
+  decides whether the fields of `'<msil>Data'` spill, by the rule with which it places them:
+  every field that is not the trailer's, together with the trailer's own fields there
+  (`cli::countTrailerDataFields`: `'<msil>data'` when the library has a data image), against
+  `'<msil>Data'`'s limit, the smaller of 65,534 and `--msil-type-member-limit`. When they spill
+  and the library has a phase 1 (a data image, a function address or a data import), it sets
+  `cli::TrailerInput::SpilledData`, and `cli::buildTrailer` makes `<Module>::.cctor` and starts
+  it with the touch, `ldsfld '<msil>Data'::'<msil>data'` and `pop`: after the width and
+  byte-order guard on `msil64-unknown-dotnet` (P-1a), and before phase 2's `ldtoken`s,
+  cross-assembly relocations and constructors. The read runs `'<msil>Data'::.cctor`, phase 1,
+  inside the module initializer, on one thread, with each spill class's `.cctor` nested in it,
+  and every other thread that uses the library waits for the module initializer (ECMA-335
+  II.10.5.3), so none reads a spilled field before phase 1 stored it. `'<msil>data'` is the
+  trailer's own field and never spills. A library without a data image, whose phase 1 stores
+  only function addresses or data imports, gets `'<msil>data'` for the touch alone, in
+  `'<msil>Data'`; `msil-ld` decides before it sets `SpilledData`, and setting it adds at most
+  that field, so a decision to spill stays right.
+- **What stays as it was.** A library whose `'<msil>Data'` fields fit (also one whose methods
+  spill, into spill classes that then hold only methods), every EXE, an `--interface-only`
+  library, CIL objects and every whole-program text (`clang -S`, llc and `--lto-emit-asm`) keep
+  their bytes: only `msil-ld`'s images spill, and the text producer leaves `SpilledData` false
+  (plan 5.14.5 S1). The spill classes and their `.cctor`s stay as M22 built them. Fields that
+  spill in a library without a phase 1 are those of undefined weak symbols (variables, and
+  functions whose address is taken), which phase 1 never stores (they stay null), so nothing
+  races and such a library gets no touch.
+- **Programs and hosts.** From FX-1 on a C program never meets the race: its module initializer
+  holds an `ldtoken` of every library it links, whose resolution runs that library's module
+  initializer, and with it the touch and phase 1, before `main` (recon `p2/exports-multiasm.md`
+  6.1). `spill-race.test` runs that path with each library it builds: a C program linked
+  against the library, whose `<Module>::.cctor` holds the `ldtoken` of the library's export
+  class, first reads a variable whose address field spilled, then one whose field stayed in
+  `'<msil>Data'`, then the sum of all 64, and gets each right. Only a host that loads a library
+  itself and first uses it from two threads at once, such as a C# program, has two first uses
+  meet, and now its second thread waits.
+- **The consistency check.** After it places the fields, `msil-ld` checks two things: that the
+  fields of `'<msil>Data'` went to spill classes exactly when it decided that they would, and
+  that it set `SpilledData` exactly when they spill and the trailer made `'<msil>Data'::.cctor`,
+  phase 1, which `cli::buildTrailer` makes exactly when the library has a phase 1. Either
+  mismatch stops the link (`reportFatalInternalError`, so a build without assertions stops too)
+  with one text, `msil-ld: the spill decision for '<msil>Data' does not match its fields`. The
+  decision and the placement use one rule, and `msil-ld`'s phase-1 condition mirrors
+  `cli::buildTrailer`'s, so no input should reach it: it is an internal error (plan section 2),
+  not a diagnostic. The second comparison ties the two phase-1 conditions together: a later
+  change of what phase 1 holds that left `msil-ld`'s copy behind stops the link instead of
+  silently dropping the touch.
+- **What FX-1 relies on.** That the second thread waits is the runtime's rule for type
+  initializers (ECMA-335 II.10.5.3), which FX-1 relies on and does not prove, and `spill-race`
+  (below) can find a wrong value only by chance. With the library's `<Module>::.cctor` removed
+  through an ildasm and ilasm round trip (the output without FX-1), its host failed in 9, 20 and
+  14 of 30 runs on .NET 10, .NET 10 with `DOTNET_TieredCompilation=0` and .NET 8, and in none of
+  30 on the .NET Framework 4.8 (in longer runs, every wrong value on all four was
+  `read_spilled`'s `NullReferenceException` at a zero address); with the touch kept through the
+  same round trip, no wrong value came in 8,000 rounds on each of the four (measured when the
+  test was written). The listings below, those of `shared-data-class.test` and the `TOUCH`
+  check of each library that `spill-race.test` links through the clang driver and, under the
+  `lto` pipeline, through LTO, and the unit tests are the checks that fail every time the touch
+  is missing.
+- **Tests.** Unit tests (from the specification): five new `CLITrailerTest` cases run the
+  trailer through the file's recording sink and its small CIL interpreter, which now models
+  `'<msil>Data'`'s type initializer, `ldtoken` and the order of events:
+  `SpilledDataTouchIsTheWholeModuleInitializer` (an image and nothing for phase 2: with the flag
+  `<Module>::.cctor` is exactly `ldsfld '<msil>data'; pop; ret` with the `.cctor` flags, without
+  it there is none, and `'<msil>Data'::.cctor` is the same in both),
+  `SpilledDataTouchPrecedesPhaseTwo` (library types, a cross relocation and a constructor: the
+  touch, then exactly the code without the flag; run alone, the module initializer starts phase
+  1 at the touch, before the `ldtoken`s), `SpilledDataTouchFollowsPortableGuard` (the guard's
+  head, the touch and the `ldtoken`, then the guard's two failure blocks after the last `ret`),
+  `SpilledDataTouchWithoutImage` (function addresses only: the sink makes `'<msil>data'` once,
+  for the touch, and phase 1 is the same with and without the flag) and
+  `CountTrailerDataFields` (0 for one-phase inputs, and on 15 two-phase shapes, with the flag
+  where there is a phase 1 and without it, the number of `'<msil>data'` fields that the sink saw
+  `buildTrailer` make). `lld/test/MSIL/shared-data-class.test` (from the specification, listings
+  through `listing.py`): the touch alone in `spill.dll` at `--msil-type-member-limit=4`, with
+  `members.py` still finding the limit kept, and no `<Module>::.cctor` without the limit; the
+  edge of the limit (at 11 the eleven fields of `'<msil>Data'` fit and there is no touch, at 10
+  one spills and the touch is there); the same touch through
+  `llc -mtriple=x86_64-unknown-linux-gnu-msil`; the touch, then a library input's `ldtoken` and
+  `pop`; on `msil64-unknown-dotnet`, through `llvm-cil-dump --forms=canon`, the guard's ten
+  instructions L0-L9, then the touch (or, without the limit, `L10: ret`), with the guard's two
+  failure blocks after the last `ret`, also with a library input; a library without an image
+  whose `'<msil>data'` exists for the touch alone (at limit 3; at 4 its four fields fit); a
+  library whose methods spill into two spill classes that hold no field while the three fields
+  of its `'<msil>Data'` fit (at limit 3), which has a phase 1 but gets no touch and no
+  `<Module>::.cctor`, since the touch is keyed on the fields of `'<msil>Data'`, not on spill
+  classes; a library whose phase 1 holds only data imports (no data and no export: a
+  constructor reads four variables of the `libc.so.6` stub), in which at limit 3 `environ` and
+  `optind` spill, `'<msil>data'` is made for the touch alone, `'<msil>Data'::.cctor` only calls
+  `'<msil>init_dataimports'` and `<Module>::.cctor` is the touch, then the constructor's call,
+  while without the limit nothing spills, with no `'<msil>data'` and no touch; and fields that
+  spill with no phase 1 (three undefined weak variables at limit 2), which get no touch and
+  link silently. Execution: `msil/test/M3/09-threads/spill-race.test` (a new directory;
+  `REQUIRES: msil-csc`, in `08-atomics/barrier-spin.test`'s form): a `-shared` library of 64
+  `static volatile int` variables, each with its own value, built at `-O0` and `-O2` and linked
+  with `--msil-type-member-limit=8`, whose `%msil_canon` listing is checked first, for the
+  touch at the start of `<Module>::.cctor` (`TOUCH`) and for the placement (a helper prints the
+  classes of the address fields of `v00`, which must be `'<msil>Data'`, and of `v63`, which
+  must be a spill class), inside a C# host that runs 64 rounds, each a first use of a fresh
+  copy (`Assembly.Load(byte[])`) by two threads that one `Barrier` releases, the second after
+  `Thread.SpinWait(1000 * r)` in round r; the host prints `spill race: 64 rounds, 0 wrong` and
+  exits 0, when the library is bound to no reference pack or to the .NET Framework's or
+  .NET 8's, on the leg's runtime and on each `msil_also_run` runtime, and, on the Windows
+  triples with the library bound to mscorlib, on the .NET Framework 4.8. A C program, `main.c`,
+  linked against each library with no member limit and verified and force-JITted with it as a
+  dependency, calls `read_spilled`, `read_data` and `sum_all` and exits 11, 12 or 13 on a
+  wrong value; FileCheck requires the `ldtoken` of `[spill]Race.Native` in its
+  `<Module>::.cctor` (`INIT`) and `[exit 0]` (`PROG`) on the leg's runtime, in every reference
+  mode, and, on the Windows triples with the library bound to mscorlib, on the .NET Framework
+  4.8, but not on the `msil_also_run` runtimes, whose substitution force-JITs and
+  runs an image without its dependencies. The test has no `.expected` file (a C# host has no
+  native oracle, and the program's transcript is FileChecked). Its threads are C#'s because
+  C's own thread functions are link errors until M28. It runs in `p3-full` and `wsl-p3`, and
+  FX-1's gate also runs it on .NET 8 and through LTO on both host x86_64 triples;
+  msil/test/README.md lists it.
+
+Tests in the tree after FX-1: `lld/test/MSIL` 146 (unchanged; `shared-data-class.test`
+extended), `msil/test/M3` 90 (one in the new `09-threads`), `CLITests` with 499 tests in 23
+suites (new: five of `CLITrailerTest`, which has 34), and, unchanged, `llvm/test/CodeGen/MSIL`
+186, `clang/test/CodeGen/MSIL` 48, `msil/test/Portable` 48, `msil/test/Programs` 248,
+`msil/test/harness` 160 and `MSILTests` with 136 tests in 12 suites.
 
 ## 3. What Phase 2 does not do
 
@@ -6313,3 +6493,14 @@ put on the stack is a constant outside the `int32` range, `ldc.i8` then `conv.i`
 that 2.3 already lists. The rule is D15 as plan section 12's row 'D15 amended (FX-2)' amends it,
 and section 2, "The fix steps and the temporary warning after R-a (FX-1 to FX-4)", describes
 what FX-2 built.
+
+FX-1's Design.md edit replaced item 22's limit in 5.4 with the fix: a library whose
+`'<msil>Data'` fields spill into further classes runs the first phase inside its module
+initializer, which reads a `'<msil>Data'` field before its other work (after the guard on the
+portable triples), so a second thread that first uses the library at the same time waits for
+the module initializer instead of reading a spilled field before the first phase stored it.
+It was applied to [Design.md](Design.md) with FX-1's plan commit on 2026-11-23, with the user's
+approval of the exact text ("(a) Apply as shown", chat, 2026-11-23; plan section 12's row
+'Design.md edit (FX-1), as approved'). Item 22 was the one item of 16-23 that the user's pick
+on the review page (2026-11-04, item prov-3) did not approve as applied; section 2, "The fix
+steps and the temporary warning after R-a (FX-1 to FX-4)", describes what FX-1 built.

@@ -1,23 +1,47 @@
 ## Two variants of a library's '<msil>Data' class (ImplementationPlan.md
-## M22.b items 1 and 2; 5.9.15, 5.9.10, 5.9.12, 5.10.12):
+## M22.b items 1 and 2; 5.9.15, 5.9.10, 5.9.12, 5.10.12), and the touch of
+## a library whose '<msil>Data' fields spill (FX-1; 5.9.10, 5.9.15 and
+## 5.18.7 PE5 as FX-1's contract row amends them):
 ## - spill classes: '<msil>Data' holds '<msil>data', the address fields and
 ##   the '<msil>fn_' fields up to the --msil-type-member-limit, and the rest
 ##   go to M20's '<msil>Spill<N>' classes ('private abstract sealed auto
 ##   ansi', 0x180, extending System.Object), whose fields are 'assembly' and
 ##   not initonly (0x0013), because '<msil>Data'::.cctor (phase 1) stores
-##   them; every spill class has a '.cctor' that reads a static field of
+##   them; each spill class with fields has a '.cctor' that reads a field of
 ##   '<msil>Data' and pops it, so that phase 1 has run before code reads a
 ##   spilled field (a spill class is not beforefieldinit-triggered by
 ##   '<msil>Data'); the export class's methods and accessors read the
 ##   fields in their spill classes, and no class exceeds the limit;
+## - the touch: when the fields of '<msil>Data' spill, <Module>::.cctor
+##   exists and starts with the touch, an ldsfld of '<msil>Data'::'<msil>data'
+##   and a pop, so that phase 1 runs inside the module initializer and every
+##   other thread that uses the library waits for it (ECMA-335 II.10.5.3)
+##   instead of reading a spilled field before phase 1 stored it;
+##   '<msil>data' is the trailer's own field, which never spills; phase 2
+##   (here a library input's ldtoken) follows the touch, and on
+##   msil64-unknown-dotnet the width and byte-order guard of
+##   portable-guard.test precedes it; the rule is the same on both host
+##   x86_64 triples and exact at the limit: a link whose fields fit has no
+##   touch (and, with no phase-2 work, no <Module>::.cctor on a host
+##   triple), also when its methods spill into spill classes that hold no
+##   field (the touch is keyed on the fields of '<msil>Data', not on the
+##   spill classes); '<msil>data' counts only in a library with an image
+##   (without one it is made for the touch alone, as in a library whose
+##   phase 1 holds only function addresses or only data imports); and
+##   fields that spill with no phase 1 (undefined weak symbols, which phase
+##   1 never stores) get no touch;
 ## - native data imports: '<msil>Data' owns the data-import field (here
 ##   environ, 'assembly static' and not initonly, 0x0013) with the helpers
 ##   '<msil>dataimport' and '<msil>init_dataimports', and its '.cctor' calls
 ##   '<msil>init_dataimports'; <Module> holds none of them (it keeps the
-##   helper's dlopen and dlsym P/Invokes).
+##   helper's dlopen and dlsym P/Invokes); data-import fields spill as the
+##   others do, and a library whose phase 1 holds only data imports (stdout,
+##   stderr, environ and optind, read by a constructor) gets the touch, before
+##   the constructor's call, when they spill.
 ## libc.so.6 is the glibc-like stub of Inputs/native/glibc.yaml, which
-## defines environ. listing.py prints one part of llvm-cil-dump's canonical
-## listing; members.py lists the classes and checks the limit.
+## defines environ, stdout, stderr and optind. listing.py prints one part of
+## llvm-cil-dump's canonical listing; members.py lists the classes and checks
+## the limit.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -78,6 +102,176 @@
 # ADDR-NEXT: {{^}}    L0: ldsfld native int '<msil>Spill{{[12]}}'::'<msil>fn_[[F]]'{{$}}
 # ADDR-NEXT: {{^}}    L1: ret{{$}}
 
+## The touch (FX-1): spill.dll's <Module>::.cctor is the touch alone, as
+## spill.o has no phase-2 work; MEMBERS's 'limit 4 ok' counts it in
+## <Module>.
+# RUN: %{listing} method spill.txt '<Module>' .cctor | FileCheck %s --check-prefix=TOUCH
+# TOUCH:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# TOUCH-NEXT: {{^}}    .maxstack 1{{$}}
+# TOUCH-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# TOUCH-NEXT: {{^}}    L1: pop{{$}}
+# TOUCH-NEXT: {{^}}    L2: ret{{$}}
+# TOUCH-NOT:  {{.}}
+
+## Without the limit nothing spills: no touch, and no <Module>::.cctor.
+# RUN: mkdir nolimit edge11 edge10 linux lib dotnet dotnet-nolimit dotnet-lib fn4 fn3 weak
+# RUN: msil-ld -shared spill.o -o nolimit/spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump nolimit/spill.dll > nolimit.txt
+# RUN: %{listing} method nolimit.txt '<Module>' .cctor | FileCheck %s --check-prefix=NO-TOUCH
+# RUN: %{listing} class nolimit.txt '<msil>Spill1' | FileCheck %s --check-prefix=NO-SPILL
+# NO-TOUCH: {{^}}no method <Module>::.cctor{{$}}
+# NO-SPILL: {{^}}no class <msil>Spill1{{$}}
+
+## At the edge of the limit: '<msil>Data' needs 11 fields ('<msil>data',
+## g0-g7 and the two '<msil>fn_' fields), so at 11 nothing spills and there
+## is no touch, while at 10 one field spills and the touch is there.
+# RUN: msil-ld -shared --msil-type-member-limit=11 spill.o -o edge11/spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump edge11/spill.dll > edge11.txt
+# RUN: %python %S/Inputs/members.py --limit 11 edge11.txt \
+# RUN:   | FileCheck %s --check-prefix=EDGE11 --implicit-check-not='<msil>Spill'
+# EDGE11: {{^}}count <msil>Data methods=1 fields=11{{$}}
+# EDGE11: {{^}}limit 11 ok{{$}}
+# RUN: %{listing} method edge11.txt '<Module>' .cctor | FileCheck %s --check-prefix=NO-TOUCH
+# RUN: msil-ld -shared --msil-type-member-limit=10 spill.o -o edge10/spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump edge10/spill.dll > edge10.txt
+# RUN: %python %S/Inputs/members.py --limit 10 edge10.txt \
+# RUN:   | FileCheck %s --check-prefix=EDGE10 --implicit-check-not='<msil>Spill2'
+# EDGE10: {{^}}count <msil>Data methods=1 fields=10{{$}}
+# EDGE10: {{^}}count <msil>Spill1 methods=1 fields=1{{$}}
+# EDGE10: {{^}}limit 10 ok{{$}}
+# RUN: %{listing} method edge10.txt '<Module>' .cctor | FileCheck %s --check-prefix=TOUCH
+
+## The same IR for x86_64-unknown-linux-gnu-msil: the same touch.
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil spill.ll -o linux/spill.o
+# RUN: msil-ld -shared --msil-type-member-limit=4 linux/spill.o -o linux/spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info linux/spill.dll | FileCheck %s --check-prefix=LINUX
+# LINUX: {{^}}SymbolTable v{{[0-9.]+}} triple=x86_64-unknown-linux-gnu-msil {{.*$}}
+# RUN: llvm-cil-dump linux/spill.dll > linux.txt
+# RUN: %{listing} method linux.txt '<Module>' .cctor | FileCheck %s --check-prefix=TOUCH
+
+## With a library input (peer.dll, of which spill.o uses nothing), phase 2's
+## ldtoken of its export class follows the touch (without spilling, phase 2
+## alone: shared-two-phase.test's TOK).
+# RUN: llc -filetype=obj peer.ll -o peer.o
+# RUN: msil-ld -shared peer.o -o peer.dll 2>&1 | count 0
+# RUN: msil-ld -shared --msil-type-member-limit=4 spill.o peer.dll -o lib/spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump lib/spill.dll > lib.txt
+# RUN: %{listing} method lib.txt '<Module>' .cctor | FileCheck %s --check-prefix=LIB-TOUCH
+# LIB-TOUCH:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# LIB-TOUCH-NEXT: {{^}}    .maxstack 1{{$}}
+# LIB-TOUCH-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# LIB-TOUCH-NEXT: {{^}}    L1: pop{{$}}
+# LIB-TOUCH-NEXT: {{^}}    L2: ldtoken [peer]peer{{$}}
+# LIB-TOUCH-NEXT: {{^}}    L3: pop{{$}}
+# LIB-TOUCH-NEXT: {{^}}    L4: ret{{$}}
+# LIB-TOUCH-NOT:  {{.}}
+
+## msil64-unknown-dotnet, listed with --forms=canon (short branches print
+## long; the labels are instruction numbers): the guard's ten instructions
+## L0-L9 as portable-guard.test pins them, then the touch, then (with
+## peer.dll) the ldtoken; without the limit the guard alone; the guard's two
+## failure blocks follow the last ret.
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet spill.ll -o dotnet/spill.o
+# RUN: msil-ld -shared --msil-type-member-limit=4 dotnet/spill.o -o dotnet/spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon dotnet/spill.dll > dotnet.txt
+# RUN: %{listing} method dotnet.txt '<Module>' .cctor | FileCheck %s --check-prefixes=GUARD,DOTNET-TOUCH
+# RUN: msil-ld -shared dotnet/spill.o -o dotnet-nolimit/spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --forms=canon dotnet-nolimit/spill.dll > dotnet-nolimit.txt
+# RUN: %{listing} method dotnet-nolimit.txt '<Module>' .cctor | FileCheck %s --check-prefixes=GUARD,DOTNET-PLAIN
+# RUN: llc -filetype=obj -mtriple=msil64-unknown-dotnet peer.ll -o dotnet/peer.o
+# RUN: msil-ld -shared dotnet/peer.o -o dotnet/peer.dll 2>&1 | count 0
+# RUN: msil-ld -shared --msil-type-member-limit=4 dotnet/spill.o dotnet/peer.dll -o dotnet-lib/spill.dll 2>&1 \
+# RUN:   | count 0
+# RUN: llvm-cil-dump --forms=canon dotnet-lib/spill.dll > dotnet-lib.txt
+# RUN: %{listing} method dotnet-lib.txt '<Module>' .cctor | FileCheck %s --check-prefixes=GUARD,DOTNET-LIB
+# GUARD:             {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# GUARD:             {{^}}    L0: ldc.i4.m1{{$}}
+# GUARD-NEXT:        {{^}}    L1: conv.i{{$}}
+# GUARD-NEXT:        {{^}}    L2: conv.u8{{$}}
+# GUARD-NEXT:        {{^}}    L3: ldc.i8 -1{{$}}
+# GUARD-NEXT:        {{^}}    L4: bne.un L[[#WIDTH:]]{{$}}
+# GUARD-NEXT:        {{^}}    L5: ldc.i4.1{{$}}
+# GUARD-NEXT:        {{^}}    L6: call uint8[](int32) [mscorlib]System.BitConverter::'GetBytes'{{$}}
+# GUARD-NEXT:        {{^}}    L7: ldc.i4.0{{$}}
+# GUARD-NEXT:        {{^}}    L8: ldelem.u1{{$}}
+# GUARD-NEXT:        {{^}}    L9: brfalse L[[#ORDER:]]{{$}}
+# DOTNET-TOUCH-NEXT: {{^}}    L10: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# DOTNET-TOUCH-NEXT: {{^}}    L11: pop{{$}}
+# DOTNET-TOUCH-NEXT: {{^}}    L12: ret{{$}}
+# DOTNET-PLAIN-NEXT: {{^}}    L10: ret{{$}}
+# DOTNET-LIB-NEXT:   {{^}}    L10: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# DOTNET-LIB-NEXT:   {{^}}    L11: pop{{$}}
+# DOTNET-LIB-NEXT:   {{^}}    L12: ldtoken [peer]peer{{$}}
+# DOTNET-LIB-NEXT:   {{^}}    L13: pop{{$}}
+# DOTNET-LIB-NEXT:   {{^}}    L14: ret{{$}}
+# GUARD-DAG:         {{^}}    L[[#WIDTH]]: ldstr "spill is built for msil64-unknown-dotnet and needs a 64-bit .NET process; this process is 32-bit"{{$}}
+# GUARD-DAG:         {{^}}    L[[#WIDTH+1]]: newobj instance void(string) {{(class )?}}[mscorlib]System.PlatformNotSupportedException::'.ctor'{{$}}
+# GUARD-DAG:         {{^}}    L[[#WIDTH+2]]: throw{{$}}
+# GUARD-DAG:         {{^}}    L[[#ORDER]]: ldstr "spill is built for msil64-unknown-dotnet and needs a little-endian .NET process"{{$}}
+# GUARD-DAG:         {{^}}    L[[#ORDER+1]]: newobj instance void(string) {{(class )?}}[mscorlib]System.PlatformNotSupportedException::'.ctor'{{$}}
+# GUARD-DAG:         {{^}}    L[[#ORDER+2]]: throw{{$}}
+# GUARD-NOT:         {{.}}
+
+## A library without an image whose phase 1 only stores '<msil>fn_' fields
+## (f0-f2 and pick's): '<msil>Data' then needs no '<msil>data', so at 4 its
+## four fields fit and there is no touch; at 3 they spill, and '<msil>data'
+## is made in '<msil>Data' for the touch alone, within the limit (setting
+## the flag adds at most '<msil>data', so the decision to spill stays right;
+## two of the four fields spill).
+# RUN: llc -filetype=obj fnaddr.ll -o fnaddr.o
+# RUN: msil-ld -shared --msil-type-member-limit=4 fnaddr.o -o fn4/fnaddr.dll 2>&1 | count 0
+# RUN: llvm-cil-dump fn4/fnaddr.dll > fn4.txt
+# RUN: %python %S/Inputs/members.py --limit 4 fn4.txt | FileCheck %s --check-prefix=FN4 \
+# RUN:   --implicit-check-not='<msil>Spill' --implicit-check-not='<msil>data'
+# FN4: {{^}}count <msil>Data methods=1 fields=4{{$}}
+# FN4: {{^}}limit 4 ok{{$}}
+# RUN: %{listing} method fn4.txt '<Module>' .cctor | FileCheck %s --check-prefix=NO-TOUCH
+# RUN: msil-ld -shared --msil-type-member-limit=3 fnaddr.o -o fn3/fnaddr.dll 2>&1 | count 0
+# RUN: llvm-cil-dump fn3/fnaddr.dll > fn3.txt
+# RUN: %python %S/Inputs/members.py --limit 3 fn3.txt | FileCheck %s --check-prefix=FN3
+# FN3: {{^}}field <msil>Data::<msil>data flags=0x0033{{$}}
+# FN3: {{^}}count <msil>Data methods=1 fields=3{{$}}
+# FN3: {{^}}count <msil>Spill1 methods={{[0-9]+}} fields=2{{$}}
+# FN3: {{^}}limit 3 ok{{$}}
+# RUN: %{listing} method fn3.txt '<Module>' .cctor | FileCheck %s --check-prefix=TOUCH
+
+## Fields that spill with no phase 1: weak.ll's three weak symbols stay
+## undefined, so their address fields are never stored and '<msil>Data' has
+## no '.cctor' (nothing to race with); a touch needs a phase 1
+## (buildTrailer's precondition), so <Module>::.cctor, which calls the
+## constructor, has none, and the link stays silent.
+# RUN: llc -filetype=obj weak.ll -o weak.o
+# RUN: msil-ld -shared --msil-type-member-limit=2 weak.o -o weak/weak.dll 2>&1 | count 0
+# RUN: llvm-cil-dump weak/weak.dll > weak.txt
+# RUN: %python %S/Inputs/members.py --limit 2 weak.txt | FileCheck %s --check-prefix=WEAK
+# WEAK: {{^}}count <msil>Data methods=0 fields=2{{$}}
+# WEAK: {{^}}count <msil>Spill1 methods=1 fields=1{{$}}
+# WEAK: {{^}}limit 2 ok{{$}}
+# RUN: %{listing} method weak.txt '<Module>' .cctor | FileCheck %s --check-prefix=WEAK-CCTOR
+# WEAK-CCTOR:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# WEAK-CCTOR-NEXT: {{^}}    .maxstack 0{{$}}
+# WEAK-CCTOR-NEXT: {{^}}    L0: call void() '{{[^']+}}'::'probe'{{$}}
+# WEAK-CCTOR-NEXT: {{^}}    L1: ret{{$}}
+# WEAK-CCTOR-NOT:  {{.}}
+
+## Spill classes that hold only methods: at 3, methods.ll's six internal
+## functions fill <Module> and spill into '<msil>Spill1' and
+## '<msil>Spill2', while the three fields of '<msil>Data' ('<msil>data', g
+## and '<msil>fn_use') fit. The library has a phase 1 but no touch, and no
+## <Module>::.cctor: the touch is keyed on the fields of '<msil>Data'
+## spilling, so a rule keyed on any spill class, or on methods or fields
+## over the limit, would add one here.
+# RUN: llc -filetype=obj methods.ll -o methods.o
+# RUN: msil-ld -shared --msil-type-member-limit=3 methods.o -o methods.dll 2>&1 | count 0
+# RUN: llvm-cil-dump methods.dll > methods.txt
+# RUN: %python %S/Inputs/members.py --limit 3 methods.txt \
+# RUN:   | FileCheck %s --check-prefix=METHODS --implicit-check-not='field <msil>Spill'
+# METHODS: {{^}}count <msil>Data methods=1 fields=3{{$}}
+# METHODS: {{^}}count <msil>Spill1 methods=2 fields=0{{$}}
+# METHODS: {{^}}count <msil>Spill2 methods=1 fields=0{{$}}
+# METHODS: {{^}}limit 3 ok{{$}}
+# RUN: %{listing} method methods.txt '<Module>' .cctor | FileCheck %s --check-prefix=NO-TOUCH
+
 ## Data imports: environ on linux-gnu, against the libc.so.6 stub.
 # RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
 # RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
@@ -109,6 +303,52 @@
 # IMPORT-MODULE-NEXT: {{^}}  .method 'dlsym' native int(native int, native int) flags=0x{{[0-9A-F]+}} impl=0x0080{{$}}
 # IMPORT-MODULE-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlsym' flags=0x0201{{$}}
 # IMPORT-MODULE-NOT:  {{.}}
+
+## A spilling library whose phase 1 holds only data imports, the one shape
+## that only the data-import term of msil-ld's phase-1 condition covers:
+## imports.ll defines no data and exports nothing (no image and no function
+## address), and its constructor reads four data imports of libc.so.6. At 3
+## their fields spill, and '<msil>data' is made in '<msil>Data' for the
+## touch alone, which leaves room for two of them (environ and optind go to
+## '<msil>Spill1'); '<msil>Data'::.cctor is phase 1's call of
+## '<msil>init_dataimports' alone, and <Module>::.cctor starts with the
+## touch, before the constructor's call. Without the limit nothing spills:
+## no spill class, no '<msil>data' (the check names '<msil>data flags',
+## since '<msil>dataimport' contains '<msil>data') and no touch.
+# RUN: llc -filetype=obj imports.ll -o imports.o
+# RUN: msil-ld -shared --msil-type-member-limit=3 imports.o libc.so.6 -o imports.dll 2>&1 | count 0
+# RUN: llvm-cil-dump imports.dll > imports.txt
+# RUN: %python %S/Inputs/members.py --limit 3 imports.txt | FileCheck %s --check-prefix=IMPORTS3
+# IMPORTS3: {{^}}field <msil>Data::<msil>data flags=0x0033{{$}}
+# IMPORTS3: {{^}}field <msil>Spill1::environ flags=0x0013{{$}}
+# IMPORTS3: {{^}}field <msil>Spill1::optind flags=0x0013{{$}}
+# IMPORTS3: {{^}}count <msil>Data methods=3 fields=3{{$}}
+# IMPORTS3: {{^}}limit 3 ok{{$}}
+# RUN: %{listing} method imports.txt '<msil>Data' .cctor | FileCheck %s --check-prefix=IMPORTS3-PHASE1
+# IMPORTS3-PHASE1:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# IMPORTS3-PHASE1-NEXT: {{^}}    .maxstack 0{{$}}
+# IMPORTS3-PHASE1-NEXT: {{^}}    L0: call void() '<msil>Data'::'<msil>init_dataimports'{{$}}
+# IMPORTS3-PHASE1-NEXT: {{^}}    L1: ret{{$}}
+# IMPORTS3-PHASE1-NOT:  {{.}}
+# RUN: %{listing} method imports.txt '<Module>' .cctor | FileCheck %s --check-prefix=IMPORTS3-TOUCH
+# IMPORTS3-TOUCH:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# IMPORTS3-TOUCH-NEXT: {{^}}    .maxstack 1{{$}}
+# IMPORTS3-TOUCH-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# IMPORTS3-TOUCH-NEXT: {{^}}    L1: pop{{$}}
+# IMPORTS3-TOUCH-NEXT: {{^}}    L2: call void() '<Module>'::'probe'{{$}}
+# IMPORTS3-TOUCH-NEXT: {{^}}    L3: ret{{$}}
+# IMPORTS3-TOUCH-NOT:  {{.}}
+# RUN: msil-ld -shared imports.o libc.so.6 -o nolimit/imports.dll 2>&1 | count 0
+# RUN: llvm-cil-dump nolimit/imports.dll > imports-nolimit.txt
+# RUN: %python %S/Inputs/members.py imports-nolimit.txt | FileCheck %s --check-prefix=IMPORTS-NOLIMIT \
+# RUN:   --implicit-check-not='<msil>Spill' --implicit-check-not='<msil>data flags'
+# IMPORTS-NOLIMIT: {{^}}count <msil>Data methods=3 fields=4{{$}}
+# RUN: %{listing} method imports-nolimit.txt '<Module>' .cctor | FileCheck %s --check-prefix=IMPORTS-PLAIN
+# IMPORTS-PLAIN:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# IMPORTS-PLAIN-NEXT: {{^}}    .maxstack 0{{$}}
+# IMPORTS-PLAIN-NEXT: {{^}}    L0: call void() '<Module>'::'probe'{{$}}
+# IMPORTS-PLAIN-NEXT: {{^}}    L1: ret{{$}}
+# IMPORTS-PLAIN-NOT:  {{.}}
 
 #--- spill.ll
 target triple = "x86_64-pc-windows-msvc-msil"
@@ -155,3 +395,129 @@ define ptr @get_env() {
   %e = load ptr, ptr @environ, align 8
   ret ptr %e
 }
+
+#--- peer.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @peer() {
+  ret i32 3
+}
+
+#--- fnaddr.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define internal i32 @f0() {
+  ret i32 10
+}
+
+define internal i32 @f1() {
+  ret i32 11
+}
+
+define internal i32 @f2() {
+  ret i32 12
+}
+
+define ptr @pick(i32 %i) {
+entry:
+  switch i32 %i, label %l2 [
+    i32 0, label %l0
+    i32 1, label %l1
+  ]
+l0:
+  ret ptr @f0
+l1:
+  ret ptr @f1
+l2:
+  ret ptr @f2
+}
+
+#--- weak.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@w0 = extern_weak global i32
+@w1 = extern_weak global i32
+@w2 = extern_weak global i32
+
+define internal void @probe() {
+  %slot = alloca ptr, align 8
+  store volatile ptr @w0, ptr %slot, align 8
+  store volatile ptr @w1, ptr %slot, align 8
+  store volatile ptr @w2, ptr %slot, align 8
+  ret void
+}
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @probe, ptr null }]
+
+#--- methods.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@g = internal global i32 5, align 4
+
+define internal i32 @h0() noinline {
+  ret i32 0
+}
+
+define internal i32 @h1() noinline {
+  ret i32 1
+}
+
+define internal i32 @h2() noinline {
+  ret i32 2
+}
+
+define internal i32 @h3() noinline {
+  ret i32 3
+}
+
+define internal i32 @h4() noinline {
+  ret i32 4
+}
+
+define internal i32 @h5() noinline {
+  ret i32 5
+}
+
+define i32 @use() {
+  %a0 = call i32 @h0()
+  %a1 = call i32 @h1()
+  %a2 = call i32 @h2()
+  %a3 = call i32 @h3()
+  %a4 = call i32 @h4()
+  %a5 = call i32 @h5()
+  %v = load volatile i32, ptr @g, align 4
+  %s1 = add i32 %a0, %a1
+  %s2 = add i32 %s1, %a2
+  %s3 = add i32 %s2, %a3
+  %s4 = add i32 %s3, %a4
+  %s5 = add i32 %s4, %a5
+  %s6 = add i32 %s5, %v
+  ret i32 %s6
+}
+
+#--- imports.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@stdout = external global ptr
+@stderr = external global ptr
+@environ = external global ptr
+@optind = external global i32
+
+define internal void @probe() {
+  %slot = alloca i64, align 8
+  %a = load ptr, ptr @stdout, align 8
+  %b = load ptr, ptr @stderr, align 8
+  %c = load ptr, ptr @environ, align 8
+  %d = load i32, ptr @optind, align 4
+  %ai = ptrtoint ptr %a to i64
+  %bi = ptrtoint ptr %b to i64
+  %ci = ptrtoint ptr %c to i64
+  %di = sext i32 %d to i64
+  %s1 = add i64 %ai, %bi
+  %s2 = add i64 %s1, %ci
+  %s3 = add i64 %s2, %di
+  store volatile i64 %s3, ptr %slot, align 8
+  ret void
+}
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @probe, ptr null }]

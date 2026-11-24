@@ -752,6 +752,12 @@ void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
   bool HasPhase1 = In.Image || !In.FnAddrFields.empty() || InitImports;
   bool HasPhase2 = !In.LibraryTypes.empty() || !In.CrossRelocs.empty() ||
                    needsUCRTStdioOptions(In) || !In.Ctors.empty();
+  // The touch of a library whose '<msil>Data' fields spill (TrailerSpill.cpp,
+  // FX-1) runs '<msil>Data'::.cctor, phase 1, inside the module initializer.
+  assert((!In.SpilledData || In.TwoPhase) &&
+         "SpilledData needs a two-phase output");
+  assert((!In.SpilledData || HasPhase1) &&
+         "SpilledData needs a phase 1 for the touch to run");
   // The portable guard (TrailerGuard.cpp): <Module>::.cctor always exists
   // and starts with it, and its failure blocks follow the final 'ret'.
   // At most one module initializer is built, so one set of labels.
@@ -776,8 +782,11 @@ void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
       M.Body.emitRet();
       finish(M, Sink);
     }
-    if (HasPhase2 || In.Guard) {
+    if (HasPhase2 || In.Guard || In.SpilledData) {
       TrailerMethod M = BeginModuleInitializer();
+      // After the guard, before the 'ldtoken's.
+      if (In.SpilledData)
+        emitSpilledDataTouch(Sink, M);
       emitPhase2(In, M, Sink, /*Shared=*/nullptr);
       EndModuleInitializer(M);
     }

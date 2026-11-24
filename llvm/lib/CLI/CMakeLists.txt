@@ -20,6 +20,7 @@ add_llvm_component_library(LLVMCLI
   Trailer.cpp
   TrailerDefs.cpp
   TrailerGuard.cpp
+  TrailerSpill.cpp
   TrailerStdio.cpp
 
   ADDITIONAL_HEADER_DIRS

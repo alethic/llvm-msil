@@ -601,7 +601,10 @@ static FieldAttributes getTrailerFieldAccess(bool twoPhase) {
 EntityRef RowTrailerSink::getDataField() {
   if (!dataField) {
     // Phase 1's '.field private static initonly native int '<msil>data'',
-    // in '<msil>Data' of a two-phase output, whose .cctor stores it.
+    // in '<msil>Data' of a two-phase output, where '<msil>Data'::.cctor
+    // stores it when there is an image. In a library whose '<msil>Data'
+    // fields spill and whose phase 1 has no image, it is made only for the
+    // spilled-data touch (FX-1), which reads it, and nothing stores it.
     OutputField f(OutputField::Trailer);
     f.name = DataFieldName.str();
     f.flags = getTrailerFieldAccess(twoPhase) | FieldAttributes::Static |

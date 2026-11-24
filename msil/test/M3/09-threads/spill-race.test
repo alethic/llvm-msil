@@ -1,0 +1,353 @@
+# The spilled-data race of -shared libraries: two C# threads first use each of 64 fresh copies of a spilling library at once, and both read the right values, as does a C program linked against the library.
+# spill.c is a -shared library (export class Race.Native) with 64 static
+# volatile int variables v00 to v63, each with its own value (1000 + i), and
+# three exported functions: read_data() reads v00, read_spilled() reads v63,
+# and sum_all() sums all 64, so that none is dropped; it comes first and
+# reads them in order, so that the link sees v00 first and v63 last. Linked
+# with --msil-type-member-limit=8, '<msil>Data' holds '<msil>data' and seven
+# address fields, v00's among them, and the other fields spill into
+# '<msil>Spill<N>' classes, v63's among them (plan 5.9.12). The type
+# initializers of '<msil>Data' (phase 1, which stores every address field)
+# and of a spill class (which reads a field of '<msil>Data' first) depend on
+# each other: without FX-1's touch, two threads whose first uses meet inside
+# a spill class's type initializer can let one of them read the spilled
+# field before phase 1 stored it, a zero address. The touch, a read of
+# '<msil>Data'::'<msil>data' at the start of the library's <Module>::.cctor
+# (pinned by lld/test/MSIL/shared-data-class.test for llc followed by
+# msil-ld, and checked here, TOUCH, in each library that this test links
+# through the clang driver and, under the lto pipeline, through msil-ld's LTO
+# link), runs phase 1 inside the module initializer, on one thread, and
+# every other thread waits for it (ECMA-335 II.10.5.3).
+# The threads are C#'s: C's own thread functions are link errors until M28
+# (msil-ld refuses pthread_create, CreateThread, _beginthread, _beginthreadex
+# and thrd_create), and a C program never meets the race: its module
+# initializer holds an ldtoken of every library it links, whose resolution
+# runs that library's module initializer, and with it the touch and phase 1,
+# before main (plan 5.9.10; recon p2/exports-multiasm.md 6.1). The test runs
+# that path once per library: main.c, linked against spill.dll with no
+# member limit, calls read_spilled() first, then read_data() and sum_all(),
+# and exits with a status of its own for each wrong value (11, 12 and 13);
+# FileCheck requires the ldtoken of [spill]Race.Native in the program's
+# <Module>::.cctor (INIT, in %msil_canon's listing) and [exit 0] (PROG).
+# Only a host that loads a library itself and first uses it from two
+# threads at once, such as a C# program, has two first uses meet. host.cs,
+# compiled by csc (%msil_csc), carries the library inside itself (embed.py,
+# as in M3/08-atomics/barrier-spin.test) and runs 64 rounds. Each round
+# loads a fresh copy with Assembly.Load(byte[]), whose statics are its own,
+# so that each round is a first use (a load that returns an earlier round's
+# copy stops the host with a line of its own and status 3), and takes the
+# MethodInfos of read_data and read_spilled: neither the load, nor GetType,
+# nor GetMethod runs the copy's module initializer (recon 6.1). Two threads
+# then wait at one Barrier; released, the thread of read_spilled first calls
+# Thread.SpinWait(1000 * r) in round r (0-63), so that the rounds move the
+# moment at which the two first uses meet, and then each thread makes its
+# delegate, calls its function and stores the result, or a mark when the
+# call throws. Only the main thread prints, after the last round:
+# 'spill race: 64 rounds, <n> wrong', where a result is wrong when it is not
+# its variable's value; it exits 0 when n is 0, else 3.
+# The test keeps plan 5.17.13's thread rules 1-3 and 5 (threads never print,
+# results depend on the input only, no cross-thread address comparison, a
+# bounded spin). Rule 4 cannot hold: without the touch a run fails only when
+# the two first uses meet inside a spill class's type initializer, which no
+# test can force, so shared-data-class.test's listings, the TOUCH check here
+# and CLITrailerTest's cases are the checks that fail every time the touch is
+# missing. This run takes, on every runtime, the path that FX-1 changes (one
+# thread runs the module initializer while the other waits), and it finds a
+# wrong value only by chance, whether the touch is missing or a runtime
+# fails to make the second thread wait. Measured when the test was written,
+# with the library's <Module>::.cctor removed through an ildasm and ilasm
+# round trip (the output without FX-1): 9, 20 and 14 of 30 runs failed on
+# .NET 10, .NET 10 with TieredCompilation=0 and .NET 8, and none of 30 on
+# .NET Framework 4.8 (in longer runs, every wrong value on all four was
+# read_spilled's NullReferenceException at a zero address); with the touch
+# kept through the same round trip, no wrong value in 8,000 rounds on each
+# of the four.
+# Before any run, place.py prints from %msil_canon's listing of each library
+# the class that holds the address field of v00 and of v63, and FileCheck
+# (PLACE) requires '<msil>Data' for v00 and a '<msil>Spill<N>' class for
+# v63, so that a change of placement fails the test instead of leaving it
+# without a race.
+# The library is built at -O0 and -O2 (-flto under the lto pipeline),
+# verified and, with jitall, force-JITted; the host runs on the configured
+# runtime and then, by %{msil_also_run_check} (plan 5.12.3), once per entry
+# of the leg's msil_also_run, force-JITted, on that entry's runtime; on
+# Windows triples a net48 build of the host runs on .NET Framework 4.8 as
+# well, when the library is bound to mscorlib (msil_references none or
+# net48). main.c is compiled as spill.c is; main.exe is verified and, with
+# jitall, force-JITted with the library as a dependency (--dep), and runs
+# on the configured runtime, in every reference mode (it needs no csc), and
+# on .NET Framework 4.8 under the net48 host's conditions. It does not run
+# on the msil_also_run entries: %{msil_also_run_check} force-JITs its image
+# with no --dep, and checks the transcript with the host's (default) prefix.
+# No .expected file: a C# host has no native oracle (plan 5.17.4).
+# Plan FX-1 (FX-1.f), 5.17.13 (FX-1, M3/09-threads).
+# REQUIRES: msil-csc
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/O0 %t/O2
+# DEFINE: %{sr_level} = O0
+# REDEFINE: %{msil_also_run_image} = %t/%{sr_level}/host.exe
+# DEFINE: %{sr_library} = \
+# DEFINE:   %clang_msil %{msil_cflags} -%{sr_level} %if msil-prog-pipeline=lto %{ -flto %} -c %t/spill.c -o %t/%{sr_level}/spill.o \
+# DEFINE:   && %clang_msil -%{sr_level} %{msil_ldflags} -shared -Wl,--export-class=Race.Native -Wl,--msil-type-member-limit=8 %t/%{sr_level}/spill.o -o %t/%{sr_level}/spill.dll \
+# DEFINE:   && %msil_verify %t/%{sr_level}/spill.dll \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %t/%{sr_level}/spill.dll %} \
+# DEFINE:   && %msil_canon %t/%{sr_level}/spill.dll > %t/%{sr_level}/spill.txt \
+# DEFINE:   && FileCheck --input-file=%t/%{sr_level}/spill.txt --check-prefix=TOUCH %s \
+# DEFINE:   && %python %t/place.py %t/%{sr_level}/spill.txt v00 v63 > %t/%{sr_level}/place.txt \
+# DEFINE:   && FileCheck --input-file=%t/%{sr_level}/place.txt --check-prefix=PLACE --match-full-lines %s \
+# DEFINE:   && %python %t/embed.py %t/%{sr_level}/spill.dll %t/host.cs %t/%{sr_level}/host.cs
+# DEFINE: %{sr_host} = \
+# DEFINE:   %msil_csc %t/%{sr_level}/host.cs --out %t/%{sr_level}/host.exe --refs net8 \
+# DEFINE:   && %msil_exec --out %t/%{sr_level}/host.out %t/%{sr_level}/host.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{sr_level}/host.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{sr_netfx} = \
+# DEFINE:   %msil_csc %t/%{sr_level}/host.cs --out %t/%{sr_level}/host48.exe --refs net48 \
+# DEFINE:   && %msil_exec --netfx --out %t/%{sr_level}/host48.out %t/%{sr_level}/host48.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{sr_level}/host48.out --match-full-lines %s
+# DEFINE: %{sr_program} = \
+# DEFINE:   %clang_msil %{msil_cflags} -%{sr_level} %if msil-prog-pipeline=lto %{ -flto %} -c %t/main.c -o %t/%{sr_level}/main.o \
+# DEFINE:   && %clang_msil -%{sr_level} %{msil_ldflags} %t/%{sr_level}/main.o %t/%{sr_level}/spill.dll -o %t/%{sr_level}/main.exe \
+# DEFINE:   && %msil_verify --dep %t/%{sr_level}/spill.dll -- %t/%{sr_level}/main.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall --dep %t/%{sr_level}/spill.dll -- %t/%{sr_level}/main.exe %} \
+# DEFINE:   && %msil_canon %t/%{sr_level}/main.exe > %t/%{sr_level}/main.txt \
+# DEFINE:   && FileCheck --input-file=%t/%{sr_level}/main.txt --check-prefix=INIT %s \
+# DEFINE:   && %msil_exec --out %t/%{sr_level}/main.out --dep %t/%{sr_level}/spill.dll -- %t/%{sr_level}/main.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{sr_level}/main.out --check-prefix=PROG --match-full-lines %s
+# DEFINE: %{sr_program_netfx} = \
+# DEFINE:   %msil_exec --netfx --out %t/%{sr_level}/main.netfx.out --dep %t/%{sr_level}/spill.dll -- %t/%{sr_level}/main.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{sr_level}/main.netfx.out --check-prefix=PROG --match-full-lines %s
+# RUN: %{sr_library}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %{sr_host} %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %{sr_netfx} %}
+# RUN: %{sr_program}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %{sr_program_netfx} %}
+# REDEFINE: %{sr_level} = O2
+# RUN: %{sr_library}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %{sr_host} %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %{sr_netfx} %}
+# RUN: %{sr_program}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %{sr_program_netfx} %}
+# Each library: v00's address field in '<msil>Data', v63's in a spill class.
+# PLACE:      v00 in '<msil>Data'
+# PLACE-NEXT: v63 in '<msil>Spill{{[1-9][0-9]*}}'
+# Each library's <Module>::.cctor starts with the touch (no M3 leg is
+# portable, so no guard comes before it).
+# TOUCH:      {{^}}.class '<Module>' flags={{.*}}
+# TOUCH-NOT:  {{^}}.class
+# TOUCH:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# TOUCH-NEXT: {{^}}    .maxstack 1{{$}}
+# TOUCH-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# TOUCH-NEXT: {{^}}    L1: pop{{$}}
+# The program's <Module>::.cctor holds the ldtoken of the library's export
+# class, whatever else it holds.
+# INIT:       {{^}}.class '<Module>' flags={{.*}}
+# INIT-NOT:   {{^}}.class
+# INIT:       {{^}}  .method '.cctor' void() {{.*}}
+# INIT-NOT:   {{^}}.class
+# INIT-NOT:   {{^}}  .method
+# INIT:       {{^}}    L{{[0-9]+}}: ldtoken [spill]Race.Native{{$}}
+# The program's transcript: every value right.
+# PROG:       [exit 0]
+# Every transcript of the host: no wrong value in 64 rounds.
+# CHECK:      spill race: 64 rounds, 0 wrong
+# CHECK-NEXT: [exit 0]
+#--- spill.c
+/* The library: 64 address fields, more than '<msil>Data' holds at
+   --msil-type-member-limit=8. */
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+
+/* volatile keeps every read a load through the variable's address field. */
+static volatile int v00 = 1000, v01 = 1001, v02 = 1002, v03 = 1003;
+static volatile int v04 = 1004, v05 = 1005, v06 = 1006, v07 = 1007;
+static volatile int v08 = 1008, v09 = 1009, v10 = 1010, v11 = 1011;
+static volatile int v12 = 1012, v13 = 1013, v14 = 1014, v15 = 1015;
+static volatile int v16 = 1016, v17 = 1017, v18 = 1018, v19 = 1019;
+static volatile int v20 = 1020, v21 = 1021, v22 = 1022, v23 = 1023;
+static volatile int v24 = 1024, v25 = 1025, v26 = 1026, v27 = 1027;
+static volatile int v28 = 1028, v29 = 1029, v30 = 1030, v31 = 1031;
+static volatile int v32 = 1032, v33 = 1033, v34 = 1034, v35 = 1035;
+static volatile int v36 = 1036, v37 = 1037, v38 = 1038, v39 = 1039;
+static volatile int v40 = 1040, v41 = 1041, v42 = 1042, v43 = 1043;
+static volatile int v44 = 1044, v45 = 1045, v46 = 1046, v47 = 1047;
+static volatile int v48 = 1048, v49 = 1049, v50 = 1050, v51 = 1051;
+static volatile int v52 = 1052, v53 = 1053, v54 = 1054, v55 = 1055;
+static volatile int v56 = 1056, v57 = 1057, v58 = 1058, v59 = 1059;
+static volatile int v60 = 1060, v61 = 1061, v62 = 1062, v63 = 1063;
+
+/* First, reading the variables in order: clang emits internal variables as
+   code first uses them, so the link sees v00 first and v63 last. */
+API int sum_all(void) {
+  return v00 + v01 + v02 + v03 + v04 + v05 + v06 + v07 +
+         v08 + v09 + v10 + v11 + v12 + v13 + v14 + v15 +
+         v16 + v17 + v18 + v19 + v20 + v21 + v22 + v23 +
+         v24 + v25 + v26 + v27 + v28 + v29 + v30 + v31 +
+         v32 + v33 + v34 + v35 + v36 + v37 + v38 + v39 +
+         v40 + v41 + v42 + v43 + v44 + v45 + v46 + v47 +
+         v48 + v49 + v50 + v51 + v52 + v53 + v54 + v55 +
+         v56 + v57 + v58 + v59 + v60 + v61 + v62 + v63;
+}
+
+/* v00: its address field stays in '<msil>Data'. */
+API int read_data(void) { return v00; }
+
+/* v63: its address field spills. */
+API int read_spilled(void) { return v63; }
+#--- main.c
+/* The C program, linked against spill.dll: the ldtoken of Race.Native in
+   its <Module>::.cctor runs the library's module initializer, and with it
+   the touch and phase 1, before main. It reads v63 first, through the
+   spilled address field, and exits with a status of its own for each wrong
+   value. */
+int read_spilled(void);
+int read_data(void);
+int sum_all(void);
+
+int main(void) {
+  if (read_spilled() != 1063) /* v63 */
+    return 11;
+  if (read_data() != 1000) /* v00 */
+    return 12;
+  if (sum_all() != 66016) /* 64 * 1000 + (0 + 1 + ... + 63) */
+    return 13;
+  return 0;
+}
+#--- place.py
+"""Prints the class that holds each named field of a canonical listing.
+
+python place.py LISTING NAME... reads LISTING, a canonical listing
+(%msil_canon: llvm-cil-dump --canonical or mdcanon), in which a class starts
+with a line ".class '<class>' flags=..." and each of its fields is a line
+"  .field '<name>' <type> flags=...", and prints "NAME in '<class>'" for each
+NAME, in the order given. A NAME that no class or more than one class
+declares is an error (exit status 1).
+"""
+import re
+import sys
+
+listing, names = sys.argv[1], sys.argv[2:]
+owners = {name: [] for name in names}
+owner = None
+with open(listing, encoding="utf-8-sig", errors="replace") as f:
+    for line in f:
+        line = line.rstrip("\r\n")
+        m = re.match(r"\.class (\S.*?) flags=", line)
+        if m:
+            owner = m.group(1)
+            continue
+        m = re.match(r"  \.field '([^']*)' ", line)
+        if m and owner is not None and m.group(1) in owners:
+            owners[m.group(1)].append(owner)
+status = 0
+for name in names:
+    if len(owners[name]) == 1:
+        print("%s in %s" % (name, owners[name][0]))
+    else:
+        sys.stderr.write(
+            "place.py: %s: %d classes declare the field '%s'%s\n"
+            % (listing, len(owners[name]), name,
+               ": " + ", ".join(owners[name]) if owners[name] else "")
+        )
+        status = 1
+sys.exit(status)
+#--- embed.py
+"""Writes the C# host's source with the library inside it.
+
+python embed.py LIBRARY SOURCE OUTPUT replaces the one @LIBRARY_BASE64@ of
+SOURCE with LIBRARY's bytes in base64 and writes the result to OUTPUT.
+"""
+import base64
+import sys
+
+library, source, output = sys.argv[1:]
+with open(library, "rb") as f:
+    data = base64.b64encode(f.read()).decode("ascii")
+with open(source, encoding="utf-8") as f:
+    text = f.read()
+marker = "@LIBRARY_BASE64@"
+if text.count(marker) != 1:
+    sys.exit("embed.py: %s must hold %s exactly once" % (source, marker))
+with open(output, "w", encoding="utf-8") as f:
+    f.write(text.replace(marker, data))
+#--- host.cs
+// The C# host: 64 rounds, each a first use of a fresh copy of the library
+// from two threads at once. The library comes from embed.py's base64.
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Threading;
+
+static class Program
+{
+    const string Library = "@LIBRARY_BASE64@";
+    const int Rounds = 64;
+    const int DataValue = 1000;    // v00, whose address field stays in '<msil>Data'
+    const int SpilledValue = 1063; // v63, whose address field spills
+    const int Threw = -1;          // the mark of a call that threw
+
+    // Makes the delegate and calls it: this thread's first use of the copy.
+    static int Call(MethodInfo function)
+    {
+        try
+        {
+            Func<int> f = (Func<int>)Delegate.CreateDelegate(typeof(Func<int>), function);
+            return f();
+        }
+        catch (Exception)
+        {
+            return Threw;
+        }
+    }
+
+    static int Main()
+    {
+        byte[] image = Convert.FromBase64String(Library);
+        List<Assembly> copies = new List<Assembly>();
+        int wrong = 0;
+        for (int r = 0; r < Rounds; ++r)
+        {
+            // A fresh copy, with statics of its own. Neither the load, nor
+            // GetType, nor GetMethod runs its module initializer.
+            Assembly library = Assembly.Load(image);
+            if (copies.Contains(library))
+            {
+                Console.WriteLine("spill race: round " + r + " loaded the copy of an earlier round");
+                return 3;
+            }
+            copies.Add(library);
+            Type native = library.GetType("Race.Native", true);
+            const BindingFlags exported = BindingFlags.Public | BindingFlags.Static;
+            MethodInfo readData = native.GetMethod("read_data", exported);
+            MethodInfo readSpilled = native.GetMethod("read_spilled", exported);
+            int spins = 1000 * r;
+            int dataResult = Threw, spilledResult = Threw;
+            using (Barrier start = new Barrier(2))
+            {
+                Thread data = new Thread(() =>
+                {
+                    start.SignalAndWait();
+                    dataResult = Call(readData);
+                });
+                Thread spilled = new Thread(() =>
+                {
+                    start.SignalAndWait();
+                    Thread.SpinWait(spins);
+                    spilledResult = Call(readSpilled);
+                });
+                data.Start();
+                spilled.Start();
+                data.Join();
+                spilled.Join();
+            }
+            if (dataResult != DataValue)
+                ++wrong;
+            if (spilledResult != SpilledValue)
+                ++wrong;
+        }
+        Console.WriteLine("spill race: " + Rounds + " rounds, " + wrong + " wrong");
+        return wrong == 0 ? 0 : 3;
+    }
+}

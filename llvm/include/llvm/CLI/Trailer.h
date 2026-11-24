@@ -24,6 +24,10 @@
 // two phases: '<msil>Data'::.cctor allocates and fills the image and applies
 // the relocations within the assembly, naming no other assembly of this
 // toolchain, and <Module>::.cctor runs the rest (exports-multiasm 6.4).
+// When the fields of '<msil>Data' spill into spill classes
+// (TrailerInput::SpilledData, FX-1), <Module>::.cctor reads '<msil>data'
+// before the rest, so that phase 1 runs inside the module initializer, which
+// every other thread waits for.
 //
 // After its other methods the trailer writes the trailer definitions that the
 // output uses (5.14.4, llvm/CLI/TrailerDefs.h), such as
@@ -67,9 +71,10 @@ enum class SectionRules : uint8_t;
 
 /// The names of the synthesized members (plan 5.1, 5.9.10, 5.9.12, 5.10.12):
 /// the module initializer, the entry point, the field that holds the image
-/// base, the RVA data of the image and of the relocation table with their
-/// value types, and the data-import helpers. No dots in type names: ilasm
-/// would split them into a namespace and a name.
+/// base or that is made for the spilled-data touch, the RVA data of the image
+/// and of the relocation table with their value types, and the data-import
+/// helpers. No dots in type names: ilasm would split them into a namespace
+/// and a name.
 inline constexpr StringLiteral ModuleInitializerName = ".cctor";
 inline constexpr StringLiteral EntryPointName = "<msil>Main";
 inline constexpr StringLiteral DataFieldName = "<msil>data";
@@ -300,6 +305,12 @@ struct TrailerInput {
   /// code, before phase 1 in a one-phase output and before phase 2 in a
   /// TwoPhase one. Without it the trailer is unchanged.
   std::optional<PortableGuard> Guard;
+  /// FX-1, TwoPhase only: the fields of '<msil>Data' spill into spill
+  /// classes. <Module>::.cctor then exists and starts, after the guard when
+  /// one is set and before the 'ldtoken's, with 'ldsfld' of '<msil>data' and
+  /// 'pop', so that phase 1 runs inside the module initializer and every
+  /// other thread waits for it. Without it the trailer is unchanged.
+  bool SpilledData = false;
 };
 
 /// The entities the trailer names, and the methods it makes: the MSIL
@@ -309,7 +320,11 @@ class LLVM_ABI TrailerSink {
 public:
   virtual ~TrailerSink();
 
-  /// '<msil>data', the static native int field that holds the image base.
+  /// '<msil>data', a static native int field. When the output has an image,
+  /// it holds the image base, which phase 1 stores. In a TwoPhase output with
+  /// TrailerInput::SpilledData and no image, the sink makes it in '<msil>Data'
+  /// only for the spilled-data touch (FX-1), which reads it, and nothing
+  /// stores it.
   virtual EntityRef getDataField() = 0;
   /// A static field FieldName of the sized value type TypeName (explicit
   /// layout, pack 1, size Bytes.size()) at RVA data holding Bytes: the
@@ -356,6 +371,13 @@ LLVM_ABI bool skipsNullConstructorSlots(SectionRules Rules);
 LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
                                     unsigned RelocLoopThreshold);
 
+/// The number of fields that buildTrailer(In, ...) makes in '<msil>Data'
+/// (FX-1): 0 without TwoPhase; otherwise 1 for '<msil>data' when In.Image or
+/// In.SpilledData is set, else 0. msil-ld calls it before it sets
+/// SpilledData; setting it adds at most '<msil>data', so a decision to spill
+/// stays right.
+LLVM_ABI unsigned countTrailerDataFields(const TrailerInput &In);
+
 /// Builds the trailer of In and hands it to Sink:
 /// - '<msil>dataimport' and '<msil>init_dataimports' when there are data
 ///   imports;
@@ -379,7 +401,10 @@ LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 ///   method is Phase 1's, instruction for instruction;
 /// - with TwoPhase, '<msil>Data'::.cctor instead runs everything up to the
 ///   relocations, and <Module>::.cctor, when it is not empty, the rest; with
-///   a guard <Module>::.cctor always exists and runs the guard first;
+///   a guard <Module>::.cctor always exists and runs the guard first; with
+///   In.SpilledData it always exists too and starts, after the guard if any
+///   and before the 'ldtoken's, with 'ldsfld' of '<msil>data' and 'pop' (the
+///   touch, FX-1), so that phase 1 runs inside the module initializer;
 /// - '<msil>Main' when In.Entry is set (decision D27), which passes main
 ///   the argc and argv of '<msil>argc' and '<msil>argv' when <Module>::.cctor
 ///   stored them, else builds them itself;
@@ -388,6 +413,8 @@ LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 /// The image's sizes must satisfy 5.9.9 rule 5 except where the caller has
 /// already reported them (ImageInput::AllowOversize), and its slots
 /// (ImageLayout::SlotsOffset) must hold countAddressSlots(In.Relocs, ...).
+/// In.SpilledData needs TwoPhase and a phase 1 (an image, a function address
+/// or a data import).
 /// Phase 2's triples have 64-bit pointers (decision D6): a relocation of
 /// width 8 stores a pointer.
 LLVM_ABI void buildTrailer(const TrailerInput &In, TrailerSink &Sink);

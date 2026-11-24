@@ -45,13 +45,24 @@
 //   output before phase 1 and in two-phase output before phase 2, with no
 //   copy in '<msil>Data'::.cctor and every other instruction unchanged; the
 //   interpreter runs it as a 64-bit little-endian, a 32-bit and a big-endian
-//   process.
+//   process;
+// - the spilled-data touch (5.9.10 as FX-1 amends it, 5.18.7 PE5; FX-1): with
+//   TrailerInput::SpilledData set on a two-phase input, '<Module>::.cctor'
+//   always exists, starts with 'ldsfld '<msil>data'; pop' (after the portable
+//   guard's checks when a guard is set, before phase 2) and is otherwise its
+//   code without the flag, and every other method stays as it is; and
+//   countTrailerDataFields, 0 for a one-phase input, is the number of
+//   '<msil>data' fields that a two-phase build makes.
 // A small CIL interpreter runs the recorded methods on a simulated heap: it
 // checks every store against the alignment it is allowed to assume (the
 // natural one, or that of an 'unaligned.' prefix), that the data block is
 // aligned to MaxAlign, that the zero part is cleared, and that every site,
 // address field and imported address holds the value the inputs describe,
-// whichever instruction sequence the loop uses.
+// whichever instruction sequence the loop uses. It can run a two-phase
+// output's '<Module>::.cctor' alone: the first access to '<msil>data' then
+// starts '<msil>Data'::.cctor, as the runtime starts a type initializer
+// (ECMA-335 II.10.5.3), and the interpreter logs that start, each 'ldtoken'
+// and each call of a test method or native function, in order.
 // Expected sequences come from HEAD's llc output (normalized: every ldc.i4
 // form as 'ldc.i4 <n>', short branches as long ones, labels L0, L1, ... in
 // code order), expected values from the plan; never from the implementation.
@@ -466,7 +477,7 @@ private:
 };
 
 struct Value {
-  enum class T { None, I4, I8, NI, Str, StrArr, ByteArr, Exc };
+  enum class T { None, I4, I8, NI, Str, StrArr, ByteArr, Exc, Handle };
   T Ty = T::None;
   int64_t I = 0; // I4 values are kept sign-extended
   std::string S;
@@ -553,6 +564,15 @@ public:
   // 32-bit native int is kept zero-extended.
   unsigned PointerBits = 64;
   bool BigEndian = false;
+  // '<msil>Data''s type initializer (ECMA-335 II.10.5.3), for a two-phase
+  // output: when set, the first read or write of '<msil>data' by a method of
+  // another type runs it first, once; its own accesses do not start it
+  // again.
+  const RecordingSink::Method *DataTypeInit = nullptr;
+  bool DataTypeInitStarted = false;
+  // In order: "init '<msil>Data'" when DataTypeInit starts, "ldtoken <name>"
+  // and "call <name>" for test methods and native functions.
+  std::vector<std::string> Log;
 
 private:
   unsigned Depth = 0;
@@ -1113,6 +1133,16 @@ Interp::Outcome Interp::run(const RecordingSink::Method &M,
         fail(Where + "ldsfld/stsfld of '" + E->Name + "'");
         break;
       }
+      if (E->K == Kind::DataField && DataTypeInit && !DataTypeInitStarted &&
+          M.Owner != TrailerOwner::Data) {
+        DataTypeInitStarted = true;
+        Log.push_back("init '<msil>Data'");
+        Outcome Init = run(*DataTypeInit, {});
+        if (Init.Threw)
+          return Init;
+        if (!Failure.empty())
+          break;
+      }
       if (I.Op == Opcode::Ldsfld) {
         auto It = Fields.find(R);
         Stack.push_back(It == Fields.end() ? Value::ni(0) : It->second);
@@ -1135,6 +1165,18 @@ Interp::Outcome Interp::run(const RecordingSink::Method &M,
         break;
       }
       Stack.push_back(Value::ni(fnPtr(I.Token.getValue())));
+      break;
+    }
+    case Opcode::Ldtoken: {
+      const RecordingSink::Entity *E = Sink.entity(I.Token);
+      if (!E) {
+        fail(Where + "a type token that the sink did not hand out");
+        break;
+      }
+      Log.push_back("ldtoken " + E->Name);
+      Value X;
+      X.Ty = Value::T::Handle;
+      Stack.push_back(X);
       break;
     }
     case Opcode::Ldstr: {
@@ -1321,6 +1363,7 @@ Interp::Outcome Interp::run(const RecordingSink::Method &M,
         fail(Where + "call of '" + E->Name + "' without a hook");
         break;
       }
+      Log.push_back("call " + E->Name);
       Value R = OnCall(*E, CallArgs);
       if (!isVoid(E->Sig.Return))
         Stack.push_back(R);
@@ -1599,19 +1642,12 @@ const MethodAttributes MainFlags = MethodAttributes::Private |
                                    MethodAttributes::HideBySig |
                                    MethodAttributes::Static;
 
-// Runs '.cctor' and checks the data block against the inputs: alignment,
-// the image, the cleared zero part, every address and function field, and
-// every relocation site. Imports maps a data-import field to the address
-// the simulated native lookup gives.
-void runAndCheckData(Program &P, Interp &VM,
-                     const std::map<EntityRef, uint64_t> &Imports = {}) {
-  if (!VM.OnCall)
-    VM.OnCall = [](const RecordingSink::Entity &E, std::vector<Value> &) {
-      return Value::i4(0);
-    };
-  Interp::Outcome O = VM.run(".cctor");
-  ASSERT_EQ(VM.Failure, "");
-  ASSERT_FALSE(O.Threw) << O.Message;
+// Checks the data block that the initializer left against the inputs:
+// alignment, the image, the cleared zero part, every address and function
+// field, and every relocation site. Imports maps a data-import field to the
+// address the simulated native lookup gives.
+void checkDataBlock(Program &P, Interp &VM,
+                    const std::map<EntityRef, uint64_t> &Imports = {}) {
   const ImageLayout &L = P.Layout;
   ASSERT_NE(P.Sink.DataField, 0u);
   uint64_t Data = uint64_t(VM.Fields[P.Sink.DataField].I);
@@ -1645,6 +1681,19 @@ void runAndCheckData(Program &P, Interp &VM,
     ASSERT_TRUE(VM.Mem.read(Data + K, 1, B));
     EXPECT_EQ(B, Expected[K]) << "data byte " << K;
   }
+}
+
+// Runs '.cctor', then checks the data block (checkDataBlock).
+void runAndCheckData(Program &P, Interp &VM,
+                     const std::map<EntityRef, uint64_t> &Imports = {}) {
+  if (!VM.OnCall)
+    VM.OnCall = [](const RecordingSink::Entity &E, std::vector<Value> &) {
+      return Value::i4(0);
+    };
+  Interp::Outcome O = VM.run(".cctor");
+  ASSERT_EQ(VM.Failure, "");
+  ASSERT_FALSE(O.Threw) << O.Message;
+  checkDataBlock(P, VM, Imports);
 }
 
 unsigned countOpcode(const RecordingSink::Method &M, Opcode Op) {
@@ -2909,6 +2958,547 @@ TEST(CLITrailerTest, PortableGuardFirstInTwoPhaseOutput) {
 
   expectGuardThrows(P.Sink, *C, 32, false, WidthMessage);
   expectGuardThrows(P.Sink, *C, 64, true, OrderMessage);
+}
+
+//===----------------------------------------------------------------------===//
+// The spilled-data touch (5.9.10 as FX-1 amends it, 5.18.7 PE5; FX-1)
+//===----------------------------------------------------------------------===//
+
+// A -shared library in M22's two-phase shape, that of
+// PortableGuardFirstInTwoPhaseOutput with a second library type:
+// module-initializer.ll's phase 1 without its entry point, then two library
+// types, a cross-assembly relocation and a constructor.
+void makeTwoPhaseLibrary(Program &P) {
+  makeModuleInitializer(P);
+  P.In.Entry.reset();
+  P.In.TwoPhase = true;
+  P.In.LibraryTypes = {P.Sink.field("lib.Exports"),
+                       P.Sink.field("other.Exports")};
+  CrossReloc X{};
+  X.Site = 16; // table[4], in the image
+  X.Width = 4;
+  X.Accessor = P.Sink.method("lib_data", sig(tNI(), {}));
+  X.Addend = 8;
+  P.In.CrossRelocs = {X};
+  P.In.Ctors = {{P.Sink.method("ctor", sig(TypeSig(), {})), false}};
+}
+
+// The touch that starts '<Module>::.cctor' when '<msil>Data''s fields spill:
+// a read of '<msil>data', a field of '<msil>Data' that never spills, so that
+// '<msil>Data'::.cctor (phase 1) runs inside the module initializer and every
+// other thread waits for it.
+const char Touch[] = "ldsfld <msil>data; pop";
+
+// The '<msil>data' fields that a build made.
+unsigned dataFieldsMade(const RecordingSink &S) {
+  return count_if(S.Entities, [](const RecordingSink::Entity &E) {
+    return E.K == Kind::DataField;
+  });
+}
+
+// Instruction Index of M is the touch: 'ldsfld' of the one '<msil>data' that
+// the sink made, then 'pop'.
+void expectTouchAt(const RecordingSink &S, const RecordingSink::Method &M,
+                   size_t Index) {
+  ASSERT_LT(Index + 1, M.Code.size()) << "'" << M.Name << "' is too short";
+  const RecordingSink::Instr &Load = M.Code[Index];
+  EXPECT_EQ(Load.Op, Opcode::Ldsfld);
+  const RecordingSink::Entity *E = S.entity(Load.Token);
+  ASSERT_NE(E, nullptr) << "no entity token";
+  EXPECT_EQ(E->K, Kind::DataField);
+  EXPECT_EQ(Load.Token.getValue(), S.DataField);
+  EXPECT_EQ(M.Code[Index + 1].Op, Opcode::Pop);
+  EXPECT_EQ(dataFieldsMade(S), 1u);
+}
+
+// Two tokens of two builds name entities of the same kind and name, or are
+// the same token that names no entity: two builds may ask the sink for the
+// same entities in another order.
+bool sameEntity(const RecordingSink &SA, TokenRef A, const RecordingSink &SB,
+                TokenRef B) {
+  const RecordingSink::Entity *X = SA.entity(A), *Y = SB.entity(B);
+  if (!X || !Y)
+    return !X && !Y && A == B;
+  return X->K == Y->K && X->Name == Y->Name && X->TypeName == Y->TypeName &&
+         X->Bytes == Y->Bytes && X->Bcl == Y->Bcl;
+}
+
+// The instructions of A from instruction Skip on are those of B, Shift bytes
+// later: the same opcodes, operands and branch targets, and tokens that name
+// the same entities (sameEntity).
+void expectCodeAfter(const RecordingSink &SA, const RecordingSink::Method &A,
+                     size_t Skip, uint32_t Shift, const RecordingSink &SB,
+                     const RecordingSink::Method &B) {
+  ASSERT_EQ(A.Code.size(), B.Code.size() + Skip) << A.Name;
+  EXPECT_EQ(A.CodeSize, B.CodeSize + Shift) << A.Name;
+  for (size_t K = 0; K != B.Code.size(); ++K) {
+    const RecordingSink::Instr &X = A.Code[K + Skip], &Y = B.Code[K];
+    std::optional<uint32_t> Target;
+    if (Y.Target)
+      Target = *Y.Target + Shift;
+    std::vector<uint32_t> Switch;
+    for (uint32_t T : Y.SwitchTargets)
+      Switch.push_back(T + Shift);
+    EXPECT_TRUE(X.Op == Y.Op && X.Offset == Y.Offset + Shift &&
+                X.Imm == Y.Imm && X.FPBits == Y.FPBits && X.Target == Target &&
+                X.SwitchTargets == Switch &&
+                sameEntity(SA, X.Token, SB, Y.Token))
+        << A.Name << ": instruction " << K + Skip;
+  }
+}
+
+// Two methods of two builds are the same, as expectSameMethod says, with
+// their tokens compared as sameEntity does.
+void expectSameMethodAcross(const RecordingSink &SA,
+                            const RecordingSink::Method &A,
+                            const RecordingSink &SB,
+                            const RecordingSink::Method &B) {
+  SCOPED_TRACE("method '" + A.Name + "'");
+  EXPECT_EQ(A.Name, B.Name);
+  EXPECT_EQ(A.Flags, B.Flags);
+  EXPECT_EQ(A.ImplFlags, B.ImplFlags);
+  EXPECT_EQ(A.Owner, B.Owner);
+  EXPECT_TRUE(A.Sig == B.Sig);
+  EXPECT_EQ(A.Locals, B.Locals);
+  EXPECT_EQ(A.MaxStack, B.MaxStack);
+  EXPECT_EQ(SA.render(A), SB.render(B));
+  expectCodeAfter(SA, A, 0, 0, SB, B);
+}
+
+// A two-phase input with an image (module-initializer.ll's phase 1) and no
+// phase-2 work, guard or entry point. Without the flag, its default, there is
+// no '<Module>::.cctor' (M22: omitted when empty); with it,
+// '<Module>::.cctor' exists only to start phase 1 and is exactly the touch
+// and 'ret', while '<msil>Data'::.cctor stays as it is. Run alone,
+// '<Module>::.cctor' starts '<msil>Data''s type initializer, which leaves the
+// data block that the inputs describe.
+TEST(CLITrailerTest, SpilledDataTouchIsTheWholeModuleInitializer) {
+  EXPECT_FALSE(TrailerInput().SpilledData);
+  auto Make = [](Program &P) {
+    makeModuleInitializer(P);
+    P.In.Entry.reset();
+    P.In.TwoPhase = true;
+  };
+  Program Plain;
+  Make(Plain);
+  Plain.build();
+  Program P;
+  Make(P);
+  P.In.SpilledData = true;
+  P.build();
+
+  ASSERT_EQ(Plain.Sink.Methods.size(), 1u);
+  EXPECT_EQ(findOwned(Plain.Sink, ".cctor", TrailerOwner::Module), nullptr);
+  const RecordingSink::Method *PlainD =
+      findOwned(Plain.Sink, ".cctor", TrailerOwner::Data);
+  ASSERT_NE(PlainD, nullptr);
+
+  ASSERT_EQ(P.Sink.Methods.size(), 2u);
+  const RecordingSink::Method *C =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Module);
+  const RecordingSink::Method *D =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Data);
+  ASSERT_NE(C, nullptr);
+  ASSERT_NE(D, nullptr);
+  EXPECT_EQ(P.Sink.render(*C), lines("ldsfld <msil>data; pop; ret"));
+  expectTouchAt(P.Sink, *C, 0);
+  EXPECT_EQ(C->Flags, CctorFlags);
+  EXPECT_EQ(unsigned(C->ImplFlags), 0u);
+  EXPECT_TRUE(isVoid(C->Sig.Return));
+  EXPECT_TRUE(C->Sig.Params.empty());
+  EXPECT_TRUE(C->Locals.empty());
+  EXPECT_EQ(C->MaxStack, 1u);
+  EXPECT_EQ(C->CodeSize, 7u); // ldsfld <field>; pop; ret
+  expectSameMethodAcross(P.Sink, *D, Plain.Sink, *PlainD);
+
+  Interp VM(P.Sink);
+  VM.DataTypeInit = D;
+  Interp::Outcome O = VM.run(*C, {});
+  ASSERT_EQ(VM.Failure, "");
+  ASSERT_FALSE(O.Threw) << O.Message;
+  EXPECT_EQ(VM.Log, (std::vector<std::string>{"init '<msil>Data'"}));
+  checkDataBlock(P, VM);
+}
+
+// A two-phase library with library types, a cross-assembly relocation and a
+// constructor (makeTwoPhaseLibrary): with the flag, '<Module>::.cctor' is the
+// touch followed by exactly its code without the flag, and every other method
+// is unchanged. Run alone, it starts phase 1 before the library types'
+// 'ldtoken's, the accessor and the constructor; without the flag phase 1
+// starts only at the cross-assembly relocation's read of '<msil>data', after
+// the 'ldtoken's.
+TEST(CLITrailerTest, SpilledDataTouchPrecedesPhaseTwo) {
+  Program Plain;
+  makeTwoPhaseLibrary(Plain);
+  Plain.build();
+  Program P;
+  makeTwoPhaseLibrary(P);
+  P.In.SpilledData = true;
+  P.build();
+
+  ASSERT_EQ(P.Sink.Methods.size(), Plain.Sink.Methods.size());
+  for (size_t K = 0; K != P.Sink.Methods.size(); ++K) {
+    EXPECT_EQ(P.Sink.Methods[K].Name, Plain.Sink.Methods[K].Name);
+    EXPECT_EQ(P.Sink.Methods[K].Owner, Plain.Sink.Methods[K].Owner);
+  }
+  const RecordingSink::Method *C =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Module);
+  const RecordingSink::Method *PlainC =
+      findOwned(Plain.Sink, ".cctor", TrailerOwner::Module);
+  ASSERT_NE(C, nullptr);
+  ASSERT_NE(PlainC, nullptr);
+  Lines Expected = lines(Touch);
+  Lines PlainCode = Plain.Sink.render(*PlainC);
+  Expected.insert(Expected.end(), PlainCode.begin(), PlainCode.end());
+  EXPECT_EQ(P.Sink.render(*C), Expected);
+  expectTouchAt(P.Sink, *C, 0);
+  ASSERT_GE(C->Code.size(), 2u);
+  EXPECT_EQ(C->Code[0].Offset, 0u);
+  EXPECT_EQ(C->Code[1].Offset, 5u);
+  // The rest is the code without the flag, 6 bytes on (ldsfld <field>; pop).
+  expectCodeAfter(P.Sink, *C, 2, 6, Plain.Sink, *PlainC);
+  EXPECT_EQ(C->Flags, CctorFlags);
+  EXPECT_EQ(C->ImplFlags, PlainC->ImplFlags);
+  EXPECT_TRUE(C->Sig == PlainC->Sig);
+  EXPECT_EQ(C->Locals, PlainC->Locals);
+  EXPECT_EQ(C->MaxStack, std::max(1u, PlainC->MaxStack));
+  for (size_t K = 0; K != P.Sink.Methods.size(); ++K)
+    if (&P.Sink.Methods[K] != C)
+      expectSameMethodAcross(P.Sink, P.Sink.Methods[K], Plain.Sink,
+                             Plain.Sink.Methods[K]);
+
+  // '<Module>::.cctor' run alone, with '<msil>Data''s type initializer.
+  auto RunAlone = [](const RecordingSink &S, const RecordingSink::Method &M) {
+    Interp VM(S);
+    VM.DataTypeInit = findOwned(S, ".cctor", TrailerOwner::Data);
+    EXPECT_NE(VM.DataTypeInit, nullptr);
+    VM.OnCall = [](const RecordingSink::Entity &E, std::vector<Value> &) {
+      return E.Name == "lib_data" ? Value::ni(0x12340000) : Value::i4(0);
+    };
+    Interp::Outcome O = VM.run(M, {});
+    EXPECT_EQ(VM.Failure, "");
+    EXPECT_FALSE(O.Threw) << O.Message;
+    return VM.Log;
+  };
+  EXPECT_EQ(RunAlone(P.Sink, *C),
+            (std::vector<std::string>{
+                "init '<msil>Data'", "ldtoken lib.Exports",
+                "ldtoken other.Exports", "call lib_data", "call ctor"}));
+  EXPECT_EQ(RunAlone(Plain.Sink, *PlainC),
+            (std::vector<std::string>{
+                "ldtoken lib.Exports", "ldtoken other.Exports",
+                "init '<msil>Data'", "call lib_data", "call ctor"}));
+}
+
+// P-1r R3's case (5.18.7 PE5): a two-phase input with the portable guard, the
+// flag and a library type. '<Module>::.cctor' is the guard's head (as
+// PortableGuardFirstInTwoPhaseOutput splits it), then the touch, then the
+// 'ldtoken', with the guard's two failure blocks after the last 'ret', and
+// otherwise what it is with the guard alone; phase 1 is that of the same
+// input with neither. In a process that the guard refuses, it throws before
+// phase 1 starts; in a 64-bit little-endian one, phase 1 starts at the touch,
+// before the 'ldtoken'.
+TEST(CLITrailerTest, SpilledDataTouchFollowsPortableGuard) {
+  auto Make = [](Program &P) {
+    makeModuleInitializer(P);
+    P.In.Entry.reset();
+    P.In.TwoPhase = true;
+    P.In.LibraryTypes = {P.Sink.field("lib.Exports")};
+  };
+  Program Plain;
+  Make(Plain);
+  Plain.build();
+  Program P;
+  Make(P);
+  P.In.Guard = portableGuard();
+  P.In.SpilledData = true;
+  P.build();
+
+  const RecordingSink::Method *C =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Module);
+  ASSERT_NE(C, nullptr);
+  GuardSplit G = splitGuard(P.Sink, *C);
+  EXPECT_EQ(G.Head, lines(GuardHead));
+  EXPECT_EQ(G.Rest,
+            lines("ldsfld <msil>data; pop; ldtoken lib.Exports; pop; ret"));
+  EXPECT_EQ(G.WidthText, WidthMessage);
+  EXPECT_EQ(G.OrderText, OrderMessage);
+  expectTouchAt(P.Sink, *C, 10);
+  // In code order: the guard's ten instructions, the five above, then the
+  // two failure blocks (a label, 'ldstr', 'newobj' and 'throw' each), so
+  // that they follow the last 'ret'.
+  Lines All = P.Sink.render(*C);
+  ASSERT_EQ(All.size(), 23u);
+  EXPECT_EQ(Lines(All.begin() + 10, All.begin() + 15), G.Rest);
+  EXPECT_EQ(All[15], "L0:");
+  EXPECT_EQ(All[19], "L1:");
+  EXPECT_EQ(C->Flags, CctorFlags);
+  Program GuardOnly;
+  Make(GuardOnly);
+  GuardOnly.In.Guard = portableGuard();
+  GuardOnly.build();
+  const RecordingSink::Method *GuardOnlyC =
+      findOwned(GuardOnly.Sink, ".cctor", TrailerOwner::Module);
+  ASSERT_NE(GuardOnlyC, nullptr);
+  Lines Rest = lines(Touch);
+  Lines GuardOnlyRest = splitGuard(GuardOnly.Sink, *GuardOnlyC).Rest;
+  Rest.insert(Rest.end(), GuardOnlyRest.begin(), GuardOnlyRest.end());
+  EXPECT_EQ(G.Rest, Rest);
+  const RecordingSink::Method *D =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Data);
+  const RecordingSink::Method *PlainD =
+      findOwned(Plain.Sink, ".cctor", TrailerOwner::Data);
+  ASSERT_NE(D, nullptr);
+  ASSERT_NE(PlainD, nullptr);
+  expectSameMethodAcross(P.Sink, *D, Plain.Sink, *PlainD);
+
+  struct Refused {
+    unsigned PointerBits;
+    bool BigEndian;
+    const char *Message;
+  };
+  for (const Refused &R :
+       {Refused{32, false, WidthMessage}, Refused{64, true, OrderMessage}}) {
+    SCOPED_TRACE(R.Message);
+    Interp VM(P.Sink);
+    VM.PointerBits = R.PointerBits;
+    VM.BigEndian = R.BigEndian;
+    VM.DataTypeInit = D;
+    Interp::Outcome O = VM.run(*C, {});
+    EXPECT_EQ(VM.Failure, "");
+    EXPECT_TRUE(O.Threw);
+    EXPECT_EQ(O.Message, R.Message);
+    EXPECT_TRUE(VM.Log.empty()) << "phase 1 or 2 ran before the guard threw";
+    EXPECT_EQ(VM.AllocHGlobalCalls, 0u);
+  }
+  Interp VM(P.Sink);
+  VM.DataTypeInit = D;
+  Interp::Outcome O = VM.run(*C, {});
+  ASSERT_EQ(VM.Failure, "");
+  ASSERT_FALSE(O.Threw) << O.Message;
+  EXPECT_EQ(VM.Log, (std::vector<std::string>{"init '<msil>Data'",
+                                              "ldtoken lib.Exports"}));
+  checkDataBlock(P, VM);
+}
+
+// A two-phase input whose phase 1 holds only function addresses: no image,
+// so no data segment. Without the flag the sink makes no '<msil>data'; with
+// it the sink makes it once, for the touch, which reads it, and phase 1 is
+// the same with and without the flag. Run alone, '<Module>::.cctor' starts
+// phase 1, which stores the function addresses and never '<msil>data'.
+TEST(CLITrailerTest, SpilledDataTouchWithoutImage) {
+  auto Make = [](Program &P) {
+    P.fnField("f", sig(tI4(), {tI4()}));
+    P.fnField("g", sig(TypeSig(), {}));
+    P.In.TwoPhase = true;
+  };
+  Program Plain;
+  Make(Plain);
+  Plain.build();
+  Program P;
+  Make(P);
+  P.In.SpilledData = true;
+  P.build();
+
+  EXPECT_EQ(dataFieldsMade(Plain.Sink), 0u);
+  ASSERT_EQ(Plain.Sink.Methods.size(), 1u);
+  const RecordingSink::Method *PlainD =
+      findOwned(Plain.Sink, ".cctor", TrailerOwner::Data);
+  ASSERT_NE(PlainD, nullptr);
+
+  ASSERT_EQ(P.Sink.Methods.size(), 2u);
+  const RecordingSink::Method *C =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Module);
+  const RecordingSink::Method *D =
+      findOwned(P.Sink, ".cctor", TrailerOwner::Data);
+  ASSERT_NE(C, nullptr);
+  ASSERT_NE(D, nullptr);
+  EXPECT_EQ(P.Sink.render(*C), lines("ldsfld <msil>data; pop; ret"));
+  expectTouchAt(P.Sink, *C, 0);
+  EXPECT_EQ(C->Flags, CctorFlags);
+  expectSameMethodAcross(P.Sink, *D, Plain.Sink, *PlainD);
+
+  Interp VM(P.Sink);
+  VM.DataTypeInit = D;
+  Interp::Outcome O = VM.run(*C, {});
+  ASSERT_EQ(VM.Failure, "");
+  ASSERT_FALSE(O.Threw) << O.Message;
+  EXPECT_EQ(VM.Log, (std::vector<std::string>{"init '<msil>Data'"}));
+  EXPECT_EQ(VM.Fields.count(P.Sink.DataField), 0u);
+  EXPECT_EQ(VM.AllocHGlobalCalls, 0u);
+  for (auto [F, M] : P.In.FnAddrFields)
+    EXPECT_EQ(uint64_t(VM.Fields[F].I), Interp::fnPtr(M)) << P.Sink.get(F).Name;
+}
+
+// Builds a two-phase input without SpilledData and, when it has a phase 1,
+// with it: countTrailerDataFields, taken before the build as msil-ld takes
+// it, is Without, then 1 (the touch's '<msil>data': at most one field more,
+// so that msil-ld's decision to spill stays right), and each time the number
+// of '<msil>data' fields that the build made.
+template <typename ProgramT>
+void expectDataFieldCount(StringRef What, function_ref<void(ProgramT &)> Make,
+                          unsigned Without, bool HasPhase1 = true) {
+  SCOPED_TRACE(What);
+  for (bool Spilled : {false, true}) {
+    if (Spilled && !HasPhase1)
+      break; // SpilledData needs a phase 1 (buildTrailer's precondition)
+    SCOPED_TRACE(Spilled ? "with SpilledData" : "without SpilledData");
+    ProgramT P;
+    Make(P);
+    ASSERT_TRUE(P.In.TwoPhase);
+    P.In.SpilledData = Spilled;
+    unsigned Count = countTrailerDataFields(P.In);
+    EXPECT_EQ(Count, Spilled ? 1u : Without);
+    P.build();
+    EXPECT_EQ(Count, dataFieldsMade(P.Sink));
+  }
+}
+
+// countTrailerDataFields counts the fields that buildTrailer makes in
+// '<msil>Data'. A one-phase output has none: 0, also with an image, whose
+// '<msil>data' the sink then makes in <Module>. For a two-phase input it is
+// the number of '<msil>data' fields that the recording sink saw the build
+// make ('<msil>image' and '<msil>relocs' are fields of <Module>, M22): 1 with
+// an image, else 0, and 1 with SpilledData; on every input shape.
+TEST(CLITrailerTest, CountTrailerDataFields) {
+  {
+    SCOPED_TRACE("one phase, an image");
+    Program P;
+    makeModuleInitializer(P);
+    EXPECT_EQ(countTrailerDataFields(P.In), 0u);
+    P.build();
+    EXPECT_EQ(dataFieldsMade(P.Sink), 1u);
+    EXPECT_FALSE(P.Sink.Methods.empty());
+    for (const RecordingSink::Method &M : P.Sink.Methods)
+      EXPECT_EQ(M.Owner, TrailerOwner::Module) << M.Name;
+  }
+  {
+    SCOPED_TRACE("one phase, relocation loop");
+    Program P;
+    makeGlobalRelocs(P, /*NumSlots=*/2);
+    P.In.RelocLoopThreshold = 1;
+    EXPECT_EQ(countTrailerDataFields(P.In), 0u);
+    P.build();
+    EXPECT_EQ(dataFieldsMade(P.Sink), 1u);
+  }
+  {
+    SCOPED_TRACE("one phase, data imports");
+    ImportProgram P;
+    P.make(DataImportHelper::Kind::Kernel32);
+    EXPECT_EQ(countTrailerDataFields(P.In), 0u);
+    P.build();
+    EXPECT_EQ(dataFieldsMade(P.Sink), 1u);
+  }
+  {
+    SCOPED_TRACE("one phase, no image");
+    Program P;
+    P.fnField("f", sig(tI4(), {tI4()}));
+    P.In.Ctors = {{P.Sink.method("c", sig(TypeSig(), {})), false}};
+    P.In.Entry = entry(P.Sink.method("main", sig(tI4(), {})), false);
+    EXPECT_EQ(countTrailerDataFields(P.In), 0u);
+    P.build();
+    EXPECT_EQ(dataFieldsMade(P.Sink), 0u);
+  }
+
+  // Two phases, with a phase 1.
+  auto Image = [](Program &P) {
+    makeModuleInitializer(P);
+    P.In.Entry.reset();
+    P.In.TwoPhase = true;
+  };
+  auto ZeroOnly = [](Program &P) {
+    P.Layout = makeLayout({}, 32);
+    P.In.Image = &P.Layout;
+    P.addressField("z", 0);
+    P.addressField("z2", 8);
+    P.In.TwoPhase = true;
+  };
+  auto Loop = [](Program &P) {
+    makeGlobalRelocs(P, /*NumSlots=*/2);
+    P.In.RelocLoopThreshold = 1;
+    P.In.TwoPhase = true;
+  };
+  auto Imports = [](ImportProgram &P) {
+    P.make(DataImportHelper::Kind::Kernel32);
+    P.In.TwoPhase = true;
+  };
+  auto ImportsLoop = [](ImportProgram &P) {
+    P.make(DataImportHelper::Kind::Dlfcn, /*NumSlots=*/2, /*Threshold=*/0);
+    P.In.TwoPhase = true;
+  };
+  auto Guarded = [](Program &P) {
+    makeTwoPhaseLibrary(P);
+    P.In.Guard = portableGuard();
+  };
+  auto Definition = [](Program &P) {
+    makeTwoPhaseLibrary(P);
+    declareBarrier(P, /*Request=*/true);
+  };
+  auto Stdio = [](Program &P) {
+    makeTwoPhaseLibrary(P);
+    StdioOptions S;
+    S.PrintfOptions =
+        P.Sink.method("__local_stdio_printf_options", sig(tNI(), {}));
+    S.ScanfOptions =
+        P.Sink.method("__local_stdio_scanf_options", sig(tNI(), {}));
+    P.In.UCRTStdio = S;
+  };
+  auto FnOnly = [](Program &P) {
+    P.fnField("f", sig(tI4(), {tI4()}));
+    P.fnField("g", sig(TypeSig(), {}));
+    P.In.TwoPhase = true;
+  };
+  auto FnAndPhase2 = [](Program &P) {
+    P.fnField("f", sig(tI4(), {tI4()}));
+    P.In.LibraryTypes = {P.Sink.field("lib.Exports")};
+    P.In.Ctors = {{P.Sink.method("ctor", sig(TypeSig(), {})), false}};
+    P.In.TwoPhase = true;
+  };
+  auto ImportsOnly = [](ImportProgram &P) {
+    P.make(DataImportHelper::Kind::Dlfcn);
+    P.In.Image = nullptr;
+    P.In.AddressFields.clear();
+    P.In.Relocs.clear();
+    P.In.Ctors.clear();
+    P.In.TwoPhase = true;
+  };
+  expectDataFieldCount<Program>("an image", Image, 1);
+  expectDataFieldCount<Program>("a zero-only image", ZeroOnly, 1);
+  expectDataFieldCount<Program>("an image and cross-assembly relocations",
+                                makeTwoPhaseLibrary, 1);
+  expectDataFieldCount<Program>("an image, relocation loop", Loop, 1);
+  expectDataFieldCount<ImportProgram>("an image and data imports", Imports, 1);
+  expectDataFieldCount<ImportProgram>(
+      "an image and data imports, relocation loop", ImportsLoop, 1);
+  expectDataFieldCount<Program>("an image and the portable guard", Guarded, 1);
+  expectDataFieldCount<Program>("an image and a trailer definition", Definition,
+                                1);
+  expectDataFieldCount<Program>("an image and the UCRT stdio options", Stdio,
+                                1);
+  expectDataFieldCount<Program>("function addresses only", FnOnly, 0);
+  expectDataFieldCount<Program>("function addresses and phase-2 work",
+                                FnAndPhase2, 0);
+  expectDataFieldCount<ImportProgram>("data imports only", ImportsOnly, 0);
+
+  // Two phases without a phase 1, where SpilledData stays unset.
+  auto Phase2Only = [](Program &P) {
+    P.In.LibraryTypes = {P.Sink.field("lib.Exports")};
+    P.In.Ctors = {{P.Sink.method("ctor", sig(TypeSig(), {})), false}};
+    P.In.TwoPhase = true;
+  };
+  auto StdioOnly = [](Program &P) {
+    StdioOptions S;
+    S.PrintfOptions =
+        P.Sink.method("__local_stdio_printf_options", sig(tNI(), {}));
+    P.In.UCRTStdio = S;
+    P.In.TwoPhase = true;
+  };
+  auto Nothing = [](Program &P) { P.In.TwoPhase = true; };
+  expectDataFieldCount<Program>("phase-2 work only", Phase2Only, 0,
+                                /*HasPhase1=*/false);
+  expectDataFieldCount<Program>("the UCRT stdio options only", StdioOnly, 0,
+                                /*HasPhase1=*/false);
+  expectDataFieldCount<Program>("nothing", Nothing, 0, /*HasPhase1=*/false);
 }
 
 } // namespace

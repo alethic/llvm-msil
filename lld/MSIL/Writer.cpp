@@ -29,13 +29,16 @@
 //    the export class follow;
 // 6. the data relocations, the constructor list, the entry point, the
 //    libraries' types and the relocations against their exports, the UCRT
-//    stdio options (5.15.2), then the trailer (cli::buildTrailer, shared with
-//    -S, 5.9.10; two-phase for -shared);
+//    stdio options (5.15.2), with -shared the decision whether the fields of
+//    '<msil>Data' spill (FX-1), then the trailer (cli::buildTrailer, shared
+//    with -S, 5.9.10; two-phase for -shared);
 // 7. names (colliding LOCAL members become '<name><msil><n>'), access, the
-//    '<msil>Spill<N>' classes past the per-type limits, the rows (with
-//    -shared also the export class, '<msil>Data' and '<msil>SymbolTable'),
-//    the bodies (cli::rewriteILTokens for copied ones), and
-//    cli::writePEImage.
+//    '<msil>Spill<N>' classes past the per-type limits (checks that
+//    '<msil>Data''s fields spill as step 6 decided, and that step 6 set
+//    SpilledData exactly when they spill and '<msil>Data'::.cctor exists),
+//    the rows (with -shared also the export class, '<msil>Data' and
+//    '<msil>SymbolTable'), the bodies (cli::rewriteILTokens for copied
+//    ones), and cli::writePEImage.
 //
 // Only input order decides anything: no hash or pointer order reaches the
 // output.
@@ -125,9 +128,11 @@ private:
   void addLibraryImports(TrailerInput &in);
   void addConstructors(ArrayRef<OutputConstructor> ctors, TrailerInput &in);
   void addUCRTStdio(TrailerInput &in);
+  void decideDataSpill(TrailerInput &in);
   std::optional<uint32_t> findEnvironField();
   void assignNames();
   void assignOwners();
+  void checkDataSpill() const;
   void addRows();
   void addLibraryRows(EntityHandle object);
   bool encodeBodies(MethodBodyStream &bodies);
@@ -145,6 +150,14 @@ private:
   SmallVector<EntityHandle, 1> owners;
   SmallVector<std::string, 1> ownerNames;
   uint32_t numSpillClasses = 0;
+  // With -shared, what decideDataSpill() decided before the trailer was
+  // built: whether the fields of '<msil>Data' spill into the spill classes,
+  // and the TrailerInput::SpilledData that it set (they spill and the library
+  // has a phase 1), kept here since finish() has no TrailerInput.
+  // checkDataSpill() compares the first with assignOwners()' placement, and
+  // the second with the first and '<msil>Data'::.cctor (FX-1).
+  bool dataFieldsSpill = false;
+  bool spilledData = false;
   // The base type of the spill classes, the export class and '<msil>Data'.
   EntityHandle object;
   // The FieldRVA data, at the offsets given to addFieldRVA.
@@ -695,17 +708,33 @@ void Writer::assignNames() {
       [](const OutputField &f) { return f.renamable; });
 }
 
+// Plan 5.9.12's per-type limit \p clrLimit (MaxMethodsPerType or
+// MaxFieldsPerType), lowered by --msil-type-member-limit.
+static uint32_t getTypeMemberLimit(uint32_t clrLimit) {
+  return std::min(clrLimit, std::max<uint32_t>(ctx.arg.msilTypeMemberLimit, 1));
+}
+
+// How many of the members of a class that may move stay in it, when it holds
+// at most \p limit members and \p fixed of them never move (the trailer's);
+// the others go to the spill classes. assignOwners() places the members by
+// this rule, and decideDataSpill() decides by it whether the fields of
+// '<msil>Data' spill (FX-1).
+static uint32_t getClassCapacity(uint32_t limit, uint32_t fixed) {
+  return limit > fixed ? limit - fixed : 0;
+}
+
 // Plan 5.9.12's per-type limits: '<Module>' holds at most 65,524 methods and
 // 65,534 fields (--msil-type-member-limit lowers both), counting the members
 // that it keeps whatever the count (the trailer's, all private). Past that,
 // members move to '<msil>Spill<N>' classes in row order. In a -shared
-// output (plan 5.9.15) '<msil>Data' holds the fields that the trailer stores
-// ('<msil>data', the address, '<msil>fn_' and data-import fields), whose
-// overflow goes to the spill classes too, and its phase 1; the export class
-// holds the exports and is never spilled (more methods than the limit is an
-// error); '<msil>SymbolTable' holds its constructor.
+// output (plan 5.9.15) '<msil>Data' holds '<msil>data' when there is one (the
+// image base, or, in a library without an image, a field made for FX-1's
+// spilled-data touch, which nothing stores), the fields that the trailer
+// stores (the address, '<msil>fn_' and data-import fields), whose overflow
+// goes to the spill classes too, and its phase 1; the export class holds the
+// exports and is never spilled (more methods than the limit is an error);
+// '<msil>SymbolTable' holds its constructor.
 void Writer::assignOwners() {
-  uint32_t limit = std::max<uint32_t>(ctx.arg.msilTypeMemberLimit, 1);
   bool shared = ctx.arg.shared;
   bool hasData = shared && !ctx.arg.interfaceOnly;
   if (hasData)
@@ -720,7 +749,7 @@ void Writer::assignOwners() {
                        uint32_t limit, uint32_t perSpill) {
     uint32_t fixed = llvm::count_if(
         members, [&](const auto &m) { return m.cls == home && isFixed(m); });
-    uint32_t capacity = limit > fixed ? limit - fixed : 0;
+    uint32_t capacity = getClassCapacity(limit, fixed);
     uint32_t n = 0, classes = 0;
     for (auto &m : members) {
       m.owner = 0;
@@ -734,14 +763,14 @@ void Writer::assignOwners() {
     }
     return classes;
   };
-  uint32_t methodLimit = std::min(MaxMethodsPerType, limit);
+  uint32_t methodLimit = getTypeMemberLimit(MaxMethodsPerType);
   // A spill class of '<msil>Data''s fields also holds a .cctor (below).
   uint32_t methodClasses = distribute(
       out.methods, OutputClass::Module,
       [](const OutputMethod &m) { return m.kind == OutputMethod::Trailer; },
       methodLimit,
       hasData ? std::max<uint32_t>(methodLimit - 1, 1) : methodLimit);
-  uint32_t fieldLimit = std::min(MaxFieldsPerType, limit);
+  uint32_t fieldLimit = getTypeMemberLimit(MaxFieldsPerType);
   uint32_t fieldClasses = distribute(
       out.fields, hasData ? OutputClass::Data : OutputClass::Module,
       [](const OutputField &f) { return f.kind == OutputField::Trailer; },
@@ -782,7 +811,13 @@ void Writer::assignOwners() {
   // but it runs only when a field of '<msil>Data' is first used: each spill
   // class that holds such fields gets a .cctor that reads one, so that phase
   // 1 runs before any of its fields is read (precise type initialization,
-  // ECMA-335 II.10.5.3.1).
+  // ECMA-335 II.10.5.3.1). The two type initializers then depend on each
+  // other: when two threads first use the library at once, the runtime may
+  // break their deadlock (II.10.5.3.3) and let one of them read a spilled
+  // field before phase 1 stored it. So in such a library <Module>::.cctor
+  // starts with a read of '<msil>data' (TrailerInput::SpilledData, FX-1):
+  // phase 1 runs inside the module initializer, which every other thread
+  // waits for.
   if (hasData && fieldClasses) {
     std::optional<uint32_t> dataField;
     SmallVector<bool, 4> holdsFields(numClasses + 1);
@@ -851,6 +886,57 @@ void Writer::assignOwners() {
   for (OutputField &f : out.fields)
     if (f.owner == 0)
       f.owner = ownerOf(f.cls);
+}
+
+// FX-1: whether the fields of a -shared output's '<msil>Data' spill, decided
+// on the filled input before the trailer is built, by assignOwners()' rule:
+// '<msil>Data' will hold every field that is not the trailer's (all exist
+// by now) and the cli::countTrailerDataFields(in) fields that the trailer
+// makes there, which never move. They are counted before SpilledData is set,
+// which adds at most '<msil>data', so a decision to spill stays right. A
+// library whose fields spill then runs phase 1 inside its module initializer
+// (TrailerInput::SpilledData), which cli::buildTrailer takes only with a
+// phase 1 (an image, a function address or a data import). Without one
+// nothing stores the fields (those of undefined weak symbols, which stay 0),
+// so nothing races, and the trailer stays as it is. That phase-1 condition
+// is buildTrailer's HasPhase1 (Trailer.cpp), and checkDataSpill() stops any
+// link where the two differ, so a later step that changes what phase 1
+// holds (M28.b's thunk part, M31.b's thread-local offset fields) changes
+// this condition too.
+void Writer::decideDataSpill(TrailerInput &in) {
+  uint32_t fields = llvm::count_if(out.fields, [](const OutputField &f) {
+    return f.kind != OutputField::Trailer;
+  });
+  dataFieldsSpill =
+      fields > getClassCapacity(getTypeMemberLimit(MaxFieldsPerType),
+                                cli::countTrailerDataFields(in));
+  spilledData = dataFieldsSpill && (in.Image || !in.FnAddrFields.empty() ||
+                                    !in.DataImports.empty());
+  in.SpilledData = spilledData;
+}
+
+// FX-1: after assignOwners(), checks decideDataSpill()'s decision twice: the
+// fields of '<msil>Data' went to spill classes exactly when it decided that
+// they would (both use one rule), and it set SpilledData exactly when they
+// spill and '<msil>Data'::.cctor exists, the trailer method of
+// OutputClass::Data named .cctor that cli::buildTrailer makes exactly when
+// there is a phase 1 (the spill classes' .cctors are of OutputClass::Module),
+// so that decideDataSpill()'s copy of HasPhase1 cannot drift silently. A
+// mismatch is an internal error (plan section 2), which stops a build
+// without assertions too.
+void Writer::checkDataSpill() const {
+  bool spilled = llvm::any_of(out.fields, [&](const OutputField &f) {
+    return f.cls == OutputClass::Data && f.owner != 0 &&
+           f.owner <= numSpillClasses;
+  });
+  bool phase1 = llvm::any_of(out.methods, [](const OutputMethod &m) {
+    return m.kind == OutputMethod::Trailer && m.cls == OutputClass::Data &&
+           m.name == ModuleInitializerName;
+  });
+  if (spilled == dataFieldsSpill && spilledData == (dataFieldsSpill && phase1))
+    return;
+  reportFatalInternalError(
+      "msil-ld: the spill decision for '<msil>Data' does not match its fields");
 }
 
 // The TypeDefs of a -shared output after M20's (plan 5.9.15): the export
@@ -1229,6 +1315,7 @@ void Writer::fillMap() {
 void Writer::finish() {
   assignNames();
   assignOwners();
+  checkDataSpill();
   addRows();
   if (errorCount())
     return;
@@ -1343,6 +1430,10 @@ void Writer::run() {
         static_cast<uint8_t>(ctx.arg.target.isArch64Bit() ? 8 : 4),
         getAssemblyName(), ctx.arg.target.str()};
   in.Defs = std::move(trailerDefs);
+  // A library's spill decision, on the filled input (an interface library
+  // returned in step 1).
+  if (ctx.arg.shared)
+    decideDataSpill(in);
   if (errorCount())
     return;
   if (ctx.arg.printImports)
